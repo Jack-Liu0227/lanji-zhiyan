@@ -16,10 +16,17 @@ a = Analysis(
         ('providers_catalog.json', '.'),
     ],
     hiddenimports=['pymupdf', 'webview'],
-    hookspath=[],
+    hookspath=['hooks'],       # hooks/hook-workflow.py 用来顶掉同名 contrib 钩子（见该文件注释）
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # 应用一行都没用到下面这些；它们是被 3.10 里别的包连带拖进来的（torch 还是 CUDA 版）。
+    # 不排除的话包 3.1GB —— 没法发给别人下载。将来真要加 OCR/机器学习功能，把对应项去掉即可。
+    excludes=[
+        'torch', 'torchvision', 'torchaudio',
+        'onnxruntime', 'rapidocr_onnxruntime', 'cv2', 'shapely', 'pyclipper',
+        'numba', 'llvmlite', 'h5py', 'pandas', 'matplotlib', 'scipy', 'sklearn',
+        'google', 'cryptography', 'yaml', 'pyreadline3', 'win32com',
+    ],
     noarchive=False,
     optimize=0,
 )
