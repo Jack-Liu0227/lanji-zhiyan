@@ -1,0 +1,18 @@
+# 运行时数据：模型 API key、下载的 PDF、笔记、上传物都在 data/ 里 —— 绝不上传
+data/
+
+# 构建产物
+dist/
+build/*
+!build/icon.ico
+!build/extract_pe_icon.py
+
+# 本地备份与缓存
+*.bak-*
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 内部交接笔记（含本机绝对路径）
+交接.md
