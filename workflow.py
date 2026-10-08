@@ -230,6 +230,14 @@ class WorkflowDB(ResearchDB):
               started_at TEXT NOT NULL, ended_at TEXT NOT NULL DEFAULT '', output_path TEXT NOT NULL DEFAULT '',
               summary TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '')""")
         self.assistant_seed(BUILTIN_ASSISTANTS)      # 公开助手（内置）：只补缺，不覆盖改过的
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(team_members)")}
+        if "assistant_id" not in cols:                 # 老库补列：成员 = 哪个助手
+            self.db.execute("ALTER TABLE team_members ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''")
+        if "color" not in cols:                        # 老库补列：成员身份色序号
+            self.db.execute("ALTER TABLE team_members ADD COLUMN color INTEGER NOT NULL DEFAULT 0")
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(chat)")}
+        if "sender" not in cols:                       # 老库补列：团队群里这条是谁说的
+            self.db.execute("ALTER TABLE chat ADD COLUMN sender TEXT NOT NULL DEFAULT ''")
         self.db.commit()
         for folder in (PAPERS, NOTES, OUT):
             folder.mkdir(parents=True, exist_ok=True)
@@ -495,9 +503,11 @@ class WorkflowDB(ResearchDB):
         return dict(row) if row else None
 
     def team_member_add(self, task_id: str, name: str, role: str = "member", step: str = "",
-                        prompt: str = "") -> dict[str, Any]:
-        row = (uuid.uuid4().hex, task_id, name, role, step, prompt, "idle", "", now(), now())
-        self.db.execute("INSERT INTO team_members VALUES (?,?,?,?,?,?,?,?,?,?)", row)
+                        prompt: str = "", assistant_id: str = "", color: int = 0) -> dict[str, Any]:
+        row = (uuid.uuid4().hex, task_id, name, role, step, prompt, "idle", "", now(), now(),
+               assistant_id, int(color or 0))
+        self.db.execute("INSERT INTO team_members (id,task_id,name,role,step,prompt,status,note,created_at,"
+                       "updated_at,assistant_id,color) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row)
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM team_members WHERE id=?", (row[0],)).fetchone())
 
@@ -957,9 +967,10 @@ class WorkflowDB(ResearchDB):
 
     # ---------- Agent 对话记录 ----------
     def add_message(self, task_id: str, role: str, content: str, events: list | None = None,
-                    scope: str = "") -> dict[str, Any]:
-        row = (uuid.uuid4().hex, task_id, role, content, json.dumps(events or [], ensure_ascii=False), now(), scope)
-        self.db.execute("INSERT INTO chat (id,task_id,role,content,events,created_at,scope) VALUES (?,?,?,?,?,?,?)", row)
+                    scope: str = "", sender: str = "") -> dict[str, Any]:
+        row = (uuid.uuid4().hex, task_id, role, content, json.dumps(events or [], ensure_ascii=False), now(), scope, sender)
+        self.db.execute("INSERT INTO chat (id,task_id,role,content,events,created_at,scope,sender)"
+                        " VALUES (?,?,?,?,?,?,?,?)", row)
         self.db.commit()
         return self.messages(task_id, scope)[-1]
 

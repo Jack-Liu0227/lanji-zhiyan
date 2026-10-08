@@ -839,6 +839,11 @@ class Handler(BaseHTTPRequestHandler):
                                                     (q.get("title") or [""])[0] or "选择产出文件夹"))
             if path == "/api/settings/meta":            # 设置页分区要的元数据：工具 / 技能 / MCP
                 return self._json(settings_meta())
+            if path == "/api/team/chat":                 # 团队 v2：成员（从助手选）+ 群记录 + 接力状态
+                try:
+                    return self._json(team.chat_state((q.get("scope") or [""])[0]))
+                except ValueError as exc:
+                    return self._json({"error": str(exc)}, 400)
             if path == "/api/team":                      # 团队看板：成员状态 + 派活队列 + 运行事件
                 try:
                     return self._json(team.board((q.get("id") or [""])[0]))
@@ -1020,6 +1025,20 @@ class Handler(BaseHTTPRequestHandler):
                         if path == "/api/assistant/delete":
                             db.assistant_delete(b.get("id", ""))
                             return self._json({"ok": True})
+                if path.startswith("/api/team/chat/"):      # 团队 v2：选助手 / 移人 / 说话（接力）/ 停止
+                    b = data or {}
+                    try:
+                        if path == "/api/team/chat/member":
+                            return self._json({"member": team.add_assistant(
+                                b.get("scope", ""), b.get("assistant_id", ""))})
+                        if path == "/api/team/chat/remove":
+                            return self._json(team.remove_member(b.get("member_id", "")))
+                        if path == "/api/team/chat/say":
+                            return self._json(team.say(b.get("scope", ""), b.get("text", "")))
+                        if path == "/api/team/chat/stop":
+                            return self._json(team.stop(b.get("scope", "")))
+                    except ValueError as exc:
+                        return self._json({"error": str(exc)}, 400)
                 if path.startswith("/api/team/"):           # 团队：成员增删改 / 派活 / 取消 / 重试
                     b = data or {}
                     if path == "/api/team/member/add":

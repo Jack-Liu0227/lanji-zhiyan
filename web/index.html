@@ -370,6 +370,28 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 /* 左列再分两层：问候卡 : 日历 = 1 : 2.2（照草图比例），问候卡内容整体居中 */
 .cal-left{display:grid;grid-template-rows:1fr 2.2fr;gap:14px;min-height:0}
 .cal-page .card.cal-hello{flex-direction:row;align-items:center;justify-content:center;gap:14px}
+
+.page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.ph-acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tc-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.tc-chip{display:inline-flex;align-items:center;gap:7px;border:1px solid color-mix(in srgb,var(--mc,var(--accent)) 45%,var(--line));border-radius:999px;background:color-mix(in srgb,var(--mc,var(--accent)) 10%,var(--panel));padding:4px 10px 4px 4px;font-size:12px}
+.tc-chip b{font-weight:600}
+.tc-chip i{font-style:normal;color:var(--muted);font-size:11px}
+.tc-chip .tc-av{width:22px;height:22px;border-radius:50%;background:color-mix(in srgb,var(--mc,var(--accent)) 26%,var(--panel2));display:inline-flex;align-items:center;justify-content:center;font-size:11px}
+.tc-chip .tc-x{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:11px;padding:0 2px}
+.tc-chip .tc-x:hover{color:var(--err)}
+.tc-add select{max-width:190px}
+.tc-chat{max-height:46vh;overflow:auto;display:flex;flex-direction:column;gap:10px}
+.tc-msg{display:flex;gap:8px;align-items:flex-start;max-width:88%}
+.tc-msg.me{align-self:flex-end;flex-direction:row-reverse}
+.tc-msg .tc-av{flex:none;width:26px;height:26px;border-radius:50%;background:color-mix(in srgb,var(--mc,var(--accent)) 24%,var(--panel2));display:inline-flex;align-items:center;justify-content:center;font-size:12px;border-left:3px solid var(--mc,var(--accent))}
+.tc-body{min-width:0}
+.tc-who{font-size:11px;color:var(--muted);margin-bottom:2px}
+.tc-who .tc-at{margin-left:6px;opacity:.7}
+.tc-text{white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--line);background:var(--panel2);border-radius:12px;padding:8px 10px;font-size:13px}
+.tc-msg.me .tc-text{background:color-mix(in srgb,var(--accent) 14%,var(--panel));border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
+.tc-sys{align-self:center;color:var(--muted);font-size:12px;border:1px dashed var(--line);border-radius:999px;padding:3px 12px}
+.tc-empty{color:var(--muted);font-size:13px;text-align:center;padding:18px 6px}
 .hello-avatar{display:grid;width:48px;height:48px;flex:none;place-items:center;border-radius:50%;background:var(--panel2);border:1px solid var(--line);font-size:24px}
 .avatar-img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}
 .prof-photo-prev{width:44px;height:44px;border-radius:50%;object-fit:cover;border:1px solid var(--line);display:none}
@@ -1384,6 +1406,7 @@ const NAV = [
   {g:"primary",items:[
     {id:"agent",label:"Agent",ico:"🤖"},
     {id:"assistants",label:"助手",ico:"🧑🔬"},
+    {id:"team",label:"团队",ico:"👥"},
     {id:"calendar",label:"日历",ico:"📅"},
     {id:"tasks",label:"项目",ico:"📁"},
     {id:"space",label:"项目空间",ico:"🧭"}]},
@@ -1396,7 +1419,7 @@ const NAV = [
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {assistants:"助手",agent:"Agent",calendar:"日历",tasks:"项目",workflow:"工作流",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
+const TITLES = {assistants:"助手",team:"团队",agent:"Agent",calendar:"日历",tasks:"项目",workflow:"工作流",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 
 function openTab(r, title){
@@ -1528,6 +1551,7 @@ function render(){
   else if(r==="notes") renderNotes(m);
   else if(r==="intel") renderIntel(m);
   else if(r==="assistants") renderAssistants(m);
+  else if(r==="team") renderTeam(m);
   else if(r==="schedules") renderSchedules(m);
   else if(r==="models") renderModels(m);
   else renderSettings(m);
@@ -1565,6 +1589,95 @@ function asCard(a){
       ${mine?`<button class="btn ghost" data-as-del="${a.id}" style="color:var(--err)">删除</button>`
             :`<button class="btn ghost" data-as-dup="${a.id}">复制为我的</button>`}
     </div></div>`;
+}
+
+/* ---------------- 团队（照 AionUi Teams：成员=助手实例、Leader 恒第一、身份色） ---------------- */
+let teamScope = localStorage.getItem("rw-team-chat") || "";
+let teamData = null, teamBusy = false, teamTick = null;
+function tcColor(i){ const P=["var(--brand)","#5c9ea4","#b58a5e","#8f7fb5","#7fa06a","#b57f92"]; return P[(i||0)%P.length]; }
+async function renderTeam(m){
+  const M = (S.models||[]).length;
+  if(!teamScope){
+    m.innerHTML = `<div class="page-head"><div><p class="inst-label">TEAM</p><h3>团队</h3>
+      <p class="hint">正在开一个团队群…</p></div></div>`;
+    try{ const r = await api("/api/chat/create", {title:"团队"}); teamScope = r.id || (r.chat&&r.chat.id) || "";
+         localStorage.setItem("rw-team-chat", teamScope); await refreshState(false); }
+    catch(e){ m.innerHTML = `<div class="page-head"><div><p class="inst-label">TEAM</p><h3>团队</h3>
+      <p class="hint">开团队群失败：${esc(e.message)}</p></div></div>`; return; }
+  }
+  try{ teamData = await api("/api/team/chat?scope=" + encodeURIComponent(teamScope)); }
+  catch(e){ teamData = {error:e.message, members:[], transcript:[]}; }
+  const D = teamData || {}, all = D.members||[], leader = all.find(x=>x.role==="leader")||null;
+  const ms = all.filter(x=>x.role!=="member"?false:true), picks = all.filter(x=>x.role==="member");
+  const inTeam = new Set(picks.map(x=>x.assistant_id));
+  const pool = (S.assistants||[]).filter(a=>a.enabled!==0 && !inTeam.has(a.id));
+  const run = D.running;
+  const bubble = (r)=>{
+    const who = r.sender || (r.role==="user" ? "你" : "成员");
+    const mm = picks.find(x=>x.name===who);
+    if(who==="系统") return `<div class="tc-sys">${esc(r.content||"")}</div>`;
+    const mine = r.role==="user";
+    return `<div class="tc-msg ${mine?"me":"them"}">
+      <span class="tc-av" style="${mm?`--mc:${tcColor(mm.color)}`:""}">${mine?"🙋":esc((mm&&mm.name||"?").slice(0,1))}</span>
+      <div class="tc-body"><div class="tc-who">${esc(who)}<span class="tc-at">${esc((r.at||"").replace("T"," ").slice(5,16))}</span></div>
+        <div class="tc-text">${esc(r.content||"")}</div></div></div>`;
+  };
+  m.innerHTML = `<div class="page-head">
+    <div><p class="inst-label">TEAM</p><h3>团队 <span class="pill">${picks.length}/${D.max||5}</span></h3>
+      <p class="hint">成员从「助手」里选（一个团队最多 ${D.max||5} 人）。你发一句话，成员之间会互相 @ 派活、一轮接一轮把活推下去；谁觉得全干完了就回「完成」，团队自动散会。</p></div>
+    <div class="ph-acts">${run?`<span class="pill">${esc(run.phase||"跑着")}</span><button class="btn ghost" id="tcStop">停止</button>`:""}
+      <button class="btn ghost" id="tcRefresh">刷新</button></div></div>
+  <div class="card" style="margin-top:12px">
+    <div class="tc-bar">
+      ${leader?`<div class="tc-chip on"><span class="tc-av" style="--mc:var(--brand)">🧭</span><b>${esc(leader.name)}</b><i>Leader</i></div>`:""}
+      ${picks.map(x=>`<div class="tc-chip" style="--mc:${tcColor(x.color)}"><span class="tc-av">${esc((x.name||"?").slice(0,1))}</span>
+        <b>${esc(x.name)}</b><i>${esc(x.prompt?x.prompt.slice(0,10):"成员")}</i>
+        <button class="tc-x" data-tc-del="${x.id}" title="移出">✕</button></div>`).join("")}
+      ${picks.length < (D.max||5) ? `<span class="tc-add">
+        <select class="control" id="tcPick"><option value="">＋ 从助手里选…</option>
+          ${pool.map(a=>`<option value="${a.id}">${esc(a.name)}${a.source==="builtin"?"（公开）":""}</option>`).join("")}</select>
+        </span>` : `<span class="hint">已满 ${D.max||5} 人</span>`}
+    </div>
+    <div class="hint" style="margin-top:6px">${picks.length?esc(picks.map(x=>x.name).join(" · ")):"还没有成员 —— 先从右边选几个助手进来。"}</div>
+  </div>
+  <div class="card tc-chat" id="tcChat" style="margin-top:12px">
+    ${(D.transcript||[]).length ? (D.transcript||[]).map(bubble).join("")
+      : `<div class="tc-empty">🧭 团队群在这里。先选成员，然后说一句你要做的事 —— 比如「帮我挑一个钠电正极掺杂方向，产出候选表」。</div>`}
+  </div>
+  <div class="card" style="margin-top:12px">
+    <div style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start">
+      <textarea class="control" id="tcSay" rows="2" placeholder="跟团队说一句话…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <button class="btn" id="tcSend">${run?"继续追一句":"发送并让团队推进"}</button></div>
+    <div class="hint" style="margin-top:6px">${run?`当前：${esc(run.current||"")}（第 ${run.turn||0}/${run.total||6} 轮）`: "没有在跑的轮次。"}</div>
+  </div>`;
+  const box = $("tcChat"); if(box) box.scrollTop = box.scrollHeight;
+  const pick = $("tcPick");
+  if(pick) pick.onchange = async ()=>{
+    if(!pick.value) return; teamBusy = true;
+    try{ await api("/api/team/chat/member", {scope:teamScope, assistant_id:pick.value}); }
+    catch(e){ alert("加成员失败：" + e.message); }
+    teamBusy = false; teamData = null; render();
+  };
+  m.querySelectorAll("[data-tc-del]").forEach(b=>b.onclick = async ()=>{
+    try{ await api("/api/team/chat/remove", {member_id:b.dataset.tcDel}); }catch(e){ alert(e.message); }
+    teamData = null; render();
+  });
+  const st = $("tcStop");
+  if(st) st.onclick = async ()=>{ try{ await api("/api/team/chat/stop", {scope:teamScope}); }catch(e){ alert(e.message); } setTimeout(()=>{ teamData=null; render(); }, 600); };
+  const rf = $("tcRefresh"); if(rf) rf.onclick = ()=>{ teamData=null; render(); };
+  const say = async ()=>{
+    const t = $("tcSay"); const text = (t.value||"").trim();
+    if(!text) return;
+    if(!picks.length) return alert("先加成员：从「助手」里选几个进团队。");
+    t.value = "";
+    try{ await api("/api/team/chat/say", {scope:teamScope, text}); }
+    catch(e){ return alert("发送失败：" + e.message); }
+    teamData = null; render();
+  };
+  if($("tcSend")) $("tcSend").onclick = say;
+  if($("tcSay")) $("tcSay").onkeydown = (e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); say(); } };
+  clearTimeout(teamTick);                                   // 有轮次在跑就每 2s 刷新一次群
+  if(run) teamTick = setTimeout(()=>{ if(route()==="team"){ teamData=null; render(); } }, 2000);
 }
 function renderAssistants(m){
   const bound = asBound();

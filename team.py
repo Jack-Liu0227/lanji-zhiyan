@@ -270,3 +270,158 @@ if __name__ == "__main__":       # 手跑自检：python team.py
     retry(row["id"])
     assert board(tid)["counts"].get("queued") == 1
     print("team.py 自检通过：", [m["name"] + "/" + m["role"] for m in members(tid)], b["counts"])
+
+
+# ============================ v2：成员=助手 + 团队内 AI 聊天平台 ============================
+
+MAX_PICKS = 5            # 一个团队最多选 5 个助手（Leader 是常驻主持，不占名额）
+# 身份色：0 号固定给 Leader，其余照 AionUi TEAM_MEMBER_PALETTE 的低饱和 slate 系
+MEMBER_COLORS = ["var(--brand)", "#5c9ea4", "#b58a5e", "#8f7fb5", "#7fa06a", "#b57f92"]
+STOP_WORDS = ("完成", "全部完成", "已全部完成", "DONE", "收工")
+
+TEAM_RUNS: dict[str, dict[str, Any]] = {}          # scope -> {turn,total,current,phase,stop}（在内存，重启即丢）
+_LOCK = threading.Lock()
+TEAM_SCOPE = "team"                              # 团队记录存在 chat 表的 scope 里
+
+
+def color_of(m: dict[str, Any]) -> str:
+    return MEMBER_COLORS[int(m.get("color") or 0) % len(MEMBER_COLORS)]
+
+
+def picks(scope: str) -> list[dict[str, Any]]:
+    """团队里被选中的助手成员（不含 Leader）。"""
+    return [m for m in members(scope) if m.get("role") == "member"]
+
+
+def add_assistant(scope: str, assistant_id: str) -> dict[str, Any]:
+    """把一个助手拉进团队（照 AionUi：团队成员就是助手实例）。最多 MAX_PICKS 个。"""
+    with workflow.WorkflowDB(_db_path()) as db:
+        asst = db.assistant(assistant_id)
+        if not asst:
+            raise ValueError("没有这个助手 —— 先去「助手」页建一个")
+        cur = [m for m in db.team_members(scope) if m["role"] == "member"]
+        if any(m["assistant_id"] == assistant_id for m in cur):
+            raise ValueError("「%s」已经在团队里了" % asst["name"])
+        if len(cur) >= MAX_PICKS:
+            raise ValueError("一个团队最多 %d 个助手（现在 %d 个），先移掉一个再加" % (MAX_PICKS, len(cur)))
+        return db.team_member_add(scope, asst["name"], "member", "", asst["rules"] or "",
+                                  assistant_id=assistant_id, color=1 + len(cur))
+
+
+def transcript(scope: str, limit: int = 200) -> list[dict[str, Any]]:
+    """团队群里的对话（谁说的都记在 sender 上）。"""
+    with workflow.WorkflowDB(_db_path()) as db:
+        return [{"role": m["role"], "content": m["content"],
+                 "sender": m.get("sender") or ("你" if m["role"] == "user" else "成员"),
+                 "at": m["created_at"]} for m in db.messages(scope, TEAM_SCOPE)][-limit:]
+
+
+def say(scope: str, text: str, start: bool = True) -> dict[str, Any]:
+    """用户往群里插一句话 → 团队接着往下推进。"""
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("要说点什么")
+    with workflow.WorkflowDB(_db_path()) as db:
+        db.add_message(scope, "user", text, scope=TEAM_SCOPE, sender="你")
+    started = kick(scope) if start else False
+    return {"ok": True, "started": started, "running": scope in TEAM_RUNS}
+
+
+def next_speaker(text: str, names: list[str], last: str | None) -> str | None:
+    """交接规则（照 AionUi 的 @ 交接）：说了收工词就散会；@ 谁就归谁；没说就按顺序轮下一个。"""
+    if not names:
+        return None
+    blob = text or ""
+    if any(w in blob for w in STOP_WORDS):
+        return None
+    for n in names:
+        if ("@" + n) in blob or ("＠" + n) in blob:
+            return n
+    if last is None or last not in names:
+        return names[0]
+    return names[(names.index(last) + 1) % len(names)]
+
+
+def _set(scope: str, **kw: Any) -> None:
+    with _LOCK:
+        st = TEAM_RUNS.get(scope)
+        if st:
+            st.update(kw)
+
+
+def kick(scope: str, turns: int = 6) -> bool:
+    """让这个团队跑起来（一次只跑一个团队；已经在跑就不重复起）。"""
+    with _LOCK:
+        if scope in TEAM_RUNS:
+            return False
+        TEAM_RUNS[scope] = {"turn": 0, "total": turns, "current": "", "phase": "排队中", "stop": False}
+    threading.Thread(target=_round, args=(scope, turns), daemon=True).start()
+    return True
+
+
+def stop(scope: str) -> dict[str, Any]:
+    _set(scope, stop=True, phase="停止中")
+    return {"ok": True}
+
+
+def _round(scope: str, turns: int) -> None:
+    """一个 AI 聊天平台：成员之间互相 @ 派话，一轮接一轮把活推下去（串行，一轮一个人）。"""
+    import workflow as _wf
+    try:
+        with workflow.WorkflowDB(_db_path()) as db:
+            ms = [m for m in db.team_members(scope) if m["role"] == "member"]
+            names = [m["name"] for m in ms]
+            by_name = {m["name"]: m for m in ms}
+            if not names:
+                db.add_message(scope, "assistant", "团队里还没有人 —— 先从左边的助手里选几个。",
+                               scope=TEAM_SCOPE, sender="系统")
+                return
+            last = None
+            for t in range(1, turns + 1):
+                st = TEAM_RUNS.get(scope) or {}
+                if st.get("stop"):
+                    db.add_message(scope, "assistant", "（已停止）", scope=TEAM_SCOPE, sender="系统")
+                    return
+                hist = [dict(m) for m in db.messages(scope, TEAM_SCOPE)][-12:]
+                tail = "\n".join((h.get("content") or "") for h in hist[-2:])
+                speaker = next_speaker(tail, names, last)
+                if not speaker:
+                    db.add_message(scope, "assistant", "团队：这件事告一段落（收到收工信号）。",
+                                   scope=TEAM_SCOPE, sender="系统")
+                    return
+                m = by_name[speaker]
+                _set(scope, turn=t, current=speaker, phase="%s 正在做（第 %d/%d 轮）" % (speaker, t, turns))
+                extra = (
+                    "【团队协作】你现在的身份是团队成员「%s」（不是全局 Leader）：%s\n"
+                    "团队名单：%s\n"
+                    "干活规则：只做你这份；结论要能核查（引用来源/数字）；"
+                    "要交给谁，就在回复开头写 @那个人的名字；整件事真做完了就回复「完成」并且不要再 @人。\n"
+                    "最近的团队记录：\n%s" % (speaker, m["prompt"] or "（没写职责）", "、".join(names),
+                                            "\n".join("%s：%s" % (h.get("sender") or h.get("role"), (h.get("content") or "")[:240])
+                                                        for h in hist)))
+                try:
+                    out = _wf.run_agent(db, scope, "继续推进（你是 %s）" % speaker, extra_context=extra,
+                                        scope=TEAM_SCOPE, publish=False)
+                    body = (out.get("reply") or "").strip() or "（这一轮没说话）"
+                except Exception as exc:                       # 一个成员失败不该掀翻整个团队，但也别空转
+                    db.add_message(scope, "assistant", "（%s 这一轮失败：%s）" % (speaker, exc),
+                                   scope=TEAM_SCOPE, sender=speaker)
+                    db.add_message(scope, "assistant", "团队：%s 这一轮出错了，先停在这里 —— 修好再继续。"
+                                   % speaker, scope=TEAM_SCOPE, sender="系统")
+                    return
+                db.add_message(scope, "assistant", body, scope=TEAM_SCOPE, sender=speaker)
+                last = speaker
+                if next_speaker(body, names, last) is None:
+                    db.add_message(scope, "assistant", "团队：都齐了，收工。", scope=TEAM_SCOPE, sender="系统")
+                    return
+            _set(scope, phase="轮次用完（%d 轮）" % turns)
+    finally:
+        with _LOCK:
+            TEAM_RUNS.pop(scope, None)
+
+
+def chat_state(scope: str) -> dict[str, Any]:
+    """团队页要的一切：成员（带色）+ 群记录 + 正在跑的状态 + 上限。"""
+    return {"members": members(scope), "max": MAX_PICKS, "palette": MEMBER_COLORS,
+            "transcript": transcript(scope), "running": TEAM_RUNS.get(scope),
+            "colors": {m["id"]: color_of(m) for m in members(scope)}}

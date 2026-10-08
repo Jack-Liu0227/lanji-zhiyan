@@ -23,6 +23,7 @@ team.DB_PATH = _p
 
 class TeamTest(unittest.TestCase):
     def setUp(self) -> None:
+        team.DB_PATH = _p          # 每个用例都把团队库指回自己的（多模块一起跑时别串）
         if _p.exists():
             _p.unlink()                       # 每个用例一个干净库：队列是全库轮询的，不隔离会互相串
         with workflow.WorkflowDB(_p) as db:
