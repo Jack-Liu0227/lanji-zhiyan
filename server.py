@@ -27,6 +27,7 @@ from typing import Any
 import papertran                 # 论文翻译页：PDF 服务 / 元数据 / BabelDOC 任务
 import rss                       # 情报日报：RSS 抓取/解析
 import vault                     # 知识库：Obsidian Vault 扫描 / 状态写回
+import schedule                  # 定时任务：抄原版 automation（只在应用活着时调度）
 import zotero                    # Zotero 本机 Local API 只读接入（笔记页；不碰 zotero.sqlite）
 from research_core import ResearchDB
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
@@ -41,6 +42,7 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
 HERE = Path(__file__).resolve().parent
 WEB = HERE / "web"
 DB_PATH = Path(os.environ.get("RESEARCH_WORKBENCH_DB", HERE / "data" / "research.sqlite3"))
+schedule.DB_PATH = DB_PATH          # 定时任务共用同一个库（schedule 不反向 import server）
 UPLOADS = HERE / "data" / "uploads"
 PORT = 8765
 CARD_W, CARD_H = 1117, 625      # 「开始卡片」尺寸（CSS 逻辑像素）
@@ -796,6 +798,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/folder/pick":
                 return self._json(self._pick_folder((q.get("initial") or [""])[0],
                                                     (q.get("title") or [""])[0] or "选择产出文件夹"))
+            if path == "/api/schedules":                 # 定时任务页：规则 + 最近运行（照原版两块结构）
+                with WorkflowDB(DB_PATH) as db:
+                    return self._json({"schedules": db.schedules(), "runs": db.schedule_runs(),
+                                       "freq": schedule.FREQ_LABELS, "run_status": schedule.RUN_STATUS,
+                                       "retryable": sorted(schedule.RETRYABLE)})
             if path == "/api/mdnotes":
                 with WorkflowDB(DB_PATH) as db:
                     return self._json({"notes": db.md_notes()})
@@ -952,6 +959,57 @@ class Handler(BaseHTTPRequestHandler):
                     tid = data.get("task_id")
                     return self._json({"note": db.save_md_note(data.get("id", ""), data.get("title", ""),
                                                                data.get("content", ""), None if tid is None else str(tid))})
+
+                if path.startswith("/api/schedule/"):      # 定时任务：保存/启停/删除/立即运行/删运行记录
+                    if path == "/api/schedule/save":
+                        name = str(data.get("name") or "").strip()
+                        if not name:
+                            return self._json({"error": "任务名称必填"}, 400)
+                        if not str(data.get("prompt") or "").strip():
+                            return self._json({"error": "Prompt 必填（到点了要让 Agent 做什么）"}, 400)
+                        ok, why = schedule.valid(str(data.get("cron") or ""))
+                        if not ok:
+                            return self._json({"error": why}, 400)
+                        folder_ok, folder = schedule.inspect_output_dir(str(data.get("output_dir") or "定时任务"))
+                        if not folder_ok:
+                            return self._json({"error": folder}, 400)
+                        enabled = bool(data.get("enabled", True))
+                        with WorkflowDB(DB_PATH) as wdb:
+                            row = wdb.schedule_save({"id": data.get("id"), "name": name,
+                                                     "prompt": str(data.get("prompt") or "").strip(),
+                                                     "project_id": str(data.get("project_id") or ""),
+                                                     "frequency": str(data.get("frequency") or "daily"),
+                                                     "cron": str(data.get("cron") or "0 9 * * *"),
+                                                     "output_dir": folder, "enabled": enabled,
+                                                     "next_run_at": (schedule.next_run_at(str(data.get("cron") or ""))
+                                                                    if (enabled and str(data.get("frequency") or "") != "manual") else "")})
+                        return self._json({"schedule": row})
+                    if path == "/api/schedule/toggle":
+                        with WorkflowDB(DB_PATH) as wdb:
+                            row = wdb.schedule(str(data.get("id") or ""))
+                            if not row:
+                                return self._json({"error": "找不到这个定时任务"}, 404)
+                            enabled = bool(data.get("enabled"))
+                            wdb.schedule_set_enabled(row["id"], enabled)
+                            wdb.schedule_mark_run(row["id"], row["last_run_at"],
+                                                  schedule.next_run_at(row["cron"]) if enabled else "")
+                            return self._json({"schedule": wdb.schedule(row["id"])})
+                    if path == "/api/schedule/delete":
+                        with WorkflowDB(DB_PATH) as wdb:
+                            wdb.schedule_delete(str(data.get("id") or ""))
+                        return self._json({"deleted": True})
+                    if path == "/api/schedule/run":        # 立即运行：丢后台线程（模型调用几十秒，别挂住请求）
+                        with WorkflowDB(DB_PATH) as wdb:
+                            row = wdb.schedule(str(data.get("id") or ""))
+                        if not row:
+                            return self._json({"error": "找不到这个定时任务"}, 404)
+                        threading.Thread(target=lambda: schedule.run_once(row, trigger="manual"),
+                                         daemon=True, name="schedule-manual").start()
+                        return self._json({"queued": True})
+                    if path == "/api/schedule/run/delete":
+                        with WorkflowDB(DB_PATH) as wdb:
+                            return self._json({"deleted": wdb.schedule_run_delete(data.get("ids") or [])})
+                    return self._json({"error": "未知的定时任务操作"}, 404)
                 if path == "/api/mdnotes/delete":
                     db.delete_md_note(data.get("id", ""))
                     return self._json({"deleted": True})
@@ -1190,6 +1248,7 @@ def main() -> int:
         WorkflowDB(DB_PATH).close()
         srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
+        schedule.start()          # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
         print(f"科研工作 1.0 已启动：{url}")
     if "--no-open" not in sys.argv:
         # 已经有「这一版」的窗口 → 把它从最小化恢复并置前，不再开新的

@@ -264,6 +264,34 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .proj-row .go:hover{filter:none;text-decoration:underline}
 .proj-row .go.del{color:var(--err);font-weight:400;padding:0 4px}
 .proj-add:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+
+/* ===== 定时任务（版式照原版 automation.tsx：页头+编辑器栅格+任务卡+说明+运行记录；配色用本应用变量） ===== */
+.sch-eyebrow{font-size:11px;letter-spacing:.08em;color:var(--muted);font-weight:600;text-transform:uppercase;margin:0 0 4px}
+.sch-head{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.sch-head h3{margin:0;font-size:16px}
+.sch-head p{color:var(--muted);font-size:12.5px;margin:5px 0 0;max-width:74ch;line-height:1.6}
+.sch-head .btn{margin-left:auto;flex:none}
+.sch-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px 12px;margin-top:12px}
+@media (max-width:1180px){.sch-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.sch-grid label{display:block;min-width:0}
+.sch-grid label>span{display:block;font-size:11px;color:var(--muted);letter-spacing:.04em;margin-bottom:4px}
+.sch-grid input,.sch-grid select,.sch-grid textarea{width:100%;border:1px solid var(--line);border-radius:9px;background:var(--panel2);padding:7px 10px;font:inherit;font-size:13px;color:var(--fg)}
+.sch-grid textarea{height:80px;resize:vertical}
+.sch-grid .full{grid-column:1/-1}
+.sch-card{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:13px 15px;margin-top:10px}
+.sch-card.off{opacity:.62}
+.sch-card .ic{width:32px;height:32px;flex:none;border-radius:10px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--accent) 12%,transparent);font-size:15px}
+.sch-card .main{min-width:0;flex:1}
+.sch-card .nmrow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.sch-card .nm{font-size:14.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sch-card .ln{color:var(--muted);font-size:12px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sch-card .acts{display:flex;gap:6px;flex:none;flex-wrap:wrap;justify-content:flex-end}
+.sch-note{display:flex;gap:8px;align-items:center;margin-top:10px;color:var(--muted);font-size:12.5px;background:color-mix(in srgb,var(--accent) 8%,transparent);border-radius:10px;padding:9px 12px;line-height:1.5}
+.sch-run{display:flex;flex-wrap:wrap;align-items:center;gap:8px;border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:9px 12px;margin-top:8px}
+.sch-run .nm{font-size:12.5px;font-weight:700}
+.sch-run .tm{font-size:11.5px;color:var(--muted)}
+.sch-run .det{flex-basis:100%;font-size:11.5px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
+.sch-run .acts{margin-left:auto;display:flex;gap:6px}
 .pf-dir{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:4px 6px 4px 12px}
 .pf-dir .dp{flex:1;min-width:0;font-size:13px;color:var(--muted-fg,var(--muted));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Consolas,monospace}
 .pf-dir.set .dp{color:inherit}
@@ -1232,13 +1260,14 @@ const NAV = [
     {id:"tasks",label:"项目",ico:"📁"}]},
   {g:"solo",items:[
     {id:"workflow",label:"工作流",ico:"🔀"},
+    {id:"schedules",label:"定时任务",ico:"⏰"},
     {id:"library",label:"知识库",ico:"📚"},
     {id:"notes",label:"笔记",ico:"📝"},
     {id:"intel",label:"情报日报",ico:"📡"}]},
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {agent:"Agent",calendar:"日历",tasks:"项目",workflow:"工作流",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",settings:"设置"};
+const TITLES = {agent:"Agent",calendar:"日历",tasks:"项目",workflow:"工作流",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 
 function openTab(r, title){
@@ -1361,6 +1390,7 @@ function render(){
   else if(r==="library") renderLibrary(m);
   else if(r==="notes") renderNotes(m);
   else if(r==="intel") renderIntel(m);
+  else if(r==="schedules") renderSchedules(m);
   else if(r==="models") renderModels(m);
   else renderSettings(m);
 }
@@ -4628,6 +4658,150 @@ function zotBind(){
   };
 }
 zotBind();
+
+/* ---------------- 定时任务（照原版 automation：规则卡 + 运行记录；语义「只在应用活着时调度」） ---------------- */
+let schRows = [], schRuns = [], schFreq = {}, schRunStatus = {}, schRetryable = [], schEdit = null, schFeedback = "";
+const SCH_PRESETS = {manual:"", hourly:"0 * * * *", daily:"0 9 * * *", weekdays:"0 9 * * 1-5", weekly:"0 9 * * 1"};
+
+function schFreqLabel(k){ return schFreq[k] || k; }
+function schStatusPill(s){ return `<span class="pill ${s==="completed"?"ok":(s==="running"?"":"warn")}">${esc(schRunStatus[s]||s)}</span>`; }
+function schWhen(iso){ return iso ? fmtDate(iso) : "—"; }
+function schEditSeed(row){
+  return { id: row?.id||"", name: row?.name||"每日科研摘要", prompt: row?.prompt||"请根据项目中的最新文献与笔记，生成一份可核验的研究摘要。",
+    project_id: row?.project_id||curTask||"", frequency: row?.frequency||"daily", cron: row?.cron||"0 9 * * *",
+    output_dir: row?.output_dir||"定时任务", enabled: row ? !!row.enabled : true };
+}
+function schEditorHTML(){
+  if(!schEdit) return "";
+  const e = schEdit;
+  const projOpts = `<option value="">未绑定（运行会被阻断）</option>` +
+    (S.tasks||[]).map(t=>`<option value="${t.id}" ${t.id===e.project_id?"selected":""}>${esc(t.title)}</option>`).join("");
+  const freqOpts = Object.keys(schFreq).length ? Object.keys(schFreq) : Object.keys(SCH_PRESETS);
+  return `<div class="card" style="margin-top:12px"><div class="sch-head">
+    <div><p class="sch-eyebrow">${e.id?"EDIT SCHEDULE":"NEW SCHEDULE"}</p>
+      <h3>${e.id?"编辑定时任务":"新建定时任务"}</h3></div>
+    <span class="pill">内置默认 09:00 · 本机时区</span>
+    <button class="btn ghost" id="schCancel">取消</button></div>
+    <div class="sch-grid">
+      <label><span>任务名称</span><input id="schName" value="${esc(e.name)}"></label>
+      <label><span>频率</span><select id="schFreq">${freqOpts.map(k=>`<option value="${k}" ${k===e.frequency?"selected":""}>${esc(schFreqLabel(k))}</option>`).join("")}</select></label>
+      <label><span>Cron（分 时 日 月 周）</span><input id="schCron" value="${esc(e.cron)}" style="font-family:ui-monospace,Consolas,monospace"></label>
+      <label><span>项目</span><select id="schProj">${projOpts}</select></label>
+      <label><span>输出目录（项目目录内的相对路径）</span><input id="schOut" value="${esc(e.output_dir)}"></label>
+      <label><span>启用</span><select id="schOn"><option value="1" ${e.enabled?"selected":""}>已启用</option><option value="0" ${e.enabled?"":"selected"}>已暂停</option></select></label>
+      <label class="full"><span>Prompt（到点了让 Agent 做什么）</span><textarea id="schPrompt">${esc(e.prompt)}</textarea></label>
+    </div>
+    <div class="hint" style="margin-top:10px">输出目录为项目目录内的相对目录，保存与运行前都会再校验一次：绝对路径、盘符、<code>..</code>、隐藏目录（如 <code>.obsidian</code>）会被拒绝。</div>
+    <div class="pf-actions" style="margin-top:12px"><button class="btn ghost" id="schCancel2">取消</button><button class="btn" id="schSave">${e.id?"更新任务":"保存任务"}</button></div></div>`;
+}
+function schCardHTML(r){
+  const next = r.enabled ? (r.next_run_at ? fmtDate(r.next_run_at) : "未排期") : "已暂停";
+  return `<div class="sch-card ${r.enabled?"":"off"}">
+    <div class="ic">⏰</div>
+    <div class="main"><div class="nmrow"><span class="nm">${esc(r.name)}</span>
+      <span class="pill ${r.enabled?"ok":"warn"}">${r.enabled?"已启用":"已暂停"}</span>
+      <span class="pill">${esc(schFreqLabel(r.frequency))} · ${esc(r.cron)}</span></div>
+      <div class="ln">${r.project_id?esc(schTaskName(r.project_id)||"已绑定项目"):"未绑定项目"} · 输出 ${esc(r.output_dir)}</div>
+      <div class="ln">${esc((r.prompt||"").replace(/\s+/g," ").slice(0,110))}</div>
+      <div class="ln">下次 ${esc(next)} · 最近 ${esc(r.last_run_at?fmtDate(r.last_run_at):"尚未运行")}</div></div>
+    <div class="acts">
+      <button class="btn ghost" data-sch-run="${r.id}" title="立即运行一次">▶ 立即运行</button>
+      <button class="btn ghost" data-sch-toggle="${r.id}" data-on="${r.enabled?1:0}">${r.enabled?"⏸ 暂停":"✓ 启用"}</button>
+      <button class="btn ghost" data-sch-edit="${r.id}">✎ 编辑</button>
+      <button class="btn ghost" data-sch-del="${r.id}" style="color:var(--err)">🗑 归档</button></div></div>`;
+}
+function schRunHTML(e){
+  const retry = schRetryable.includes(e.status);
+  return `<div class="sch-run">
+    <span class="nm">${esc(e.name)}</span>${schStatusPill(e.status)}
+    <span class="pill">${e.trigger==="manual"?"手动触发":(e.trigger==="catchup"?"启动补跑":"定时触发")}</span>
+    <span class="tm">${esc(schWhen(e.started_at))}${e.ended_at?` → ${esc(fmtDate(e.ended_at).slice(-5))}`:""}</span>
+    <div class="acts">
+      ${retry?`<button class="btn ghost" data-run-retry="${e.schedule_id}">重试</button>`:""}
+      <button class="btn ghost" data-run-del="${e.id}">删除</button></div>
+    ${e.reason?`<div class="det">阻断/失败原因：${esc(e.reason)}</div>`:""}
+    ${e.summary?`<div class="det">摘要：${esc(e.summary)}</div>`:""}
+    <div class="det">产物：${e.output_path?esc(e.output_path):"未生成"}</div></div>`;
+}
+async function schLoad(keepMsg){
+  const d = await api("/api/schedules");
+  schRows = d.schedules||[]; schRuns = d.runs||[]; schFreq = d.freq||{};
+  schRunStatus = d.run_status||{}; schRetryable = d.retryable||[];
+  if(!keepMsg) schFeedback = "";
+}
+async function renderSchedules(m){
+  m.style.padding = "";
+  m.innerHTML = `<div class="muted">正在读取定时任务…</div>`;
+  try{ await schLoad(true); }
+  catch(e){ m.innerHTML = `<div class="msg error">读取失败：${esc(e.message)}</div>`; return; }
+  m.innerHTML = `
+    <div class="card"><div class="sch-head">
+      <div><p class="sch-eyebrow">AUTOMATION / SCHEDULES</p><h3>定时任务</h3>
+        <p>管理由本应用 Agent 执行的定时研究任务。任务仅在应用运行时调度，写入范围遵循项目目录约定。</p></div>
+      <button class="btn" id="schNew">＋ 新建定时任务</button></div></div>
+    ${schFeedback?`<div class="card" style="margin-top:10px"><span class="hint">${esc(schFeedback)}</span></div>`:""}
+    ${schEditorHTML()}
+    <div class="card" style="margin-top:12px">
+      <div class="sch-head"><div><p class="sch-eyebrow">RUNTIME SCHEDULE</p><h3>已配置任务</h3></div>
+        <span class="pill">${schRows.length} 个任务</span></div>
+      ${schRows.length? schRows.map(schCardHTML).join("") : `<div class="hint" style="margin-top:10px">还没有定时任务。创建每日摘要、文献检索或项目进度提醒，由本应用 Agent 在应用运行时执行。</div>`}
+      <div class="sch-note">🕒 <span>调度依赖应用进程；关闭「科研工作 1.0」期间不会后台执行。重新打开时错过的每日时间点最多补跑一次，其余等待下一个时间点（可随时暂停/启用）。</span></div>
+    </div>
+    <div class="card" style="margin-top:12px">
+      <div class="sch-head"><div><p class="sch-eyebrow">RUN HISTORY</p><h3>最近运行</h3></div>
+        <span class="pill">${schRuns.length} 条</span>
+        ${schRuns.length?`<button class="btn ghost" id="schRunsClear">清空记录</button>`:""}</div>
+      ${schRuns.length? schRuns.map(schRunHTML).join("") : `<div class="hint" style="margin-top:10px">尚无定时运行记录；每次到点触发、启动补跑或立即运行都会在这里记录状态、原因和产物路径。</div>`}
+    </div>`;
+
+  const nm = () => esc($("schName").value.trim() || "未命名任务");
+  const bindEditor = ()=>{
+    if(!schEdit) return;
+    $("schCancel") && ($("schCancel").onclick = ()=>{ schEdit=null; render(); });
+    $("schCancel2") && ($("schCancel2").onclick = ()=>{ schEdit=null; render(); });
+    $("schFreq").onchange = (e)=>{ const k=e.target.value; const c=SCH_PRESETS[k]; if(c) $("schCron").value=c;
+      schEdit.frequency=k; if(c) schEdit.cron=c; };
+    $("schSave").onclick = async ()=>{
+      const body = { id: schEdit.id, name: nm(), prompt: $("schPrompt").value.trim(),
+        project_id: $("schProj").value, frequency: $("schFreq").value, cron: $("schCron").value.trim(),
+        output_dir: $("schOut").value.trim() || "定时任务", enabled: $("schOn").value === "1" };
+      if(!body.prompt) return alert("Prompt 必填");
+      try{ await api("/api/schedule/save", body); schEdit=null; await schLoad();
+           schFeedback = "定时任务已保存；仅在应用运行时执行。"; render(); }
+      catch(e){ alert("保存失败：" + e.message); }
+    };
+  };
+  $("schNew").onclick = ()=>{ schEdit = schEditSeed(null); render(); setTimeout(()=>$("schName")?.focus(),30); };
+  bindEditor();
+  m.querySelectorAll("[data-sch-edit]").forEach(b=>b.onclick=()=>{
+    const r = schRows.find(x=>x.id===b.dataset.schEdit); schEdit = schEditSeed(r); render(); });
+  m.querySelectorAll("[data-sch-toggle]").forEach(b=>b.onclick=async ()=>{
+    try{ await api("/api/schedule/toggle", { id:b.dataset.schToggle, enabled: b.dataset.on !== "1" });
+         schFeedback = "定时任务状态已更新。"; await schLoad(); render(); }
+    catch(e){ alert("状态更新失败：" + e.message); } });
+  m.querySelectorAll("[data-sch-del]").forEach(b=>b.onclick=async ()=>{
+    const r = schRows.find(x=>x.id===b.dataset.schDel);
+    if(!confirm(`确认归档“${r?r.name:""}”？归档后不会再自动运行。`)) return;
+    try{ await api("/api/schedule/delete", { id:b.dataset.schDel }); schFeedback = "定时任务已归档。";
+         await schLoad(); render(); }
+    catch(e){ alert("归档失败：" + e.message); } });
+  m.querySelectorAll("[data-sch-run]").forEach(b=>b.onclick=async ()=>{
+    try{ await api("/api/schedule/run", { id:b.dataset.schRun }); schFeedback = "定时任务已立即触发；跑完会出现在「最近运行」。";
+         render(); setTimeout(()=>{ if(route()==="schedules") render(); }, 6000); }
+    catch(e){ alert("触发失败：" + e.message); } });
+  m.querySelectorAll("[data-run-retry]").forEach(b=>b.onclick=async ()=>{
+    try{ await api("/api/schedule/run", { id:b.dataset.runRetry }); schFeedback = "已按该规则重新触发一次。";
+         render(); setTimeout(()=>{ if(route()==="schedules") render(); }, 6000); }
+    catch(e){ alert("重试失败：" + e.message); } });
+  m.querySelectorAll("[data-run-del]").forEach(b=>b.onclick=async ()=>{
+    try{ await api("/api/schedule/run/delete", { ids:[b.dataset.runDel] }); await schLoad(); render(); }
+    catch(e){ alert("删除运行记录失败：" + e.message); } });
+  $("schRunsClear") && ($("schRunsClear").onclick = async ()=>{
+    if(!confirm(`删除全部 ${schRuns.length} 条运行记录？定时规则与产物文件都不会被改动。`)) return;
+    try{ await api("/api/schedule/run/delete", { ids: schRuns.map(x=>x.id) }); await schLoad(); render(); }
+    catch(e){ alert("清空失败：" + e.message); } });
+}
+const schTaskName = (id)=> (S.tasks||[]).find(t=>t.id===id)?.title || "";
 
 async function renderNotes(m){
   m.style.padding = "";

@@ -189,6 +189,17 @@ class WorkflowDB(ResearchDB):
               task_id TEXT NOT NULL, result_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
               path TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
               PRIMARY KEY (task_id, result_id))""")
+        self.db.execute("""CREATE TABLE IF NOT EXISTS schedules (
+              id TEXT PRIMARY KEY, name TEXT NOT NULL, prompt TEXT NOT NULL DEFAULT '',
+              project_id TEXT NOT NULL DEFAULT '', frequency TEXT NOT NULL DEFAULT 'daily',
+              cron TEXT NOT NULL DEFAULT '0 9 * * *', output_dir TEXT NOT NULL DEFAULT '定时任务',
+              enabled INTEGER NOT NULL DEFAULT 1, last_run_at TEXT NOT NULL DEFAULT '',
+              next_run_at TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        self.db.execute("""CREATE TABLE IF NOT EXISTS schedule_runs (
+              id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, name TEXT NOT NULL DEFAULT '',
+              trigger TEXT NOT NULL DEFAULT 'scheduler', status TEXT NOT NULL DEFAULT 'running',
+              started_at TEXT NOT NULL, ended_at TEXT NOT NULL DEFAULT '', output_path TEXT NOT NULL DEFAULT '',
+              summary TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '')""")
         self.db.commit()
         for folder in (PAPERS, NOTES, OUT):
             folder.mkdir(parents=True, exist_ok=True)
@@ -374,6 +385,73 @@ class WorkflowDB(ResearchDB):
         folder = (base / kind) if (base and kind in names) else fallback.get(kind, OUT)
         folder.mkdir(parents=True, exist_ok=True)
         return folder
+
+    # ---------- 定时任务（照原版 automation：规则 + 每次运行一条记录） ----------
+    def schedules(self) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.db.execute("SELECT * FROM schedules ORDER BY created_at").fetchall()]
+
+    def schedule(self, sid: str) -> dict[str, Any] | None:
+        row = self.db.execute("SELECT * FROM schedules WHERE id=?", (str(sid or ""),)).fetchone()
+        return dict(row) if row else None
+
+    def schedule_save(self, data: dict[str, Any]) -> dict[str, Any]:
+        sid = str(data.get("id") or "").strip() or uuid.uuid4().hex
+        stamp = now()
+        enabled = 1 if data.get("enabled", True) else 0
+        fields = (str(data.get("name") or "未命名任务"), str(data.get("prompt") or ""),
+                  str(data.get("project_id") or ""), str(data.get("frequency") or "daily"),
+                  str(data.get("cron") or "0 9 * * *"), str(data.get("output_dir") or "定时任务"),
+                  enabled, str(data.get("next_run_at") or ""))
+        row = self.db.execute("SELECT id FROM schedules WHERE id=?", (sid,)).fetchone()
+        if row:
+            self.db.execute("""UPDATE schedules SET name=?, prompt=?, project_id=?, frequency=?, cron=?,
+                output_dir=?, enabled=?, next_run_at=?, updated_at=? WHERE id=?""", (*fields, stamp, sid))
+        else:
+            self.db.execute("INSERT INTO schedules VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (sid, *fields[:6], enabled, "", fields[7], stamp, stamp))
+        self.db.commit()
+        return self.schedule(sid) or {}
+
+    def schedule_set_enabled(self, sid: str, enabled: bool) -> None:
+        self.db.execute("UPDATE schedules SET enabled=?, updated_at=? WHERE id=?",
+                        (1 if enabled else 0, now(), str(sid or "")))
+        self.db.commit()
+
+    def schedule_delete(self, sid: str) -> None:
+        self.db.execute("DELETE FROM schedule_runs WHERE schedule_id=?", (str(sid or ""),))
+        self.db.execute("DELETE FROM schedules WHERE id=?", (str(sid or ""),))
+        self.db.commit()
+
+    def schedule_mark_run(self, sid: str, last_run_at: str, next_run_at: str) -> None:
+        self.db.execute("UPDATE schedules SET last_run_at=?, next_run_at=?, updated_at=? WHERE id=?",
+                        (str(last_run_at or ""), str(next_run_at or ""), now(), str(sid or "")))
+        self.db.commit()
+
+    def schedule_runs(self, limit: int = 80) -> list[dict[str, Any]]:
+        rows = self.db.execute("SELECT * FROM schedule_runs ORDER BY started_at DESC LIMIT ?",
+                               (max(1, min(500, int(limit))),)).fetchall()
+        return [dict(r) for r in rows]
+
+    def schedule_run_add(self, run: dict[str, Any]) -> None:
+        """同一个 id 覆盖写（先落 running，跑完再覆盖成终态）。"""
+        self.db.execute("""INSERT INTO schedule_runs VALUES (?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET status=excluded.status, ended_at=excluded.ended_at,
+            output_path=excluded.output_path, summary=excluded.summary, reason=excluded.reason""",
+                        (str(run.get("id") or uuid.uuid4().hex), str(run.get("schedule_id") or ""),
+                         str(run.get("name") or ""), str(run.get("trigger") or "scheduler"),
+                         str(run.get("status") or "running"), str(run.get("started_at") or now()),
+                         str(run.get("ended_at") or ""), str(run.get("output_path") or ""),
+                         str(run.get("summary") or ""), str(run.get("reason") or "")))
+        self.db.commit()
+
+    def schedule_run_delete(self, ids: list[str]) -> int:
+        ids = [str(i) for i in (ids or []) if str(i).strip()]
+        if not ids:
+            return 0
+        marks = ",".join("?" for _ in ids)
+        cur = self.db.execute(f"DELETE FROM schedule_runs WHERE id IN ({marks})", tuple(ids))
+        self.db.commit()
+        return int(cur.rowcount or 0)
 
     # ---------- 项目记忆（长期 = 项目要点与结论；短期 = 对话内容与细节） ----------
     def memory(self, task_id: str, kind: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
