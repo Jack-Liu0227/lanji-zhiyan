@@ -189,6 +189,25 @@ class WorkflowDB(ResearchDB):
               task_id TEXT NOT NULL, result_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
               path TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
               PRIMARY KEY (task_id, result_id))""")
+        # 团队（A 档：Leader + Partner 成员 + 派活队列 + 运行事件）—— 抄 AionUi Teams 的模型
+        self.db.execute("""CREATE TABLE IF NOT EXISTS team_members (
+              id TEXT PRIMARY KEY, task_id TEXT NOT NULL, name TEXT NOT NULL,
+              role TEXT NOT NULL DEFAULT 'member', step TEXT NOT NULL DEFAULT '',
+              prompt TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'idle',
+              note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        self.db.execute("""CREATE TABLE IF NOT EXISTS team_tasks (
+              id TEXT PRIMARY KEY, task_id TEXT NOT NULL, member_id TEXT NOT NULL DEFAULT '',
+              member_name TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '',
+              prompt TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'queued',
+              created_at TEXT NOT NULL, started_at TEXT NOT NULL DEFAULT '', ended_at TEXT NOT NULL DEFAULT '',
+              output_path TEXT NOT NULL DEFAULT '', result TEXT NOT NULL DEFAULT '',
+              reason TEXT NOT NULL DEFAULT '', trigger TEXT NOT NULL DEFAULT 'leader',
+              origin TEXT NOT NULL DEFAULT '')""")
+        self.db.execute("""CREATE TABLE IF NOT EXISTS team_events (
+              id TEXT PRIMARY KEY, team_task_id TEXT NOT NULL, task_id TEXT NOT NULL,
+              kind TEXT NOT NULL DEFAULT 'note', text TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL)""")
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_team_tasks_status ON team_tasks(status)")
         self.db.execute("""CREATE TABLE IF NOT EXISTS schedules (
               id TEXT PRIMARY KEY, name TEXT NOT NULL, prompt TEXT NOT NULL DEFAULT '',
               project_id TEXT NOT NULL DEFAULT '', frequency TEXT NOT NULL DEFAULT 'daily',
@@ -452,6 +471,75 @@ class WorkflowDB(ResearchDB):
         cur = self.db.execute(f"DELETE FROM schedule_runs WHERE id IN ({marks})", tuple(ids))
         self.db.commit()
         return int(cur.rowcount or 0)
+
+    # ---------- 团队 ----------
+    def team_members(self, task_id: str) -> list[dict[str, Any]]:
+        rows = self.db.execute(
+            "SELECT * FROM team_members WHERE task_id=? ORDER BY (role='leader') DESC, created_at",
+            (task_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def team_member(self, mid: str) -> dict[str, Any] | None:
+        row = self.db.execute("SELECT * FROM team_members WHERE id=?", (mid,)).fetchone()
+        return dict(row) if row else None
+
+    def team_member_add(self, task_id: str, name: str, role: str = "member", step: str = "",
+                        prompt: str = "") -> dict[str, Any]:
+        row = (uuid.uuid4().hex, task_id, name, role, step, prompt, "idle", "", now(), now())
+        self.db.execute("INSERT INTO team_members VALUES (?,?,?,?,?,?,?,?,?,?)", row)
+        self.db.commit()
+        return dict(self.db.execute("SELECT * FROM team_members WHERE id=?", (row[0],)).fetchone())
+
+    def team_member_update(self, mid: str, **fields: Any) -> dict[str, Any]:
+        allow = {k: v for k, v in fields.items() if k in ("name", "step", "prompt", "status", "note")}
+        if allow:
+            allow["updated_at"] = now()
+            sets = ", ".join("%s=?" % k for k in allow)
+            self.db.execute("UPDATE team_members SET %s WHERE id=?" % sets, (*allow.values(), mid))
+            self.db.commit()
+        return self.team_member(mid) or {}
+
+    def team_member_remove(self, mid: str) -> None:
+        self.db.execute("DELETE FROM team_members WHERE id=?", (mid,))
+        self.db.commit()
+
+    def team_tasks(self, task_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        if task_id:
+            rows = self.db.execute("SELECT * FROM team_tasks WHERE task_id=? ORDER BY created_at DESC LIMIT ?",
+                                   (task_id, limit)).fetchall()
+        else:
+            rows = self.db.execute("SELECT * FROM team_tasks ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def team_task(self, tid: str) -> dict[str, Any] | None:
+        row = self.db.execute("SELECT * FROM team_tasks WHERE id=?", (tid,)).fetchone()
+        return dict(row) if row else None
+
+    def team_task_add(self, task_id: str, member_id: str, member_name: str, title: str, prompt: str,
+                      trigger: str = "leader", origin: str = "") -> dict[str, Any]:
+        row = (uuid.uuid4().hex, task_id, member_id, member_name, title[:120], prompt, "queued",
+               now(), "", "", "", "", "", trigger, origin)
+        self.db.execute("INSERT INTO team_tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+        self.db.commit()
+        return dict(self.db.execute("SELECT * FROM team_tasks WHERE id=?", (row[0],)).fetchone())
+
+    def team_task_mark(self, tid: str, status: str, **fields: Any) -> None:
+        allow = {k: v for k, v in fields.items()
+                 if k in ("started_at", "ended_at", "output_path", "result", "reason")}
+        allow["status"] = status
+        sets = ", ".join("%s=?" % k for k in allow)
+        self.db.execute("UPDATE team_tasks SET %s WHERE id=?" % sets, (*allow.values(), tid))
+        self.db.commit()
+
+    def team_events(self, task_id: str, limit: int = 200) -> list[dict[str, Any]]:
+        rows = self.db.execute("SELECT * FROM team_events WHERE task_id=? ORDER BY created_at DESC LIMIT ?",
+                               (task_id, limit)).fetchall()
+        return [dict(r) for r in reversed(rows)]        # 从旧到新（读 trace 的顺序）
+
+    def team_event_add(self, team_task_id: str, task_id: str, kind: str, text: str) -> None:
+        self.db.execute("INSERT INTO team_events VALUES (?,?,?,?,?,?)",
+                        (uuid.uuid4().hex, team_task_id, task_id, kind, text[:2000], now()))
+        self.db.commit()
 
     # ---------- 项目记忆（长期 = 项目要点与结论；短期 = 对话内容与细节） ----------
     def memory(self, task_id: str, kind: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
@@ -1824,6 +1912,12 @@ TOOL_SPECS = [
     _schema("format_convert", "把稿件导出为 docx / md / html。", {"format": {"type": "string", "enum": ["docx", "md", "html"]}, "name": {"type": "string"}}, ["format"]),
     _schema("calendar_add", "在日历里加一条日程并关联当前任务。", {"title": {"type": "string"}, "date": {"type": "string", "description": "YYYY-MM-DD"}, "kind": {"type": "string"}}, ["title", "date"]),
     _schema("knowledge_query", "在本任务已入库的笔记与证据里做关键词检索。", {"query": {"type": "string"}}, ["query"]),
+    _schema("team_board", "看团队看板：成员各自状态 + 最近派活与执行情况（谁在跑、谁完成了、失败原因）。",
+            {"project": {"type": "string", "description": "项目名或 id；不填=当前项目"}}),
+    _schema("team_assign", "把一件事派给某个团队成员（Partner Agent）执行；先 team_board 看有哪些成员。",
+            {"member": {"type": "string", "description": "成员名字（或 id）"},
+             "prompt": {"type": "string", "description": "要它干什么，写清楚要什么产出"},
+             "project": {"type": "string", "description": "项目名或 id；不填=当前项目"}}, ["member", "prompt"]),
 ]
 
 TOOL_NAMES = [t["function"]["name"] for t in TOOL_SPECS]
@@ -1915,6 +2009,13 @@ def _knowledge_query(db: "WorkflowDB", task_id: str, query: str) -> dict[str, An
 
 def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], scope: str = "") -> Any:
     """scope = 当前步骤（''/'idea'/'outline'/'write'/'review'）—— doc_read/doc_write 据此决定动哪个文件。"""
+    if name in ("team_board", "team_assign"):
+        import team as _team                                  # 延迟导入：team 反向依赖 workflow
+        tid = _team_project(db, task_id, args.get("project", ""))
+        if name == "team_board":
+            return _team.board(tid)
+        return _team.assign(tid, args.get("member", ""), args.get("prompt", ""), trigger="leader",
+                            origin="leader@" + task_id[:8])
     if name == "memory_save":
         return db.add_memory(task_id, args.get("kind", "long"), args.get("text", ""))
     if name == "library_overview":
@@ -2468,6 +2569,25 @@ AGENT_SYSTEM = """你是「科研工作 1.0」的研究 Agent，用中文工作�
 5. 一个目标尽量用最少的工具调用完成；任务完成后直接给结论。"""
 
 
+def _team_project(db: "WorkflowDB", task_id: str, raw: str) -> str:
+    """团队派活的落点项目：给了名字/ID 用它；没给就用当前 task（项目对话时就是该项目）。
+    首页通用对话没有项目 → 必须点名，否则直接报错（不许瞎猜一个项目去执行）。"""
+    raw = (raw or "").strip()
+    tasks = {t["id"]: t for t in db.tasks()}
+    if raw:
+        if raw in tasks:
+            return raw
+        low = raw.lower()
+        for tid, t in tasks.items():
+            if low and low in (t["title"] or "").lower():
+                return tid
+        raise ValueError("没有叫「%s」的项目（现有：%s）" % (raw, "、".join(t["title"] for t in tasks.values()) or "空"))
+    row = db.db.execute("SELECT id FROM chats WHERE id=?", (task_id,)).fetchone()
+    if row:
+        raise ValueError("这是首页通用对话，没绑项目 —— 请用 project 参数指明要派给哪个项目")
+    return task_id
+
+
 def _global_brief(db: "WorkflowDB") -> str:
     """全局 Leader 的简报：有哪些项目、各自走到哪、库里有多少东西。
     首页 Agent 以前完全不知道项目存在（ctx 只说「没有绑定任何项目」）—— 这就是 Leader 缺的视野。"""
@@ -2508,6 +2628,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                "任意文献/笔记/日程，也能新建项目、加日程、检索下载精读文献、写笔记。\n"
                "项目工作流里跑的是 **绑定单个项目的 Partner Agent**；要在某个项目内部推进，就按「哪个项目、要什么产出」把话说清，"
                "或建议用户进那个项目的「项目空间 / 工作流」。\n"
+               "你也可以用 `team_board` 看某项目团队的成员与执行状态、用 `team_assign` 直接把活派给某个项目的 Partner Agent"
+               "（它们排队执行，产出落在该项目目录的「团队/」里）。\n"
                f"这是通用对话「{task['title']}」，产出目录：{db.out_dir(task_id)}" + _global_brief(db))
     else:
         ctx = (f"你是《{task['title']}》项目的 **Partner Agent**：绑定单个项目，只在这个项目范围内工作；"
@@ -2585,6 +2707,13 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
 def _brief(name: str, result: Any) -> str:
     if not isinstance(result, dict):
         return str(result)[:120]
+    if name == "team_board":
+        c = result.get("counts") or {}
+        return "团队 %d 人 · 排队 %d · 运行 %d · 完成 %d · 失败 %d" % (
+            len(result.get("members") or []), c.get("queued", 0), c.get("running", 0),
+            c.get("done", 0), c.get("failed", 0))
+    if name == "team_assign":
+        return "已派给「%s」，排队等待执行" % result.get("member_name", "")
     if name == "paper_search":
         return f"检索到 {result.get('found')} 条，新增入库 {len(result.get('saved') or [])} 条"
     if name == "paper_download":

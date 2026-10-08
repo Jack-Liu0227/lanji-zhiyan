@@ -28,6 +28,7 @@ import papertran                 # 论文翻译页：PDF 服务 / 元数据 / Ba
 import rss                       # 情报日报：RSS 抓取/解析
 import vault                     # 知识库：Obsidian Vault 扫描 / 状态写回
 import schedule                  # 定时任务：抄原版 automation（只在应用活着时调度）
+import team                      # 团队：Leader + Partner 成员 + 派活队列（抄 AionUi Teams）
 import zotero                    # Zotero 本机 Local API 只读接入（笔记页；不碰 zotero.sqlite）
 from research_core import ResearchDB
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
@@ -43,6 +44,7 @@ HERE = Path(__file__).resolve().parent
 WEB = HERE / "web"
 DB_PATH = Path(os.environ.get("RESEARCH_WORKBENCH_DB", HERE / "data" / "research.sqlite3"))
 schedule.DB_PATH = DB_PATH          # 定时任务共用同一个库（schedule 不反向 import server）
+team.DB_PATH = DB_PATH              # 团队共用同一个库
 UPLOADS = HERE / "data" / "uploads"
 PORT = 8765
 CARD_W, CARD_H = 1117, 625      # 「开始卡片」尺寸（CSS 逻辑像素）
@@ -798,6 +800,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/folder/pick":
                 return self._json(self._pick_folder((q.get("initial") or [""])[0],
                                                     (q.get("title") or [""])[0] or "选择产出文件夹"))
+            if path == "/api/team":                      # 团队看板：成员状态 + 派活队列 + 运行事件
+                try:
+                    return self._json(team.board((q.get("id") or [""])[0]))
+                except ValueError as exc:
+                    return self._json({"error": str(exc), "members": [], "tasks": [], "counts": {}}, 400)
             if path == "/api/schedules":                 # 定时任务页：规则 + 最近运行（照原版两块结构）
                 with WorkflowDB(DB_PATH) as db:
                     return self._json({"schedules": db.schedules(), "runs": db.schedule_runs(),
@@ -960,6 +967,24 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"note": db.save_md_note(data.get("id", ""), data.get("title", ""),
                                                                data.get("content", ""), None if tid is None else str(tid))})
 
+                if path.startswith("/api/team/"):           # 团队：成员增删改 / 派活 / 取消 / 重试
+                    b = data or {}
+                    if path == "/api/team/member/add":
+                        return self._json({"member": team.add_member(
+                            b.get("id", ""), b.get("name", ""), b.get("step", ""), b.get("prompt", ""))})
+                    if path == "/api/team/member/update":
+                        return self._json({"member": team.update_member(
+                            b.get("member_id", ""), name=b.get("name"), step=b.get("step"), prompt=b.get("prompt"))})
+                    if path == "/api/team/member/remove":
+                        return self._json(team.remove_member(b.get("member_id", "")))
+                    if path == "/api/team/assign":
+                        return self._json({"task": team.assign(
+                            b.get("id", ""), b.get("member", ""), b.get("prompt", ""),
+                            b.get("title", ""), "manual" if b.get("manual") else "leader")})
+                    if path == "/api/team/task/cancel":
+                        return self._json(team.cancel(b.get("row_id", "")))
+                    if path == "/api/team/task/retry":
+                        return self._json(team.retry(b.get("row_id", "")))
                 if path.startswith("/api/schedule/"):      # 定时任务：保存/启停/删除/立即运行/删运行记录
                     if path == "/api/schedule/save":
                         name = str(data.get("name") or "").strip()
@@ -1249,6 +1274,7 @@ def main() -> int:
         srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         schedule.start()          # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
+        team.start_worker()       # 团队派活队列（串行：一次跑一个成员）
         print(f"科研工作 1.0 已启动：{url}")
     if "--no-open" not in sys.argv:
         # 已经有「这一版」的窗口 → 把它从最小化恢复并置前，不再开新的

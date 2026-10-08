@@ -320,6 +320,10 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .sp-kv:first-of-type{border-top:0}
 .sp-kv span{color:var(--muted);flex:none;width:9em}
 .sp-kv b{font-weight:600;overflow-wrap:anywhere}
+.sp-acts{display:flex;gap:6px;flex:none;flex-wrap:wrap}
+.tm-ev{flex-basis:100%;margin-top:6px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;font-size:12px;color:var(--muted);display:grid;gap:4px;max-height:280px;overflow:auto}
+.tm-ev-k{display:inline-block;min-width:6em;color:var(--accent);font-weight:600;font-family:ui-monospace,Consolas,monospace}
+.tm-ev-t{margin-right:8px;opacity:.7;font-variant-numeric:tabular-nums}
 .pf-dir{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:4px 6px 4px 12px}
 .pf-dir .dp{flex:1;min-width:0;font-size:13px;color:var(--muted-fg,var(--muted));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Consolas,monospace}
 .pf-dir.set .dp{color:inherit}
@@ -4841,8 +4845,8 @@ const schTaskName = (id)=> (S.tasks||[]).find(t=>t.id===id)?.title || "";
 
 /* ---------------- 项目空间（照原版 project-space：页头 + tab + 概览四卡 + 快照；
      只聚合本应用真有的数据，「任务/矩阵/资源关系/知识库」四个 tab 没有对应物 → 不做空壳） ---------------- */
-let spTab = "overview", spId = null;
-const SP_TABS = [["overview","概览"],["papers","文献"],["notes","笔记"],["calendar","日程"]];
+let spTab = "overview", spId = null, spTeam = null, spOpen = null;
+const SP_TABS = [["overview","概览"],["team","团队"],["papers","文献"],["notes","笔记"],["calendar","日程"]];
 function spProg(d){
   const stages = (S.stages||[]).map(s=>s.key);
   const map = d.stage_map || {};
@@ -4879,6 +4883,59 @@ function spBodyHTML(d){
         <div class="sp-nm">${esc(e.title||"")}</div><div class="sp-meta">${esc(e.date||"")}${e.time?" "+esc(e.time):""}${e.done?" · 已完成":""}</div></div></div>`).join("")
       : `<div class="hint" style="margin-top:10px">本月没有该项目的事件。</div>`}</div>`;
   }
+  if(spTab === "team"){
+    const D = spTeam || {};
+    if(D.error) return `<div class="card" style="margin-top:12px"><div class="msg error">读取团队失败：${esc(D.error)}</div></div>`;
+    const ms = D.members||[], tasks = D.tasks||[], c = D.counts||{};
+    const leader = ms.find(m=>m.role==="leader") || {};
+    const others = ms.filter(m=>m.role!=="leader");
+    const stepOpts = (D.steps||[]).map(s=>`<option value="${s}">${esc(s)}</option>`).join("");
+    const st = (s)=>`<span class="pill ${s==="done"||s==="running"?"ok":(s==="failed"?"":(s==="queued"?"warn":""))}" ${s==="failed"?'style="color:var(--err)"':""}>${esc(s||"idle")}</span>`;
+    const icon = (t)=>({running:"⏳",done:"✅",failed:"⚠",canceled:"⊘",blocked:"⛔"}[t]||"•");
+    return `
+      <div class="card" style="margin-top:12px">
+        <div class="sch-head"><div><p class="inst-label">TEAM / LEADER</p><h3>团队</h3></div>
+          <span class="pill">${ms.length} 人</span><span class="pill ok">Leader 不可移除</span></div>
+        <div class="sp-row" style="align-items:flex-start"><span class="sp-ic">🧭</span>
+          <div class="sp-main"><div class="sp-nm">${esc(leader.name||"全局 Leader")} <span class="pill ok">Leader</span></div>
+            <div class="sp-meta">${esc(D.leader_brief||"")}</div></div></div>
+        ${others.length?others.map(m=>`<div class="sp-row"><span class="sp-ic">🤝</span>
+          <div class="sp-main"><div class="sp-nm">${esc(m.name)} ${m.step?`<span class="pill">${esc(m.step)}</span>`:""} ${st(m.status)}</div>
+            <div class="sp-meta">${esc(m.prompt||"（没写职责说明）")}${m.note?" · "+esc(m.note):""}</div></div>
+          <div class="sp-acts"><button class="btn ghost" data-tm-assign="${m.id}">派活</button>
+            <button class="btn ghost" data-tm-rename="${m.id}">改名</button>
+            <button class="btn ghost" data-tm-del="${m.id}" style="color:var(--err)">移除</button></div></div>`).join("")
+        :`<div class="hint" style="margin-top:8px">还没有 Partner 成员。加一个，或直接让 Leader 帮你安排。</div>`}
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+          <input class="control" id="tmName" placeholder="新成员名字，如：检索员" style="max-width:200px">
+          <select class="control" id="tmStep" style="max-width:200px"><option value="">不绑工作流步骤</option>${stepOpts}</select>
+          <button class="btn ghost" id="tmAdd">＋ 加成员</button>
+          <input class="control" id="tmPrompt" placeholder="它的职责说明（可选）：如「只做开放获取检索，产出候选表」" style="flex:1;min-width:220px">
+        </div></div>
+      <div class="card" style="margin-top:12px">
+        <div class="sch-head"><div><p class="inst-label">ASSIGN / PARTNER AGENT</p><h3>派活</h3></div>
+          <button class="btn ghost" id="tmTellLeader">没有合适的？让 Leader 安排 →</button></div>
+        <div style="display:grid;grid-template-columns:200px 1fr auto;gap:8px;align-items:start;margin-top:8px">
+          <select class="control" id="tmAssignee">${others.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join("")||`<option value="">（先加成员）</option>`}</select>
+          <textarea class="control" id="tmTask" rows="2" placeholder="要它干什么？写清要什么产出，例：检索 O3 型钠电正极近三年掺杂改性论文，产出候选表（标题/年份/DOI）"></textarea>
+          <button class="btn" id="tmDo">派活</button></div></div>
+      <div class="card" style="margin-top:12px">
+        <div class="sch-head"><div><p class="inst-label">RUN BOARD</p><h3>运行看板</h3></div>
+          <span class="hint">排队 ${c.queued||0} · 运行 ${c.running||0} · 完成 ${c.done||0} · 失败 ${c.failed||0} · 取消 ${c.canceled||0}</span>
+          <span style="flex:1"></span><button class="btn ghost" id="tmRefresh">刷新</button></div>
+        <div class="hint" style="margin-top:6px">${esc(D.serial_note||"")}</div>
+        ${tasks.length?tasks.map(t=>`<div class="sp-row" style="flex-wrap:wrap">
+          <span class="sp-ic">${icon(t.status)}</span>
+          <div class="sp-main"><div class="sp-nm">${esc(t.title||"")} ${st(t.status)}</div>
+            <div class="sp-meta">给「${esc(t.member_name)}」· ${esc(t.trigger)} · ${esc(spWhen(t.created_at))}${t.started_at?" → "+esc(spWhen(t.ended_at||"…")):""}${t.output_path?" · 产物 "+esc(outName(t.output_path)):""}${t.reason?" · "+esc(t.reason):""}</div></div>
+          <div class="sp-acts"><button class="btn ghost" data-tm-open="${t.id}">${spOpen===t.id?"收起":"详情"}</button>
+            ${t.status==="queued"?`<button class="btn ghost" data-tm-cancel="${t.id}">取消</button>`:""}
+            ${(t.status==="failed"||t.status==="canceled")?`<button class="btn ghost" data-tm-retry="${t.id}">重试</button>`:""}</div>
+          ${spOpen===t.id?`<div class="tm-ev">${(t.events||[]).map(e=>`<div><span class="tm-ev-k">${esc(e.kind)}</span><span class="tm-ev-t">${esc(spWhen(e.created_at).slice(11))}</span>${esc(e.text)}</div>`).join("")||`<div class="hint">没有事件</div>`}</div>`:""}
+        </div>`).join("")
+        :`<div class="hint" style="margin-top:10px">还没有派过活。上面派一个，或让 Leader 安排。</div>`}
+      </div>`;
+  }
   const stages = (S.stages||[]).map(s=>({key:s.key, label:s.label, st:(d.stage_map||{})[s.key]||""}));
   const recent = (d.steps||[]).slice(0,6);
   return `
@@ -4913,6 +4970,49 @@ function spBodyHTML(d){
         </div></div>`).join(""):`<div class="hint" style="margin-top:10px">还没有步骤记录。</div>`}</div>`;
 }
 function spBind(d){
+  const tmApi = async (path, body, what)=>{
+    try{ await api(path, body); }catch(e){ alert((what||"操作")+"失败："+e.message); return false; }
+    spTeam = null; render(); return true;
+  };
+  const g = (id)=>$(id);
+  if(g("tmAdd")) g("tmAdd").onclick = ()=>{
+    const name=(g("tmName").value||"").trim(); if(!name) return alert("先写个名字");
+    tmApi("/api/team/member/add", {id:curTask, name, step:g("tmStep").value, prompt:(g("tmPrompt").value||"").trim()}, "加成员");
+  };
+  if(g("tmDo")) g("tmDo").onclick = ()=>{
+    const member=g("tmAssignee").value, prompt=(g("tmTask").value||"").trim();
+    if(!member) return alert("先加一个成员"); if(!prompt) return alert("要派什么活？");
+    tmApi("/api/team/assign", {id:curTask, member, prompt, manual:true}, "派活");
+  };
+  if(g("tmRefresh")) g("tmRefresh").onclick = ()=>{ spTeam=null; render(); };
+  if(g("tmTellLeader")) g("tmTellLeader").onclick = ()=>{
+    const title=(spData&&spData.task&&spData.task.title)||"这个项目";
+    openTab("agent");
+    setTimeout(()=>{ const t=$("ask"); if(t){ t.value=`帮我给《${title}》的团队加一个擅长 ___ 的成员`; t.focus(); } }, 80);
+  };
+  document.querySelectorAll("[data-tm-assign]").forEach(b=>b.onclick=()=>{
+    const a=g("tmAssignee"); if(a) a.value=b.dataset.tmAssign;
+    const t=g("tmTask"); if(t){ t.scrollIntoView({block:"center",behavior:"smooth"}); t.focus(); }
+  });
+  document.querySelectorAll("[data-tm-rename]").forEach(b=>b.onclick=()=>{
+    const cur=((spTeam&&spTeam.members)||[]).find(m=>m.id===b.dataset.tmRename)||{};
+    const name=window.prompt("新名字：", cur.name||""); if(!name) return;
+    tmApi("/api/team/member/update", {member_id:b.dataset.tmRename, name}, "改名");
+  });
+  document.querySelectorAll("[data-tm-del]").forEach(b=>b.onclick=()=>{
+    if(!window.confirm("移除这个成员？（已派给它的任务会留在看板里）")) return;
+    tmApi("/api/team/member/remove", {member_id:b.dataset.tmDel}, "移除成员");
+  });
+  document.querySelectorAll("[data-tm-open]").forEach(b=>b.onclick=()=>{
+    spOpen = spOpen===b.dataset.tmOpen ? null : b.dataset.tmOpen; render();
+  });
+  document.querySelectorAll("[data-tm-cancel]").forEach(b=>b.onclick=()=>tmApi("/api/team/task/cancel", {row_id:b.dataset.tmCancel}, "取消"));
+  document.querySelectorAll("[data-tm-retry]").forEach(b=>b.onclick=()=>tmApi("/api/team/task/retry", {row_id:b.dataset.tmRetry}, "重试"));
+  const live = ((spTeam&&spTeam.counts)||{});
+  if((live.queued||0)+(live.running||0) > 0){          // 有活在看板上就自己刷，别让人手点
+    clearTimeout(window.__tmTick);
+    window.__tmTick = setTimeout(()=>{ if(route()==="space" && spTab==="team"){ spTeam=null; render(); } }, 3000);
+  }
   const go = (id, route)=>{ const b=$(id); if(b) b.onclick = ()=>openTab(route); };
   go("spToFlow","workflow"); go("spToNote","notes"); go("spToCal","calendar"); go("spToLib","library");
   const del = $("spDel");
@@ -4926,8 +5026,12 @@ function spBind(d){
 async function renderSpace(m){
   m.style.padding = "";
   if(!curTask){ m.innerHTML = needTask(); return; }
-  if(spId !== curTask){ spId = curTask; spTab = "overview"; }
+  if(spId !== curTask){ spId = curTask; spTab = "overview"; spTeam = null; spOpen = null; }
   m.innerHTML = `<div class="muted">正在读取项目…</div>`;
+  if(spTab === "team" && !spTeam){
+    try{ spTeam = await api("/api/team?id=" + encodeURIComponent(curTask)); }
+    catch(e){ spTeam = { error: e.message }; }
+  }
   let d;
   try{ d = await api("/api/task?id=" + encodeURIComponent(curTask)); }
   catch(e){ m.innerHTML = `<div class="msg error">读取项目失败：${esc(e.message)}</div>`; return; }
