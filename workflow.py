@@ -2468,6 +2468,26 @@ AGENT_SYSTEM = """你是「科研工作 1.0」的研究 Agent，用中文工作�
 5. 一个目标尽量用最少的工具调用完成；任务完成后直接给结论。"""
 
 
+def _global_brief(db: "WorkflowDB") -> str:
+    """全局 Leader 的简报：有哪些项目、各自走到哪、库里有多少东西。
+    首页 Agent 以前完全不知道项目存在（ctx 只说「没有绑定任何项目」）—— 这就是 Leader 缺的视野。"""
+    lines: list[str] = []
+    for t in db.tasks():
+        tid = t["id"]
+        try:
+            papers = db.db.execute("SELECT COUNT(*) AS c FROM papers WHERE task_id=?", (tid,)).fetchone()["c"]
+            notes = db.db.execute("SELECT COUNT(*) AS c FROM notes WHERE task_id=?", (tid,)).fetchone()["c"]
+        except Exception:
+            papers = notes = 0
+        lines.append(f"  · {t['title']}｜阶段 {db.stage_now(tid, t['stage'])}｜文献 {papers}｜笔记 {notes}｜更新 {(t['updated_at'] or '')[:16]}")
+    out = ("\n【全局简报】共 %d 个项目：%s" % (len(lines), ("\n" + "\n".join(lines)) if lines else "（还没有项目，可以先用 create 项目的能力建一个）"))
+    try:
+        out += "\n【大笔记】%d 篇（笔记页那批）" % len(db.md_notes())
+    except Exception:
+        pass
+    return out
+
+
 def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_steps: int = 6,
               system: str | None = None, tools: list[dict[str, Any]] | None = None,
               extra_context: str = "", scope: str = "", publish: bool = True) -> dict[str, Any]:
@@ -2483,10 +2503,16 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         say({"type": "user", "content": text})
     task = db.summary(task_id)["task"]
     chat_row = db.db.execute("SELECT * FROM chats WHERE id=?", (task_id,)).fetchone()
-    if chat_row:  # 通用 Agent 对话：不绑项目，产出落在对话自己的输出文件夹
-        ctx = f"这是通用助手对话「{task['title']}」，没有绑定任何项目。\n产出目录：{db.out_dir(task_id)}"
+    if chat_row:  # 首页 Agent = 全局 Leader：不绑项目，但有全局视野
+        ctx = ("你是这个软件的 **全局 Leader**（首页 Agent，不属于任何单个项目）：可以跨项目工作 —— 查任意项目、"
+               "任意文献/笔记/日程，也能新建项目、加日程、检索下载精读文献、写笔记。\n"
+               "项目工作流里跑的是 **绑定单个项目的 Partner Agent**；要在某个项目内部推进，就按「哪个项目、要什么产出」把话说清，"
+               "或建议用户进那个项目的「项目空间 / 工作流」。\n"
+               f"这是通用对话「{task['title']}」，产出目录：{db.out_dir(task_id)}" + _global_brief(db))
     else:
-        ctx = (f"当前项目：{task['title']}\n研究问题：{task['question']}\n"
+        ctx = (f"你是《{task['title']}》项目的 **Partner Agent**：绑定单个项目，只在这个项目范围内工作；"
+               "跨项目的事让用户回首页 Agent（全局 Leader）做。\n"
+               f"当前项目：{task['title']}\n研究问题：{task['question']}\n"
                f"关键词 / 材料体系：{task['material_system']}\n项目 ID：{task_id}\n产出目录：{db.out_dir(task_id)}")
     if extra_context:
         ctx += "\n\n" + extra_context

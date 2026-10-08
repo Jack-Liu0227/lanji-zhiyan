@@ -179,6 +179,35 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("失败", out["events"][1]["summary"])
 
 
+    def test_agent_roles_leader_vs_partner(self) -> None:
+        """分档：首页通用对话 = 全局 Leader（带全局简报，能看到所有项目）；
+        项目对话 = 绑定该项目的 Partner Agent。锁住这两句口径，别以后被改回去。"""
+        self.db.add_model("假模型3", "http://127.0.0.1:1/v1", "fake3", "sk", activate=True)
+        proj = self.db.create_task("钠电掺杂", "选一种金属掺杂", "NFM", "")
+        chat = self.db.create_chat("通用对话")
+        seen: dict = {}
+
+        def fake_chat_raw(profile, messages, tools=None, **kw):
+            seen["ctx"] = messages[1]["content"]          # [0]=system, [1]=上下文
+            return {"role": "assistant", "content": "好。", "tool_calls": []}
+
+        old = workflow.chat_raw
+        workflow.chat_raw = fake_chat_raw
+        try:
+            run_agent(self.db, proj, "项目内问一句")
+            partner = seen["ctx"]
+            run_agent(self.db, chat, "全局问一句")
+            leader = seen["ctx"]
+            brief = workflow._global_brief(self.db)
+        finally:
+            workflow.chat_raw = old
+        self.assertIn("Partner Agent", partner)
+        self.assertIn("钠电掺杂", partner)
+        self.assertIn("全局 Leader", leader)
+        self.assertIn("全局简报", leader)
+        self.assertIn("钠电掺杂", leader)                 # Leader 要能看到项目名
+        self.assertIn("全局简报", brief)
+
     def test_delete_task_cascades_and_spares_user_files(self) -> None:
         """删项目：子表（含只能经 papers 关联的 paper_pages/evidence）清干净，别的项目不受影响；
         磁盘上只清 data/papers 里的副本 —— 用户自己的原文件必须还在。"""

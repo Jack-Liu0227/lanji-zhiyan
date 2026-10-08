@@ -294,6 +294,8 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .sch-run .acts{margin-left:auto;display:flex;gap:6px}
 
 /* ===== 项目空间（版式照原版 project-space.tsx：页头+tab+概览四卡+快照；色/控件全走主题变量） ===== */
+.wf-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px}
+.wf-head .hint{font-size:12.5px}
 .sp-tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);margin-top:12px}
 .sp-tab{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);font:inherit;font-size:13px;padding:8px 12px;cursor:pointer;white-space:nowrap}
 .sp-tab:hover{color:var(--fg)}
@@ -1476,7 +1478,7 @@ function renderAgent(m){
       <header class="at-head">
         <div class="at-heading"><span style="color:var(--accent);font-size:15px">✦</span>
           <div><h1 id="at-title">${esc(cur?cur.title:"Hi，今天有什么安排？")}</h1>
-          <p id="at-sub">${cur?`${esc(assistantKey())} · 通用助手（不绑项目） · 产出 ${esc(outName(cur.out_dir))}`:"通用助手：不绑项目，每个对话有自己的记忆和输出文件夹"}</p></div></div>
+          <p id="at-sub">${cur?`${esc(assistantKey())} · 全局 Leader · 跨项目 · 产出 ${esc(outName(cur.out_dir))}`:"全局 Leader：不属于任何单个项目 —— 可以跨项目查文献/笔记/日程、建项目、加日程；项目工作流里跑的是绑定该项目的 Partner Agent"}</p></div></div>
         <button class="at-profile" id="at-profile" title="在「设置」里改模型与权限">
           <span>⚙</span><b>${esc(S.active? (S.active.name+" · "+S.active.model) : "未选择模型")}</b><em>自动批准</em></button>
       </header>
@@ -1570,7 +1572,7 @@ function renderAgent(m){
     btn.disabled=false;
   };
   $("modpick").onchange = async (e)=>{ if(!e.target.value) return; await api("/api/models/active",{id:e.target.value}); await refreshState(false); render(); };
-  $("assist").oninput = (e)=>{ localStorage.setItem("rw-assist", e.target.value.trim()||"researcher"); const s=$("at-sub"); if(s) s.textContent = `${assistantKey()} · 通用助手（不绑项目） · 产出 ${cur?outName(cur.out_dir):"默认产出目录"}`; };
+  $("assist").oninput = (e)=>{ localStorage.setItem("rw-assist", e.target.value.trim()||"researcher"); const s=$("at-sub"); if(s) s.textContent = `${assistantKey()} · 全局 Leader · 跨项目 · 产出 ${cur?outName(cur.out_dir):"默认产出目录"}`; };
   // 输入区（我们自己的：＋ 菜单 / 拖放 / 粘贴 / 自动长高）
   $("send").onclick = send;
   $("ask").onkeydown = (e)=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();} };
@@ -1816,7 +1818,7 @@ function loadAgentMeta(){                            // 从已存的对话里回
   if(room){                                            // 首次提问后标题会变，顺手同步抬头
     const h=$("at-title"), s=$("at-sub");
     if(h) h.textContent = room.title;
-    if(s) s.textContent = `${assistantKey()} · 通用助手（不绑项目） · 产出 ${outName(room.out_dir)}`;
+    if(s) s.textContent = `${assistantKey()} · 全局 Leader · 跨项目 · 产出 ${outName(room.out_dir)}`;
   }
   stPaint();
 }
@@ -2512,6 +2514,11 @@ function enBind(){
 function renderWorkflow(m){
   m.style.padding = "";        // 清掉 Agent 页留下的 10px 内边距，让竖线的负边距对得上 .main 的 16px
   m.innerHTML = needTask() || `
+    <div class="wf-head">
+      <span class="pill ok" title="绑定单个项目的专用 agent">Partner Agent</span>
+      <span class="hint">绑定《${esc((S.tasks||[]).find(t=>t.id===curTask)?.title||"当前项目")}》· 只在这个项目范围内工作；跨项目的事回首页 Agent（全局 Leader）</span>
+      <span style="flex:1"></span>
+      <button class="btn ghost" id="wfToLeader">回首页 Leader →</button></div>
     <div class="wf-page">
       <div class="wf-rail">${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}">${STAGE[s]}</button>`).join("")}</div>
       <div class="wf-body">${WF_ORDER.map(s=> PANELS[s] ? PANELS[s](s===wfStep)
@@ -2530,6 +2537,7 @@ function renderWorkflow(m){
     if(wfStep==="convert") cvBind();
     if(wfStep==="entrans") enBind();
   });
+  const wfL = $("wfToLeader"); if(wfL) wfL.onclick = ()=>openTab("agent");
   if(wfStep==="idea") iwBind(m);
   if(wfStep==="search") wsBind(m);
   if(wfStep==="download") dlBind(m);
@@ -4927,16 +4935,18 @@ async function renderSpace(m){
   const opts = (S.tasks||[]).map(x=>`<option value="${x.id}" ${x.id===curTask?"selected":""}>${esc(x.title)}</option>`).join("");
   m.innerHTML = `
     <div class="card"><div class="sch-head">
-      <div><p class="inst-label">WORKSPACE / PROJECT</p><h3>${esc(t.title||"项目空间")}</h3>
+      <div><p class="inst-label">WORKSPACE / PROJECT</p><h3>${esc(t.title||"项目空间")} <span class="pill ok" title="绑定该项目的专用 agent">Partner Agent</span></h3>
         <p>项目级聚合只读取已关联的本地数据；写操作回到各领域的 Command 和安全通道。归档可恢复，外部文件不会被删除。</p></div>
       <select id="spPick" class="control" style="max-width:200px" title="选择项目空间">${opts}</select>
-      <button class="btn" id="spFlow">进入工作流 →</button></div></div>
+      <button class="btn" id="spFlow">进入工作流 →</button>
+      <button class="btn ghost" id="spLeader">问全局 Leader →</button></div></div>
     <div class="sp-tabs" id="spTabs">${SP_TABS.map(([k,l])=>`<button class="sp-tab ${k===spTab?"on":""}" data-sp-tab="${k}">${l}</button>`).join("")}</div>
     <div class="card" style="margin-top:12px"><div class="hint" style="display:flex;gap:14px;flex-wrap:wrap">
       <span>项目 ID：${esc(curTask)}</span><span class="sp-stage">阶段：${esc(t.stage_now||"未开始")}</span><span>更新：${esc(spWhen(t.updated_at))}</span></div></div>
     <div id="spBody"></div>`;
   $("spPick").onchange = (e)=>{ curTask = e.target.value; localStorage.setItem("rw-task", curTask); spId = null; render(); };
   $("spFlow").onclick = ()=>openTab("workflow");
+  const sl = $("spLeader"); if(sl) sl.onclick = ()=>openTab("agent");
   m.querySelectorAll("[data-sp-tab]").forEach(b=>b.onclick=()=>{ spTab = b.dataset.spTab; render(); });
   $("spBody").innerHTML = spBodyHTML(d);
   spBind(d);
