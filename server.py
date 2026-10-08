@@ -27,6 +27,7 @@ from typing import Any
 import papertran                 # 论文翻译页：PDF 服务 / 元数据 / BabelDOC 任务
 import rss                       # 情报日报：RSS 抓取/解析
 import vault                     # 知识库：Obsidian Vault 扫描 / 状态写回
+import zotero                    # Zotero 本机 Local API 只读接入（笔记页；不碰 zotero.sqlite）
 from research_core import ResearchDB
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
@@ -798,6 +799,29 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/mdnotes":
                 with WorkflowDB(DB_PATH) as db:
                     return self._json({"notes": db.md_notes()})
+            if path == "/api/zotero/status":            # Zotero 本机只读接入（笔记页用）
+                return self._json(zotero.status(q.get("base", [""])[0] or None))
+            if path == "/api/zotero/collections":
+                try:
+                    return self._json(zotero.collections(q.get("base", [""])[0] or None))
+                except zotero.ZoteroError as exc:
+                    return self._json({"error": str(exc), "collections": []}, 400)
+            if path == "/api/zotero/items":
+                try:
+                    return self._json(zotero.items(
+                        q.get("base", [""])[0] or None,
+                        (q.get("collection") or [""])[0],
+                        (q.get("q") or [""])[0],
+                        int((q.get("start") or ["0"])[0] or 0),
+                        int((q.get("limit") or ["50"])[0] or 50)))
+                except (zotero.ZoteroError, ValueError) as exc:
+                    return self._json({"error": str(exc), "items": []}, 400)
+            if path == "/api/zotero/note":              # 条目 → 可存成笔记的 title/content（不落盘）
+                try:
+                    return self._json(zotero.note_for(q.get("base", [""])[0] or None,
+                                                      (q.get("key") or [""])[0]))
+                except zotero.ZoteroError as exc:
+                    return self._json({"error": str(exc)}, 400)
             if path == "/api/pdf":                       # 论文翻译页的阅读器：按入库记录回吐 PDF 字节
                 with WorkflowDB(DB_PATH) as db:
                     f = papertran.pdf_path(db, (q.get("id") or [""])[0])

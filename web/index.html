@@ -1123,6 +1123,24 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
   </div>
 </div>
 
+<div id="zoteroModal" class="modal hidden">
+  <div class="modal-mask"></div>
+  <div class="modal-dialog modal-wide">
+    <div class="modal-head"><h3>从 Zotero 取文献</h3><button class="modal-close" id="btnZotClose">✕</button></div>
+    <div class="modal-body">
+      <p class="modal-desc" id="zotStatus">正在连接 Zotero…</p>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <select id="zotCollection" class="control" style="max-width:260px"></select>
+        <input id="zotQuery" class="control" placeholder="搜索标题 / 作者 / 标签" style="max-width:260px">
+        <button class="btn ghost" id="zotSearch">搜索</button>
+        <span class="hint" id="zotCount"></span>
+      </div>
+      <div id="zotList" class="md-note-list" style="max-height:44vh;overflow:auto"></div>
+    </div>
+    <div class="modal-foot"><button class="btn" id="btnZotClose2">关闭</button></div>
+  </div>
+</div>
+
 <script src="/vendor/splash.js"></script>
 <script src="/vendor/kb3d.js"></script>
 <script src="/vendor/lunar/lunar.js"></script>
@@ -4504,6 +4522,7 @@ function mdBind(m){
   $("btnMdImport").onclick = ()=>$("mdFileInput").click();
   $("mdFileInput").onchange = (e)=>{ mdImport(e.target.files); e.target.value=""; };
   $("mdNoteSearch").oninput = mdPaintList;
+  $("btnMdZotero").onclick = zotOpen;
   $("mdNoteList").onclick = (e)=>{
     const it = e.target.closest("[data-md-note]");
     if(!it || it.dataset.mdNote===mdActiveId) return;
@@ -4553,6 +4572,68 @@ function mdBind(m){
     root.classList.remove("md-view-dragging");
   }));
 }
+/* ---------------- Zotero 接入（只读；照原版科研工作台：本机 Local API 127.0.0.1:23119） ----------------
+   不读 zotero.sqlite、不写回、不后台同步。取到的条目走原有「新建笔记」，所以前台流程不变。 */
+let zotRows = [], zotStart = 0, zotMore = false;
+const zotSub = (it)=>[ (it.creators||[]).slice(0,3).join(", "), it.year, it.venue ].filter(Boolean).join(" · ");
+function zotRowHTML(it){
+  const badge = it.type === "note" ? `<em class="md-bind">📝 Zotero 笔记</em>`
+              : (it.doi ? `<em class="md-bind">DOI</em>` : "");
+  return `<div class="md-note-item" data-zot-key="${esc(it.key)}">
+      <b>${esc(it.title || "(无标题)")}</b>${badge}<span>${esc(zotSub(it))}</span></div>`;
+}
+function zotClose(){ $("zoteroModal")?.classList.add("hidden"); }
+async function zotOpen(){
+  const box = $("zoteroModal"); if(!box) return;
+  box.classList.remove("hidden");
+  $("zotStatus").textContent = "正在连接 Zotero…";
+  $("zotList").innerHTML = ""; $("zotCount").textContent = ""; $("zotCollection").innerHTML = "";
+  try{
+    const st = await api("/api/zotero/status");
+    $("zotStatus").textContent = st.message || "";
+    if(!st.readable) return;                       // 没启动 / 版本太老：只显示中文状态，不假装连上了
+    const cols = await api("/api/zotero/collections");
+    $("zotCollection").innerHTML = `<option value="">全库（按修改时间）</option>` +
+      (cols.collections || []).map(c=>`<option value="${esc(c.key)}">${esc(c.name)}（${c.count}）</option>`).join("");
+    await zotLoad(true);
+  }catch(e){ $("zotStatus").textContent = "读 Zotero 失败：" + e.message; }
+}
+async function zotLoad(reset){
+  if(reset) zotStart = 0;
+  const qs = new URLSearchParams({ collection: $("zotCollection").value,
+    q: $("zotQuery").value.trim(), start: String(zotStart), limit: "30" });
+  const d = await api("/api/zotero/items?" + qs.toString());
+  zotRows = reset ? (d.items || []) : zotRows.concat(d.items || []);
+  zotMore = !!d.hasMore; zotStart = zotRows.length;
+  $("zotCount").textContent = (d.total != null) ? (zotRows.length + "/" + d.total + " 条") : (zotRows.length + " 条");
+  $("zotList").innerHTML = zotRows.length
+    ? zotRows.map(zotRowHTML).join("") + (zotMore ? `<button class="btn ghost" id="zotMore" style="margin:8px">加载更多</button>` : "")
+    : `<div class="hint" style="padding:8px">没有匹配的条目</div>`;
+  const more = $("zotMore"); if(more) more.onclick = ()=>zotLoad(false).catch(e=>mdFail(e,"加载更多"));
+}
+async function zotImport(key){
+  try{
+    const d = await api("/api/zotero/note?key=" + encodeURIComponent(key));
+    zotClose();
+    await mdNew(d.title || "Zotero 条目", d.content || "", true);   // 复用原有新建流程
+  }catch(e){ mdFail(e, "导入 Zotero 条目"); }
+}
+function zotBind(){
+  const box = $("zoteroModal"); if(!box) return;
+  box.querySelector(".modal-mask").onclick = zotClose;
+  $("btnZotClose").onclick = zotClose;
+  $("btnZotClose2").onclick = zotClose;
+  $("zotCollection").onchange = ()=>zotLoad(true).catch(e=>mdFail(e,"读条目"));
+  $("zotSearch").onclick = ()=>zotLoad(true).catch(e=>mdFail(e,"搜索"));
+  $("zotQuery").onkeydown = (e)=>{ if(e.key === "Enter") zotLoad(true).catch(err=>mdFail(err,"搜索")); };
+  $("zotList").onclick = (e)=>{
+    if(e.target.closest("#zotMore")) return;               // 「加载更多」自己有 onclick
+    const row = e.target.closest("[data-zot-key]");
+    if(row) zotImport(row.dataset.zotKey);
+  };
+}
+zotBind();
+
 async function renderNotes(m){
   m.style.padding = "";
   m.innerHTML = `<div class="md-view" id="mdView">
@@ -4560,6 +4641,7 @@ async function renderNotes(m){
       <div class="md-note-side-head">
         <button class="btn" id="btnMdNew">＋ 新建</button>
         <button class="btn ghost" id="btnMdImport">导入 .md</button>
+        <button class="btn ghost" id="btnMdZotero" title="从本机 Zotero 取文献或笔记，建成一篇笔记">Zotero</button>
       </div>
       <input id="mdNoteSearch" class="ws-field-input" type="search" placeholder="搜索笔记" style="background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:7px 9px;font-size:12.5px;color:inherit;font-family:inherit;outline:none">
       <div id="mdNoteList" class="md-note-list"></div>
