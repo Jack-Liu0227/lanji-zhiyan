@@ -247,27 +247,23 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .proj-row.cur{border-color:var(--rail,#B7B3AE);background:color-mix(in srgb,var(--rail,#B7B3AE) 7%,var(--panel))}
 .proj-add{display:flex;align-items:center;justify-content:center;min-height:118px;border:1px dashed color-mix(in srgb,var(--fg) 22%,transparent);border-radius:14px;background:transparent;color:var(--muted);font-weight:600;cursor:pointer}
 .proj-add:hover{border-color:var(--accent);color:var(--accent)}
-/* ===== 方案 C 整页：进「项目」页整窗切成暖色托盘（米驼底 #F7F3EC + 陶土 #C67B5C）===== */
-body.pj-warm{--bg:#F7F3EC;--panel:#FFFDF9;--panel2:#F5F0E1;--line:#E6DDCC;--fg:#2B2A26;--muted:#6E6A61;--muted-fg:#6E6A61;--accent:#C67B5C;--accent-ink:#fff;--err:#B4453C}
-/* 内联的 --accent/--accent-ink 挂在 :root 上，CSS 覆盖不了；把暖色变量挂进 .pj-page，就近继承才赢 */
-.pj-page{--bg:#F7F3EC;--panel:#FFFDF9;--panel2:#F5F0E1;--line:#E6DDCC;--fg:#2B2A26;--muted:#6E6A61;--muted-fg:#6E6A61;--accent:#C67B5C;--accent-ink:#fff;--err:#B4453C}
+/* 2026-10-08 撤掉「暖色孤岛」：原来这套米驼/陶土色把项目页做成了另一套配色，和其它页风格割裂。
+   现在项目页跟别的页一样吃应用主题（--bg/--panel/--line/--accent 全由主题推导），只保留卡片托盘的版式。 */
 .pj-page h1{font-size:22px;font-weight:700;margin:0 0 3px;letter-spacing:-.01em}
 .pj-page .sub{color:var(--muted);font-size:12.5px;margin-bottom:14px}
-.pj-page .card{border-radius:14px;box-shadow:0 1px 2px color-mix(in srgb,var(--fg) 5%,transparent),0 8px 20px color-mix(in srgb,var(--fg) 4%,transparent)}
-.pj-page .pj-sec h3{font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.04em;margin:0 0 10px}
 .pj-new{padding:13px 15px}
 .pj-new h3{font-size:14px;color:var(--muted);font-weight:600;margin:0 0 10px}
 .pj-new .row{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
 .pj-new label{display:block}
 .pj-new label>span{display:block;font-size:11px;color:var(--muted);letter-spacing:.04em;margin-bottom:4px}
-.pj-new input,.pj-new textarea{width:100%;border:1px solid var(--line);border-radius:9px;background:#fff;padding:7px 10px;font:inherit;font-size:13px;color:var(--fg)}
+.pj-new input,.pj-new textarea{width:100%;border:1px solid var(--line);border-radius:9px;background:var(--panel);padding:7px 10px;font:inherit;font-size:13px;color:var(--fg)}
 .pj-new textarea{height:46px;resize:none}
 .pj-new .full{grid-column:1/-1}
 .proj-row.cur{outline:2px solid color-mix(in srgb,var(--rail,#B7B3AE) 45%,transparent);outline-offset:1px}
 .proj-row .go{background:transparent;color:color-mix(in srgb,var(--accent) 78%,var(--fg));padding:0;font-size:12.5px;font-weight:700}
 .proj-row .go:hover{filter:none;text-decoration:underline}
 .proj-row .go.del{color:var(--err);font-weight:400;padding:0 4px}
-.proj-add:hover{background:color-mix(in srgb,#fff 45%,transparent)}
+.proj-add:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
 .pf-dir{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:4px 6px 4px 12px}
 .pf-dir .dp{flex:1;min-width:0;font-size:13px;color:var(--muted-fg,var(--muted));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Consolas,monospace}
 .pf-dir.set .dp{color:inherit}
@@ -1356,7 +1352,6 @@ function renderStatus(){
 function render(){
   renderSidebar(); renderTopbar(); renderTabs(); renderStatus();
   const r = route(); const m = $("main");
-  document.body.classList.toggle("pj-warm", r === "tasks");        // 项目页 = 方案 C 的暖色托盘，别的页自动还原
   if(!S.loaded) m.innerHTML = `<div class="muted">加载中…</div>`;
   else if(r==="agent") renderAgent(m);
   else if(r==="workflow") renderWorkflow(m);
