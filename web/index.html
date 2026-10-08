@@ -266,7 +266,7 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .proj-add:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
 
 /* ===== 定时任务（版式照原版 automation.tsx：页头+编辑器栅格+任务卡+说明+运行记录；配色用本应用变量） ===== */
-.sch-eyebrow{font-size:11px;letter-spacing:.08em;color:var(--muted);font-weight:600;text-transform:uppercase;margin:0 0 4px}
+.sch-eyebrow,.inst-label{font-size:11px;letter-spacing:.08em;color:var(--muted);font-weight:600;text-transform:uppercase;margin:0 0 4px}
 .sch-head{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}
 .sch-head h3{margin:0;font-size:16px}
 .sch-head p{color:var(--muted);font-size:12.5px;margin:5px 0 0;max-width:74ch;line-height:1.6}
@@ -292,6 +292,32 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .sch-run .tm{font-size:11.5px;color:var(--muted)}
 .sch-run .det{flex-basis:100%;font-size:11.5px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
 .sch-run .acts{margin-left:auto;display:flex;gap:6px}
+
+/* ===== 项目空间（版式照原版 project-space.tsx：页头+tab+概览四卡+快照；色/控件全走主题变量） ===== */
+.sp-tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);margin-top:12px}
+.sp-tab{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);font:inherit;font-size:13px;padding:8px 12px;cursor:pointer;white-space:nowrap}
+.sp-tab:hover{color:var(--fg)}
+.sp-tab.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.sp-grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.sp-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:1180px){.sp-grid4{grid-template-columns:repeat(2,minmax(0,1fr))}.sp-grid2{grid-template-columns:1fr}}
+.sp-kpi strong{display:block;font-size:26px;font-weight:700;letter-spacing:-.01em;margin:2px 0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-kpi-note{color:var(--muted);font-size:12px;margin:0;line-height:1.5}
+.sp-bar{height:6px;border-radius:999px;background:var(--panel2);margin-top:8px;overflow:hidden}
+.sp-bar>div{height:100%;background:var(--accent);border-radius:999px}
+.sp-row{display:flex;gap:10px;align-items:flex-start;border-top:1px solid var(--line);padding:9px 0}
+.sp-row:first-of-type{border-top:0}
+.sp-ic{width:22px;flex:none;text-align:center;color:var(--muted);font-size:13px}
+.sp-main{min-width:0;flex:1}
+.sp-nm{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-meta{color:var(--muted);font-size:11.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-dot{width:9px;height:9px;border-radius:50%;flex:none;margin-top:5px;background:color-mix(in srgb,var(--fg) 18%,transparent)}
+.sp-dot.run{background:color-mix(in srgb,var(--accent) 45%,transparent)}
+.sp-dot.on{background:var(--accent)}
+.sp-kv{display:flex;gap:10px;border-top:1px solid var(--line);padding:7px 0;font-size:12.5px}
+.sp-kv:first-of-type{border-top:0}
+.sp-kv span{color:var(--muted);flex:none;width:9em}
+.sp-kv b{font-weight:600;overflow-wrap:anywhere}
 .pf-dir{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:4px 6px 4px 12px}
 .pf-dir .dp{flex:1;min-width:0;font-size:13px;color:var(--muted-fg,var(--muted));white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:ui-monospace,Consolas,monospace}
 .pf-dir.set .dp{color:inherit}
@@ -1257,7 +1283,8 @@ const NAV = [
   {g:"primary",items:[
     {id:"agent",label:"Agent",ico:"🤖"},
     {id:"calendar",label:"日历",ico:"📅"},
-    {id:"tasks",label:"项目",ico:"📁"}]},
+    {id:"tasks",label:"项目",ico:"📁"},
+    {id:"space",label:"项目空间",ico:"🗂"}]},
   {g:"solo",items:[
     {id:"workflow",label:"工作流",ico:"🔀"},
     {id:"schedules",label:"定时任务",ico:"⏰"},
@@ -1267,7 +1294,7 @@ const NAV = [
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {agent:"Agent",calendar:"日历",tasks:"项目",workflow:"工作流",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",settings:"设置"};
+const TITLES = {agent:"Agent",calendar:"日历",tasks:"项目",workflow:"工作流",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 
 function openTab(r, title){
@@ -1385,6 +1412,7 @@ function render(){
   else if(r==="agent") renderAgent(m);
   else if(r==="workflow") renderWorkflow(m);
   else if(r==="tasks") renderTasks(m);
+  else if(r==="space") renderSpace(m);
   else if(r==="calendar") renderCalendar(m);
   else if(r==="mail") renderMail(m);
   else if(r==="library") renderLibrary(m);
@@ -2941,7 +2969,7 @@ function renderTasks(m){
     curTask = id; localStorage.setItem("rw-task",curTask); render();
   });
   m.querySelectorAll("[data-go]").forEach(b=>b.onclick=(e)=>{          // 进入项目 → 切当前 + 跳工作流
-    e.stopPropagation(); curTask = b.dataset.go; localStorage.setItem("rw-task",curTask); openTab("workflow");
+    e.stopPropagation(); curTask = b.dataset.go; localStorage.setItem("rw-task",curTask); openTab("space");
   });
   m.querySelectorAll("[data-del]").forEach(b=>b.onclick=async (e)=>{    // 删除项目（连带数据，先确认）
     e.stopPropagation();
@@ -4802,6 +4830,117 @@ async function renderSchedules(m){
     catch(e){ alert("清空失败：" + e.message); } });
 }
 const schTaskName = (id)=> (S.tasks||[]).find(t=>t.id===id)?.title || "";
+
+/* ---------------- 项目空间（照原版 project-space：页头 + tab + 概览四卡 + 快照；
+     只聚合本应用真有的数据，「任务/矩阵/资源关系/知识库」四个 tab 没有对应物 → 不做空壳） ---------------- */
+let spTab = "overview", spId = null;
+const SP_TABS = [["overview","概览"],["papers","文献"],["notes","笔记"],["calendar","日程"]];
+function spProg(d){
+  const stages = (S.stages||[]).map(s=>s.key);
+  const map = d.stage_map || {};
+  const total = stages.length || 7;
+  const done = stages.filter(k=>map[k] === "done").length;
+  return { total, done, pct: Math.round(done*100/total) };
+}
+function spWhen(iso){ return iso ? fmtDate(iso) : "—"; }
+function spMonthEvents(){ const ev=(S.events||[]); return ev.filter(e=>!e.task_id || e.task_id===curTask); }
+function spBodyHTML(d){
+  const t = d.task||{}, sum = d.summary||{}, p = spProg(d);
+  if(spTab === "papers"){
+    const rows = d.paper_list||[];
+    return `<div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">PAPERS / PROJECT</p><h3>${esc(t.title||"")} 的文献</h3></div>
+      <span class="pill">${rows.length} 条</span><button class="btn ghost" id="spToLib">去知识库 →</button></div>
+      ${rows.length ? rows.map(r=>`<div class="sp-row"><span class="sp-ic">📄</span><div class="sp-main">
+        <div class="sp-nm">${esc(r.title||r.filename||"未命名")}</div>
+        <div class="sp-meta">${esc(r.filename||"")} · ${r.pages?String(r.pages).split(",").length+" 页":""} · ${esc(spWhen(r.created_at))}</div></div></div>`).join("")
+      : `<div class="hint" style="margin-top:10px">这个项目还没有入库文献。到「知识库」或工作流的检索步加进来。</div>`}</div>`;
+  }
+  if(spTab === "notes"){
+    const rows = d.notes||[];
+    return `<div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">NOTES / PROJECT</p><h3>项目笔记</h3></div>
+      <span class="pill">${rows.length} 篇</span><button class="btn ghost" id="spToNote">去笔记页 →</button></div>
+      ${rows.length ? rows.map(n=>`<div class="sp-row"><span class="sp-ic">📝</span><div class="sp-main">
+        <div class="sp-nm">${esc(n.title||"未命名笔记")}</div><div class="sp-meta">${esc(spWhen(n.created_at))}</div></div></div>`).join("")
+      : `<div class="hint" style="margin-top:10px">还没有绑定到本项目的笔记。在「笔记」页把笔记绑到这个项目即可。</div>`}</div>`;
+  }
+  if(spTab === "calendar"){
+    const rows = spMonthEvents();
+    return `<div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">CALENDAR / PROJECT</p><h3>项目日程</h3></div>
+      <span class="pill">${rows.length} 条</span><button class="btn ghost" id="spToCal">去日历 →</button></div>
+      ${rows.length ? rows.map(e=>`<div class="sp-row"><span class="sp-ic">📅</span><div class="sp-main">
+        <div class="sp-nm">${esc(e.title||"")}</div><div class="sp-meta">${esc(e.date||"")}${e.time?" "+esc(e.time):""}${e.done?" · 已完成":""}</div></div></div>`).join("")
+      : `<div class="hint" style="margin-top:10px">本月没有该项目的事件。</div>`}</div>`;
+  }
+  const stages = (S.stages||[]).map(s=>({key:s.key, label:s.label, st:(d.stage_map||{})[s.key]||""}));
+  const recent = (d.steps||[]).slice(0,6);
+  return `
+    <div class="sp-grid4" style="margin-top:12px">
+      <div class="card sp-kpi"><p class="inst-label">PROJECT / STATUS</p><strong>${esc(t.stage_now||"未开始")}</strong>
+        <p class="sp-kpi-note">${esc((t.question||"未填研究问题").slice(0,90))}</p></div>
+      <div class="card sp-kpi"><p class="inst-label">PROGRESS</p><strong>${p.pct}%</strong>
+        <p class="sp-kpi-note">${p.done}/${p.total} 步完成</p><div class="sp-bar"><div style="width:${p.pct}%"></div></div></div>
+      <div class="card sp-kpi"><p class="inst-label">RESEARCH</p><strong>${sum.papers||0}</strong>
+        <p class="sp-kpi-note">项目文献 · 证据 ${sum.evidence||0} 条</p></div>
+      <div class="card sp-kpi"><p class="inst-label">NEXT WINDOW</p><strong>${spMonthEvents().length}</strong>
+        <p class="sp-kpi-note">本月日程</p></div></div>
+    <div class="sp-grid2" style="margin-top:12px">
+      <div class="card"><div class="sch-head"><div><p class="inst-label">WORKFLOW SNAPSHOT</p><h3>工作流快照</h3></div>
+        <button class="btn ghost" id="spToFlow">去工作流 →</button></div>
+        ${stages.length ? stages.map(s=>`<div class="sp-row"><span class="sp-dot ${s.st==="done"?"on":(s.st?"run":"")}"></span>
+          <div class="sp-main"><div class="sp-nm">${esc(s.label)}</div>
+          <div class="sp-meta">${s.st==="done"?"已完成":(s.st?"已记录 · "+esc(s.st):"未开始")}</div></div></div>`).join("")
+        : `<div class="hint" style="margin-top:10px">还没有步骤记录。</div>`}
+        <div class="hint" style="margin-top:8px">最近步骤：${recent.length?esc(recent.map(r=>r.stage).join(" → ")):"—"}</div></div>
+      <div class="card"><p class="inst-label">RELATIONSHIPS</p><h3 style="margin:0 0 8px">项目边界</h3>
+        <div class="sp-kv"><span>项目位置</span><b>${esc(t.base_dir||"未设置（产出落工作区默认目录）")}</b></div>
+        <div class="sp-kv"><span>关键词 / 体系</span><b>${esc(t.material_system||"—")}</b></div>
+        <div class="sp-kv"><span>最近更新</span><b>${esc(spWhen(t.updated_at))}</b></div>
+        <div class="hint" style="margin-top:10px">这一页只读聚合：不会改动文献、笔记、日程；写操作都在各自页面里。删除项目会连带它的文献、证据、笔记、会话、步骤。</div>
+        <div class="pf-actions" style="margin-top:10px"><button class="btn ghost" id="spDel" style="color:var(--err)">删除项目</button></div></div>
+    </div>
+    <div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">STEP LOG</p><h3>步骤记录</h3></div>
+      <span class="pill">${(d.steps||[]).length} 条</span></div>
+      ${recent.length?recent.map(r=>`<div class="sp-row"><span class="sp-ic">•</span><div class="sp-main">
+        <div class="sp-nm">${esc(r.stage)} · ${esc(r.status)}</div><div class="sp-meta">${esc(r.summary||"")} · ${esc(spWhen(r.created_at))}</div>
+        </div></div>`).join(""):`<div class="hint" style="margin-top:10px">还没有步骤记录。</div>`}</div>`;
+}
+function spBind(d){
+  const go = (id, route)=>{ const b=$(id); if(b) b.onclick = ()=>openTab(route); };
+  go("spToFlow","workflow"); go("spToNote","notes"); go("spToCal","calendar"); go("spToLib","library");
+  const del = $("spDel");
+  if(del) del.onclick = async ()=>{
+    const t = d.task||{};
+    if(!confirm(`删除项目「${t.title||""}」？\n它的文献、证据、笔记、会话、日程、步骤都会一起删掉，不可撤销。`)) return;
+    try{ await api("/api/task/delete", {id: curTask}); }catch(e){ return alert("删除失败："+e.message); }
+    curTask = null; localStorage.removeItem("rw-task"); await refreshState(false); openTab("tasks");
+  };
+}
+async function renderSpace(m){
+  m.style.padding = "";
+  if(!curTask){ m.innerHTML = needTask(); return; }
+  if(spId !== curTask){ spId = curTask; spTab = "overview"; }
+  m.innerHTML = `<div class="muted">正在读取项目…</div>`;
+  let d;
+  try{ d = await api("/api/task?id=" + encodeURIComponent(curTask)); }
+  catch(e){ m.innerHTML = `<div class="msg error">读取项目失败：${esc(e.message)}</div>`; return; }
+  const t = d.task||{};
+  const opts = (S.tasks||[]).map(x=>`<option value="${x.id}" ${x.id===curTask?"selected":""}>${esc(x.title)}</option>`).join("");
+  m.innerHTML = `
+    <div class="card"><div class="sch-head">
+      <div><p class="inst-label">WORKSPACE / PROJECT</p><h3>${esc(t.title||"项目空间")}</h3>
+        <p>项目级聚合只读取已关联的本地数据；写操作回到各领域的 Command 和安全通道。归档可恢复，外部文件不会被删除。</p></div>
+      <select id="spPick" class="control" style="max-width:200px" title="选择项目空间">${opts}</select>
+      <button class="btn" id="spFlow">进入工作流 →</button></div></div>
+    <div class="sp-tabs" id="spTabs">${SP_TABS.map(([k,l])=>`<button class="sp-tab ${k===spTab?"on":""}" data-sp-tab="${k}">${l}</button>`).join("")}</div>
+    <div class="card" style="margin-top:12px"><div class="hint" style="display:flex;gap:14px;flex-wrap:wrap">
+      <span>项目 ID：${esc(curTask)}</span><span class="sp-stage">阶段：${esc(t.stage_now||"未开始")}</span><span>更新：${esc(spWhen(t.updated_at))}</span></div></div>
+    <div id="spBody"></div>`;
+  $("spPick").onchange = (e)=>{ curTask = e.target.value; localStorage.setItem("rw-task", curTask); spId = null; render(); };
+  $("spFlow").onclick = ()=>openTab("workflow");
+  m.querySelectorAll("[data-sp-tab]").forEach(b=>b.onclick=()=>{ spTab = b.dataset.spTab; render(); });
+  $("spBody").innerHTML = spBodyHTML(d);
+  spBind(d);
+}
 
 async function renderNotes(m){
   m.style.padding = "";
