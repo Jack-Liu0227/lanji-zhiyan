@@ -120,7 +120,9 @@ class ResearchDB:
     def create_chat(self, title: str = "") -> str:
         cid = uuid.uuid4().hex
         t = now()
-        self.db.execute("INSERT INTO chats VALUES (?,?,?,?,?)", (cid, (title or "").strip() or "新对话", "", t, t))
+        # 具名列：chats 后续会补列（assistant_id），定位插入会跟着坏
+        self.db.execute("INSERT INTO chats (id,title,out_dir,created_at,updated_at) VALUES (?,?,?,?,?)",
+                        (cid, (title or "").strip() or "新对话", "", t, t))
         self.db.commit()
         return cid
 

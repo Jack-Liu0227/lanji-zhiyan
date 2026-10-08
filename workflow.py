@@ -165,6 +165,9 @@ class WorkflowDB(ResearchDB):
     def __init__(self, path: str | Path):
         super().__init__(path)
         self.db.executescript(WORKFLOW_SCHEMA)
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(chats)")}
+        if "assistant_id" not in cols:                # 老库补列：对话绑的助手（我的/公开）
+            self.db.execute("ALTER TABLE chats ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''")
         # 老库补列（providers 是这次新做的表，早期版本只有 6 列）
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(providers)")}
         if "source" not in cols:
@@ -190,6 +193,13 @@ class WorkflowDB(ResearchDB):
               path TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
               PRIMARY KEY (task_id, result_id))""")
         # 团队（A 档：Leader + Partner 成员 + 派活队列 + 运行事件）—— 抄 AionUi Teams 的模型
+        self.db.execute("""CREATE TABLE IF NOT EXISTS assistants (
+  id TEXT PRIMARY KEY, source TEXT NOT NULL DEFAULT 'user', name TEXT NOT NULL,
+  avatar TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+  rules TEXT NOT NULL DEFAULT '', prompts TEXT NOT NULL DEFAULT '[]',
+  model_id TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+)""")
         self.db.execute("""CREATE TABLE IF NOT EXISTS team_members (
               id TEXT PRIMARY KEY, task_id TEXT NOT NULL, name TEXT NOT NULL,
               role TEXT NOT NULL DEFAULT 'member', step TEXT NOT NULL DEFAULT '',
@@ -219,6 +229,7 @@ class WorkflowDB(ResearchDB):
               trigger TEXT NOT NULL DEFAULT 'scheduler', status TEXT NOT NULL DEFAULT 'running',
               started_at TEXT NOT NULL, ended_at TEXT NOT NULL DEFAULT '', output_path TEXT NOT NULL DEFAULT '',
               summary TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '')""")
+        self.assistant_seed(BUILTIN_ASSISTANTS)      # 公开助手（内置）：只补缺，不覆盖改过的
         self.db.commit()
         for folder in (PAPERS, NOTES, OUT):
             folder.mkdir(parents=True, exist_ok=True)
@@ -539,6 +550,60 @@ class WorkflowDB(ResearchDB):
     def team_event_add(self, team_task_id: str, task_id: str, kind: str, text: str) -> None:
         self.db.execute("INSERT INTO team_events VALUES (?,?,?,?,?,?)",
                         (uuid.uuid4().hex, team_task_id, task_id, kind, text[:2000], now()))
+        self.db.commit()
+
+    # ---------- 助手（照 AionUi Assistant：我的 / 公开；点进去设提示词） ----------
+    def assistants(self) -> list[dict[str, Any]]:
+        rows = self.db.execute("SELECT * FROM assistants ORDER BY source='builtin', sort_order, created_at").fetchall()
+        return [dict(r) for r in rows]
+
+    def assistant(self, aid: str) -> dict[str, Any] | None:
+        row = self.db.execute("SELECT * FROM assistants WHERE id=?", (aid,)).fetchone()
+        return dict(row) if row else None
+
+    def assistant_save(self, aid: str, **f: Any) -> dict[str, Any]:
+        allow = {k: v for k, v in f.items() if k in ("name", "avatar", "description", "rules", "prompts", "model_id") and v is not None}
+        cur = self.assistant(aid)
+        if cur and cur["source"] == "builtin":
+            raise ValueError("公开助手是只读的 —— 请「复制为我的」再改。")
+        if cur:
+            if allow:
+                allow["updated_at"] = now()
+                self.db.execute("UPDATE assistants SET %s WHERE id=?" % ", ".join("%s=?" % k for k in allow), (*allow.values(), aid))
+        else:
+            row = (aid, "user", allow.get("name") or "新助手", allow.get("avatar", ""), allow.get("description", ""),
+                   allow.get("rules", ""), allow.get("prompts", "[]"), allow.get("model_id", ""), 1, 99, now(), now())
+            self.db.execute("INSERT INTO assistants VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row)
+        self.db.commit()
+        return dict(self.db.execute("SELECT * FROM assistants WHERE id=?", (aid,)).fetchone())
+
+    def assistant_delete(self, aid: str) -> None:
+        cur = self.assistant(aid)
+        if cur and cur["source"] == "builtin":
+            raise ValueError("公开助手不能删除 —— 可以「复制为我的」再改。")
+        self.db.execute("DELETE FROM assistants WHERE id=?", (aid,))
+        self.db.commit()
+
+    def assistant_of_chat(self, chat_id: str) -> str:
+        """这个对话绑的是哪个助手（空串=没绑）。"""
+        row = self.db.execute("SELECT assistant_id FROM chats WHERE id=?", (chat_id,)).fetchone()
+        return ((row["assistant_id"] if row else "") or "")
+
+    def assistant_seed(self, builtins: list[dict[str, Any]]) -> int:
+        """内置（公开）助手：只补缺，不覆盖用户改过的。"""
+        n = 0
+        for b in builtins:
+            if not self.assistant(b["id"]):
+                self.db.execute("INSERT INTO assistants VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                                (b["id"], "builtin", b["name"], b.get("avatar", ""), b.get("description", ""),
+                                 b.get("rules", ""), json.dumps(b.get("prompts", []), ensure_ascii=False),
+                                 "", 1, b.get("sort_order", 0), now(), now()))
+                n += 1
+        self.db.commit()
+        return n
+
+    def set_chat_assistant(self, cid: str, aid: str) -> None:
+        self.db.execute("UPDATE chats SET assistant_id=?, updated_at=? WHERE id=?", (aid, now(), cid))
         self.db.commit()
 
     # ---------- 项目记忆（长期 = 项目要点与结论；短期 = 对话内容与细节） ----------
@@ -2588,6 +2653,26 @@ def _team_project(db: "WorkflowDB", task_id: str, raw: str) -> str:
     return task_id
 
 
+BUILTIN_ASSISTANTS = [
+    {"id": "builtin-searcher", "name": "文献检索员", "avatar": "🔎", "sort_order": 1,
+     "description": "开放获取检索 + 去重 + 候选表；不编造、拿不到就说拿不到。",
+     "rules": "只做开放获取检索与筛选：先给候选表（标题 / 年份 / 期刊 / DOI / 是否 OA），再问要不要入库精读。"
+              "拿不到的全文直接说拿不到，绝不编造数据或结论。",
+     "prompts": ["检索 O3 型钠电正极近三年掺杂改性的论文，产出候选表", "把这篇的期刊和 DOI 补全", "这个方向有哪些值得读的综述"]},
+    {"id": "builtin-writer", "name": "写作搭档", "avatar": "✍️", "sort_order": 2,
+     "description": "按项目框架写/改正文，逐字保真、只动该动的地方。",
+     "rules": "改写时以原稿为骨架、能不改就不改；一次性说明改了哪些句子和为什么，别顺手重写整段。",
+     "prompts": ["按框架写 Introduction 的第一段", "把这段改成论文语气，别改事实", "这句话有什么问题"]},
+    {"id": "builtin-reviewer", "name": "审稿人", "avatar": "🧐", "sort_order": 3,
+     "description": "站在审稿人角度挑最致命的问题，按严重程度排序。",
+     "rules": "先说最可能被拒的三个问题（附证据/位置），再说次要问题；不谈文风喜好，只谈可验证的问题。",
+     "prompts": ["挑这篇稿子最可能被拒的三个问题", "检查数据与结论是否一致", "列出还需要补的实验"]},
+    {"id": "builtin-extractor", "name": "数据抽取员", "avatar": "📊", "sort_order": 4,
+     "description": "从 PDF / 正文里抽结构化数据（材料-性能 / 实验参数）。",
+     "rules": "只抽原文明确写了的字段，逐条给出处（页/表/句）；原文没有的字段留空并写「未提及」。",
+     "prompts": ["从这篇 PDF 抽出材料-性能表", "把这些实验参数整理成表格", "这篇用的合成方法是什么"]},
+]
+
 def _global_brief(db: "WorkflowDB") -> str:
     """全局 Leader 的简报：有哪些项目、各自走到哪、库里有多少东西。
     首页 Agent 以前完全不知道项目存在（ctx 只说「没有绑定任何项目」）—— 这就是 Leader 缺的视野。"""
@@ -2636,6 +2721,14 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                "跨项目的事让用户回首页 Agent（全局 Leader）做。\n"
                f"当前项目：{task['title']}\n研究问题：{task['question']}\n"
                f"关键词 / 材料体系：{task['material_system']}\n项目 ID：{task_id}\n产出目录：{db.out_dir(task_id)}")
+    if chat_row:                      # 这个对话绑的助手（我的/公开）→ 它的规则进 system
+        try:
+            asst = db.assistant(chat_row["assistant_id"] or "")
+        except Exception:
+            asst = None
+        if asst:
+            ctx += "\n\n【当前助手】%s（%s）\n规则：%s" % (
+                asst["name"], "公开内置" if asst["source"] == "builtin" else "我的助手", asst["rules"] or "（没写规则）")
     if extra_context:
         ctx += "\n\n" + extra_context
     history = [{"role": m["role"], "content": m["content"]} for m in db.messages(task_id, scope or "idea")[:-1]][-12:]

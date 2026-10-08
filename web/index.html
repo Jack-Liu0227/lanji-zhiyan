@@ -29,6 +29,23 @@ a{color:var(--accent)}
 .mark i:nth-child(1){height:10px;opacity:.6}.mark i:nth-child(2){height:16px;opacity:.85}.mark i:nth-child(3){height:22px}
 .brand b{font-size:16px;font-weight:700;display:block;line-height:1.15}
 .brand small{color:var(--muted);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase}
+.as-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:12px}
+.as-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;transition:border-color .18s,transform .18s}
+.as-card:hover{border-color:var(--accent)}
+.as-card.off{opacity:.55}
+.as-card-top{display:flex;align-items:flex-start;justify-content:space-between}
+.as-card b{display:block;margin-top:12px;font-size:14px;font-weight:600;color:var(--text)}
+.as-card p{margin:6px 0 0;font-size:12px;line-height:1.5;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.9em}
+.as-card-foot{margin-top:14px;display:flex;align-items:center;gap:8px}
+.as-card-foot .as-go{opacity:0;transition:opacity .18s}
+.as-card:hover .as-card-foot .as-go{opacity:1}
+.as-av{display:inline-flex;align-items:center;justify-content:center;border-radius:12px;background:var(--panel2);border:1px solid var(--line)}
+.as-dot{width:8px;height:8px;border-radius:50%;background:var(--line);flex:none;margin-top:4px}
+.as-dot.on{background:var(--accent)}
+.as-form{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;margin-top:8px}
+.as-form .field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+.as-card + .as-card{}
+
 /* 个人资料卡片（照 lit 侧栏卡片，只显示头像 + 用户名） */
 .profile-card{display:flex;align-items:center;gap:10px;margin:8px 10px 4px;padding:9px 11px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;cursor:pointer;transition:background .15s}
 .profile-card:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
@@ -638,6 +655,21 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 
 /* 工作流页：左竖列（照最左侧导航栏的卡片样式）+ 右功能区 */
 .wf-page{display:grid;grid-template-columns:168px 1fr;gap:0;height:100%;min-height:0}
+.page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.ph-acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.set-wrap{display:grid;grid-template-columns:168px 1fr;gap:16px;align-items:start}
+.set-nav{display:flex;flex-direction:column}
+.set-row{width:100%;display:flex;align-items:center;gap:8px;text-align:left;padding:8px 10px;margin-bottom:2px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--fg);font-size:14px;cursor:pointer}
+.set-row:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.set-row.on{background:color-mix(in srgb,var(--accent) 20%,transparent);box-shadow:inset 2px 0 0 var(--accent);border-color:transparent;font-weight:600}
+.set-ico{width:18px;text-align:center}
+.at-title{cursor:text;border-radius:8px;padding:2px 6px;margin-left:-6px;transition:background .15s,color .15s}
+.at-title:hover{background:var(--panel2);color:var(--accent)}
+.at-idwrap{display:flex;align-items:center;cursor:pointer}
+.as-chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:4px}
+.as-chip{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:8px 12px;font-size:13px;color:var(--fg);cursor:pointer;transition:border-color .15s,color .15s}
+.as-chip:hover{border-color:var(--accent);color:var(--accent)}
+
 .wf-rail{display:flex;flex-direction:column;min-height:0;margin:-16px 0;padding:16px 12px 16px 0;border-right:4px solid var(--line)}   /* 4px、用全局边框色；负边距顶到 #main 上下边缘（-16px 跟 .main 的 padding 走） */
 .wf-step{width:100%;padding:8px 10px;margin-bottom:2px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--fg);font-size:14px;text-align:center;cursor:pointer}
 .wf-step:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
@@ -1225,6 +1257,7 @@ let curTask = localStorage.getItem("rw-task") || null;
 let tDir = "";                                   // 新建项目时选的「项目位置」，选完即用，不持久化
 let curChat = localStorage.getItem("rw-chat") || null;   // Agent 页当前对话（独立于项目）
 
+
 /* ---------------- 个人资料（照 lit：侧栏卡片 + 填写弹窗；卡片只显示头像和用户名） ---------------- */
 const profile = Object.assign({ name:"研究生", avatar:"🎓", field:"", photo:"" },
   JSON.parse(localStorage.getItem("rw-profile") || "{}"));
@@ -1350,6 +1383,7 @@ async function api(path, opts){
 const NAV = [
   {g:"primary",items:[
     {id:"agent",label:"Agent",ico:"🤖"},
+    {id:"assistants",label:"助手",ico:"🧑🔬"},
     {id:"calendar",label:"日历",ico:"📅"},
     {id:"tasks",label:"项目",ico:"📁"},
     {id:"space",label:"项目空间",ico:"🧭"}]},
@@ -1362,7 +1396,7 @@ const NAV = [
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {agent:"Agent",calendar:"日历",tasks:"项目",workflow:"工作流",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
+const TITLES = {assistants:"助手",agent:"Agent",calendar:"日历",tasks:"项目",workflow:"工作流",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 
 function openTab(r, title){
@@ -1493,6 +1527,7 @@ function render(){
   else if(r==="library") renderLibrary(m);
   else if(r==="notes") renderNotes(m);
   else if(r==="intel") renderIntel(m);
+  else if(r==="assistants") renderAssistants(m);
   else if(r==="schedules") renderSchedules(m);
   else if(r==="models") renderModels(m);
   else renderSettings(m);
@@ -1501,6 +1536,130 @@ function render(){
 function needTask(){
   if(!curTask) return `<div class="card"><h3>还没有选项目</h3><div class="hint">工作流、Agent、文献都挂在项目上。先去「项目」页建一个，或用右上角下拉选一个。</div><button class="btn" style="margin-top:10px" onclick="openTab('tasks')">去建项目</button></div>`;
   return "";
+}
+
+
+/* ---------------- 助手（照 AionUi AssistantSettings/home + editor ----------------
+   我的助手 / 公开助手 两栏；点卡片进编辑器（身份 / 提示词 / 规则 / 默认模型）。
+   公开助手只读，只能「复制为我的」——照 AionUi 的权限表。 ---------------- */
+let asView = "mine";                       // mine | official | edit
+let asEdit = { id:"", source:"user", name:"", avatar:"", description:"", rules:"", prompts:[], model_id:"" };
+
+function asSource(a){ return a.source === "builtin" ? "official" : "mine"; }
+function asOf(kind){ return (S.assistants||[]).filter(a=>asSource(a)===kind); }
+function asCur(){ return (S.assistants||[]).find(a=>a.id===asEdit.id) || null; }
+function asChat(){ return (S.chats||[]).find(c=>c.id===curChat) || null; }
+function asBound(){ const c=asChat(); return c ? (c.assistant_id||"") : ""; }
+function asAvatarOf(a, size){
+  const px = size||42;
+  return `<span class="as-av" style="width:${px}px;height:${px}px;font-size:${Math.round(px*0.55)}px">${esc(a&&a.avatar || "🤖")}</span>`;
+}
+function asCard(a){
+  const on = a.enabled !== 0, mine = asSource(a)==="mine";
+  return `<div class="as-card ${on?"":"off"}" data-as-open="${a.id}">
+    <div class="as-card-top">${asAvatarOf(a)}<span class="as-dot ${on?"on":""}" title="${on?"已启用":"已停用"}"></span></div>
+    <b>${esc(a.name)}</b>
+    <p>${esc(a.description||"（没有描述）")}</p>
+    <div class="as-card-foot">
+      ${on?`<button class="btn ghost as-go" data-as-chat="${a.id}">用它对话</button>`:""}
+      ${mine?`<button class="btn ghost" data-as-del="${a.id}" style="color:var(--err)">删除</button>`
+            :`<button class="btn ghost" data-as-dup="${a.id}">复制为我的</button>`}
+    </div></div>`;
+}
+function renderAssistants(m){
+  const bound = asBound();
+  if(asView === "edit"){
+    const a = asCur(), ro = asEdit.source === "builtin";
+    m.innerHTML = `<div class="page-head">
+      <div><p class="inst-label">ASSISTANT</p><h3>${a?"编辑助手":"新建助手"}</h3>
+        <p class="hint">${ro?"公开助手的内容只读 —— 点「复制为我的」就能改成你自己的。":"提示词和规则会在这个助手发起的对话里生效（进 system）。"}</p></div>
+      <div class="ph-acts"><button class="btn" id="as-back">← 返回</button>
+        ${a&&!ro?`<button class="btn ghost" id="as-del" style="color:var(--err)">删除</button>`:""}</div></div>
+    <div class="card" style="margin-top:12px">
+      <p class="inst-label">身份</p>
+      <div class="as-form">
+        <label class="field"><span>名字</span><input class="control" id="as-name" ${ro?"disabled":""} value="${esc(asEdit.name)}" placeholder="如：文献检索员"></label>
+        <label class="field"><span>头像 Emoji</span><input class="control" id="as-av" ${ro?"disabled":""} value="${esc(asEdit.avatar)}" placeholder="🤖" maxlength="4"></label>
+        <label class="field"><span>描述</span><input class="control" id="as-desc" ${ro?"disabled":""} value="${esc(asEdit.description)}" placeholder="一句话说明它是干什么的"></label>
+        <label class="field"><span>默认模型（可留空 = 用当前模型）</span>
+          <select class="control" id="as-model" ${ro?"disabled":""}>
+            <option value="">跟随当前模型</option>
+            ${(S.models||[]).map(mm=>`<option value="${mm.id}" ${mm.id===asEdit.model_id?"selected":""}>${esc(mm.name)}</option>`).join("")}</select></label>
+      </div></div>
+    <div class="card" style="margin-top:12px">
+      <p class="inst-label">提示词 / 推荐问题（一行一条，空状态会显示成按钮）</p>
+      <textarea class="control" id="as-prompts" rows="4" ${ro?"readonly":""} placeholder="检索 O3 型钠电正极近三年掺杂改性的论文">${esc((asEdit.prompts||[]).join("\n"))}</textarea>
+      <p class="inst-label" style="margin-top:12px">规则（写进 system，约束它怎么干活）</p>
+      <textarea class="control" id="as-rules" rows="5" ${ro?"readonly":""} placeholder="只做开放获取检索；拿不到全文就说拿不到，绝不编造。">${esc(asEdit.rules||"")}</textarea>
+    </div>
+    ${ro?`<div style="margin-top:12px"><button class="btn" id="as-dup">复制为我的</button></div>`
+        :`<div style="margin-top:12px"><button class="btn btn-primary" id="as-save">保存</button></div>`}`;
+    $("as-back").onclick = ()=>{ asView = "mine"; render(); };
+    const dupBtn = $("as-dup");
+    if(dupBtn) dupBtn.onclick = ()=> duplicateAssistant(a);
+    const delBtn = $("as-del");
+    if(delBtn) delBtn.onclick = ()=> deleteAssistant(a.id, a.name);
+    const saveBtn = $("as-save");
+    if(saveBtn) saveBtn.onclick = async ()=>{
+      const body = { id: asEdit.id||"", name: $("as-name").value.trim() || "新助手",
+        avatar: $("as-av").value.trim(), description: $("as-desc").value.trim(),
+        model_id: $("as-model").value,
+        prompts: $("as-prompts").value.split("\n").map(x=>x.trim()).filter(Boolean),
+        rules: $("as-rules").value.trim() };
+      let r;
+      try{ r = await api("/api/assistant/save", body); }
+      catch(e){ return alert("保存失败：" + e.message); }
+      await refreshState(false);
+      asEdit.id = r.assistant.id;            // 新建时服务端才给 id
+      asView = "mine"; render();
+    };
+    return;
+  }
+  const list = asOf(asView);
+  m.innerHTML = `<div class="page-head">
+    <div><p class="inst-label">ASSISTANTS</p><h3>助手</h3>
+      <p class="hint">「我的」是自己建的；「公开」是内置的（只读，可复制成自己的）。点卡片就能改提示词、规则、默认模型。当前对话用的是：<b>${esc(((S.assistants||[]).find(a=>a.id===bound)||{}).name || "没绑助手")}</b></p></div>
+    <div class="ph-acts"><button class="btn" id="as-new">＋ 新建助手</button></div></div>
+  <div class="at-tabs" style="margin-top:10px">
+    <button class="at-tab ${asView==="mine"?"on":""}" data-as-v="mine">我的助手 ${asOf("mine").length}</button>
+    <button class="at-tab ${asView==="official"?"on":""}" data-as-v="official">公开助手 ${asOf("official").length}</button></div>
+  <div class="as-grid">${list.length?list.map(asCard).join(""):`<p class="hint">这一栏还是空的。</p>`}</div>`;
+  $("as-new").onclick = ()=>{ asEdit = {id:"",source:"user",name:"",avatar:"",description:"",rules:"",prompts:[],model_id:""}; asView="edit"; render(); };
+  m.querySelectorAll("[data-as-v]").forEach(b=>b.onclick=()=>{ asView=b.dataset.asV; render(); });
+  m.querySelectorAll("[data-as-open]").forEach(b=>b.onclick=(e)=>{
+    if(e.target.closest("[data-as-chat],[data-as-del],[data-as-dup]")) return;
+    const a = (S.assistants||[]).find(x=>x.id===b.dataset.asOpen); if(!a) return;
+    asEdit = { id:a.id, source:a.source, name:a.name, avatar:a.avatar||"", description:a.description||"", rules:a.rules||"",
+               prompts: JSON.parse(a.prompts||"[]"), model_id:a.model_id||"" };
+    asView = "edit"; render();
+  });
+  m.querySelectorAll("[data-as-chat]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); useAssistant(b.dataset.asChat); });
+  m.querySelectorAll("[data-as-dup]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); duplicateAssistant((S.assistants||[]).find(x=>x.id===b.dataset.asDup)); });
+  m.querySelectorAll("[data-as-del]").forEach(b=>b.onclick=(e)=>{
+    e.stopPropagation(); const a=(S.assistants||[]).find(x=>x.id===b.dataset.asDel); deleteAssistant(b.dataset.asDel, a?a.name:""); });
+}
+async function duplicateAssistant(a){
+  if(!a) return;
+  const r = await api("/api/assistant/save", { name: a.name + "（我的）", avatar: a.avatar, description: a.description,
+    rules: a.rules, prompts: JSON.parse(a.prompts||"[]"), model_id: a.model_id||"" });
+  await refreshState(false);
+  asEdit = { id:r.assistant.id, source:"user", name:r.assistant.name, avatar:r.assistant.avatar,
+             description:r.assistant.description, rules:r.assistant.rules, prompts:JSON.parse(r.assistant.prompts||"[]"), model_id:r.assistant.model_id||"" };
+  asView = "mine"; render();          // 落回列表：新卡片就在那儿，改它点卡片进去
+}
+async function deleteAssistant(id, name){
+  const a = (S.assistants||[]).find(x=>x.id===id);
+  if(a && a.source === "builtin") return alert("公开助手不能删除 —— 可以「复制为我的」再改。");
+  if(!confirm(`删除助手「${name}」？（已经用它的对话不受影响）`)) return;
+  try{ await api("/api/assistant/delete", {id}); }catch(e){ return alert("删除失败：" + e.message); }
+  await refreshState(false); asView = "mine"; render();
+}
+async function useAssistant(id){                       // 用它对话：绑到当前对话（没有就新建一个），切到 Agent 页
+  let cid = curChat;
+  if(!cid){ const r = await api("/api/chat/create", {}); cid = r.id || (r.chat && r.chat.id); }
+  try{ await api("/api/chat/assistant", {id: cid, assistant_id: id}); }catch(e){ return alert("绑定失败：" + e.message); }
+  curChat = cid; localStorage.setItem("rw-chat", cid);
+  await refreshState(false); openTab("agent");
 }
 
 /* ---------------- Agent（结构/版式照科研工作台 features/agent：
@@ -1541,17 +1700,35 @@ function renderHistory(){
     <div class="ah-foot">🕒 一个对话一份记忆 · 输出目录各自独立</div></aside>`;
 }
 
+function asEmpty(){                       // 照 AionUi SingleChatEmptyState：头像 + 名字 + 一行说明 + 推荐问题
+  const a = (S.assistants||[]).find(x=>x.id === (((S.chats||[]).find(c=>c.id===curChat)||{}).assistant_id||"")) || null;
+  let ps = []; try{ ps = JSON.parse((a&&a.prompts)||"[]"); }catch(e){ ps = []; }
+  const chips = document.getElementById("msgs");
+  return `<div style="display:flex;flex-direction:column;align-items:center;gap:20px;padding:0 24px;text-align:center;max-width:560px;margin:0 auto">
+    ${asAvatarOf(a, 48)}
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <span style="font-size:16px;font-weight:600">${esc(a?a.name:"AI 助手")}</span>
+      <span style="font-size:13px;color:var(--muted)">${esc(a&&a.description ? a.description : "有什么可以帮你的？直接说你要做什么。")}</span></div>
+    ${ps.length?`<div class="as-chips">${ps.map(p=>`<button class="as-chip" data-chip="${esc(p)}">${esc(p)}</button>`).join("")}</div>`:""}</div>`;
+}
+function bindChips(){
+  document.querySelectorAll("[data-chip]").forEach(b=>b.onclick=()=>{
+    const t=$("ask"); if(!t) return; t.value = b.dataset.chip; t.focus();
+    if(typeof grow === "function") grow();
+  });
+}
 function renderAgent(m){
   m.style.padding = "10px";
   const cur = (S.chats||[]).find(t=>t.id===curChat);
+  const boundA = (S.assistants||[]).find(a=>a.id === ((cur&&cur.assistant_id)||"")) || null;
   const recs = (S.chatEvents||[]).length;
   m.innerHTML = `<div class="agent">
     ${renderHistory()}
     <section class="at" aria-label="对话主线">
       <header class="at-head">
-        <div class="at-heading"><span style="color:var(--accent);font-size:15px">✦</span>
-          <div><h1 id="at-title">${esc(cur?cur.title:"Hi，今天有什么安排？")}</h1>
-          <p id="at-sub">${cur?`${esc(assistantKey())} · 全局 Leader · 跨项目 · 产出 ${esc(outName(cur.out_dir))}`:"全局 Leader：不属于任何单个项目 —— 可以跨项目查文献/笔记/日程、建项目、加日程；项目工作流里跑的是绑定该项目的 Partner Agent"}</p></div></div>
+        <div class="at-heading"><span class="at-idwrap" id="at-who" title="这个对话绑的助手（去「助手」页管理）">${asAvatarOf(boundA, 26)}</span>
+          <div><h1 id="at-title" class="at-title" title="点击改名">${esc(cur?cur.title:"Hi，今天有什么安排？")}</h1>
+          <p id="at-sub">${esc(boundA?boundA.name:(assistantKey()+"（未绑助手）"))} · 全局 Leader · 跨项目 · 产出 ${esc(cur?outName(cur.out_dir):"默认产出目录")}</p></div></div>
         <button class="at-profile" id="at-profile" title="在「设置」里改模型与权限">
           <span>⚙</span><b>${esc(S.active? (S.active.name+" · "+S.active.model) : "未选择模型")}</b><em>自动批准</em></button>
       </header>
@@ -1593,7 +1770,9 @@ function renderAgent(m){
                 ${S.models.map(mm=>`<option value="${mm.id}" ${S.active&&mm.id===S.active.id?"selected":""}>${esc(mm.name)}</option>`).join("")}</select></label>
             </div>
             <div class="at-tools-r">
-              <label class="at-sel" title="助手署名">🤖<input id="assist" placeholder="researcher" value="${esc(assistantKey())}"></label>
+              <label class="at-sel" title="这个对话用哪个助手（在「助手」页增删改）">🧑‍🔬<select id="assist">
+                <option value="">未绑助手</option>
+                ${(S.assistants||[]).filter(a=>a.enabled!==0).map(a=>`<option value="${a.id}" ${cur&&cur.assistant_id===a.id?"selected":""}>${esc(a.name)}</option>`).join("")}</select></label>
               <button class="send-btn" id="send" title="发送" aria-label="发送">↑</button>
             </div>
           </div>
@@ -1602,6 +1781,23 @@ function renderAgent(m){
         <p class="at-hint">Enter 发送 · Shift + Enter 换行 · 附件用左侧 <code>＋</code> 或直接把文件拖进输入框 · 权限：自动批准（本地任务/日历/笔记写入直接生效）</p>
       </div>
     </section></div>`;
+  const tEl = $("at-title");
+  if(tEl && cur) tEl.onclick = ()=>{          // 照 AionUi ChatTitleEditor：点标题原地改名
+    const inp = document.createElement("input");
+    inp.className = "control"; inp.value = cur.title; inp.style.cssText = "font-size:16px;font-weight:700;max-width:320px";
+    tEl.replaceWith(inp); inp.focus(); inp.select();
+    const commit = async ()=>{
+      const v = (inp.value||"").trim();
+      if(v && v !== cur.title){
+        try{ await api("/api/chat/rename", {id:cur.id, title:v}); }catch(e){ alert("改名失败："+e.message); }
+        await refreshState(false);
+      }
+      render();
+    };
+    inp.onblur = commit;
+    inp.onkeydown = (e)=>{ if(e.key==="Enter"){ e.preventDefault(); commit(); } if(e.key==="Escape") render(); };
+  };
+  const whoEl = $("at-who"); if(whoEl) whoEl.onclick = ()=>openTab("assistants");
   // 左栏
   m.querySelectorAll("[data-open]").forEach(b=>b.onclick=()=>{ curChat=b.dataset.open; localStorage.setItem("rw-chat",curChat); render(); });
   m.querySelectorAll("[data-sel]").forEach(b=>b.onchange=()=>{ b.checked?ahSel.add(b.dataset.sel):ahSel.delete(b.dataset.sel); render(); });
@@ -1645,7 +1841,11 @@ function renderAgent(m){
     btn.disabled=false;
   };
   $("modpick").onchange = async (e)=>{ if(!e.target.value) return; await api("/api/models/active",{id:e.target.value}); await refreshState(false); render(); };
-  $("assist").oninput = (e)=>{ localStorage.setItem("rw-assist", e.target.value.trim()||"researcher"); const s=$("at-sub"); if(s) s.textContent = `${assistantKey()} · 全局 Leader · 跨项目 · 产出 ${cur?outName(cur.out_dir):"默认产出目录"}`; };
+     $("assist").onchange = async (e)=>{
+       if(!curChat){ alert("先新建一个对话，再选助手。"); return; }
+       try{ await api("/api/chat/assistant", {id:curChat, assistant_id:e.target.value}); }catch(err){ return alert("绑定失败："+err.message); }
+       await refreshState(false); render();
+     };
   // 输入区（我们自己的：＋ 菜单 / 拖放 / 粘贴 / 自动长高）
   $("send").onclick = send;
   $("ask").onkeydown = (e)=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();} };
@@ -1657,7 +1857,7 @@ function renderAgent(m){
   wireDrop($("composer"));
   setAtts(); grow();
   if(!curChat){
-    $("msgs").innerHTML = emptyState("🤖","准备好开始了吗？","先在左边选一个对话，或点 ＋ 新建一个，再直接说你要做什么。");
+    $("msgs").innerHTML = asEmpty(); bindChips();
     loadAgentMeta();
   } else {
     loadChat();
@@ -1673,7 +1873,7 @@ async function loadChat(){
     const box=$("msgs"); if(!box) return;
     if(agentView==="trajectory"){ renderTrajectory(box); }
     else if(!S.chat.length){
-      box.innerHTML = emptyState("✦","这是一段新对话","发送第一条消息即可开始：例如「检索 O3 钠电掺杂的近期论文，挑开放获取的下载并精读」。");
+      box.innerHTML = asEmpty(); bindChips();
     } else {
       box.innerHTML="";
       S.chat.forEach(m=>appendOne(box,{type:m.role,content:m.content,events:m.events,replay:true,at:m.created_at}));
@@ -5395,12 +5595,14 @@ function themeSwatches(compact){
 function bindSwatches(host){
   host.querySelectorAll("[data-p]").forEach(s=>s.onclick=()=>{ applyTheme(s.dataset.p); render(); });
 }
-function renderSettings(m){
-  m.innerHTML = `<div class="card"><h3>主题</h3>
+let setSec = "theme";                    // 设置左列分区（照工作流中间可选栏）
+let setMeta = null;                      // /api/settings/meta 缓存：tool 在 S.tools，skill / MCP 在这
+const SET_SECS = [["theme", "🎨", "主题色"], ["models", "🔌", "模型列表"], ["tools", "🧰", "Tool"], ["skills", "⚡", "Skill"], ["mcp", "🔗", "MCP"]];
+function setPanel(){
+  if(setSec === "theme") return `<div class="card"><h3>主题色</h3>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn" id="th">${document.documentElement.dataset.theme==="dark"?"切到浅色":"切到深色"}</button>
-      <span class="hint">主题色：</span><div class="swatches" id="presets">${themeSwatches()}</div>
-    </div>
+      <span class="hint">主题色：</span><div class="swatches" id="presets">${themeSwatches()}</div></div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
       <span class="hint">自定义：</span>
       <input type="color" id="cpick" value="${currentPrimary()}" style="width:38px;height:30px;padding:2px">
@@ -5409,20 +5611,45 @@ function renderSettings(m){
       <button class="btn ghost" id="creset">恢复默认</button>
     </div>
     <div class="hint" style="margin-top:8px">字体大小：</div>
-    <div style="display:flex;gap:6px;margin-top:4px">${[["compact","紧凑"],["comfortable","标准"],["large","大"]].map(([k,l])=>`<button class="btn ghost" data-f="${k}">${l}</button>`).join("")}</div></div>
-    <div class="card"><h3>Agent 可用工具 <span class="pill">${S.tools.length}</span></h3>
-      <table><tr><th>工具</th><th>说明</th></tr>${S.tools.map(t=>`<tr><td><code>${esc(t.name)}</code></td><td class="muted">${esc(t.description)}</td></tr>`).join("")}</table></div>
-    <div class="card"><h3>边界</h3><ul class="hint"><li>只下载开放获取全文，不绕付费墙。</li><li>候选证据必须带页码与原文，对不上的会被拒收。</li><li>模型产出（审查/撰写）是草稿，不是结论。</li><li>数据只在本地 <code>data/research.sqlite3</code>。</li></ul></div>
-    <div id="set-models"></div>`;
-  $("th").onclick=()=>setTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
-  bindSwatches($("presets"));
-  $("cpick").oninput=(e)=>{ $("chex").value=e.target.value; applyTheme(e.target.value); };
-  $("chex").onkeydown=(e)=>{ if(e.key==="Enter"){ applyTheme(e.target.value.trim()); render(); } };
-  $("capply").onclick=()=>{ applyTheme($("chex").value.trim()); render(); };
-  $("creset").onclick=()=>{ applyTheme(DEFAULT_THEME); render(); };
-  m.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>setFont(b.dataset.f));
-  $("set-models").innerHTML = `<div class="card"><h3>模型</h3><div class="hint">可选模型、凭据、默认模型都在这里设置（原侧栏「模型」页）。</div></div>`;
-  renderModels($("set-models"));   // 复用原面板：挂到设置页的容器上
+    <div style="display:flex;gap:6px;margin-top:4px">${[["compact","紧凑"],["comfortable","标准"],["large","大"]].map(([k,l])=>`<button class="btn ghost" data-f="${k}">${l}</button>`).join("")}</div></div>`;
+  if(setSec === "models") return `<div class="card"><h3>模型列表</h3>
+      <div class="hint">可选模型、凭据、默认模型都在这里设置（原来侧栏的「模型」页）。</div></div><div id="set-models"></div>`;
+  if(setSec === "tools") return `<div class="card"><h3>Agent 可用工具 <span class="pill">${(S.tools||[]).length}</span></h3>
+      <table><tr><th>工具</th><th>说明</th></tr>${(S.tools||[]).map(t=>`<tr><td><code>${esc(t.name)}</code></td><td class="muted">${esc(t.description)}</td></tr>`).join("")}</table></div>
+    <div class="card"><h3>边界</h3><ul class="hint"><li>只下载开放获取全文，不绕付费墙。</li><li>候选证据必须带页码与原文，对不上的会被拒收。</li><li>模型产出（审查/撰写）是草稿，不是结论。</li><li>数据只在本地 <code>data/research.sqlite3</code>。</li></ul></div>`;
+  if(!setMeta) return `<div class="card"><h3>${setSec==="skills"?"Skill":"MCP"} 服务器</h3><div class="hint">正在读本机配置…</div></div>`;
+  if(setMeta.__err) return `<div class="card"><h3>读不到</h3><div class="hint">${esc(setMeta.__err)}</div></div>`;
+  if(setSec === "skills") return `<div class="card"><h3>Skill <span class="pill">${(setMeta.skills||[]).length}</span></h3>
+      <div class="hint">本机技能包（只读）：<code>${esc(setMeta.hermes_dir||"")}</code> —— 安装/更新在 Hermes 里做。</div>
+      <table><tr><th>技能</th><th>说明</th></tr>${(setMeta.skills||[]).map(x=>`<tr><td><code>${esc(x.name)}</code></td><td class="muted">${esc(x.desc)}</td></tr>`).join("")}</table></div>`;
+  return `<div class="card"><h3>MCP <span class="pill">${(setMeta.mcp||[]).length}</span></h3>
+      <div class="hint">本机配置里的 MCP 服务器（只读）：<code>${esc(setMeta.mcp_cfg||"")}</code></div>
+      <table><tr><th>服务器</th><th>启动</th></tr>${(setMeta.mcp||[]).map(x=>`<tr><td><code>${esc(x.name)}</code></td><td class="muted">${esc(x.cmd)}</td></tr>`).join("")}</table></div>`;
+}
+function renderSettings(m){
+  m.innerHTML = `<div class="page-head"><div><p class="inst-label">SETTINGS</p><h3>设置</h3></div>
+      <div class="ph-acts"><button class="btn ghost" id="to-assist">管理助手 →</button></div></div>
+    <div class="set-wrap" style="margin-top:12px">
+      <nav class="set-nav">${SET_SECS.map(([k,i,l])=>`<button class="set-row ${k===setSec?"on":""}" data-set="${k}"><span class="set-ico">${i}</span>${l}</button>`).join("")}</nav>
+      <div class="set-body" id="set-body">${setPanel()}</div></div>`;
+  m.querySelectorAll("[data-set]").forEach(b=>b.onclick=()=>{ setSec = b.dataset.set; render(); });
+  const ta = $("to-assist"); if(ta) ta.onclick = ()=>openTab("assistants");
+  if(setSec === "theme"){
+    $("th").onclick = ()=>setTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
+    bindSwatches($("presets"));
+    $("cpick").oninput = (e)=>{ $("chex").value = e.target.value; applyTheme(e.target.value); };
+    $("chex").onkeydown = (e)=>{ if(e.key==="Enter"){ applyTheme(e.target.value.trim()); render(); } };
+    $("capply").onclick = ()=>{ applyTheme($("chex").value.trim()); render(); };
+    $("creset").onclick = ()=>{ applyTheme(DEFAULT_THEME); render(); };
+    m.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>setFont(b.dataset.f));
+  }
+  if(setSec === "models"){
+    $("set-models").innerHTML = `<div class="card"><h3>模型</h3><div class="hint">可选模型、凭据、默认模型都在这里设置（原侧栏「模型」页）。</div></div>`;
+    renderModels($("set-models"));      // 复用原面板
+  }
+  if((setSec === "skills" || setSec === "mcp") && !setMeta){
+    api("/api/settings/meta").then(r=>{ setMeta = r; render(); }).catch(e=>{ setMeta = {__err:e.message}; render(); });
+  }
 }
 const FONTS={compact:"13px",comfortable:"14px",large:"16px"};
 function setTheme(t){ document.documentElement.dataset.theme=t; localStorage.setItem("rw-theme",t);
@@ -5441,7 +5668,7 @@ function md(t){
 /* ---------------- 启动 ---------------- */
 async function refreshState(rerender=true){
   const st = await api("/api/state");
-  S.tasks=st.tasks; S.chats=st.chats||[]; S.models=st.models; S.active=st.active; S.events=st.events;
+  S.tasks=st.tasks; S.chats=st.chats||[]; S.assistants=st.assistants||[]; S.models=st.models; S.active=st.active; S.events=st.events;
   { const pv = await api("/api/providers"); S.providers=pv.providers; S.wires=pv.wires; S.default=pv.default; }
   if(!S.tools.length) S.tools = (await api("/api/tools")).tools;
   S.loaded=true;

@@ -27,6 +27,7 @@ from typing import Any
 import papertran                 # 论文翻译页：PDF 服务 / 元数据 / BabelDOC 任务
 import rss                       # 情报日报：RSS 抓取/解析
 import vault                     # 知识库：Obsidian Vault 扫描 / 状态写回
+import workflow
 import schedule                  # 定时任务：抄原版 automation（只在应用活着时调度）
 import team                      # 团队：Leader + Partner 成员 + 派活队列（抄 AionUi Teams）
 import zotero                    # Zotero 本机 Local API 只读接入（笔记页；不碰 zotero.sqlite）
@@ -379,6 +380,41 @@ def catalog_cards(db: Any) -> list[dict[str, Any]]:
     return cards
 
 
+def settings_meta() -> dict[str, Any]:
+    """工具 = 本 app 的 TOOL_SPECS；技能 = 本机 Hermes skills；MCP = 本机 Hermes 配置里的服务器。只读。"""
+    tools = [{"name": t["function"]["name"], "desc": (t["function"].get("description") or "")}
+             for t in workflow.TOOL_SPECS]
+    skills, mcp = [], []
+    sk = Path(os.environ.get("LOCALAPPDATA", "")) / "hermes" / "skills"
+    for f in (sorted(sk.glob("*/SKILL.md")) + sorted(sk.glob("*/*/SKILL.md")))[:80]:
+        try:
+            head = f.read_text(encoding="utf-8", errors="replace")[:1200]
+            m = re.search(r"^description:\s*(.+)$", head, re.M)
+            skills.append({"name": f.parent.name, "desc": (m.group(1).strip().strip('"\'') if m else ""),
+                           "dir": str(f.parent)})
+        except OSError:
+            pass
+    cfg = Path(os.environ.get("LOCALAPPDATA", "")) / "hermes" / "config.yaml"
+    if cfg.is_file():
+        try:
+            import yaml
+            data = yaml.safe_load(cfg.read_text(encoding="utf-8", errors="replace")) or {}
+            servers = data.get("mcp_servers") or data.get("mcp") or {}
+            if isinstance(servers, list):
+                servers = {str(x.get("name") or i): x for i, x in enumerate(servers) if isinstance(x, dict)}
+            for name, spec in servers.items():
+                if name == "servers" and isinstance(spec, dict):
+                    for n2, s2 in spec.items():
+                        mcp.append({"name": n2, "cmd": str(s2.get("command") or s2.get("url") or "")[:120]})
+                else:
+                    mcp.append({"name": name, "cmd": str((spec or {}).get("command") or (spec or {}).get("url") or "")[:120]})
+        except Exception as exc:
+            mcp = [{"name": "（读取 Hermes 配置失败）", "cmd": str(exc)[:80]}]
+    sk_all = len(list(sk.glob("*/SKILL.md"))) + len(list(sk.glob("*/*/SKILL.md"))) if sk.is_dir() else 0
+    return {"tools": tools, "skills": skills, "skills_total": sk_all, "mcp": mcp,
+            "hermes_dir": str(sk), "mcp_cfg": str(cfg)}
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -708,6 +744,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({
                         "tasks": [{**dict(t), "stage_now": db.stage_now(t["id"], t["stage"])} for t in db.tasks()],
                         "chats": db.chats(),
+                        "assistants": db.assistants(),
                         "models": [{**m, "api_key": "***" if m["api_key"] else ""} for m in db.models()],
                         "active": (lambda m: ({**m, "api_key": "***"} if m and m["api_key"] else m))(active),
                         "active_model": (lambda m: ({**m, "api_key": "***"} if m and m["api_key"] else m))(active),
@@ -800,6 +837,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/folder/pick":
                 return self._json(self._pick_folder((q.get("initial") or [""])[0],
                                                     (q.get("title") or [""])[0] or "选择产出文件夹"))
+            if path == "/api/settings/meta":            # 设置页分区要的元数据：工具 / 技能 / MCP
+                return self._json(settings_meta())
             if path == "/api/team":                      # 团队看板：成员状态 + 派活队列 + 运行事件
                 try:
                     return self._json(team.board((q.get("id") or [""])[0]))
@@ -967,6 +1006,20 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"note": db.save_md_note(data.get("id", ""), data.get("title", ""),
                                                                data.get("content", ""), None if tid is None else str(tid))})
 
+                if path.startswith("/api/assistant/") or path == "/api/chat/assistant":
+                    b = data or {}
+                    with WorkflowDB(DB_PATH) as db:
+                        if path == "/api/chat/assistant":
+                            db.set_chat_assistant(b.get("id", ""), b.get("assistant_id", ""))
+                            return self._json({"ok": True})
+                        if path == "/api/assistant/save":
+                            fid = (b.get("id") or "").strip() or ("a-" + os.urandom(4).hex())
+                            return self._json({"assistant": db.assistant_save(fid, name=b.get("name"),
+                                avatar=b.get("avatar"), description=b.get("description"), rules=b.get("rules"),
+                                prompts=json.dumps(b.get("prompts") or [], ensure_ascii=False), model_id=b.get("model_id"))})
+                        if path == "/api/assistant/delete":
+                            db.assistant_delete(b.get("id", ""))
+                            return self._json({"ok": True})
                 if path.startswith("/api/team/"):           # 团队：成员增删改 / 派活 / 取消 / 重试
                     b = data or {}
                     if path == "/api/team/member/add":
@@ -1103,6 +1156,13 @@ class Handler(BaseHTTPRequestHandler):
                     cid = data.get("id", "")
                     db.clear_messages(cid)
                     return self._json(db.delete_chat(cid))
+                if path == "/api/chat/rename":               # 对话改名（照 AionUi 标题点击改名）
+                    b = data or {}
+                    with WorkflowDB(DB_PATH) as db:
+                        db.db.execute("UPDATE chats SET title=?, updated_at=? WHERE id=?",
+                                      ((b.get("title") or "").strip()[:120] or "新对话", workflow.now(), b.get("id", "")))
+                        db.db.commit()
+                    return self._json({"ok": True})
                 if path == "/api/chat/outdir":
                     cid = data.get("id", "")
                     picked = (data.get("dir") or "").strip()
@@ -1238,7 +1298,7 @@ class Handler(BaseHTTPRequestHandler):
         helper = ("import sys, pathlib, tkinter as tk, tkinter.filedialog as fd\n"
                   "r = tk.Tk(); r.withdraw(); r.attributes('-topmost', True)\n"
                   "p = fd.askdirectory(title=sys.argv[3] or '选择产出文件夹', initialdir=sys.argv[2] or str(pathlib.Path.home()))\n"
-                  "r.destroy(); pathlib.Path(sys.argv[1]).write_text(p or '', encoding='utf-8')\n")
+                  "r.destroy(); Path(sys.argv[1]).write_text(p or '', encoding='utf-8')\n")
         tmp = Path(tempfile.mkstemp(suffix=".txt")[1])
         try:
             proc = subprocess.run([sys.executable, "-c", helper, str(tmp), initial or "", title or ""],
