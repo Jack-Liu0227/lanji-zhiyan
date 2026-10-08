@@ -354,6 +354,9 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .cal-left{display:grid;grid-template-rows:1fr 2.2fr;gap:14px;min-height:0}
 .cal-page .card.cal-hello{flex-direction:row;align-items:center;justify-content:center;gap:14px}
 .hello-avatar{display:grid;width:48px;height:48px;flex:none;place-items:center;border-radius:50%;background:var(--panel2);border:1px solid var(--line);font-size:24px}
+.avatar-img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}
+.prof-photo-prev{width:44px;height:44px;border-radius:50%;object-fit:cover;border:1px solid var(--line);display:none}
+.prof-photo-prev.on{display:block}
 .cal-page .card.cal-hello b{font-size:20px;font-weight:700}
 .cal-bottom{display:grid;grid-template-columns:1fr 1fr;gap:14px;min-height:0}
 .cal-page .card{margin-bottom:0;padding:14px 16px;min-height:0;display:flex;flex-direction:column}
@@ -1170,6 +1173,13 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
     <div class="modal-body">
       <label class="field"><span>用户名（显示名）</span><input id="profName" class="tb-input" style="width:100%" placeholder="例如：姚同学"></label>
       <label class="field"><span>头像 Emoji</span><input id="profAvatar" class="tb-input" style="width:100%" placeholder="🎓" maxlength="4"></label>
+      <label class="field"><span>头像照片（选了照片就优先用它，Emoji 留着备着）</span>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="file" id="profPhotoFile" accept="image/*" style="display:none">
+          <button type="button" class="btn ghost" id="btnProfPhotoPick">＋ 上传照片</button>
+          <button type="button" class="btn ghost" id="btnProfPhotoClear">恢复默认（🎓）</button>
+          <img id="profPhotoPrev" class="prof-photo-prev" alt="">
+        </div></label>
       <label class="field"><span>专业方向</span><input id="profField" class="tb-input" style="width:100%" placeholder="如：材料科学与工程"></label>
     </div>
     <div class="modal-foot">
@@ -1216,17 +1226,69 @@ let tDir = "";                                   // 新建项目时选的「项�
 let curChat = localStorage.getItem("rw-chat") || null;   // Agent 页当前对话（独立于项目）
 
 /* ---------------- 个人资料（照 lit：侧栏卡片 + 填写弹窗；卡片只显示头像和用户名） ---------------- */
-const profile = Object.assign({ name:"研究生", avatar:"🎓", field:"" },
+const profile = Object.assign({ name:"研究生", avatar:"🎓", field:"", photo:"" },
   JSON.parse(localStorage.getItem("rw-profile") || "{}"));
+/* 头像：有照片就用照片（本地缩成 128×128 存 localStorage），没有就回落 Emoji；默认 🎓 */
+function avatarPhoto(){ const p = String(profile.photo || ""); return p.startsWith("data:image/") ? p : ""; }
+function avatarInner(){                      // 给模板串用（侧栏 / 日历问候卡）
+  const p = avatarPhoto();
+  return p ? `<img class="avatar-img" src="${p}" alt="">` : esc(profile.avatar || "🎓");
+}
+function paintAvatar(){
+  const a=$("profileAvatar");
+  if(a){
+    const p = avatarPhoto();
+    if(p){ a.innerHTML = `<img class="avatar-img" src="${p}" alt="">`; a.classList.add("has-photo"); }
+    else { a.textContent = profile.avatar || "🎓"; a.classList.remove("has-photo"); }
+  }
+  const h=$("calHelloAvatar");
+  if(h){
+    const p = avatarPhoto();
+    if(p){ h.innerHTML = `<img class="avatar-img" src="${p}" alt="">`; }
+    else h.textContent = profile.avatar || "🎓";
+  }
+}
+function paintProfilePreview(){
+  const img = $("profPhotoPrev"); if(!img) return;
+  const p = avatarPhoto();
+  if(p){ img.src = p; img.classList.add("on"); } else { img.removeAttribute("src"); img.classList.remove("on"); }
+}
+function readAvatarFile(file, cb){
+  if(!file) return;
+  if(!/^image\//.test(file.type || "")){ alert("这不是图片文件"); return; }
+  const fr = new FileReader();
+  fr.onerror = ()=>alert("读文件失败");
+  fr.onload = ()=>{
+    const im = new Image();
+    im.onerror = ()=>alert("这张图片读不了（格式可能不支持）");
+    im.onload = ()=>{
+      try{
+        const S = 128, side = Math.min(im.width, im.height);
+        const c = document.createElement("canvas"); c.width = c.height = S;
+        const g = c.getContext("2d");
+        g.drawImage(im, (im.width-side)/2, (im.height-side)/2, side, side, 0, 0, S, S);
+        cb(c.toDataURL("image/jpeg", 0.86));
+      }catch(e){ alert("这张图片处理失败：" + e.message); }
+    };
+    im.src = fr.result;
+  };
+  fr.readAsDataURL(file);
+}
+function setAvatarPhoto(url){
+  profile.photo = url || "";
+  localStorage.setItem("rw-profile", JSON.stringify(profile));
+  paintProfilePreview(); renderProfile();
+}
 function renderProfile(){
-  const a=$("profileAvatar"), n=$("profileName");
-  if(a) a.textContent = profile.avatar || "🎓";
+  const n=$("profileName");
   if(n) n.textContent = profile.name || "研究生";
+  paintAvatar();
 }
 function openProfileModal(){
   $("profName").value = profile.name || "";
   $("profAvatar").value = profile.avatar || "🎓";
   $("profField").value = profile.field || "";
+  paintProfilePreview();
   $("profileModal").classList.remove("hidden");
   setTimeout(()=>$("profName").focus(), 50);
 }
@@ -1351,6 +1413,13 @@ function renderSidebar(){
   $("btnProfCancel").onclick = closeProfileModal;
   $("btnProfSave").onclick = saveProfileModal;
   document.querySelector("#profileModal .modal-mask").onclick = closeProfileModal;
+  $("btnProfPhotoPick").onclick = ()=>$("profPhotoFile").click();
+  $("profPhotoFile").onchange = (e)=>{
+    const f = e.target.files && e.target.files[0];
+    readAvatarFile(f, (url)=>setAvatarPhoto(url));       // 选完就立刻生效并落 localStorage
+    e.target.value = "";
+  };
+  $("btnProfPhotoClear").onclick = ()=>setAvatarPhoto("");
   renderProfile();
 }
 
@@ -3074,7 +3143,7 @@ function renderCalendar(m){
     <div class="cal-mid">
       <div class="cal-left">
       <div class="card cal-hello">
-        <span class="hello-avatar" id="calHelloAvatar">${profile.avatar || "🎓"}</span><b id="calHelloText">${helloText()}</b></div>
+        <span class="hello-avatar" id="calHelloAvatar">${avatarInner()}</span><b id="calHelloText">${helloText()}</b></div>
       <div class="card">
         <div class="card-head"><b>📅 科研日历</b>
           <div class="cal-nav">
