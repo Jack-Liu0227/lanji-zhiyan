@@ -242,9 +242,9 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .pj-sec{background:none;border:0;box-shadow:none;padding:0}
 .proj-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
 .proj-row{position:relative;cursor:pointer;overflow:hidden;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:13px 15px 11px 18px;font-size:14px;box-shadow:0 1px 2px color-mix(in srgb,var(--fg) 6%,transparent),0 6px 18px color-mix(in srgb,var(--fg) 7%,transparent);transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease}
-.proj-row::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:0 3px 3px 0;background:var(--rail,#B7B3AE)}
-.proj-row:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--rail,#B7B3AE) 55%,var(--line));box-shadow:0 2px 4px color-mix(in srgb,var(--fg) 7%,transparent),0 14px 28px color-mix(in srgb,var(--fg) 10%,transparent)}
-.proj-row.cur{border-color:var(--rail,#B7B3AE);background:color-mix(in srgb,var(--rail,#B7B3AE) 7%,var(--panel))}
+.proj-row::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:0 3px 3px 0;background:var(--accent)}
+.proj-row:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--accent) 55%,var(--line));box-shadow:0 2px 4px color-mix(in srgb,var(--fg) 7%,transparent),0 14px 28px color-mix(in srgb,var(--fg) 10%,transparent)}
+.proj-row.cur{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,var(--panel))}
 .proj-add{display:flex;align-items:center;justify-content:center;min-height:118px;border:1px dashed color-mix(in srgb,var(--fg) 22%,transparent);border-radius:14px;background:transparent;color:var(--muted);font-weight:600;cursor:pointer}
 .proj-add:hover{border-color:var(--accent);color:var(--accent)}
 /* 2026-10-08 撤掉「暖色孤岛」：原来这套米驼/陶土色把项目页做成了另一套配色，和其它页风格割裂。
@@ -259,7 +259,7 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .pj-new input,.pj-new textarea{width:100%;border:1px solid var(--line);border-radius:9px;background:var(--panel);padding:7px 10px;font:inherit;font-size:13px;color:var(--fg)}
 .pj-new textarea{height:46px;resize:none}
 .pj-new .full{grid-column:1/-1}
-.proj-row.cur{outline:2px solid color-mix(in srgb,var(--rail,#B7B3AE) 45%,transparent);outline-offset:1px}
+.proj-row.cur{outline:2px solid color-mix(in srgb,var(--accent) 45%,transparent);outline-offset:1px}
 .proj-row .go{background:transparent;color:color-mix(in srgb,var(--accent) 78%,var(--fg));padding:0;font-size:12.5px;font-weight:700}
 .proj-row .go:hover{filter:none;text-decoration:underline}
 .proj-row .go.del{color:var(--err);font-weight:400;padding:0 4px}
@@ -1284,7 +1284,7 @@ const NAV = [
     {id:"agent",label:"Agent",ico:"🤖"},
     {id:"calendar",label:"日历",ico:"📅"},
     {id:"tasks",label:"项目",ico:"📁"},
-    {id:"space",label:"项目空间",ico:"🗂"}]},
+    {id:"space",label:"项目空间",ico:"🧭"}]},
   {g:"solo",items:[
     {id:"workflow",label:"工作流",ico:"🔀"},
     {id:"schedules",label:"定时任务",ico:"⏰"},
@@ -2932,7 +2932,7 @@ function resultHtml(stage,r){
 
 /* ---------------- 项目 ---------------- */
 function renderTasks(m){
-  const RAILS = ["#C08C82", "#8FA6B5", "#A3B18A", "#A99BB5", "#CBB79A", "#B7B3AE"];   // 莫兰迪六色，按项目顺序轮换
+  // 卡片色带 2026-10-08：原来按顺序轮换莫兰迪六色（豆沙/米驼那组偏暖），与主题脱节 → 撤掉，统一吃 --accent。
   const kws = t => String(t.material_system || "").split(/[，,、;；]+/).map(s => s.trim()).filter(Boolean)
     .slice(0, 4).map(s => `<span class="kw">${esc(s)}</span>`).join("");
   m.innerHTML = `
@@ -2953,7 +2953,7 @@ function renderTasks(m){
         </div>
         <div class="pf-actions" style="margin-top:10px"><button class="btn" id="t-go">创建项目</button></div></div>
     <div class="card pj-sec"><h3>${S.tasks.length} 个项目</h3>${S.tasks.length?
-      `<div class="proj-cards">${S.tasks.map((t, i) => `<div class="proj-row ${t.id===curTask?"cur":""}" style="--rail:${RAILS[i%RAILS.length]}">
+      `<div class="proj-cards">${S.tasks.map((t, i) => `<div class="proj-row ${t.id===curTask?"cur":""}">
         <div class="nm">${esc(t.title)}</div>
         <div class="q">${esc(t.question||"未填研究问题")}</div>
         <div class="kws">${kws(t)}</div>
