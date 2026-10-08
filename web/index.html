@@ -1213,7 +1213,6 @@ async function api(path, opts){
 /* ============================== 路由 ============================== */
 const NAV = [
   {g:"primary",items:[
-    {id:"models",label:"模型",ico:"🧠"},
     {id:"agent",label:"Agent",ico:"🤖"},
     {id:"calendar",label:"日历",ico:"📅"},
     {id:"tasks",label:"项目",ico:"📁"}]},
@@ -1407,7 +1406,7 @@ function renderAgent(m){
         <div class="at-heading"><span style="color:var(--accent);font-size:15px">✦</span>
           <div><h1 id="at-title">${esc(cur?cur.title:"Hi，今天有什么安排？")}</h1>
           <p id="at-sub">${cur?`${esc(assistantKey())} · 通用助手（不绑项目） · 产出 ${esc(outName(cur.out_dir))}`:"通用助手：不绑项目，每个对话有自己的记忆和输出文件夹"}</p></div></div>
-        <button class="at-profile" id="at-profile" title="在「模型与 Agent」里改模型与权限">
+        <button class="at-profile" id="at-profile" title="在「设置」里改模型与权限">
           <span>⚙</span><b>${esc(S.active? (S.active.name+" · "+S.active.model) : "未选择模型")}</b><em>自动批准</em></button>
       </header>
       <div class="at-tabs">
@@ -1483,7 +1482,7 @@ function renderAgent(m){
   };
   // 右栏头 + 视图切换
   m.querySelectorAll("[data-v]").forEach(b=>b.onclick=()=>{ agentView=b.dataset.v; renderAgent(m); });
-  $("at-profile").onclick = ()=> openTab("models");
+  $("at-profile").onclick = ()=> openTab("settings");      // 模型配置已并入设置页
   $("outpick").onclick = async ()=>{                        // 空 dir = 服务端弹原生「选择文件夹」
     if(!curChat) return alert("先新建一个对话");
     const btn=$("outpick"), txt=$("outdir-txt"), old=txt.textContent;
@@ -4840,7 +4839,8 @@ function renderSettings(m){
     <div style="display:flex;gap:6px;margin-top:4px">${[["compact","紧凑"],["comfortable","标准"],["large","大"]].map(([k,l])=>`<button class="btn ghost" data-f="${k}">${l}</button>`).join("")}</div></div>
     <div class="card"><h3>Agent 可用工具 <span class="pill">${S.tools.length}</span></h3>
       <table><tr><th>工具</th><th>说明</th></tr>${S.tools.map(t=>`<tr><td><code>${esc(t.name)}</code></td><td class="muted">${esc(t.description)}</td></tr>`).join("")}</table></div>
-    <div class="card"><h3>边界</h3><ul class="hint"><li>只下载开放获取全文，不绕付费墙。</li><li>候选证据必须带页码与原文，对不上的会被拒收。</li><li>模型产出（审查/撰写）是草稿，不是结论。</li><li>数据只在本地 <code>data/research.sqlite3</code>。</li></ul></div>`;
+    <div class="card"><h3>边界</h3><ul class="hint"><li>只下载开放获取全文，不绕付费墙。</li><li>候选证据必须带页码与原文，对不上的会被拒收。</li><li>模型产出（审查/撰写）是草稿，不是结论。</li><li>数据只在本地 <code>data/research.sqlite3</code>。</li></ul></div>
+    <div id="set-models"></div>`;
   $("th").onclick=()=>setTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
   bindSwatches($("presets"));
   $("cpick").oninput=(e)=>{ $("chex").value=e.target.value; applyTheme(e.target.value); };
@@ -4848,6 +4848,8 @@ function renderSettings(m){
   $("capply").onclick=()=>{ applyTheme($("chex").value.trim()); render(); };
   $("creset").onclick=()=>{ applyTheme(DEFAULT_THEME); render(); };
   m.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>setFont(b.dataset.f));
+  $("set-models").innerHTML = `<div class="card"><h3>模型</h3><div class="hint">可选模型、凭据、默认模型都在这里设置（原侧栏「模型」页）。</div></div>`;
+  renderModels($("set-models"));   // 复用原面板：挂到设置页的容器上
 }
 const FONTS={compact:"13px",comfortable:"14px",large:"16px"};
 function setTheme(t){ document.documentElement.dataset.theme=t; localStorage.setItem("rw-theme",t);
