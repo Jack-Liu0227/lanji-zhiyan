@@ -1142,7 +1142,8 @@ def _get(url: str, timeout: int = 30) -> bytes:
 
 
 def search_crossref(query: str, rows: int = 10) -> list[dict[str, Any]]:
-    url = "https://api.crossref.org/works?rows=%d&query=%s" % (rows, urllib.parse.quote(query))
+    url = ("https://api.crossref.org/works?rows=%d&filter=type:journal-article&query=%s"
+           % (rows, urllib.parse.quote(query)))
     items = json.loads(_get(url).decode("utf-8", "replace")).get("message", {}).get("items", [])
     out = []
     for it in items:
@@ -1167,7 +1168,8 @@ def _oa_pdf(w: dict[str, Any]) -> str:
 
 
 def search_openalex(query: str, rows: int = 10) -> list[dict[str, Any]]:
-    url = "https://api.openalex.org/works?per-page=%d&search=%s" % (rows, urllib.parse.quote(query))
+    url = ("https://api.openalex.org/works?per-page=%d&filter=type:article&search=%s"
+           % (rows, urllib.parse.quote(query)))
     items = json.loads(_get(url).decode("utf-8", "replace")).get("results", [])
     out = []
     for it in items:
@@ -1452,19 +1454,39 @@ def stage_idea(db: WorkflowDB, task_id: str, idea: str) -> dict[str, Any]:
     return {"verdict": out, "note_id": note["id"], "markdown": md}
 
 
+_GLUE = {"using", "based", "with", "from", "into", "this", "that", "these", "their",
+         "have", "been", "were", "between", "toward", "towards", "about", "after", "before", "under"}
+
+
+def _relevant(query: str, item: dict[str, Any]) -> bool:
+    """相关度粗筛：查询里 ≥2 个实词（≥4 字符）出现在标题+摘要里才算命中。
+    目的：挡掉「Teacher materials Volume 1」这类只蹭到一个词的噪声。关键词本来就少时不过滤。"""
+    toks = [t for t in re.findall(r"[a-z0-9][a-z0-9\-]{3,}", (query or "").lower()) if t not in _GLUE]
+    if len(toks) < 2:
+        return True
+    blob = ("%s %s" % (item.get("title") or "", item.get("abstract") or "")).lower()
+    return sum(1 for t in toks if t in blob) >= 2
+
+
 def stage_search(db: WorkflowDB, task_id: str, query: str, sources: list[str] | None = None, rows: int = 10) -> dict[str, Any]:
     query = (query or "").strip() or db.summary(task_id)["task"]["question"]
     if not query:
         raise ValueError("请填写检索关键词")
-    found = search(query, sources, rows)
+    raw = search(query, sources, rows)
+    found = [x for x in raw if _relevant(query, x)]
     filled = enrich_oa(found)                      # 按 DOI 反查 OpenAlex，尽量把 OA 直链补全
     saved = db.cache_results(task_id, found)
-    db.log_step(task_id, "search", "done", f"检索到 {len(found)} 条，新增 {len(saved)} 条，补 OA 直链 {filled} 条")
-    return {"query": query, "found": len(found), "saved": saved, "enriched": filled, "results": db.results(task_id)}
+    db.log_step(task_id, "search", "done", f"检索到 {len(found)} 条（粗筛掉 {len(raw) - len(found)} 条不相关），新增 {len(saved)} 条，补 OA 直链 {filled} 条")
+    return {"query": query, "found": len(found), "filtered": len(raw) - len(found), "saved": saved,
+            "enriched": filled, "results": db.results(task_id)}
 
 
 def stage_download(db: WorkflowDB, task_id: str, result_id: str) -> dict[str, Any]:
+    if not (result_id or "").strip():
+        raise ValueError("没给要下载的那条检索结果 —— 在「论文搜索」里点某条的「下载 OA」，或勾选后自动下载")
     item = db.result(result_id)
+    if not item:
+        raise ValueError("这条检索结果不在了（可能被清过），重新搜一次")
     path = download_pdf(item, target_dir=db.pdir(task_id, "文献库"))
     paper = db.ingest_pdf(task_id, path)
     db.log_step(task_id, "download", "done", f"已入库 {paper['filename']}（{len(paper['pages'])} 页）")
@@ -1496,6 +1518,101 @@ def stage_download_selected(db: WorkflowDB, task_id: str, result_ids: list[str])
     return {"selected": len(ids), "downloaded": done, "manual": manual, "items": db.queue(task_id)}
 
 
+def is_paper_pdf(path: Any) -> bool:
+    """这算不算「一篇论文」：overleaf 编出来的成品、_build 里的、旁边有同名 .tex 的、<20KB 的都跳过。"""
+    p = Path(str(path))
+    low = str(p).replace("\\", "/").lower()
+    if "_build" in low or "/overleaf/" in low or "/__pycache__/" in low:
+        return False
+    try:
+        if p.stat().st_size < 20000:          # 太小的多半是封面/编译残件，不是论文
+            return False
+    except OSError:
+        return False
+    if p.with_suffix(".tex").exists():        # 旁边就是它的 .tex 源 → 这是编出来的
+        return False
+    return True
+
+
+class DeepreadStopped(Exception):
+    """用户点了停止 —— 不是失败，是主动中断。"""
+
+
+DEEPREAD: dict[str, dict[str, Any]] = {}      # task_id -> 进度（内存；重启即丢，这是刻意的）
+
+
+def deepread_state(task_id: str) -> dict[str, Any] | None:
+    return DEEPREAD.get(task_id)
+
+
+def deepread_stop(task_id: str) -> dict[str, Any]:
+    st = DEEPREAD.get(task_id)
+    if st:
+        st["stop"] = True
+    return {"ok": True, "stopping": bool(st)}
+
+
+def deepread_kick(db_path: str, task_id: str) -> dict[str, Any]:
+    """把「一键精读」扔到后台跑（原来同步跑，篇多会卡死界面、也停不下来）。"""
+    if task_id in DEEPREAD:
+        return {"started": False, "reason": "这个项目已经在精读了"}
+    DEEPREAD[task_id] = {"total": 0, "done": 0, "failed": 0, "skipped": [],
+                         "current": "准备中", "phase": "running", "stop": False, "errors": []}
+    import threading
+    threading.Thread(target=_deepread_worker, args=(db_path, task_id), daemon=True).start()
+    return {"started": True}
+
+
+def _deepread_worker(db_path: str, task_id: str) -> None:
+    st = DEEPREAD[task_id]
+    try:
+        with WorkflowDB(db_path) as db:
+            folder = db.pdir(task_id, "文献库")
+            known = {p["filename"] for p in db.papers_of(task_id)}
+            skipped = []
+            for pdf in sorted(folder.glob("*.pdf")):
+                if st.get("stop"):
+                    st["phase"] = "stopped"
+                    return
+                if pdf.name in known:
+                    continue
+                if not is_paper_pdf(pdf):
+                    skipped.append(pdf.name)
+                    continue
+                st["current"] = "入库 " + pdf.name[:44]
+                try:
+                    db.ingest_pdf(task_id, pdf)
+                except Exception as exc:
+                    st["failed"] += 1
+                    st["errors"].append("入库 %s: %s" % (pdf.name[:30], exc))
+            st["skipped"] = skipped
+            papers = db.papers_of(task_id)
+            if not papers:
+                raise ValueError("这个项目的「文献库」里没有可精读的 PDF —— 先搜一篇下下来，或把 PDF 丢进文献库")
+            st["total"] = len(papers)
+            for i, p in enumerate(papers, 1):
+                if st.get("stop"):
+                    st["phase"] = "stopped"
+                    return
+                st["current"] = p["filename"][:46]
+                try:
+                    stage_read(db, task_id, p["id"], should_stop=lambda: bool(st.get("stop")))
+                except DeepreadStopped:
+                    st["phase"] = "stopped"
+                    return
+                except Exception as exc:
+                    st["failed"] += 1
+                    st["errors"].append("%s: %s" % (p["filename"][:30], exc))
+                st["done"] = i
+            db.log_step(task_id, "notes", "done", "精读 %d 篇（失败 %d，跳过非论文 %d）" % (st["done"], st["failed"], len(skipped)))
+            st["phase"] = "done"
+    except Exception as exc:
+        st["phase"] = "failed"
+        st["error"] = "%s: %s" % (type(exc).__name__, exc)
+    finally:
+        st["current"] = ""
+
+
 def stage_deepread(db: WorkflowDB, task_id: str) -> dict[str, Any]:
     """一键精读：把项目里已入库的 PDF（文献库里的）逐篇精读，生成的 Markdown 笔记落到「笔记」。"""
     folder = db.pdir(task_id, "文献库")
@@ -1520,7 +1637,8 @@ def stage_deepread(db: WorkflowDB, task_id: str) -> dict[str, Any]:
     return {"notes": notes, "errors": errors, "out": str(db.pdir(task_id, "笔记"))}
 
 
-def stage_read(db: WorkflowDB, task_id: str, paper_id: str, per_page: int = 6000) -> dict[str, Any]:
+def stage_read(db: WorkflowDB, task_id: str, paper_id: str, per_page: int = 6000,
+               should_stop: Any = None) -> dict[str, Any]:
     """逐页精读：把每页文本连同页码交给模型，要求中文要点 + 可引用原文。"""
     profile = db.active_model()
     paper = db.paper(paper_id)
@@ -1536,6 +1654,8 @@ def stage_read(db: WorkflowDB, task_id: str, paper_id: str, per_page: int = 6000
         chunks.append("\n\n".join(buf))
     parts = []
     for i, chunk in enumerate(chunks, 1):
+        if should_stop and should_stop():      # 每段检查一次：停就立刻不读了
+            raise DeepreadStopped()
         parts.append(chat(profile, [
             {"role": "system", "content": READ_SYSTEM},
             {"role": "user", "content": f"论文：{paper['filename']}（第 {i}/{len(chunks)} 段）\n\n{chunk}"},

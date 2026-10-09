@@ -388,6 +388,7 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .tc-team.done{opacity:.6}
 .tc-team i{font-style:normal;color:var(--muted);font-size:11px}
 .tc-team.add{border-style:dashed}
+.btn.stop{background:color-mix(in srgb,var(--err) 16%,var(--panel));border-color:color-mix(in srgb,var(--err) 45%,var(--line));color:var(--err)}
 .as-mdl{display:block;margin-top:2px;font-size:11px;font-style:normal;color:var(--muted)}
 .tc-chat{max-height:46vh;overflow:auto;display:flex;flex-direction:column;gap:10px}
 .tc-msg{display:flex;gap:8px;align-items:flex-start;max-width:88%}
@@ -3205,16 +3206,39 @@ async function wsEnterDownload(){
     .catch(e=>{ dlBusy=false; alert("自动下载失败：" + e.message); });
   startDlPoll();
 }
-async function dlRead(){
+let dlReadBusy = false, dlReadTick = null;
+async function dlRead(){                       // 后台精读：起完就返回；进度靠轮询；按钮再点一次=停
   if(!curTask) return;
   const btn = $("dlRead"); if(!btn) return;
-  const old = btn.textContent; btn.disabled = true; btn.textContent = "精读中…（逐段过模型，篇多会慢）";
+  if(dlReadBusy){
+    try{ await api("/api/deepread/stop",{task_id:curTask}); btn.textContent = "正在停…（当前这篇读完就停）"; }
+    catch(e){ alert("停止失败：" + e.message); }
+    return;
+  }
   try{
     const r = await api("/api/workflow/deepread",{task_id:curTask});
-    const n = (r.notes||[]).length, e = (r.errors||[]).length;
-    btn.textContent = `已生成 ${n} 篇笔记${e? `（${e} 篇失败）`:""} → 笔记文件夹`;
-    setTimeout(()=>{ const b=$("dlRead"); if(b){ b.disabled=false; b.textContent=old; } }, 3000);
-  }catch(err){ btn.disabled=false; btn.textContent=old; alert("精读失败：" + err.message); }
+    if(!r.started){ alert(r.reason || "这个项目已经在精读了"); return; }
+    dlReadBusy = true; btn.classList.add("stop"); btn.textContent = "停止精读";
+    dlReadTick = setInterval(dlReadPoll, 2000);
+  }catch(err){ alert("精读失败：" + err.message); }
+}
+async function dlReadPoll(){
+  try{
+    const st = await api("/api/deepread/status?task_id=" + encodeURIComponent(curTask));
+    if(!st || !st.phase) return;
+    const tip = $("dlTip"), b2 = $("dlRead");
+    const head = "精读 " + st.done + "/" + (st.total || "?") + " 篇" + (st.failed ? "（失败 " + st.failed + "）" : "")
+               + ((st.skipped && st.skipped.length) ? " · 跳过非论文 " + st.skipped.length : "");
+    if(tip) tip.textContent = st.phase === "running" ? head + " · 正在读 " + (st.current || "") : head;
+    if(st.phase === "running") return;
+    clearInterval(dlReadTick); dlReadTick = null; dlReadBusy = false;
+    if(b2){
+      b2.classList.remove("stop");
+      b2.textContent = st.phase === "done" ? "精读完了（去看笔记）" : (st.phase === "stopped" ? "已停止" : "精读失败");
+      setTimeout(()=>{ const b3 = $("dlRead"); if(b3 && !dlReadBusy) b3.textContent = "一键精读"; }, 5000);
+    }
+    if(st.phase === "failed" && st.error) alert("精读失败：" + st.error);
+  }catch(e){ /* 轮询失败就等下一次 */ }
 }
 function wsCard(r, mode){
   const search = mode !== "manual";

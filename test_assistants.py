@@ -28,11 +28,14 @@ class AssistantTest(unittest.TestCase):
 
     def test_01_builtin_seeded_and_idempotent(self):
         a = self.db.assistants()
-        self.assertEqual(len(a), 4)
+        self.assertEqual(len(a), 5)                                   # 4 个业务助手 + Pony 模式
         self.assertTrue(all(x["source"] == "builtin" for x in a))
-        self.assertIn("文献检索员", [x["name"] for x in a])
+        names = [x["name"] for x in a]
+        self.assertIn("文献检索员", names)
+        self.assertIn("Pony 模式", names)
+        self.assertTrue([x for x in a if x["name"] == "Pony 模式"][0]["rules"])   # pony 规则非空
         self.db.assistant_seed(workflow.BUILTIN_ASSISTANTS)          # 再播一次
-        self.assertEqual(len(self.db.assistants()), 4)                # 不重复
+        self.assertEqual(len(self.db.assistants()), 5)                # 不重复
         self.assertTrue(all(json.loads(x["prompts"] or "[]") for x in a))   # 每个都有推荐问题
 
     def test_02_builtin_immutable_and_undeletable(self):

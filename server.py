@@ -38,8 +38,8 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       outline_read, outline_write, doc_read, doc_write, doc_seed, OUTLINE_TEMPLATE,
                       cite_read, cite_add, cite_sync, conv_files, conv_run, conv_compile, conv_open,
                       en_state, en_run, CONV_FORMATS, _safe_path,
-                      stage_deepread,
-                      stage_download_selected, test_provider)
+                      stage_download_selected, test_provider,
+                      deepread_kick, deepread_state, deepread_stop)
 
 HERE = Path(__file__).resolve().parent
 WEB = HERE / "web"
@@ -848,6 +848,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/folder/pick":
                 return self._json(self._pick_folder((q.get("initial") or [""])[0],
                                                     (q.get("title") or [""])[0] or "选择产出文件夹"))
+            if path == "/api/deepread/status":           # 精读进度（前端每 2 秒问一次）
+                return self._json(deepread_state((q.get("task_id") or [""])[0]) or {"phase": ""})
             if path == "/api/settings/meta":            # 设置页分区要的元数据：工具 / 技能 / MCP
                 return self._json(settings_meta())
             if path == "/api/teams":                     # 团队清单（多团队：3 固定 + 2 机动）
@@ -977,6 +979,8 @@ class Handler(BaseHTTPRequestHandler):
                                 hits.append({"kind": "日程", "id": ev["task_id"] or "", "title": ev["title"], "sub": ev["date"]})
                 return self._json({"q": needle, "hits": hits[:60]})
             return self._json({"error": "not found"}, 404)
+        except ValueError as exc:                 # 用法/前置条件不对 → 400（不是服务端故障）
+            self._json({"error": str(exc)}, 400)
         except KeyError as exc:
             self._json({"error": f"找不到对象：{exc}"}, 404)
         except Exception as exc:  # 界面永远拿到可读错误
@@ -1269,6 +1273,8 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("先采用或填写一个模型，再测试")
                     return self._json({"model": model,
                                        "reply": test_provider(p["base_url"], p["api_key"], model)})
+                if path == "/api/deepread/stop":             # 停精读（当前这篇读完后不再往下读）
+                    return self._json(deepread_stop(data.get("task_id", "")))
                 if path.startswith("/api/workflow/"):
                     stage = path.rsplit("/", 1)[-1]
                     tid = data.get("task_id", "")
@@ -1282,8 +1288,8 @@ class Handler(BaseHTTPRequestHandler):
                         if ids:
                             return self._json(stage_download_selected(db, tid, list(ids)))
                         return self._json(ACTION["download"](db, tid, data.get("result_id", "")))
-                    if stage == "deepread":                     # 一键精读：项目里已入库的 PDF 全过一遍
-                        return self._json(stage_deepread(db, tid))
+                    if stage == "deepread":                     # 一键精读：扔后台跑，立刻返回（前端轮询进度、可停）
+                        return self._json(deepread_kick(str(DB_PATH), tid))
                     if stage == "queue":                        # 下载精读面板的实时数据
                         items = db.queue(tid)
                         return self._json({
@@ -1308,6 +1314,8 @@ class Handler(BaseHTTPRequestHandler):
                                                             data.get("format", "docx"), data.get("name", "paper")))
                     return self._json({"error": f"未知步骤 {stage}"}, 404)
             return self._json({"error": "not found"}, 404)
+        except ValueError as exc:                 # 用法/前置条件不对 → 400
+            self._json({"error": str(exc)}, 400)
         except KeyError as exc:
             self._json({"error": f"找不到对象：{exc}"}, 404)
         except Exception as exc:
