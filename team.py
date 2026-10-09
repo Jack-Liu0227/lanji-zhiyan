@@ -45,6 +45,8 @@ def _now() -> str:
 # ---------------- 成员 ----------------
 def ensure_leader(task_id: str) -> dict[str, Any]:
     """确保团队里有 leader 行（幂等）。AionUi：Leader 恒为列表第一个、不可移除。"""
+    if not (task_id or "").strip():
+        raise ValueError("团队要挂在一个项目或对话上（scope 不能是空）")
     with workflow.WorkflowDB(_db_path()) as db:
         rows = [m for m in db.team_members(task_id) if m["role"] == "leader"]
         if rows:

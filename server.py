@@ -1013,18 +1013,21 @@ class Handler(BaseHTTPRequestHandler):
 
                 if path.startswith("/api/assistant/") or path == "/api/chat/assistant":
                     b = data or {}
-                    with WorkflowDB(DB_PATH) as db:
-                        if path == "/api/chat/assistant":
-                            db.set_chat_assistant(b.get("id", ""), b.get("assistant_id", ""))
-                            return self._json({"ok": True})
-                        if path == "/api/assistant/save":
-                            fid = (b.get("id") or "").strip() or ("a-" + os.urandom(4).hex())
-                            return self._json({"assistant": db.assistant_save(fid, name=b.get("name"),
-                                avatar=b.get("avatar"), description=b.get("description"), rules=b.get("rules"),
-                                prompts=json.dumps(b.get("prompts") or [], ensure_ascii=False), model_id=b.get("model_id"))})
-                        if path == "/api/assistant/delete":
-                            db.assistant_delete(b.get("id", ""))
-                            return self._json({"ok": True})
+                    try:
+                        with WorkflowDB(DB_PATH) as db:
+                            if path == "/api/chat/assistant":
+                                db.set_chat_assistant(b.get("id", ""), b.get("assistant_id", ""))
+                                return self._json({"ok": True})
+                            if path == "/api/assistant/save":
+                                fid = (b.get("id") or "").strip() or ("a-" + os.urandom(4).hex())
+                                return self._json({"assistant": db.assistant_save(fid, name=b.get("name"),
+                                    avatar=b.get("avatar"), description=b.get("description"), rules=b.get("rules"),
+                                    prompts=json.dumps(b.get("prompts") or [], ensure_ascii=False), model_id=b.get("model_id"))})
+                            if path == "/api/assistant/delete":
+                                db.assistant_delete(b.get("id", ""))
+                                return self._json({"ok": True})
+                    except ValueError as exc:
+                        return self._json({"error": str(exc)}, 400)
                 if path.startswith("/api/team/chat/"):      # 团队 v2：选助手 / 移人 / 说话（接力）/ 停止
                     b = data or {}
                     try:
@@ -1039,6 +1042,7 @@ class Handler(BaseHTTPRequestHandler):
                             return self._json(team.stop(b.get("scope", "")))
                     except ValueError as exc:
                         return self._json({"error": str(exc)}, 400)
+
                 if path.startswith("/api/team/"):           # 团队：成员增删改 / 派活 / 取消 / 重试
                     b = data or {}
                     if path == "/api/team/member/add":
