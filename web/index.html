@@ -381,6 +381,14 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .tc-chip .tc-x{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:11px;padding:0 2px}
 .tc-chip .tc-x:hover{color:var(--err)}
 .tc-add select{max-width:190px}
+.tc-teams{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tc-team{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;background:var(--panel2);color:var(--fg);padding:5px 12px;font-size:12px;cursor:pointer}
+.tc-team:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.tc-team.on{background:color-mix(in srgb,var(--accent) 18%,transparent);border-color:transparent;box-shadow:inset 2px 0 0 var(--accent);font-weight:600}
+.tc-team.done{opacity:.6}
+.tc-team i{font-style:normal;color:var(--muted);font-size:11px}
+.tc-team.add{border-style:dashed}
+.as-mdl{display:block;margin-top:2px;font-size:11px;font-style:normal;color:var(--muted)}
 .tc-chat{max-height:46vh;overflow:auto;display:flex;flex-direction:column;gap:10px}
 .tc-msg{display:flex;gap:8px;align-items:flex-start;max-width:88%}
 .tc-msg.me{align-self:flex-end;flex-direction:row-reverse}
@@ -1583,6 +1591,7 @@ function asCard(a){
   return `<div class="as-card ${on?"":"off"}" data-as-open="${a.id}">
     <div class="as-card-top">${asAvatarOf(a)}<span class="as-dot ${on?"on":""}" title="${on?"已启用":"已停用"}"></span></div>
     <b>${esc(a.name)}</b>
+    <i class="as-mdl">${a.model_id?("🔌 "+esc(modelName(a.model_id)||"（模型已删）")):"🔌 用当前激活模型"}</i>
     <p>${esc(a.description||"（没有描述）")}</p>
     <div class="as-card-foot">
       ${on?`<button class="btn ghost as-go" data-as-chat="${a.id}">用它对话</button>`:""}
@@ -1593,10 +1602,18 @@ function asCard(a){
 
 /* ---------------- 团队（照 AionUi Teams：成员=助手实例、Leader 恒第一、身份色） ---------------- */
 let teamScope = localStorage.getItem("rw-team-chat") || "";
-let teamData = null, teamBusy = false, teamTick = null;
+let teamData = null, teamBusy = false, teamTick = null, teamList = null;
 function tcColor(i){ const P=["var(--brand)","#5c9ea4","#b58a5e","#8f7fb5","#7fa06a","#b57f92"]; return P[(i||0)%P.length]; }
+const modelName = (id)=>((S.models||[]).find(x=>x.id===id)||{}).name||"";
 async function renderTeam(m){
-  const M = (S.models||[]).length;
+  if(!teamList){ try{ teamList = await api("/api/teams"); }catch(e){ teamList = {teams:[], error:e.message}; } }
+  const TL = (teamList.teams||[]);
+  const curT = TL.find(t=>t.id===teamScope) || null;
+  if(!curT){                                            // scope 不合法（老数据/被解散）→ 落到第一个固定团队
+    const first = TL.find(t=>t.kind==="fixed") || TL[0] || null;
+    teamScope = first ? first.id : "";
+    if(teamScope) localStorage.setItem("rw-team-chat", teamScope); else localStorage.removeItem("rw-team-chat");
+  }
   if(!teamScope){
     m.innerHTML = `<div class="page-head"><div><p class="inst-label">TEAM</p><h3>团队</h3>
       <p class="hint">正在开一个团队群…</p></div></div>`;
@@ -1623,19 +1640,32 @@ async function renderTeam(m){
         <div class="tc-text">${esc(r.content||"")}</div></div></div>`;
   };
   m.innerHTML = `<div class="page-head">
-    <div><p class="inst-label">TEAM</p><h3>团队 <span class="pill">${picks.length}/${D.max||5}</span></h3>
-      <p class="hint">成员从「助手」里选（一个团队最多 ${D.max||5} 人）。你发一句话，成员之间会互相 @ 派活、一轮接一轮把活推下去；谁觉得全干完了就回「完成」，团队自动散会。</p></div>
+    <div><p class="inst-label">TEAM</p><h3>${esc(curT?curT.name:"团队")} <span class="pill">${picks.length}/${D.max||5}</span>
+      <span class="pill">${curT&&curT.kind==="temp"?"机动":"固定"}</span>${curT&&curT.status==="done"?'<span class="pill">已收工</span>':""}</h3>
+      <p class="hint">最多 5 个团队：<b>3 个固定</b>（常驻）+ <b>2 个机动</b>（用完自动释放）。成员从「助手」里选（一个团队最多 ${D.max||5} 人，助手背后接的是哪个模型，就用那个模型说话）。你发一句，成员之间互相 @ 派活、一轮轮推进；谁说「完成」就散会。</p></div>
     <div class="ph-acts">${run?`<span class="pill">${esc(run.phase||"跑着")}</span><button class="btn ghost" id="tcStop">停止</button>`:""}
       <button class="btn ghost" id="tcRefresh">刷新</button></div></div>
+  <div class="card" style="margin-top:12px">
+    <div class="tc-teams">
+      ${TL.map(x=>`<button class="tc-team ${x.id===teamScope?"on":""} ${x.status==="done"?"done":""}" data-tc-team="${x.id}" title="${x.kind==="fixed"?"固定团队":"机动团队"}">
+        ${x.kind==="fixed"?"📌":"⏳"} ${esc(x.name)}<i>${x.picks||0}</i></button>`).join("")}
+      ${(teamList.temp||0) < (teamList.max_temp||2) ? `<button class="tc-team add" id="tcNewTeam">＋ 机动团队</button>`
+        : `<span class="hint" style="margin-left:6px">机动位满了（用完会自动释放）</span>`}
+      <span style="flex:1"></span>
+      <button class="btn ghost" id="tcRename" title="改当前团队的名字">改名</button>
+      ${curT&&curT.kind==="temp"?`<button class="btn ghost" id="tcDissolve" style="color:var(--err)" title="解散这个机动团队">解散</button>`:""}
+    </div>
+    <div class="hint" style="margin-top:6px">共 ${TL.length}/${teamList.max||5} 个团队（固定 ${teamList.fixed||0}/${teamList.max_fixed||3} · 机动 ${teamList.temp||0}/${teamList.max_temp||2}）</div>
+  </div>
   <div class="card" style="margin-top:12px">
     <div class="tc-bar">
       ${leader?`<div class="tc-chip on"><span class="tc-av" style="--mc:var(--brand)">🧭</span><b>${esc(leader.name)}</b><i>Leader</i></div>`:""}
       ${picks.map(x=>`<div class="tc-chip" style="--mc:${tcColor(x.color)}"><span class="tc-av">${esc((x.name||"?").slice(0,1))}</span>
-        <b>${esc(x.name)}</b><i>${esc(x.prompt?x.prompt.slice(0,10):"成员")}</i>
+        <b>${esc(x.name)}</b><i>${esc((x.model?x.model+" · ":"")+(x.prompt?x.prompt.slice(0,8):"成员"))}</i>
         <button class="tc-x" data-tc-del="${x.id}" title="移出">✕</button></div>`).join("")}
       ${picks.length < (D.max||5) ? `<span class="tc-add">
         <select class="control" id="tcPick"><option value="">＋ 从助手里选…</option>
-          ${pool.map(a=>`<option value="${a.id}">${esc(a.name)}${a.source==="builtin"?"（公开）":""}</option>`).join("")}</select>
+          ${pool.map(a=>`<option value="${a.id}">${esc(a.name)}${a.source==="builtin"?"（公开）":""}${a.model_id?" · "+esc(modelName(a.model_id)||"?"):" · 用当前激活模型"}</option>`).join("")}</select>
         </span>` : `<span class="hint">已满 ${D.max||5} 人</span>`}
     </div>
     <div class="hint" style="margin-top:6px">${picks.length?esc(picks.map(x=>x.name).join(" · ")):"还没有成员 —— 先从右边选几个助手进来。"}</div>
@@ -1651,6 +1681,31 @@ async function renderTeam(m){
     <div class="hint" style="margin-top:6px">${run?`当前：${esc(run.current||"")}（第 ${run.turn||0}/${run.total||6} 轮）`: "没有在跑的轮次。"}</div>
   </div>`;
   const box = $("tcChat"); if(box) box.scrollTop = box.scrollHeight;
+  m.querySelectorAll("[data-tc-team]").forEach(b=>b.onclick = ()=>{
+    if(b.dataset.tcTeam === teamScope) return;
+    teamScope = b.dataset.tcTeam; localStorage.setItem("rw-team-chat", teamScope);
+    teamData = null; render();
+  });
+  const nw = $("tcNewTeam");
+  if(nw) nw.onclick = async ()=>{
+    try{ const r = await api("/api/teams/new", {kind:"temp"}); teamList = null;
+         teamScope = (r.team&&r.team.id)||teamScope; localStorage.setItem("rw-team-chat", teamScope); }
+    catch(e){ alert("建机动团队失败：" + e.message); }
+    teamData = null; render();
+  };
+  const rn = $("tcRename");
+  if(rn) rn.onclick = async ()=>{
+    const nm = prompt("团队名字：", curT?curT.name:"");
+    if(!nm) return;
+    try{ await api("/api/teams/rename", {id:teamScope, name:nm}); }catch(e){ return alert("改名失败：" + e.message); }
+    teamList = null; teamData = null; render();
+  };
+  const ds = $("tcDissolve");
+  if(ds) ds.onclick = async ()=>{
+    if(!confirm("解散这个机动团队？（成员会释放，群记录仍留在库里）")) return;
+    try{ await api("/api/teams/dissolve", {id:teamScope}); }catch(e){ return alert("解散失败：" + e.message); }
+    teamList = null; teamScope = ""; teamData = null; render();
+  };
   const pick = $("tcPick");
   if(pick) pick.onchange = async ()=>{
     if(!pick.value) return; teamBusy = true;

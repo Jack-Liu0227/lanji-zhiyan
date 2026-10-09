@@ -393,6 +393,11 @@ def _round(scope: str, turns: int) -> None:
                     return
                 m = by_name[speaker]
                 _set(scope, turn=t, current=speaker, phase="%s 正在做（第 %d/%d 轮）" % (speaker, t, turns))
+                prof = None                                  # 这个成员背后接的模型（= 它那个助手绑的模型）
+                if m.get("assistant_id"):
+                    _a = db.assistant(m["assistant_id"]) or {}
+                    if _a.get("model_id"):
+                        prof = db.model(_a["model_id"]) or None
                 extra = (
                     "【团队协作】你现在的身份是团队成员「%s」（不是全局 Leader）：%s\n"
                     "团队名单：%s\n"
@@ -403,7 +408,7 @@ def _round(scope: str, turns: int) -> None:
                                                         for h in hist)))
                 try:
                     out = _wf.run_agent(db, scope, "继续推进（你是 %s）" % speaker, extra_context=extra,
-                                        scope=TEAM_SCOPE, publish=False)
+                                        scope=TEAM_SCOPE, publish=False, profile=prof)
                     body = (out.get("reply") or "").strip() or "（这一轮没说话）"
                 except Exception as exc:                       # 一个成员失败不该掀翻整个团队，但也别空转
                     db.add_message(scope, "assistant", "（%s 这一轮失败：%s）" % (speaker, exc),
@@ -418,12 +423,117 @@ def _round(scope: str, turns: int) -> None:
                     return
             _set(scope, phase="轮次用完（%d 轮）" % turns)
     finally:
+        release(scope)                     # 机动团队：跑完就把成员释放掉、标记收工（名额还给别人）
         with _LOCK:
             TEAM_RUNS.pop(scope, None)
 
 
 def chat_state(scope: str) -> dict[str, Any]:
-    """团队页要的一切：成员（带色）+ 群记录 + 正在跑的状态 + 上限。"""
-    return {"members": members(scope), "max": MAX_PICKS, "palette": MEMBER_COLORS,
+    """团队页要的一切：这个团队 + 成员（带色 + 各自模型）+ 群记录 + 正在跑的状态 + 上限。"""
+    ensure_leader(scope)
+    with workflow.WorkflowDB(_db_path()) as db:
+        ms = members(scope)
+        for m in ms:
+            m["model"] = _member_model(db, m)
+        t_rec = db.team(scope)
+    return {"team": t_rec, "members": ms, "max": MAX_PICKS, "palette": MEMBER_COLORS,
             "transcript": transcript(scope), "running": TEAM_RUNS.get(scope),
-            "colors": {m["id"]: color_of(m) for m in members(scope)}}
+            "colors": {m["id"]: color_of(m) for m in ms}}
+
+
+# ============================ v3：多团队（3 固定 + 2 机动）+ 成员各用自己的模型 ============================
+
+MAX_TEAMS, MAX_FIXED, MAX_TEMP = 5, 3, 2
+
+
+def ensure_defaults() -> list[dict[str, Any]]:
+    """保证 3 个固定团队在（幂等）。"""
+    with workflow.WorkflowDB(_db_path()) as db:
+        ts = db.teams()
+        fixed = [x for x in ts if x["kind"] == "fixed"]
+        for i in range(len(fixed), MAX_FIXED):
+            db.team_add("团队 %d" % (i + 1), "fixed")
+        return db.teams()
+
+
+def teams() -> dict[str, Any]:
+    """团队清单（带成员数、成员各自的模型名）。"""
+    with workflow.WorkflowDB(_db_path()) as db:
+        ts = ensure_defaults()
+        out = []
+        for x in ts:
+            ms = [m for m in db.team_members(x["id"]) if m["role"] == "member"]
+            for m in ms:
+                m["model"] = _member_model(db, m)
+            out.append({**x, "members": ms, "picks": len(ms)})
+        return {"teams": out, "max": MAX_TEAMS, "max_fixed": MAX_FIXED, "max_temp": MAX_TEMP,
+                "fixed": len([x for x in out if x["kind"] == "fixed"]),
+                "temp": len([x for x in out if x["kind"] == "temp"])}
+
+
+def new_team(kind: str = "temp", name: str = "") -> dict[str, Any]:
+    """建团队。固定位 3 个、机动位 2 个；机动位满了会先把「已收工」的自动收掉（用完即释放）。"""
+    with workflow.WorkflowDB(_db_path()) as db:
+        ensure_defaults()
+        ts = db.teams()
+        if kind == "fixed":
+            if len([x for x in ts if x["kind"] == "fixed"]) >= MAX_FIXED:
+                raise ValueError("固定团队只能有 %d 个" % MAX_FIXED)
+        else:
+            temps = [x for x in ts if x["kind"] == "temp"]
+            if len(temps) >= MAX_TEMP:
+                done = [x for x in temps if x["status"] == "done"]
+                if not done:
+                    raise ValueError("两个机动位都在用 —— 等它们跑完，或先解散一个")
+                db.team_delete(done[0]["id"])          # 用完的机动团队自动回收，腾出名额
+        if len(db.teams()) >= MAX_TEAMS:               # 兜底（正常走不到：上面两种位各卡了一道）
+            raise ValueError("最多 %d 个团队（%d 固定 + %d 机动）" % (MAX_TEAMS, MAX_FIXED, MAX_TEMP))
+        n = len([x for x in db.teams() if x["kind"] == kind]) + 1
+        return db.team_add(name.strip() or ("%s %d" % ("团队" if kind == "fixed" else "机动", n)), kind)
+
+
+def rename_team(tid: str, name: str) -> dict[str, Any]:
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("名字不能空")
+    with workflow.WorkflowDB(_db_path()) as db:
+        if not db.team(tid):
+            raise ValueError("没有这个团队")
+        return db.team_update(tid, name=name)
+
+
+def dissolve(tid: str) -> dict[str, Any]:
+    """解散团队。机动的可以；固定的不行（3 个固定位是常驻的）。记录留在库里不删。"""
+    with workflow.WorkflowDB(_db_path()) as db:
+        t = db.team(tid)
+        if not t:
+            raise ValueError("没有这个团队")
+        if t["kind"] == "fixed":
+            raise ValueError("固定团队不能解散 —— 只能改名字")
+        db.team_delete(tid)
+        return {"ok": True, "dissolved": t["name"]}
+
+
+def release(tid: str) -> None:
+    """机动团队「用完」：释放成员（把助手让出来）、标记收工；对话记录留着还能看。"""
+    with workflow.WorkflowDB(_db_path()) as db:
+        t = db.team(tid)
+        if not t or t["kind"] != "temp":
+            return
+        for m in db.team_members(tid):
+            if m["role"] == "member":
+                db.team_member_remove(m["id"])
+        db.team_update(tid, status="done")
+
+
+def _member_model(db, m: dict[str, Any]) -> str:
+    """这个成员背后接的是哪个模型（助手绑的那个）。"""
+    aid = m.get("assistant_id") or ""
+    if not aid:
+        return ""
+    a = db.assistant(aid) or {}
+    mid = a.get("model_id") or ""
+    if not mid:
+        return ""
+    prof = db.model(mid) or {}
+    return prof.get("name") or ""

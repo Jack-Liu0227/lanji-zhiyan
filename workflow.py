@@ -230,6 +230,9 @@ class WorkflowDB(ResearchDB):
               started_at TEXT NOT NULL, ended_at TEXT NOT NULL DEFAULT '', output_path TEXT NOT NULL DEFAULT '',
               summary TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '')""")
         self.assistant_seed(BUILTIN_ASSISTANTS)      # 公开助手（内置）：只补缺，不覆盖改过的
+        self.db.execute("""CREATE TABLE IF NOT EXISTS teams (
+              id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'fixed',
+              status TEXT NOT NULL DEFAULT 'idle', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(team_members)")}
         if "assistant_id" not in cols:                 # 老库补列：成员 = 哪个助手
             self.db.execute("ALTER TABLE team_members ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''")
@@ -550,6 +553,35 @@ class WorkflowDB(ResearchDB):
         allow["status"] = status
         sets = ", ".join("%s=?" % k for k in allow)
         self.db.execute("UPDATE team_tasks SET %s WHERE id=?" % sets, (*allow.values(), tid))
+        self.db.commit()
+
+    # ---------- 团队表（一个团队 = 一条记录；成员/记录都挂在它的 id 上） ----------
+    def teams(self) -> list[dict[str, Any]]:
+        return [dict(r) for r in self.db.execute("SELECT * FROM teams ORDER BY created_at")]
+
+    def team(self, tid: str) -> dict[str, Any] | None:
+        row = self.db.execute("SELECT * FROM teams WHERE id=?", (tid,)).fetchone()
+        return dict(row) if row else None
+
+    def team_add(self, name: str, kind: str = "fixed") -> dict[str, Any]:
+        tid = uuid.uuid4().hex
+        self.db.execute("INSERT INTO teams (id,name,kind,status,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                        (tid, (name or "新团队").strip(), kind, "idle", now(), now()))
+        self.db.commit()
+        return self.team(tid) or {}
+
+    def team_update(self, tid: str, **fields: Any) -> dict[str, Any]:
+        allow = {k: v for k, v in fields.items() if k in ("name", "status", "kind") and v is not None}
+        if allow:
+            allow["updated_at"] = now()
+            self.db.execute("UPDATE teams SET %s WHERE id=?" % ", ".join("%s=?" % k for k in allow),
+                            (*allow.values(), tid))
+            self.db.commit()
+        return self.team(tid) or {}
+
+    def team_delete(self, tid: str) -> None:
+        self.db.execute("DELETE FROM teams WHERE id=?", (tid,))
+        self.db.execute("DELETE FROM team_members WHERE task_id=?", (tid,))
         self.db.commit()
 
     def team_events(self, task_id: str, limit: int = 200) -> list[dict[str, Any]]:
@@ -2704,16 +2736,34 @@ def _global_brief(db: "WorkflowDB") -> str:
     return out
 
 
+def agent_profile(db: "WorkflowDB", task_id: str) -> dict[str, Any] | None:
+    """这个对话该用哪个模型：**绑了助手就用助手接的那个模型**（deepseek 助手跑 deepseek、gpt 助手跑 gpt），
+    没绑（或助手没指定）就退回当前激活模型。项目工作流仍用激活模型。"""
+    try:
+        row = db.db.execute("SELECT assistant_id FROM chats WHERE id=?", (task_id,)).fetchone()
+    except Exception:
+        return db.active_model()
+    aid = (row["assistant_id"] if row else "") or ""
+    if aid:
+        a = db.assistant(aid)
+        if a and a.get("model_id"):
+            m = db.model(a["model_id"])
+            if m and m.get("base_url") and m.get("model"):
+                return m
+    return db.active_model()
+
+
 def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_steps: int = 6,
               system: str | None = None, tools: list[dict[str, Any]] | None = None,
-              extra_context: str = "", scope: str = "", publish: bool = True) -> dict[str, Any]:
+              extra_context: str = "", scope: str = "", publish: bool = True,
+              profile: dict[str, Any] | None = None) -> dict[str, Any]:
     """工具调用循环。emit(event) 每产生一条事件调用一次（SSE 用）。
     system/tools 不传就是通用 Agent（AGENT_SYSTEM + 全量工具）；创新点审查/确认大纲那两步会传受限工具 + 记忆块。
     scope 决定这轮对话和哪一步共用历史（'' = 创新点审查/通用，'outline' = 确认大纲）。
     publish=False = 后台子 agent（文章撰写流水线内部用）：不写对话历史、不落 assistant 回复、不发 done，
     工具调用与文本照旧流给前台看进度 —— 由调用方统一收尾。"""
     say = emit or (lambda _e: None)
-    profile = db.active_model()
+    profile = profile or agent_profile(db, task_id)
     if publish:
         db.add_message(task_id, "user", text, scope=scope)
         say({"type": "user", "content": text})

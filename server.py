@@ -839,6 +839,11 @@ class Handler(BaseHTTPRequestHandler):
                                                     (q.get("title") or [""])[0] or "选择产出文件夹"))
             if path == "/api/settings/meta":            # 设置页分区要的元数据：工具 / 技能 / MCP
                 return self._json(settings_meta())
+            if path == "/api/teams":                     # 团队清单（多团队：3 固定 + 2 机动）
+                try:
+                    return self._json(team.teams())
+                except ValueError as exc:
+                    return self._json({"error": str(exc), "teams": []}, 400)
             if path == "/api/team/chat":                 # 团队 v2：成员（从助手选）+ 群记录 + 接力状态
                 try:
                     return self._json(team.chat_state((q.get("scope") or [""])[0]))
@@ -1026,6 +1031,17 @@ class Handler(BaseHTTPRequestHandler):
                             if path == "/api/assistant/delete":
                                 db.assistant_delete(b.get("id", ""))
                                 return self._json({"ok": True})
+                    except ValueError as exc:
+                        return self._json({"error": str(exc)}, 400)
+                if path.startswith("/api/teams/"):           # 建 / 改名 / 解散 团队
+                    b = data or {}
+                    try:
+                        if path == "/api/teams/new":
+                            return self._json({"team": team.new_team(b.get("kind", "temp"), b.get("name", ""))})
+                        if path == "/api/teams/rename":
+                            return self._json({"team": team.rename_team(b.get("id", ""), b.get("name", ""))})
+                        if path == "/api/teams/dissolve":
+                            return self._json(team.dissolve(b.get("id", "")))
                     except ValueError as exc:
                         return self._json({"error": str(exc)}, 400)
                 if path.startswith("/api/team/chat/"):      # 团队 v2：选助手 / 移人 / 说话（接力）/ 停止
