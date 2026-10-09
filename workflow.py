@@ -906,6 +906,11 @@ class WorkflowDB(ResearchDB):
         self.db.execute("UPDATE providers SET models=?, enabled=? WHERE id=?",
                         (json.dumps(names, ensure_ascii=False), 1 if (names or p["api_key"]) else 0, pid))
         self.db.commit()
+        if on and not self.active_model():          # 还没有默认模型 → 这次采用的就当默认，省得 Agent 说「没配模型」
+            try:
+                self.set_default(pid, model)
+            except ValueError:
+                pass
         return self.provider(pid)
 
     def set_default(self, pid: str, model: str) -> dict[str, Any]:
@@ -1126,7 +1131,7 @@ def discover_models(base_url: str, api_key: str = "", timeout: int = 25) -> list
 def test_provider(base_url: str, api_key: str, model: str, timeout: int = 60) -> str:
     """发一条最小消息，证明 Key/地址/模型名三者真的能打通。"""
     return chat({"base_url": base_url, "api_key": api_key, "model": model},
-                [{"role": "user", "content": "回复两个字：可用"}], timeout=timeout, max_tokens=16)
+                [{"role": "user", "content": "回复两个字：可用"}], timeout=timeout, max_tokens=64)
 
 
 # ============================ 论文搜索（开放接口） ============================
@@ -2696,7 +2701,14 @@ def _team_project(db: "WorkflowDB", task_id: str, raw: str) -> str:
     return task_id
 
 
+PONY_RULES = '你是「懒但靠谱的资深工程师」（Ponytail ultra）。做事顺序：先读透要改的代码与真实流程，再挑最省的那一档——①这需求真有必要吗（YAGNI）②仓里已有现成的就复用 ③标准库能干就别写 ④平台原生特性优先 ⑤已装的依赖优先 ⑥能一行就一行 ⑦最后才写最小可用实现。禁止：没人要的抽象与脚手架、为一个实现写接口、只有一处用的硬编码色板。改 bug 改根因（先 grep 所有调用方，在最共享的那层加一次守卫），不要只堵上报的那条路。输出：先给结果/代码，再最多三行说明（跳过了什么、什么时候补）；不写设计随笔、不为简化辩护。例外（不许简化）：信任边界的输入校验、防数据丢失的错误处理、安全措施、无障碍、用户明确点名要的东西；用户坚持要全量就照做。留下一个能跑的检查（assert 自检或一个小 test），别交空壳。'
+
+
 BUILTIN_ASSISTANTS = [
+    {"id": "builtin-pony", "name": "Pony 模式", "avatar": "🐴",
+     "description": "懒但靠谱的资深工程师：先读透再动手，能删不加，只写最小可用实现。",
+     "rules": PONY_RULES,
+     "prompts": ["按 Ponytail 模式帮我改这个功能", "这段代码哪里过度设计了？", "这个 bug 的根因在哪，改一处就够吗？"]},
     {"id": "builtin-searcher", "name": "文献检索员", "avatar": "🔎", "sort_order": 1,
      "description": "开放获取检索 + 去重 + 候选表；不编造、拿不到就说拿不到。",
      "rules": "只做开放获取检索与筛选：先给候选表（标题 / 年份 / 期刊 / DOI / 是否 OA），再问要不要入库精读。"

@@ -443,7 +443,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, b"not found", "text/plain; charset=utf-8")
         self._send(200, target.read_bytes(), self.MIME.get(target.suffix.lower(), "application/octet-stream"))
 
+    @staticmethod
+    def _scrub(v: Any) -> Any:
+        """出站脱敏：api_key 一律不回给前端（本机也一样，少一个泄漏面）。"""
+        if isinstance(v, dict):
+            return {k: ("***" if (k == "api_key" and v[k]) else ("" if k == "api_key" else Handler._scrub(x)))
+                    for k, x in v.items()}
+        if isinstance(v, list):
+            return [Handler._scrub(x) for x in v]
+        return v
+
     def _json(self, payload: Any, code: int = 200) -> None:
+        payload = self._scrub(payload)
         self._send(code, json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8")
 
     def _body(self) -> dict[str, Any]:
@@ -1231,7 +1242,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"deleted": True})
                 if path == "/api/models/test":
                     prof = db.model(data.get("id", "")) if data.get("id") else db.active_model()
-                    reply = chat(prof, [{"role": "user", "content": "只回复两个字：可用"}], max_tokens=16, timeout=60)
+                    reply = chat(prof, [{"role": "user", "content": "只回复两个字：可用"}], max_tokens=64, timeout=60)
                     return self._json({"ok": True, "reply": reply})
                 if path == "/api/providers/add":
                     p = db.add_provider(data.get("name", ""), data.get("base_url", ""),
