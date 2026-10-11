@@ -32,7 +32,7 @@ _CREATE_NEW_PROCESS_GROUP = 0x00000200 if os.name == "nt" else 0   # 控制台�
 STALL_SECONDS = 900                        # 多久没有任何输出就判定卡死（版式识别偶尔会安静几分钟）
 ZHIPU_BASE = "https://open.bigmodel.cn/api/paas/v4"
 ZHIPU_MODEL = "glm-4-flash"
-QPS = os.environ.get("RW_TRANS_QPS", "8")
+QPS_TOTAL = int(os.environ.get("RW_TRANS_QPS", "8"))      # 全局并发上限（DeepSeek 的并发上限跟余额挂钩，别超）
 CHUNK_PARALLEL = int(os.environ.get("RW_TRANS_PARALLEL", "3"))   # 同时跑几段
 CHUNK_MAX = int(os.environ.get("RW_TRANS_CHUNKS", "3"))           # 整篇切几段（每段都要重跑一次版式模型，段多反而更慢）     # 翻译并发上限（原来 4，太保守；不满意就设这个环境变量）
 JOBS: dict[str, dict[str, Any]] = {}          # paper_id -> 翻译任务状态（进程内，够用）
@@ -416,11 +416,26 @@ def _pages_done(paper_id: str) -> int:
         return int(JOBS.get(paper_id, {}).get("pages_done") or 0)
 
 
+def _balance_hint(tail: str) -> str:
+    """从日志尾部认出发钱相关的错误，直接给人话（这类错重试没用，得充值/降并发）。"""
+    low = tail.lower()
+    if "insufficient balance" in low or "'code': 'invalid_request_error'" in low and "402" in low:
+        return "API 余额不足（402 Insufficient Balance）—— 充值后再翻"
+    if "concurrency" in low and "429" in low:
+        return "并发超限（429）—— 充值提升额度，或把 RW_TRANS_PARALLEL 调小"
+    return ""
+
+
 def _fail(paper_id: str, mono: Path, total: int, log: Path, a: int, b: int, code: int) -> None:
+    hint = ""
+    try:
+        hint = _balance_hint(log.read_text(encoding="utf-8", errors="replace")[-4000:])
+    except Exception:
+        pass
     with _LOCK:
         cur = JOBS.get(paper_id, {})
         JOBS[paper_id] = {**cur, "state": "partial" if mono.is_file() else "error",
-                          "msg": f"翻到第 {a}-{b} 页时失败（退出码 {code}{_why(code)}）",
+                          "msg": (hint or f"翻到第 {a}-{b} 页时失败（退出码 {code}{_why(code)}）"),
                           "total_pages": total, "mono": str(mono) if mono.is_file() else "", "log": str(log)}
 
 
@@ -444,7 +459,9 @@ def _run(paper_id: str, path: Path, out_dir: Path, cfg: dict[str, str],
         cmd = BABELDOC_CMD + ["--files", str(path), "--lang-in", "en", "--lang-out", "zh",
                               "--openai", "--openai-model", cfg["model"],
                               "--openai-base-url", cfg["base"], "--openai-api-key", cfg["key"],
-                              "--watermark-output-mode", "no_watermark", "--qps", QPS,
+                              "--watermark-output-mode", "no_watermark",
+                              # 每段分到的并发 = 全局上限 / 段数（段并行后必须摊薄，否则撞余额决定的并发上限 429）
+                              "--qps", str(max(1, QPS_TOTAL // max(1, CHUNK_PARALLEL))),
                               "--no-dual",                    # UI 只用单语译文，省掉对照版的生成
                               "--no-auto-extract-glossary",   # 省掉一整趟全篇术语抽取的 LLM 调用
                               "--pages", f"{a}-{b}",
