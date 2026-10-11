@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import urllib.parse
 import urllib.request
@@ -31,9 +32,13 @@ _CREATE_NEW_PROCESS_GROUP = 0x00000200 if os.name == "nt" else 0   # 控制台�
 STALL_SECONDS = 900                        # 多久没有任何输出就判定卡死（版式识别偶尔会安静几分钟）
 ZHIPU_BASE = "https://open.bigmodel.cn/api/paas/v4"
 ZHIPU_MODEL = "glm-4-flash"
-QPS = os.environ.get("RW_TRANS_QPS", "8")     # 翻译并发上限（原来 4，太保守；不满意就设这个环境变量）
+QPS = os.environ.get("RW_TRANS_QPS", "8")
+CHUNK_PARALLEL = int(os.environ.get("RW_TRANS_PARALLEL", "2"))   # 同时跑几段
+CHUNK_MAX = int(os.environ.get("RW_TRANS_CHUNKS", "3"))           # 整篇切几段（每段都要重跑一次版式模型，段多反而更慢）     # 翻译并发上限（原来 4，太保守；不满意就设这个环境变量）
 JOBS: dict[str, dict[str, Any]] = {}          # paper_id -> 翻译任务状态（进程内，够用）
 _LOCK = threading.Lock()
+_LOG_LOCK = threading.Lock()      # 多段并行时日志文件是共享的
+_SPLICE_LOCK = threading.Lock()   # 拼接译文必须串行，否则页序会乱
 
 DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+")
 KW_RE = re.compile(r"(?i)key\s?words?\s*[:：]?\s*(.{5,240})")
@@ -206,13 +211,13 @@ def _parse_pages(s: str) -> list[tuple[int, int]]:
 
 def _plan(n: int) -> list[tuple[int, int]]:
     """分批顺序：先单独翻第 1 页（他要「第一页好了先展示第一页」），往后按批推。
-    页多了就均分成 6 段 —— 每段都要重跑一次版式模型，段数太多反而更慢。"""
+    页多了就均分成 CHUNK_MAX 段 —— 每段都要重跑一次版式模型，段数太多反而更慢。"""
     if n <= 0:
         return []
     if n == 1:
         return [(1, 1)]
     if n > 12:
-        size = -(-n // 6)
+        size = -(-n // max(1, CHUNK_MAX))
     else:
         size = 3
     parts, a = [(1, 1)], 2
@@ -306,8 +311,9 @@ def _spawn(paper_id: str, cmd: list[str], env: dict[str, str], fh: Any, a: int, 
     threading.Thread(target=_watch, daemon=True).start()
     for line in proc.stdout or []:
         last[0] = time.monotonic()
-        fh.write(line)
-        fh.flush()
+        with _LOG_LOCK:
+            fh.write(line)
+            fh.flush()
         ph = _phase(line)
         if ph:
             phase = ph
@@ -321,6 +327,11 @@ def _spawn(paper_id: str, cmd: list[str], env: dict[str, str], fh: Any, a: int, 
         with _LOCK:
             JOBS[paper_id] = {**JOBS.get(paper_id, {}), "state": "running", "msg": msg}
     return proc.wait()
+
+
+def _splice_serial(dest: Path, part: Path, a: int, b: int) -> None:
+    with _SPLICE_LOCK:                    # 多段并行时，拼页必须一个一个来
+        _splice(dest, part, a, b)
 
 
 def _splice(dest: Path, part: Path, a: int, b: int) -> None:
@@ -345,49 +356,83 @@ def _splice(dest: Path, part: Path, a: int, b: int) -> None:
             time.sleep(0.4)
 
 
+def _progress(paper_id: str, msg: str, done: int, total: int, log: Path,
+              pct: int | None = None, mono: str = "") -> None:
+    with _LOCK:
+        cur = JOBS.get(paper_id, {})
+        upd = {**cur, "state": "running", "msg": msg, "pages_done": done, "total_pages": total, "log": str(log)}
+        if pct is not None:
+            upd["pct"] = pct
+        if mono:
+            upd["mono"] = mono
+        JOBS[paper_id] = upd
+
+
+def _pages_done(paper_id: str) -> int:
+    with _LOCK:
+        return int(JOBS.get(paper_id, {}).get("pages_done") or 0)
+
+
+def _fail(paper_id: str, mono: Path, total: int, log: Path, a: int, b: int, code: int) -> None:
+    with _LOCK:
+        cur = JOBS.get(paper_id, {})
+        JOBS[paper_id] = {**cur, "state": "partial" if mono.is_file() else "error",
+                          "msg": f"翻到第 {a}-{b} 页时失败（退出码 {code}{_why(code)}）",
+                          "total_pages": total, "mono": str(mono) if mono.is_file() else "", "log": str(log)}
+
+
 def _run(paper_id: str, path: Path, out_dir: Path, cfg: dict[str, str],
          plan: list[tuple[int, int]], mono: Path, env: dict[str, str]) -> None:
+    """按段翻，段与段**并行**（CHUNK_PARALLEL）；翻好一段立刻拼进 mono，UI 就能边翻边看。
+
+    ponytail: 每段仍各自重跑一次版式模型（实测约 16s/段），所以段数被 CHUNK_MAX 压着。
+    想再快就把整篇交给一个 babeldoc 进程跑 —— 代价是失去「第一页先出来」和断点续翻。
+    """
     log = mono.parent / f"trans_{paper_id[:8]}.log"
     total = plan[-1][1] if plan else 0
+
+    def one(idx: int, a: int, b: int) -> bool:
+        part_dir = out_dir / "_parts" / f"p{a}-{b}"
+        part_dir.mkdir(parents=True, exist_ok=True)
+        with _LOG_LOCK:
+            fh.write(f"\n===== 第 {a}-{b} 页（第 {idx}/{len(plan)} 段）=====\n")
+            fh.flush()
+        _progress(paper_id, f"正在翻第 {a}-{b} 页（第 {idx}/{len(plan)} 段）", a - 1, total, log)
+        cmd = BABELDOC_CMD + ["--files", str(path), "--lang-in", "en", "--lang-out", "zh",
+                              "--openai", "--openai-model", cfg["model"],
+                              "--openai-base-url", cfg["base"], "--openai-api-key", cfg["key"],
+                              "--watermark-output-mode", "no_watermark", "--qps", QPS,
+                              "--no-dual",                    # UI 只用单语译文，省掉对照版的生成
+                              "--no-auto-extract-glossary",   # 省掉一整趟全篇术语抽取的 LLM 调用
+                              "--pages", f"{a}-{b}",
+                              "--working-dir", str(out_dir / "_work" / f"p{a}-{b}"),
+                              "--output", str(part_dir)]
+        code = _spawn(paper_id, cmd, env, fh, a, b)
+        part_mono = part_dir / mono.name
+        if code != 0 or not part_mono.is_file():
+            with _LOG_LOCK:
+                fh.write(f"!!! 这段失败：退出码 {code}\n")
+                fh.flush()
+            _fail(paper_id, mono, total, log, a, b, code)
+            return False
+        _splice_serial(mono, part_mono, a, b)
+        done = max(_pages_done(paper_id), b)      # 并行完成顺序不定，进度只许往前走
+        _save_state(out_dir, paper_id, done, total, False)
+        _progress(paper_id, f"已翻好第 1-{done} 页 / 共 {total} 页", done, total, log,
+                  pct=int(done * 100 / max(1, total)), mono=str(mono))
+        return True
+
     try:
         with log.open("w", encoding="utf-8", errors="replace") as fh:
-            for idx, (a, b) in enumerate(plan, 1):
-                part_dir = out_dir / "_parts" / f"p{a}-{b}"
-                part_dir.mkdir(parents=True, exist_ok=True)
-                fh.write(f"\n===== 第 {a}-{b} 页（第 {idx}/{len(plan)} 段）=====\n")
-                fh.flush()
-                with _LOCK:
-                    JOBS[paper_id] = {**JOBS.get(paper_id, {}), "state": "running",
-                                      "msg": f"正在翻第 {a}-{b} 页（第 {idx}/{len(plan)} 段）",
-                                      "pages_done": a - 1, "total_pages": total, "log": str(log)}
-                cmd = BABELDOC_CMD + ["--files", str(path), "--lang-in", "en", "--lang-out", "zh",
-                                      "--openai", "--openai-model", cfg["model"],
-                                      "--openai-base-url", cfg["base"], "--openai-api-key", cfg["key"],
-                                      "--watermark-output-mode", "no_watermark", "--qps", QPS,
-                                      "--no-dual",                    # UI 只用单语译文，省掉对照版的生成
-                                      "--no-auto-extract-glossary",   # 省掉一整趟全篇术语抽取的 LLM 调用
-                                      "--pages", f"{a}-{b}",
-                                      "--working-dir", str(out_dir / "_work" / f"p{a}-{b}"),
-                                      "--output", str(part_dir)]
-                code = _spawn(paper_id, cmd, env, fh, a, b)
-                part_mono = part_dir / mono.name
-                if code != 0 or not part_mono.is_file():
-                    fh.write(f"!!! 这段失败：退出码 {code}\n")
-                    with _LOCK:
-                        JOBS[paper_id] = {**JOBS.get(paper_id, {}),
-                                          "state": "partial" if mono.is_file() else "error",
-                                          "msg": f"翻到第 {a}-{b} 页时失败（退出码 {code}{_why(code)}）",
-                                          "pages_done": a - 1, "total_pages": total,
-                                          "mono": str(mono) if mono.is_file() else "", "log": str(log)}
-                    return
-                _splice(mono, part_mono, a, b)
-                _save_state(out_dir, paper_id, b, total, False)
-                with _LOCK:
-                    JOBS[paper_id] = {**JOBS.get(paper_id, {}), "state": "running",
-                                      "pct": int(b * 100 / max(1, total)),
-                                      "msg": f"已翻好第 1-{b} 页 / 共 {total} 页",
-                                      "pages_done": b, "total_pages": total,
-                                      "mono": str(mono), "log": str(log)}
+            futs = []
+            with ThreadPoolExecutor(max_workers=max(1, min(CHUNK_PARALLEL, len(plan) or 1))) as ex:
+                for idx, (a, b) in enumerate(plan, 1):
+                    futs.append(ex.submit(one, idx, a, b))
+                for f in as_completed(futs):
+                    if not f.result():             # 有一段失败：停掉还没跑的，已翻好的留下
+                        for g in futs:
+                            g.cancel()
+                        return
         _save_state(out_dir, paper_id, total, total, True)
         with _LOCK:
             JOBS[paper_id] = {**JOBS.get(paper_id, {}), "state": "done", "pct": 100, "msg": "完成",
