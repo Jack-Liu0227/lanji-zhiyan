@@ -27,6 +27,7 @@ BABELDOC_CMD = ["uv", "tool", "run", "babeldoc"]
 # 用户一关这个黑窗，子进程就收到控制台事件、以 0xC000013A 退出 —— 表现就是
 # 「点翻译弹黑窗然后卡住」。所以子进程必须不创建控制台。
 _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+_CREATE_NEW_PROCESS_GROUP = 0x00000200 if os.name == "nt" else 0   # 控制台事件不再传播给子进程
 STALL_SECONDS = 900                        # 多久没有任何输出就判定卡死（版式识别偶尔会安静几分钟）
 ZHIPU_BASE = "https://open.bigmodel.cn/api/paas/v4"
 ZHIPU_MODEL = "glm-4-flash"
@@ -288,7 +289,8 @@ def _spawn(paper_id: str, cmd: list[str], env: dict[str, str], fh: Any, a: int, 
     """跑一段 babeldoc：日志边写边刷新，状态里同步进度"""
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
-                            errors="replace", env=env, creationflags=_CREATE_NO_WINDOW)
+                            errors="replace", env=env,
+                            creationflags=_CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP)
     phase, done, tot = "", 0, 0
     last = [time.monotonic()]
 
