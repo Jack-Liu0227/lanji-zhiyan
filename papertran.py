@@ -22,6 +22,12 @@ from typing import Any
 
 # BabelDOC 实测：模型/字体走本机缓存，只有 tiktoken 小文件首次要联网（已灌进缓存）
 BABELDOC_CMD = ["uv", "tool", "run", "babeldoc"]
+
+# 从 pythonw（无控制台）里起控制台程序，Windows 会给子进程新建一个黑窗；
+# 用户一关这个黑窗，子进程就收到控制台事件、以 0xC000013A 退出 —— 表现就是
+# 「点翻译弹黑窗然后卡住」。所以子进程必须不创建控制台。
+_CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+STALL_SECONDS = 900                        # 多久没有任何输出就判定卡死（版式识别偶尔会安静几分钟）
 ZHIPU_BASE = "https://open.bigmodel.cn/api/paas/v4"
 ZHIPU_MODEL = "glm-4-flash"
 QPS = os.environ.get("RW_TRANS_QPS", "8")     # 翻译并发上限（原来 4，太保守；不满意就设这个环境变量）
@@ -271,12 +277,33 @@ def _phase(line: str) -> str:
     return ""
 
 
+def _why(code: int) -> str:
+    """把 Windows 的魔数退出码翻成人话，免得界面只显示一串数字。"""
+    return {3221225786: "：子进程被控制台事件中断（黑窗被关掉/按了 Ctrl+C）",
+            3221225477: "：子进程崩溃（访问冲突）",
+            -9: "：看门狗判定卡死后终止"}.get(code, "")
+
+
 def _spawn(paper_id: str, cmd: list[str], env: dict[str, str], fh: Any, a: int, b: int) -> int:
     """跑一段 babeldoc：日志边写边刷新，状态里同步进度"""
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True, encoding="utf-8", errors="replace", env=env)
+                            stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
+                            errors="replace", env=env, creationflags=_CREATE_NO_WINDOW)
     phase, done, tot = "", 0, 0
+    last = [time.monotonic()]
+
+    def _watch() -> None:                  # 卡死看门狗：读循环会阻塞在 readline 上，只能另起线程盯
+        while proc.poll() is None:
+            if time.monotonic() - last[0] > STALL_SECONDS:
+                fh.write(f"!!! 超过 {STALL_SECONDS}s 没有任何输出，判定卡死并终止\n")
+                fh.flush()
+                proc.kill()
+                return
+            time.sleep(5)
+
+    threading.Thread(target=_watch, daemon=True).start()
     for line in proc.stdout or []:
+        last[0] = time.monotonic()
         fh.write(line)
         fh.flush()
         ph = _phase(line)
@@ -347,7 +374,7 @@ def _run(paper_id: str, path: Path, out_dir: Path, cfg: dict[str, str],
                     with _LOCK:
                         JOBS[paper_id] = {**JOBS.get(paper_id, {}),
                                           "state": "partial" if mono.is_file() else "error",
-                                          "msg": f"翻到第 {a}-{b} 页时失败（退出码 {code}）",
+                                          "msg": f"翻到第 {a}-{b} 页时失败（退出码 {code}{_why(code)}）",
                                           "pages_done": a - 1, "total_pages": total,
                                           "mono": str(mono) if mono.is_file() else "", "log": str(log)}
                     return
