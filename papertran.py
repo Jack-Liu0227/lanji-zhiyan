@@ -334,11 +334,15 @@ def _splice_serial(dest: Path, part: Path, a: int, b: int) -> None:
         _splice(dest, part, a, b)
 
 
-def _trim_tail(mono: Path, src: Path) -> None:
-    """把译文尾部「与原文同页逐字相同」的页删掉 —— 那些是 babeldoc 为版式上下文带进来的
-    未翻译原页（实测要 1-2 页会给整篇）。乱序并行的段也安全：已翻译的页文字不同，不会被动。
+def _trim_tail(mono: Path, src: Path, done_pages: int) -> None:
+    """只裁「超出已翻页数 done_pages」的尾部原页 —— 那些是 babeldoc 为版式上下文带进来的
+    未翻译页（实测要 1-2 页会给整篇）。
 
-    ponytail: 判据是「文字与原文完全相同」。整页只有公式/图的页可能也满足而被删 ——
+    为什么必须有 done_pages 这个上限：模型/接口出问题时 babeldoc 会把段落原样 fallback，
+    这些「真译文页」的文字与原文**逐字相同**，只按文字判会把 38 页全删掉（踩过一次）。
+    已翻页以内的页一律不动。
+
+    ponytail: 判据仍是「文字与原文完全相同」。整页只有公式/图的页可能也满足而被删 ——
     这种页本来没有可翻的文字，代价可接受；真要精确就按页存一份「本页已翻」的标记。
     """
     try:
@@ -346,7 +350,7 @@ def _trim_tail(mono: Path, src: Path) -> None:
         with fitz.open(str(mono)) as mo, fitz.open(str(src)) as so:
             n, m = mo.page_count, so.page_count
             keep = n
-            while keep > 1:
+            while keep > 1 and keep > done_pages:
                 i = keep - 1
                 a = mo[i].get_text().strip()
                 b = so[i].get_text().strip() if i < m else ""
@@ -385,9 +389,15 @@ def _splice(dest: Path, part: Path, a: int, b: int) -> None:
     with _fitz(dest) as old, _fitz(part) as new:
         import fitz                                              # 空文档得用模块的 open()，_fitz 是"开已有文件"的帮手
         out = fitz.open()
-        for i in range(old.page_count):
-            src = new if (a - 1) <= i <= (b - 1) and i < new.page_count else old
-            out.insert_pdf(src, from_page=i, to_page=i)
+        n_out = max(old.page_count, b)                           # 文档只增不减：新段可能把页数往后推
+        ref = new[0].rect if new.page_count else None             # 乱序并行缺页时补一张空白，保住页号一一对应
+        for i in range(n_out):
+            if (a - 1) <= i <= (b - 1) and i < new.page_count:
+                out.insert_pdf(new, from_page=i, to_page=i)
+            elif i < old.page_count:
+                out.insert_pdf(old, from_page=i, to_page=i)
+            else:
+                out.new_page(width=ref.width if ref else 595, height=ref.height if ref else 842)
         tmp = dest.with_name(dest.name + ".tmp.pdf")
         out.save(str(tmp))
         out.close()
@@ -476,7 +486,7 @@ def _run(paper_id: str, path: Path, out_dir: Path, cfg: dict[str, str],
             _fail(paper_id, mono, total, log, a, b, code)
             return False
         _splice_serial(mono, part_mono, a, b)
-        _trim_tail(mono, path)          # 删掉尾部带进来的未翻译原页
+        _trim_tail(mono, path, max(_pages_done(paper_id), b))   # 只裁超出已翻范围的尾部原页
         done = max(_pages_done(paper_id), b)      # 并行完成顺序不定，进度只许往前走
         _save_state(out_dir, paper_id, done, total, False)
         _progress(paper_id, f"已翻好第 1-{done} 页 / 共 {total} 页", done, total, log,
