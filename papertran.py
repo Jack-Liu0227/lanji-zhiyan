@@ -33,7 +33,7 @@ STALL_SECONDS = 900                        # 多久没有任何输出就判定�
 ZHIPU_BASE = "https://open.bigmodel.cn/api/paas/v4"
 ZHIPU_MODEL = "glm-4-flash"
 QPS = os.environ.get("RW_TRANS_QPS", "8")
-CHUNK_PARALLEL = int(os.environ.get("RW_TRANS_PARALLEL", "2"))   # 同时跑几段
+CHUNK_PARALLEL = int(os.environ.get("RW_TRANS_PARALLEL", "3"))   # 同时跑几段
 CHUNK_MAX = int(os.environ.get("RW_TRANS_CHUNKS", "3"))           # 整篇切几段（每段都要重跑一次版式模型，段多反而更慢）     # 翻译并发上限（原来 4，太保守；不满意就设这个环境变量）
 JOBS: dict[str, dict[str, Any]] = {}          # paper_id -> 翻译任务状态（进程内，够用）
 _LOCK = threading.Lock()
@@ -334,10 +334,53 @@ def _splice_serial(dest: Path, part: Path, a: int, b: int) -> None:
         _splice(dest, part, a, b)
 
 
+def _trim_tail(mono: Path, src: Path) -> None:
+    """把译文尾部「与原文同页逐字相同」的页删掉 —— 那些是 babeldoc 为版式上下文带进来的
+    未翻译原页（实测要 1-2 页会给整篇）。乱序并行的段也安全：已翻译的页文字不同，不会被动。
+
+    ponytail: 判据是「文字与原文完全相同」。整页只有公式/图的页可能也满足而被删 ——
+    这种页本来没有可翻的文字，代价可接受；真要精确就按页存一份「本页已翻」的标记。
+    """
+    try:
+        import fitz
+        with fitz.open(str(mono)) as mo, fitz.open(str(src)) as so:
+            n, m = mo.page_count, so.page_count
+            keep = n
+            while keep > 1:
+                i = keep - 1
+                a = mo[i].get_text().strip()
+                b = so[i].get_text().strip() if i < m else ""
+                if a and b and a == b:
+                    keep -= 1
+                else:
+                    break
+            if keep == n or keep < 1:
+                return
+            out = fitz.open()
+            for i in range(keep):
+                out.insert_pdf(mo, from_page=i, to_page=i)
+            tmp = mono.with_name(mono.name + ".trim.pdf")
+            out.save(str(tmp))
+            out.close()
+        os.replace(tmp, mono)
+    except Exception:
+        pass                                   # 裁不掉不影响翻译本身
+
+
 def _splice(dest: Path, part: Path, a: int, b: int) -> None:
     """把 part 里的第 a..b 页拼进累积译文：读旧 + 写新 + 替换（页序始终跟原文一一对应）。"""
     if not dest.is_file():
-        shutil.copy2(part, dest)
+        # 第一段：babeldoc 为版式上下文会多带页（实测要 1-2 页时给了 3 页），
+        # 所以不能整份照搬，只取 [a, b] 区间 —— 否则未翻译的原页会留在译文里
+        import fitz
+        with _fitz(part) as src:
+            out = fitz.open()
+            for i in range(a - 1, min(b, src.page_count)):
+                out.insert_pdf(src, from_page=i, to_page=i)
+            tmp = dest.with_name(dest.name + ".tmp.pdf")
+            out.save(str(tmp))
+            out.close()
+        os.replace(tmp, dest)
         return
     with _fitz(dest) as old, _fitz(part) as new:
         import fitz                                              # 空文档得用模块的 open()，_fitz 是"开已有文件"的帮手
@@ -416,6 +459,7 @@ def _run(paper_id: str, path: Path, out_dir: Path, cfg: dict[str, str],
             _fail(paper_id, mono, total, log, a, b, code)
             return False
         _splice_serial(mono, part_mono, a, b)
+        _trim_tail(mono, path)          # 删掉尾部带进来的未翻译原页
         done = max(_pages_done(paper_id), b)      # 并行完成顺序不定，进度只许往前走
         _save_state(out_dir, paper_id, done, total, False)
         _progress(paper_id, f"已翻好第 1-{done} 页 / 共 {total} 页", done, total, log,
