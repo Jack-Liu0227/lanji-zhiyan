@@ -742,7 +742,7 @@ function boot() {
   function leave() {
     if (sp.classList.contains("out")) return;
     sp.classList.add("out");
-    try { fetch("/api/win/maximize", { method: "POST" }); } catch (e) {}   // 卡片 → 铺回工作区
+    try { fetch("/api/win/maximize", { method: "POST", headers: { "Content-Type": "application/json" } }); } catch (e) {}   // 卡片 → 铺回工作区（服务端 POST 只收 application/json：少了这个头就是静默 415，全屏不生效）
     setTimeout(function () {
       if (g) g.dispose();
       if (w) w.dispose();
@@ -758,7 +758,7 @@ function boot() {
   }
   var x = document.getElementById("spClose");
   if (x) x.addEventListener("click", function () {
-    fetch("/api/win/close", { method: "POST" }).catch(function () { window.close(); });
+    fetch("/api/win/close", { method: "POST", headers: { "Content-Type": "application/json" } }).catch(function () { window.close(); });
   });
   ["spGo", "spClose"].forEach(function (id) {
     var el = document.getElementById(id);
