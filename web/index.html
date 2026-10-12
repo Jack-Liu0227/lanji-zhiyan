@@ -134,6 +134,11 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .ah-new:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--fg)}
 
 .ah-list{min-height:0;flex:1;overflow-y:auto;padding:8px}
+.ah-filter{display:flex;gap:5px;padding:0 3px 7px}
+.ah-fbtn{flex:1;background:transparent;border:1px solid var(--line);border-radius:7px;padding:4px 0;font-size:11.5px;color:var(--muted);cursor:pointer;font-family:inherit}
+.ah-fbtn:hover{background:var(--panel2)}
+.ah-fbtn.on{background:color-mix(in srgb,var(--accent) 16%,transparent);border-color:transparent;color:var(--fg);font-weight:600}
+.ah-bind{font-style:normal;color:var(--accent)}
 .ah-bar{display:flex;min-height:32px;align-items:center;justify-content:space-between;gap:7px;margin-bottom:5px;border-bottom:1px solid var(--line);padding:0 3px 7px;color:var(--muted);font-size:11px}
 .ah-bar label{display:flex;align-items:center;gap:6px;cursor:pointer}
 .ah-bar input,.ah-check input{width:15px;height:15px;cursor:pointer;accent-color:var(--accent)}
@@ -1921,9 +1926,9 @@ const outName = (p)=> (p||"").replace(/[\\/]+$/,"").split(/[\\/]/).pop() || "默
 const assistantKey = ()=> localStorage.getItem("rw-assist") || "researcher";
 const emptyState = (icon,title,text)=>`<div class="at-empty"><div class="at-empty-ico">${icon}</div><h2>${title}</h2><p>${text}</p></div>`;
 
-function historyGroups(){
+function historyGroups(pool){
   const g = {"今天":[],"昨天":[],"更早":[]};
-  const list = S.chats || [];
+  const list = pool || S.chats || [];
   for(const t of list){
     const d = new Date(t.updated_at || t.created_at || ""); const n = new Date();
     const dist = Math.floor((Date.UTC(n.getFullYear(),n.getMonth(),n.getDate()) - Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()))/86400000);
@@ -1931,13 +1936,21 @@ function historyGroups(){
   }
   return g;
 }
+function projName(id){ return ((S.tasks||[]).find(x=>x.id===id)||{}).title || ""; }
+let ahFilter = localStorage.getItem("rw-ah-filter") || "all";     // all | free | proj
+function histChats(){
+  const all = (S.chats||[]).filter(c=>ahFilter==="free" ? !c.task_id : ahFilter==="proj" ? !!c.task_id : true);
+  return all;
+}
 function renderHistory(){
-  const groups = historyGroups();
+  const all = histChats();
+  const groups = historyGroups(all);
   const item = (t)=>`<div class="ah-item-wrap ${t.id===curChat?"on":""}">
       <label class="ah-check" title="选择"><input type="checkbox" data-sel="${t.id}" ${ahSel.has(t.id)?"checked":""}></label>
       <button class="ah-item ${t.id===curChat?"on":""}" data-open="${t.id}">
-        <span class="ah-ico">💬</span>
-        <span class="ah-copy"><strong>${esc(t.title)}</strong><span>${esc(outName(t.out_dir))} · ${fmtDate(t.updated_at)}</span></span>
+        <span class="ah-ico">${t.task_id?"🧭":"💬"}</span>
+        <span class="ah-copy"><strong>${esc(t.title)}</strong>
+          <span>${t.task_id?`<em class="ah-bind">📁 ${esc(projName(t.task_id)||"项目")}</em> · `:""}${esc(outName(t.out_dir))} · ${fmtDate(t.updated_at)}</span></span>
         <span class="ah-dot ${t.id===curChat?"run":""}"></span></button>
       <button class="ah-del" data-del="${t.id}" title="删除对话">🗑</button></div>`;
   const list = Object.entries(groups).map(([k,v])=> v.length?`<div class="ah-group"><p class="ah-group-label">${k}</p>${v.map(item).join("")}</div>`:"").join("");
@@ -1945,9 +1958,12 @@ function renderHistory(){
     <div class="ah-head"><div><p class="eyebrow">WORKSPACE</p><h2>对话</h2></div>
       <button class="ah-new" id="ah-new" title="新建对话">＋</button></div>
     <div class="ah-list">
-      <div class="ah-bar"><label><input type="checkbox" id="ah-all" ${ahSel.size&&ahSel.size===(S.chats||[]).length?"checked":""}>全选 ${(S.chats||[]).length} 个对话</label>
+      <div class="ah-bar"><label><input type="checkbox" id="ah-all" ${ahSel.size&&ahSel.size===(S.chats||[]).length?"checked":""}>全选 ${all.length} 个对话</label>
         <button class="ah-del-sel" id="ah-del-sel" ${ahSel.size?"":"disabled"}>删除选中 ${ahSel.size}</button></div>
-      ${list || `<p class="hint" style="margin:14px 5px">还没有对话，点右上角 ＋ 新建。</p>`}</div>
+      <div class="ah-filter">
+        ${[["all","全部"],["free","随意对话"],["proj","项目对话"]].map(([k,l])=>
+          `<button class="ah-fbtn ${ahFilter===k?"on":""}" data-f="${k}">${l}</button>`).join("")}</div>
+      ${list || `<p class="hint" style="margin:14px 5px">${ahFilter==="proj"?"还没有绑定项目的对话 —— 在输入条上用「🧭 绑定项目」新建一个。":ahFilter==="free"?"还没有随意对话，点右上角 ＋ 新建。":"还没有对话，点右上角 ＋ 新建。"}</p>`}</div>
     <div class="ah-foot">🕒 一个对话一份记忆 · 输出目录各自独立</div></aside>`;
 }
 
@@ -1979,7 +1995,7 @@ function renderAgent(m){
       <header class="at-head">
         <div class="at-heading"><span class="at-idwrap" id="at-who" title="这个对话绑的助手（去「助手」页管理）">${asAvatarOf(boundA, 26)}</span>
           <div><h1 id="at-title" class="at-title" title="点击改名">${esc(cur?cur.title:"Hi，今天有什么安排？")}</h1>
-          <p id="at-sub">${esc(boundA?boundA.name:(assistantKey()+"（未绑助手）"))} · 全局 Leader · 跨项目 · 产出 ${esc(cur?outName(cur.out_dir):"默认产出目录")}</p></div></div>
+          <p id="at-sub">${esc(boundA?boundA.name:(assistantKey()+"（未绑助手）"))} · ${cur&&cur.task_id?`Partner · 绑定《${esc(projName(cur.task_id)||"项目")}》`:"全局 Leader · 跨项目"} · 产出 ${esc(cur?outName(cur.out_dir):"默认产出目录")}</p></div></div>
         <button class="at-profile" id="at-profile" title="在「设置」里改模型与权限">
           <span>⚙</span><b>${esc(S.active? (S.active.name+" · "+S.active.model) : "未选择模型")}</b><em>自动批准</em></button>
       </header>
@@ -2015,6 +2031,9 @@ function renderAgent(m){
                   <div class="tip">提示：把文件直接拖到输入框也能附加。</div>
                 </div>
               </div>
+              <label class="at-sel" title="把当前对话绑到一个项目上（绑了就是「项目对话」：记忆/文献/产出都跟项目走；不绑就是随意对话）">🧭<select id="projbind">
+                <option value="">不绑项目（随意对话）</option>
+                ${(S.tasks||[]).map(t=>`<option value="${t.id}" ${cur&&cur.task_id===t.id?"selected":""}>${esc(t.title)}</option>`).join("")}</select></label>
               <button class="at-sel at-outbtn" id="outpick" title="选择这个对话的产出文件夹（原生文件夹选择框）">📁
                 <span id="outdir-txt">${esc(cur?outName(cur.out_dir):"默认产出目录")}</span></button>
               <label class="at-sel" title="这个对话用哪个模型档案">🔌<select id="modpick"><option value="">未配置模型</option>
@@ -2097,6 +2116,15 @@ function renderAgent(m){
        try{ await api("/api/chat/assistant", {id:curChat, assistant_id:e.target.value}); }catch(err){ return alert("绑定失败："+err.message); }
        await refreshState(false); render();
      };
+  const pb = $("projbind");
+  if(pb) pb.onchange = async ()=>{
+    if(!curChat){ const r = await api("/api/chat/create", {}); curChat = r.id || (r.chat&&r.chat.id); localStorage.setItem("rw-chat", curChat); }
+    try{ await api("/api/chat/bind", {id:curChat, task_id:pb.value}); }catch(e){ return alert("绑定失败："+e.message); }
+    await refreshState(false); render();
+  };
+  document.querySelectorAll("[data-f]").forEach(b=>b.onclick=()=>{
+    ahFilter = b.dataset.f; localStorage.setItem("rw-ah-filter", ahFilter); render();
+  });
   // 输入区（我们自己的：＋ 菜单 / 拖放 / 粘贴 / 自动长高）
   $("send").onclick = send;
   $("ask").onkeydown = (e)=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();} };
@@ -2342,7 +2370,7 @@ function loadAgentMeta(){                            // 从已存的对话里回
   if(room){                                            // 首次提问后标题会变，顺手同步抬头
     const h=$("at-title"), s=$("at-sub");
     if(h) h.textContent = room.title;
-    if(s) s.textContent = `${assistantKey()} · 全局 Leader · 跨项目 · 产出 ${outName(room.out_dir)}`;
+    if(s) s.textContent = `${assistantKey()} · ${room.task_id?`Partner · 绑定《${projName(room.task_id)||"项目"}》`:"全局 Leader · 跨项目"} · 产出 ${outName(room.out_dir)}`;
   }
   stPaint();
 }

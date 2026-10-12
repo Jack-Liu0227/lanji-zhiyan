@@ -169,6 +169,8 @@ class WorkflowDB(ResearchDB):
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(chats)")}
         if "assistant_id" not in cols:                # 老库补列：对话绑的助手（我的/公开）
             self.db.execute("ALTER TABLE chats ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''")
+        if "task_id" not in cols:                     # 老库补列：对话绑的项目（'' = 随意对话）
+            self.db.execute("ALTER TABLE chats ADD COLUMN task_id TEXT NOT NULL DEFAULT ''")
         # 老库补列（providers 是这次新做的表，早期版本只有 6 列）
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(providers)")}
         if "source" not in cols:
@@ -3023,7 +3025,26 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         say({"type": "user", "content": text})
     task = db.summary(task_id)["task"]
     chat_row = db.db.execute("SELECT * FROM chats WHERE id=?", (task_id,)).fetchone()
-    if chat_row:  # 首页 Agent = 全局 Leader：不绑项目，但有全局视野
+    bound = ""                                     # 这个对话绑的项目（'' = 随意对话）
+    if chat_row:
+        try:
+            bound = (chat_row["task_id"] or "").strip()
+        except Exception:
+            bound = ""
+        if bound and not db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (bound,)).fetchone():
+            bound = ""                             # 项目被删了 → 退回随意对话
+    ctx_id = bound or task_id                       # 工具按这个 id 干活：绑了项目就落在项目里
+    if chat_row and bound:                        # 绑了项目 → Partner Agent（对话历史独立，视野与产出跟项目走）
+        pt = db.summary(bound)["task"]
+        ctx = (f"你是《{pt['title']}》项目的 **Partner Agent**：这个对话绑在该项目上 —— 对话历史自己一份，"
+               f"但文献/笔记/记忆/产出都按项目来。\n"
+               f"当前项目：{pt['title']}\n研究问题：{pt['question']}\n关键词 / 材料体系：{pt['material_system']}\n"
+               f"项目 ID：{bound}\n产出目录：{db.pdir(bound, '其余')}")
+        try:
+            ctx += "\n\n" + db.memory_block(bound)     # 项目的长期/短期记忆
+        except Exception:
+            pass
+    elif chat_row:  # 首页 Agent = 全局 Leader：不绑项目，但有全局视野
         ctx = ("你是这个软件的 **全局 Leader**（首页 Agent，不属于任何单个项目）：可以跨项目工作 —— 查任意项目、"
                "任意文献/笔记/日程，也能新建项目、加日程、检索下载精读文献、写笔记。\n"
                "项目工作流里跑的是 **绑定单个项目的 Partner Agent**；要在某个项目内部推进，就按「哪个项目、要什么产出」把话说清，"
@@ -3086,7 +3107,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             ev = {"type": "tool_call", "name": name, "args": args, "id": call.get("id")}
             say(ev); events.append(ev)
             try:
-                result = _tool_impl(name, db, task_id, args, scope)
+                result = _tool_impl(name, db, ctx_id, args, scope)
                 ok, brief = True, _brief(name, result)
             except Exception as exc:
                 result, ok, brief = {"error": f"{type(exc).__name__}: {exc}"}, False, f"失败：{exc}"

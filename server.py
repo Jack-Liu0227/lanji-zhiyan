@@ -1222,6 +1222,13 @@ class Handler(BaseHTTPRequestHandler):
                     cid = data.get("id", "")
                     db.clear_messages(cid)
                     return self._json(db.delete_chat(cid))
+                if path == "/api/chat/bind":                  # 对话绑项目（'' = 解绑成随意对话）
+                    b = data or {}
+                    with WorkflowDB(DB_PATH) as db:
+                        try:
+                            return self._json({"chat": db.bind_chat(b.get("id", ""), b.get("task_id", ""))})
+                        except ValueError as exc:
+                            return self._json({"error": str(exc)}, 400)
                 if path == "/api/chat/rename":               # 对话改名（照 AionUi 标题点击改名）
                     b = data or {}
                     with WorkflowDB(DB_PATH) as db:
