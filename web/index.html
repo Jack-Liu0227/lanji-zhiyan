@@ -1707,7 +1707,7 @@ async function renderTeam(m){
   <div class="page-head">
     <div><p class="inst-label">TEAM</p><h3>${esc(curT?curT.name:"团队")} <span class="pill">${picks.length}/${D.max||5}</span>
       <span class="pill">${curT&&curT.kind==="temp"?"机动":"固定"}</span>${curT&&curT.status==="done"?'<span class="pill">已收工</span>':""}</h3>
-      <p class="hint">最多 5 个团队：<b>3 个固定</b>（常驻）+ <b>2 个机动</b>（用完自动释放）。成员从「助手」里选（一个团队最多 ${D.max||5} 人，助手背后接的是哪个模型，就用那个模型说话）。你发一句，成员之间互相 @ 派活、一轮轮推进；谁说「完成」就散会。</p></div>
+      <p class="hint">最多 5 个团队：<b>2 个固定</b>（论文精读 / 论文写作，常驻）+ <b>3 个机动</b>（用完自动释放）。成员从「助手」里选（一个团队最多 ${D.max||5} 人，助手背后接的是哪个模型，就用那个模型说话）。你发一句，成员之间互相 @ 派活、一轮轮推进；谁说「完成」就散会。</p></div>
     <div class="ph-acts">${run?`<span class="pill">${esc(run.phase||"跑着")}</span><span class="pill">第 ${run.turn||0}/${run.total||6} 轮</span><button class="btn ghost" id="tcStop">停止</button>`:""}
       <button class="btn ghost" id="tcRefresh">刷新</button></div></div>
   <div class="tc-cols">
@@ -1717,10 +1717,10 @@ async function renderTeam(m){
         <div class="tc-teams">
           ${TL.map(x=>`<button class="tc-team ${x.id===teamScope?"on":""} ${x.status==="done"?"done":""}" data-tc-team="${x.id}" title="${x.kind==="fixed"?"固定团队":"机动团队"}">
             <span>${x.kind==="fixed"?"📌":"⏳"}</span><b>${esc(x.name)}</b><i>${x.picks||0}</i></button>`).join("")}
-          ${(teamList.temp||0) < (teamList.max_temp||2) ? `<button class="tc-team add" id="tcNewTeam">＋ 机动团队</button>`
+          ${(teamList.temp||0) < (teamList.max_temp||3) ? `<button class="tc-team add" id="tcNewTeam">＋ 机动团队</button>`
             : `<p class="hint" style="margin:4px 2px">机动位满了（用完会自动释放）</p>`}
         </div>
-        <p class="tc-cnt">共 ${TL.length}/${teamList.max||5} 个团队（固定 ${teamList.fixed||0}/${teamList.max_fixed||3} · 机动 ${teamList.temp||0}/${teamList.max_temp||2}）</p>
+        <p class="tc-cnt">共 ${TL.length}/${teamList.max||5} 个团队（固定 ${teamList.fixed||0}/${teamList.max_fixed||2} · 机动 ${teamList.temp||0}/${teamList.max_temp||3}）</p>
         <div class="tc-row2">
           <button class="btn ghost" id="tcRename" title="改当前团队的名字">改名</button>
           ${curT&&curT.kind==="temp"?`<button class="btn ghost" id="tcDissolve" style="color:var(--err)" title="解散这个机动团队">解散</button>`:""}

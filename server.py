@@ -852,7 +852,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(deepread_state((q.get("task_id") or [""])[0]) or {"phase": ""})
             if path == "/api/settings/meta":            # 设置页分区要的元数据：工具 / 技能 / MCP
                 return self._json(settings_meta())
-            if path == "/api/teams":                     # 团队清单（多团队：3 固定 + 2 机动）
+            if path == "/api/teams":                     # 团队清单（多团队：2 固定 + 3 机动）
                 try:
                     return self._json(team.teams())
                 except ValueError as exc:

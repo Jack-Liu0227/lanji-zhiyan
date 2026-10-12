@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""多团队（3 固定 + 2 机动）+ 助手=模型 的自检。
+"""多团队（2 固定 + 3 机动）+ 固定团队预置成员 + 助手=模型 的自检。
 
     python -m unittest test_teams -v
 """
@@ -34,25 +34,44 @@ class TeamsTest(unittest.TestCase):
             return db.team(tid)
 
     # ---------- 固定位 ----------
-    def test_01_three_fixed_seeded_idempotent(self):
+    def test_01_two_fixed_seeded_idempotent(self):
         a = team.ensure_defaults()
-        self.assertEqual(len([x for x in a if x["kind"] == "fixed"]), 3)
+        fixed = [x for x in a if x["kind"] == "fixed"]
+        self.assertEqual([x["name"] for x in fixed], ["论文精读", "论文写作"])
         b = team.ensure_defaults()
-        self.assertEqual(len(b), 3)                       # 幂等，不重复播
-        self.assertEqual(team.teams()["fixed"], 3)
+        self.assertEqual(len(b), 2)                       # 幂等，不重复播
+        self.assertEqual(team.teams()["fixed"], 2)
         with self.assertRaises(ValueError):
-            team.new_team("fixed")                        # 第 4 个固定位不给
+            team.new_team("fixed")                        # 第 3 个固定位不给
+
+    def test_01b_fixed_teams_preseeded_roster(self):
+        """两个固定团队各预置 3 个成员（按助手名字找），再调一次不会重复拉人。"""
+        team.ensure_defaults()
+        want = {"论文精读": ["分块员", "图表解读员", "论文精读"],
+                "论文写作": ["结构规划员", "论文写作", "论文审查"]}
+        for t in team.teams()["teams"]:
+            if t["kind"] != "fixed":
+                continue
+            names = [m["name"] for m in team.picks(t["id"])]
+            self.assertEqual(names, want[t["name"]], t["name"])
+            for m in team.picks(t["id"]):
+                self.assertTrue(m["assistant_id"])        # 每个成员都挂在助手上
+                self.assertGreaterEqual(m["color"], 1)    # Leader 占 0 号色
+        again = [m["name"] for t in team.teams()["teams"] if t["name"] == "论文精读"
+                 for m in team.picks(t["id"])]
+        self.assertEqual(again, want["论文精读"])          # 幂等：还是 3 个
 
     # ---------- 机动位 ----------
-    def test_02_two_temp_then_full(self):
+    def test_02_three_temp_then_full(self):
         t1 = team.new_team("temp")
         t2 = team.new_team("temp")
-        self.assertEqual(team.teams()["temp"], 2)
+        t3x = team.new_team("temp")
+        self.assertEqual(team.teams()["temp"], 3)
         with self.assertRaises(ValueError) as e:
-            team.new_team("temp")                         # 两个都在用 → 不给
+            team.new_team("temp")                         # 三个都在用 → 不给
         self.assertIn("都在用", str(e.exception))
         team.release(t1["id"])                            # t1 用完 → 释放
-        self.assertEqual(team.teams()["temp"], 2)
+        self.assertEqual(team.teams()["temp"], 3)
         t3 = team.new_team("temp")                        # 用完的自动回收 → 又能建
         self.assertNotEqual(t3["id"], t1["id"])
         ids = [x["id"] for x in team.teams()["teams"]]
@@ -71,6 +90,7 @@ class TeamsTest(unittest.TestCase):
 
     def test_04_total_cap_five(self):
         team.ensure_defaults()
+        team.new_team("temp")
         team.new_team("temp")
         team.new_team("temp")
         self.assertEqual(len(team.teams()["teams"]), 5)
@@ -123,6 +143,22 @@ class TeamsTest(unittest.TestCase):
         mem = [m for m in st["members"] if m["role"] == "member"][0]
         self.assertEqual(mem["model"], "deepseek")        # 卡片上能看到它背后是哪个模型
         self.assertEqual(len(st["members"]), 2)           # Leader + 1 人
+
+
+    # ---------- 老库迁移 ----------
+    def test_09_legacy_placeholders_handed_over(self):
+        """老库里的空占位「团队 1/2/3」：前两个被改名接手（并预置成员），多的转成「已收工」的机动，记录不删。"""
+        for i in (1, 2, 3):
+            with workflow.WorkflowDB(_p) as db:
+                db.team_add("团队 %d" % i, "fixed")
+        team.ensure_defaults()
+        ts = team.teams()["teams"]
+        fixed = [x["name"] for x in ts if x["kind"] == "fixed"]
+        self.assertEqual(sorted(fixed), ["论文写作", "论文精读"])
+        left = [x for x in ts if x["kind"] == "temp" and x["name"].startswith("团队")]
+        self.assertEqual(len(left), 1)                    # 多出来的那一个转成了机动位
+        self.assertEqual(left[0]["status"], "done")       # 标已收工，等着被回收
+        self.assertEqual(team.teams()["fixed"], 2)
 
 
 if __name__ == "__main__":
