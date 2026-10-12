@@ -1325,14 +1325,6 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .mp-card h4{margin:0 0 6px;font-size:13px}
 .mp-card p{margin:0 0 8px;font-size:12px;color:var(--muted);line-height:1.7;white-space:pre-wrap}
 .mp-card .row{display:flex;gap:8px;align-items:center}
-.mp-chat-body{flex:1;min-height:0;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
-.mp-in-row{flex:none;border-top:1px solid var(--line);padding:10px;display:flex;gap:8px;align-items:flex-end}
-.mp-in-row textarea{flex:1;min-height:40px;max-height:120px;resize:none;padding:9px 10px;border-radius:9px;
-  border:1px solid var(--line);background:var(--panel2);color:var(--fg);font:inherit;font-size:13px}
-.mp-bub{max-width:92%;font-size:13px;line-height:1.7;padding:9px 11px;border-radius:10px;white-space:pre-wrap;word-break:break-word}
-.mp-bub.u{align-self:flex-end;background:color-mix(in srgb,var(--accent) 20%,var(--panel2))}
-.mp-bub.a{align-self:flex-start;background:var(--panel2);border:1px solid var(--line)}
-.mp-tool{align-self:flex-start;font-size:11.5px;color:var(--muted);border:1px dashed var(--line);border-radius:8px;padding:5px 9px}
 .mp-src{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px 0}
 .mp-chip{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px;background:var(--panel2)}
 </style>
@@ -2523,6 +2515,12 @@ const DOC_UI = {
     empty: ["🧐", "这是项目的「稿件审查」", "直接说「审一遍」，或把具体担心抛过来。左边可以用 🖍 荧光笔标出想改的细节，标完点「把标注发给 agent」，我会逐条回应；大的思路问题我会先列出来。"],
     ph: "说「审一遍」/ 问某处逻辑 / 让 agent 改…（Enter 发送）",
     hint: "Enter 发送 · 左边 🖍 标细节 → 「把标注发给 agent」逐条回应" },
+  map: { ico: "🧩", file: "谱系", who: "结构",
+    sub: "与项目绑定 · 左边那张谱系图就是这一步的产物：把大纲每个小标题挂上精读结论 / 实验数据",
+    seed: "", pull: "", post: "/api/map", scope: "map", hl: false,
+    empty: ["🧩", "这是项目的「梳理精读」", "左边是谱系图的画布。跟我说要怎么改，比如「按大纲建一版谱系图」「把 Left2025 挂到 2.1 下面，标成反例」——改完左边立刻重画。实验数据直接拖到画布上就上传。"],
+    ph: "说「按大纲建一版谱系图」/ 让它把某篇挂到某一节下面 / 讨论怎么归类…（Enter 发送）",
+    hint: "Enter 发送 · 说「更新谱系」→ 画布立刻换成新版（谱系.json 就地覆盖）" },
 };
 const DOCS = {};                                   // 每一步一份状态
 function docState(k){
@@ -2628,7 +2626,7 @@ function docShow(k, d){
       : `<div class="ol-empty">${DOC_UI[k].empty[1]} 还没有内容。<br>右边跟 agent 说一句，或点上面「${DOC_UI[k].seed || "让 agent 写"}」。</div>`;
     if(DOC_UI[k].hl) docPaintMarks(k);                    // 标注按文本重新贴回去
   }
-  docEl(k, "meta").textContent = md.trim() ? `${d.sections || 0} 个大标题 · ${d.subs || 0} 个小标题 · ${d.chars || 0} 字` : "";
+  const mb = docEl(k, "meta"); if(mb) mb.textContent = md.trim() ? `${d.sections || 0} 个大标题 · ${d.subs || 0} 个小标题 · ${d.chars || 0} 字` : "";
 }
 async function docLoad(k){
   const st = docState(k);
@@ -2669,7 +2667,7 @@ function docCandidate(text){
 }
 function docShowCand(k){
   const b = docEl(k, "pull"); if(!b) return;
-  const cur = (docEl(k, "src").value || "").trim();
+  const srcEl = docEl(k, "src"); const cur = (srcEl ? srcEl.value : "").trim();
   b.classList.toggle("hidden", !docState(k).cand || docState(k).cand === cur);
 }
 
@@ -2753,7 +2751,7 @@ function docBind(k, m){
   docEl(k, "assist").oninput = (e)=>localStorage.setItem("rw-assist", e.target.value.trim() || "researcher");
   if(DOC_UI[k].seed) docEl(k, "seed").onclick = async ()=>{ try{ docShow(k, await api("/api/doc/seed", { task_id: curTask, step: k }));
     docMsg(k, k === "write" ? "已按框架搭好骨架（标题层级照抄框架）" : "已按模板起稿"); }catch(e){ docMsg(k, "起稿失败：" + e.message); } };
-  docEl(k, "pull").onclick = async ()=>{
+  if(docEl(k, "pull")) docEl(k, "pull").onclick = async ()=>{
     const st = docState(k); if(!st.cand) return;
     try{ const r = await api("/api/doc/save", { task_id: curTask, step: k, markdown: st.cand });
          st.cand = ""; docShow(k, r); docShowCand(k); docMsg(k, `已用这条回复更新（${r.chars || 0} 字）`); }
@@ -2761,9 +2759,9 @@ function docBind(k, m){
   };
   if(DOC_UI[k].cite) docEl(k, "cite").onclick = ()=>{
     if(docState(k).showCite) docLoad(k); else docShowCite(k); };
-  docEl(k, "reload").onclick = ()=>docLoad(k);
-  docEl(k, "edit").onclick = ()=>docEdit(k, true);
-  docEl(k, "edit-save").onclick = ()=>docSaveEdit(k);
+  if(docEl(k, "reload")) docEl(k, "reload").onclick = ()=>docLoad(k);
+  if(docEl(k, "edit")) docEl(k, "edit").onclick = ()=>docEdit(k, true);
+  if(docEl(k, "edit-save")) docEl(k, "edit-save").onclick = ()=>docSaveEdit(k);
   if(DOC_UI[k].hl){
     docEl(k, "pen").onclick = ()=>docPen(k);
     docEl(k, "penpanel").querySelector(".dw-x").onclick = ()=>docPen(k, false);
@@ -2872,11 +2870,12 @@ async function docSend(k){
   }catch(e){ errMsg = e.message; appendOne(box, { type: "error", message: e.message }); }
   st.msgs.push({ role: "assistant", content: final, events: evs });
   st.events = st.events.concat(evs);
-  const wrote = evs.some(e => e.type === "tool_call" && (e.name === "doc_write" || e.name === "outline_write"));
+  const wrote = evs.some(e => e.type === "tool_call" && (e.name === "doc_write" || e.name === "outline_write" || e.name === "map_write"));
   st.cand = wrote ? "" : docCandidate(final);            // 模型没调工具就把回复里那段收着，给个一键落盘
   btn.disabled = false; btn.textContent = "↑";
   box.scrollTop = box.scrollHeight;
   await docLoad(k);                                      // 重拉：文件可能刚被 doc_write 改过 → 左边跟着更新
+  if(k === "map") await mpLoad();                          // 谱系图：聊天改完立刻重画画布
   docShowCand(k);
   if(!wrote && !st.cand) docMsg(k, `这轮没有改${DOC_UI[k].file} —— 说「更新${DOC_UI[k].file}」或让它「写进文件」`);
   if(errMsg) appendOne(box, { type: "error", message: errMsg });
@@ -6650,12 +6649,38 @@ function mapPanelHTML(active){
         </div>
       </div>
       <div class="mp-right">
-        <div class="mp-head"><b>结构 agent</b><span class="mp-meta" id="mp-stat"></span><span class="mp-spacer"></span>
-          <button class="btn ghost" id="mp-clear" title="清掉这一步的对话记录">清空</button></div>
-        <div class="mp-chat-body" id="mp-msgs"></div>
-        <div class="mp-in-row">
-          <textarea id="mp-in" rows="1" placeholder="说「把 Left2025 挂到 2.1 下面」「这节结论换成…」「按大纲建一版谱系图」"></textarea>
-          <button class="btn" id="mp-send">发送</button>
+        <div class="at-head">
+          <div class="at-heading"><span style="color:var(--accent);font-size:15px">🧩</span>
+            <div><h1 id="map-title">${esc(proj ? proj.title : "梳理精读")}</h1>
+            <p id="map-sub">与项目绑定 · 左边那张谱系图就是这一步的产物</p></div></div>
+        </div>
+        <div class="at-tabs">
+          <button class="at-tab on" data-dv="map|conversation">对话</button>
+          <button class="at-tab" data-dv="map|trajectory">轨迹 <span id="map-trail-n">0</span></button></div>
+        <div class="at-msgs" id="map-msgs" role="log" aria-label="结构 agent 对话"></div>
+        <div class="at-dock">
+          <div class="at-panel">
+            <div class="st-box st-counts">
+              <div class="st-row"><span>对话轮数</span><b id="map-turns">0</b></div>
+              <div class="st-row"><span>调用工具数</span><b id="map-calls">0</b></div>
+              <div class="st-row"><span>消耗 token</span><b id="map-tok">0</b></div></div>
+            <div class="st-box"><p>工具名称</p><div class="st-log" id="map-tools"></div></div>
+            <div class="st-box"><p>产出目录</p><div class="st-log" id="map-outs"></div></div>
+          </div>
+          <div class="atts" id="map-atts"></div>
+          <div class="composer" id="map-composer">
+            <textarea id="map-ask" rows="1" placeholder="说「按大纲建一版谱系图」/ 让它把某篇挂到某一节下面…（Enter 发送，Shift+Enter 换行）"></textarea>
+            <div class="at-tools">
+              <div class="at-tools-l"><button class="icon-btn" id="map-plus" title="附加文件">＋</button>
+                <label class="at-sel" title="这一步用哪个模型档案">🔌<select id="map-modpick"><option value="">未配置模型</option>
+                  ${S.models.map(mm => `<option value="${mm.id}" ${S.active && mm.id === S.active.id ? "selected" : ""}>${esc(mm.name)}</option>`).join("")}</select></label></div>
+              <div class="at-tools-r">
+                <label class="at-sel" title="助手署名">🤖<input id="map-assist" placeholder="researcher" value="${esc(assistantKey())}"></label>
+                <button class="send-btn" id="map-send" title="发送" aria-label="发送">↑</button></div>
+            </div>
+            <input type="file" id="map-filepick" multiple style="display:none">
+          </div>
+          <p class="at-hint">Enter 发送 · 说「更新谱系」→ 画布立刻换成新版（谱系.json 就地覆盖）</p>
         </div>
       </div>
     </div>
@@ -6788,7 +6813,7 @@ function mpCard(id){
     MP.nodes = MP.nodes.filter(x=>x.id!==id);
     MP.edges = MP.edges.filter(e=>e.from!==id && e.to!==id);
     MP.sel = "";
-    await mpSave();
+    await mpSave(); docMsg("map", "已删掉这个节点（谱系.json 已更新）");
   };
 }
 
@@ -6799,73 +6824,12 @@ async function mpSave(){
     MP.nodes = d.nodes; MP.edges = d.edges;
     $("mp-meta").textContent = `${d.sections} 小节 · ${d.refs} 关联`;
     mpPaint();
-  }catch(e){ mpMsg("保存失败：" + e.message); }
+  }catch(e){ docMsg("map", "保存失败：" + e.message); }
 }
 
-function mpMsgs(list){
-  const box = $("mp-msgs"); if(!box) return;
-  box.innerHTML = list.length ? "" : `<div class="mp-bub a mp-intro">左边是这张谱系图的画布 —— 它在后台就是项目里的一份 JSON。
-    直接跟我说要怎么改，比如「把 Left2025 挂到 2.1 掺杂元素筛选下面，标成反例」，我就改图；每改完一次左边立刻重画。</div>`;
-  list.forEach(m=>{
-    const b = document.createElement("div");
-    b.className = "mp-bub " + (m.role==="user" ? "u" : "a");
-    b.textContent = m.content || "";
-    box.appendChild(b);
-  });
-  box.scrollTop = box.scrollHeight;
-}
-function mpMsg(t){ const box = $("mp-msgs"); if(!box) return;
-  const b = document.createElement("div"); b.className = "mp-bub a"; b.textContent = t; box.appendChild(b); box.scrollTop = box.scrollHeight; }
-function mpTool(t){ const box = $("mp-msgs"); if(!box) return;
-  const b = document.createElement("div"); b.className = "mp-tool"; b.textContent = t; box.appendChild(b); box.scrollTop = box.scrollHeight; }
-
-async function mpSend(){
-  const ta = $("mp-in"); const msg = (ta.value||"").trim(); if(!msg || MP.busy) return;
-  if(!curTask) return mpMsg("先在「项目」里建一个项目再回来 —— 这一步 100% 绑项目。");
-  ta.value = ""; ta.style.height = "";
-  MP.busy = true; $("mp-send").disabled = true;
-  mpMsgsAppend("user", msg);
-  let acc = "", n = 0;
-  try{
-    const res = await fetch("/api/map", {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({task_id: curTask, message: msg})});
-    if(!res.ok || !res.body) throw new Error("HTTP " + res.status);
-    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
-    for(;;){
-      const {value, done} = await reader.read(); if(done) break;
-      buf += dec.decode(value, {stream:true});
-      let i;
-      while((i = buf.indexOf("\n\n")) >= 0){
-        const chunk = buf.slice(0, i); buf = buf.slice(i+2);
-        const line = chunk.startsWith("data: ") ? chunk.slice(6) : chunk;
-        let evt; try{ evt = JSON.parse(line); }catch(_){ continue; }
-        if(evt.type === "tool_call"){ n++; mpTool(`🔧 ${evt.name||evt.tool||""} ${evt.summary||""}`.trim()); }
-        else if(evt.type === "assistant"){ acc += evt.content || ""; }
-        else if(evt.type === "error"){ mpMsg("出错了：" + (evt.message||"")); }
-        else if(evt.type === "done"){ if(evt.content) acc = evt.content; }
-      }
-    }
-  }catch(e){ mpMsg("请求失败：" + e.message); }
-  if(acc) mpMsgsAppend("assistant", acc);
-  $("mp-stat").textContent = `1 轮 · ${n} 次工具`;
-  MP.busy = false; $("mp-send").disabled = false;
-  await mpLoad();                        /* 改完立刻重画左边 */
-}
-function mpMsgsAppend(role, text){
-  const box = $("mp-msgs"); if(!box) return;
-  const b = document.createElement("div");
-  b.className = "mp-bub " + (role === "user" ? "u" : "a");
-  const intro = box.querySelector(".mp-intro"); if(intro) intro.remove();
-  b.textContent = text; box.appendChild(b); box.scrollTop = box.scrollHeight;
-}
-
-function mpBind(){
+function mpBind(m){
+  docBind("map", m);                                  /* 右栏＝「确认大纲」那套（对话/轨迹/统计/附件），post 走 /api/map */
   $("mp-refresh").onclick = ()=>mpLoad();
-  $("mp-clear").onclick = async ()=>{ if(!confirm("清掉「梳理精读」这一步的对话记录？（谱系图不动）")) return;
-    try{ await api("/api/chat/clear", {task_id: curTask}); await mpLoad(); }catch(e){ mpMsg("清空失败："+e.message); } };
-  $("mp-send").onclick = ()=>mpSend();
-  $("mp-in").oninput = (e)=>{ e.target.style.height=""; e.target.style.height = Math.min(120, e.target.scrollHeight) + "px"; };
-  $("mp-in").onkeydown = (e)=>{ if(e.key === "Enter" && (e.ctrlKey || e.metaKey)){ e.preventDefault(); mpSend(); } };
   $("mp-edit").onclick = ()=>{
     const ta = $("mp-json"), show = ta.classList.contains("hidden");
     ta.classList.toggle("hidden", !show);
@@ -6880,7 +6844,7 @@ function mpBind(){
       MP.nodes = r.nodes; MP.edges = r.edges;
       $("mp-json").classList.add("hidden"); $("mp-save").classList.add("hidden"); $("mp-wrap").classList.remove("hidden");
       mpPaint();
-    }catch(e){ mpMsg("JSON 有问题：" + e.message); }
+    }catch(e){ docMsg("map", "JSON 有问题：" + e.message); }
   };
   // 画布：点节点出信息卡；拖文件进来 = 上传实验数据
   const wrap = $("mp-wrap");
@@ -6917,11 +6881,11 @@ async function mpUpload(files){
                             {method:"POST", headers:{"Content-Type":"application/octet-stream"}, body: buf});
       const d = await r.json();
       if(d.error) throw new Error(d.error);
-      mpTool(`📎 已上传 ${f.name} → ${d.path||""}`);
-    }catch(e){ mpMsg("上传失败：" + e.message); }
+      docMsg("map", `📎 已上传 ${f.name} → ${d.path||""}`);
+    }catch(e){ docMsg("map", "上传失败：" + e.message); }
   }
   await mpLoad();
-  mpMsg("数据文件进来了 —— 跟 agent 说一句「把刚上传的这份挂到某一节下面」它就会画进谱系图。");
+  docMsg("map", "数据文件进来了 —— 跟 agent 说一句「把刚上传的这份挂到某一节下面」它就会画进谱系图。");
 }
 
 </script>
