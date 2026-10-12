@@ -18,7 +18,6 @@ import pdfio            # PDF 读写（pypdf/pdfplumber，见 pdfio.py）
 import re
 import shutil
 import socket
-import sqlite3
 import subprocess
 import time
 import urllib.error
@@ -29,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from research_core import ResearchDB, excerpt_matches
+from research_core import ResearchDB
 
 HERE = Path(__file__).resolve().parent
 DATA = HERE / "data"
@@ -1618,28 +1617,6 @@ def _deepread_worker(db_path: str, task_id: str) -> None:
         st["current"] = ""
 
 
-def stage_deepread(db: WorkflowDB, task_id: str) -> dict[str, Any]:
-    """一键精读：把项目里已入库的 PDF（文献库里的）逐篇精读，生成的 Markdown 笔记落到「笔记」。"""
-    folder = db.pdir(task_id, "文献库")
-    known = {p["filename"] for p in db.papers_of(task_id)}
-    for pdf in sorted(folder.glob("*.pdf")):           # 手动下载后丢进「文献库」的也一起收进来
-        if pdf.name not in known and is_paper_pdf(pdf):
-            try:
-                db.ingest_pdf(task_id, pdf)
-            except Exception:
-                pass
-    papers = db.papers_of(task_id)
-    if not papers:
-        raise ValueError("还没有已下载的 PDF，先在「论文搜索」勾选并进入下载")
-    notes, errors = [], []
-    for p in papers:
-        try:
-            r = stage_read(db, task_id, p["id"])
-            notes.append({"paper": p["filename"], "note_id": r["note_id"], "chunks": r["chunks"]})
-        except Exception as exc:
-            errors.append({"paper": p["filename"], "error": str(exc)})
-    db.log_step(task_id, "notes", "done", f"精读 {len(notes)} 篇，失败 {len(errors)} 篇")
-    return {"notes": notes, "errors": errors, "out": str(db.pdir(task_id, "笔记"))}
 
 
 def stage_read(db: WorkflowDB, task_id: str, paper_id: str, per_page: int = 6000,
@@ -2430,8 +2407,6 @@ def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str) -> dict[
     return out
 
 
-def outline_path(db: "WorkflowDB", task_id: str) -> Path:                  # 旧名保留
-    return doc_path(db, task_id, "outline")
 
 
 def outline_read(db: "WorkflowDB", task_id: str) -> dict[str, Any]:

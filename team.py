@@ -15,7 +15,6 @@ import re
 import threading
 import time
 import traceback
-import uuid
 from datetime import datetime
 from typing import Any
 
@@ -152,7 +151,6 @@ def retry(task_id_row: str) -> dict[str, Any]:
 
 # ---------------- 队列 worker（串行） ----------------
 def _run_one(row: dict[str, Any]) -> None:
-    import team as _self                      # 便于测试替换 run_agent
     t_id = row["task_id"]
     with workflow.WorkflowDB(_db_path()) as db:
         db.team_task_mark(row["id"], "running", started_at=_now())

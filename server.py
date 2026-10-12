@@ -31,7 +31,6 @@ import workflow
 import schedule                  # 定时任务：抄原版 automation（只在应用活着时调度）
 import team                      # 团队：Leader + Partner 成员 + 派活队列（抄 AionUi Teams）
 import zotero                    # Zotero 本机 Local API 只读接入（笔记页；不碰 zotero.sqlite）
-from research_core import ResearchDB
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
