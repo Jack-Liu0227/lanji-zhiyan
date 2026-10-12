@@ -1077,7 +1077,16 @@ body.dw-pen-on .ol-body{cursor:text}
 body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 40%,transparent)}
 @media (max-width:1150px){ .ol-grid{grid-template-columns:minmax(0,1fr)} .ol-right{display:none} }
 
-.tr-note{display:grid;grid-template-columns:minmax(0,3fr) minmax(300px,1fr);gap:12px;height:100%;padding:10px;box-sizing:border-box}
+.tr-note{position:absolute;inset:0;z-index:12;display:flex;flex-direction:column;padding:10px;box-sizing:border-box}
+.tr-note-grid{display:grid;grid-template-columns:minmax(0,3fr) minmax(300px,1fr);gap:12px;flex:1;min-height:0}
+.tr-note-bar{display:flex;align-items:center;gap:8px;flex:none;height:42px;padding:0 2px}
+.tr-note-bar .tr-ib,.tr-zen-zoom .tr-ib{width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--fg);font-size:15px;line-height:1;cursor:pointer}
+.tr-note-bar .tr-ib:hover,.tr-zen-zoom .tr-ib:hover{border-color:var(--accent);color:var(--accent)}
+.tr-zoomv{color:var(--muted);font-size:12px;min-width:46px;text-align:center;font-variant-numeric:tabular-nums}
+.tr-note-exit{width:auto !important;padding:0 12px;gap:6px;font-size:13px}
+.tr-zen-zoom{display:none;position:absolute;left:14px;top:12px;z-index:20;align-items:center;gap:6px;padding:4px;border-radius:10px;background:color-mix(in srgb,var(--panel) 88%,transparent);border:1px solid var(--line)}
+.tr-stage.zen .tr-zen-zoom{display:flex}
+.tr-stage.note .tr-zen-zoom,.tr-stage.note .tr-zen-exit{display:none}
 .tr-note-l,.tr-note-r{border:1px solid var(--line);border-radius:10px;background:var(--panel);display:flex;flex-direction:column;min-width:0;overflow:hidden}
 .tr-note-h{flex:none;padding:8px 12px;border-bottom:1px solid var(--line);color:var(--muted);font-size:12px}
 .tr-note-body{flex:1;min-height:0;overflow:auto;padding:12px 18px;font-size:13.5px}
@@ -6014,7 +6023,7 @@ async function renderIntel(m){
    照用户草图：左上「＋ 添加论文」（文件对话框 / 拖进来）→ 自动解析 DOI/题目/发表时间/关键词
    → 大框里是可滚动的 PDF（缩放 / 页码 / 荧光笔）→ 底部三个功能键：中英互译 / 笔记模式 / 荧光笔。
    PDF 渲染用 vendor 的 pdf.js 3.11（能选中文字，荧光笔才有依据）；译文用 BabelDOC（后端）。 */
-const TR = { pid: "", meta: null, view: "read", scale: 1.15, hlOn: false, hlColor: "#FFE066", hlWidth: 14,
+const TR = { pid: "", meta: null, view: "read", scale: 1.15, noteScale: 1, noteZen: false, hlOn: false, hlColor: "#FFE066", hlWidth: 14,
              pdf: null, pages: 0, sel: new Set(), hl: [], job: null, poll: 0, note: null, dual: false };
 const TR_MAX = 3.0, TR_MIN = 0.5;
 
@@ -6027,7 +6036,7 @@ function trPanelHTML(active){
       <span class="tr-zoom"><button class="tr-ib" id="trOut" title="缩小">−</button><button class="tr-ib" id="trIn" title="放大">＋</button></span>
       <span class="tr-pageno" id="trPageNo">0 / 0</span>
       <button class="btn ghost" id="trPenTop">🖍 荧光笔</button>
-      <button class="btn ghost" id="trZenTop" title="全屏，左原文右中文，可拖分栏 / Ctrl+滚轮缩放（Esc 退出）">⛶ 专注模式</button>
+      <button class="btn ghost" id="trZenTop" title="全屏，左原文右中文，可拖分栏；左上角有缩放加减号（Esc 退出）">⛶ 专注模式</button>
       <button class="btn" id="trBtnT">🌐 中英互译</button>
       <button class="btn" id="trBtnN">📝 笔记模式</button>
       <button class="btn ghost hidden" id="trBtnBack">↩ 还原</button>
@@ -6041,6 +6050,7 @@ function trPanelHTML(active){
     </div>
     <div class="tr-stage" id="trStage">
       <button class="tr-zen-exit" id="trZenExit" title="退出专注模式（Esc）">✕ 退出专注</button>
+      <span class="tr-zen-zoom" id="trZenZoom"><button class="tr-ib" id="trZenOut" title="缩小" aria-label="缩小">−</button><button class="tr-ib" id="trZenIn" title="放大" aria-label="放大">＋</button><span class="tr-zoomv" id="trZenZoomV">100%</span></span>
       <div class="tr-drop" id="trDrop">
         <div class="tr-drop-in">
           <div class="tr-drop-ico">📄</div>
@@ -6052,11 +6062,20 @@ function trPanelHTML(active){
       <div class="tr-split hidden" id="trSplit" title="拖动调整两栏宽度"></div>
       <div class="tr-pane hidden" id="trPaneB" data-pane="b"><div class="tr-pane-tag">中文</div><div class="tr-scroll"></div></div>
       <div class="tr-note hidden" id="trNote">
+        <div class="tr-note-bar">
+          <button class="tr-ib" id="trNoteOut" title="缩小字号" aria-label="缩小字号">−</button>
+          <button class="tr-ib" id="trNoteIn" title="放大字号" aria-label="放大字号">＋</button>
+          <span class="tr-zoomv" id="trNoteZoomV">100%</span>
+          <span class="tr-spacer"></span>
+          <button class="tr-ib tr-note-exit" id="trNoteExit" title="退出笔记模式（Esc）">✕ 退出</button>
+        </div>
+        <div class="tr-note-grid">
         <div class="tr-note-l"><div class="tr-note-h">中文全文（只读）<span id="trNotePages"></span></div><div class="tr-note-body md-render" id="trNoteBody"></div></div>
         <div class="tr-note-r">
           <input id="trNoteTitle" class="tr-note-title" placeholder="笔记名">
           <div class="tr-note-hint"><span id="trNoteBind">阅读笔记</span> · 自动保存<span id="trNoteState"></span></div>
           <textarea id="trNoteSrc" class="tr-note-src" spellcheck="true" placeholder="在这里随记随写…"></textarea>
+        </div>
         </div>
       </div>
     </div>
@@ -6225,9 +6244,9 @@ function trZen(on){
   st.classList.toggle("zen", show);
   TR.zen = show;
   $("trZenTop")?.classList.toggle("active", show);
-  trMsg(show ? "专注模式：中间那条线照样能拖，Ctrl+滚轮 / 双指缩放，Esc 退出"
+  trMsg(show ? "专注模式：中间那条线照样能拖；缩放用左上角那对加减号，Esc 退出"
              : "");
-  if(show) trPaintNear(TR.active === "b" ? "b" : "a");
+  if(show){ trPaintNear(TR.active === "b" ? "b" : "a"); trZoomLabel(); }
 }
 function trZoom(d){
   TR.scale = Math.min(TR_MAX, Math.max(TR_MIN, Math.round((TR.scale + d) * 100) / 100));
@@ -6235,6 +6254,25 @@ function trZoom(d){
   if(TR.dual){ trMount("a", `/api/pdf?id=${encodeURIComponent(TR.pid)}`);
                if(TR.monoUrl) trMount("b", TR.monoUrl); }
   else trReader(TR.pid);
+  trZoomLabel();
+}
+function trZoomLabel(){ const v = $("trZenZoomV"); if(v) v.textContent = Math.round(TR.scale*100) + "%"; }
+function trExitFull(){
+  /* ✕ / Esc 的统一出口：笔记模式先退回阅读器，再把全屏收掉 */
+  if(TR.view === "note") trBack();
+  trZen(false);
+}
+function trNoteZoom(d){
+  TR.noteScale = Math.min(1.8, Math.max(0.7, Math.round((TR.noteScale + d) * 10) / 10));
+  trNoteApply();
+}
+function trNoteApply(){
+  /* 笔记模式里没有 PDF 可缩放 —— 顶栏那对加减号管的是中文/笔记两栏的字号 */
+  const px = (13.5 * TR.noteScale).toFixed(1) + "px";
+  const b = $("trNoteBody"), s = $("trNoteSrc");
+  if(b) b.style.fontSize = px;
+  if(s) s.style.fontSize = px;
+  const v = $("trNoteZoomV"); if(v) v.textContent = Math.round(TR.noteScale*100) + "%";
 }
 
 /* ---------------- 荧光笔 ---------------- */
@@ -6383,6 +6421,13 @@ function trView(v){
   TR.view = v;
   $("trNote")?.classList.toggle("hidden", v !== "note");
   $("trDrop")?.classList.toggle("hidden", v !== "empty");
+  /* 笔记模式 = 全屏（和专注模式共用同一个 fixed 舞台）；离开笔记模式时自动收掉全屏 */
+  const st = $("trStage");
+  if(st){
+    st.classList.toggle("note", v === "note");
+    if(v === "note"){ st.classList.add("zen"); TR.zen = true; TR.noteZen = true; }
+    else if(TR.noteZen){ st.classList.remove("zen"); TR.zen = false; TR.noteZen = false; }
+  }
 }
 async function trNoteMode(){
   /* 笔记模式：左边 3/4 中文全文（只读），右边 1/4 「阅读笔记」随记随写。
@@ -6400,12 +6445,13 @@ async function trNoteMode(){
     $("trBtnN")?.classList.add("active");
     $("trNoteTitle").value = TR.note.title || "阅读笔记";
     $("trNoteSrc").value = TR.note.content || "";                 // 空白：他自己写
+    trNoteApply();
     $("trNoteBody").innerHTML = r.text ? renderMarkdown(trDedent(r.text))
                                        : `<div class="tr-load">还没有中文全文 —— 先点上面「🌐 中英互译」，翻好一段这里就有一段。</div>`;
     $("trNotePages").textContent = r.pages ? ` · ${r.pages} 页` : "";
     const pname = (TR.meta && TR.meta.title) ? trShort(TR.meta.title) : (TR.pid || "").slice(0, 8);
     $("trNoteBind").textContent = `已绑定论文：${pname}${curTask ? " · 项目" : ""} · 自动保存`;
-    trMsg(`「阅读笔记」已绑到这篇论文（论文绑项目）；左边中文、右边随记随写${r.pages ? "" : "（暂无中文全文）"}`);
+    trMsg(`「阅读笔记」已绑到这篇论文；左边中文、右边随记随写，顶栏加减号调字号、✕ 退出（Esc）${r.pages ? "" : "（暂无中文全文）"}`);
   }catch(e){ trMsg("笔记打开失败：" + e.message + (/(not found|404)/i.test(e.message) ? "（服务端是旧版本，重启一次）" : "")); }
 }
 function trShort(s, n){ s = String(s || ""); return s.length > n ? s.slice(0, n) + "…" : s; }
@@ -6469,7 +6515,7 @@ function trBind(){
   trPenInit(); trNoteBind(); trFillPick();
   if(!TR.hlBound){ TR.hlBound = 1;                     // 文档级监听只挂一次（renderWorkflow 会反复调 trBind）
     document.addEventListener("mouseup", (e)=>{ if($("trStage")?.contains(e.target)) trHlOnMouseUp(e); });
-    document.addEventListener("keydown", (e)=>{ if(e.key === "Escape"){ trPenPanel(false); trZen(false); } });
+    document.addEventListener("keydown", (e)=>{ if(e.key === "Escape"){ trPenPanel(false); trExitFull(); } });
   }
   // 拖进来（整页都能接）
   const st = $("trStage"); let depth = 0;
@@ -6490,13 +6536,15 @@ function trBind(){
   });
   ["pointerup","pointercancel"].forEach(t=>sp.addEventListener(t,()=>{ dragging = false; }));
   $("trZenTop").onclick = () => trZen();
-  $("trZenExit").onclick = () => trZen(false);
-  // Ctrl+滚轮 / 双指捏合 = 缩放（触屏上浏览器把捏合报成 ctrl+wheel）
-  $("trStage").addEventListener("wheel",(e)=>{
-    if(!e.ctrlKey) return;
-    e.preventDefault();
-    trZoom(e.deltaY < 0 ? 0.1 : -0.1);
-  },{passive:false});
+  $("trZenExit").onclick = () => trExitFull();
+  $("trZenIn").onclick = () => trZoom(0.15);
+  $("trZenOut").onclick = () => trZoom(-0.15);
+  $("trNoteIn").onclick = () => trNoteZoom(0.1);
+  $("trNoteOut").onclick = () => trNoteZoom(-0.1);
+  $("trNoteExit").onclick = () => trExitFull();
+  // 缩放只认左上角那对加减号：触屏捏合（浏览器报成 ctrl+wheel）/ Ctrl+滚轮 一律吞掉，
+  // 不吞的话浏览器本体缩放会把 PDF 文字层带偏（文字层是按缩放比例铺的绝对定位）
+  $("trStage").addEventListener("wheel",(e)=>{ if(e.ctrlKey) e.preventDefault(); },{passive:false});
   // 点哪一栏，工具栏就管哪一栏
   $("trStage").addEventListener("mousedown",(e)=>{
     const p = e.target.closest(".tr-pane"); if(!p) return;
