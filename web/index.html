@@ -1211,6 +1211,20 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .kb-caption b{color:#eaf2ee;margin-left:5px}
 @media (prefers-reduced-motion:reduce){.kb-orbit-core,.kb-orbit-core::before,.kb-orbit-core::after{animation:none}}
 
+
+/* ============ 笔记页 · 方案②（莫兰迪静谧）· 全走主题变量，2026-10-11 ============ */
+.md-view{ --r-md: 10px; }
+.md-view .md-note-item{ border-radius: var(--r-md); }
+.md-view .md-note-item.active{ background: color-mix(in srgb,var(--accent) 15%,var(--panel)); border-color: color-mix(in srgb,var(--accent) 34%,transparent); }
+.md-view .md-bind{ background: color-mix(in srgb,var(--accent) 18%,var(--panel)); }
+.md-view .md-tool-btn, .md-view .md-tool-select, .md-view .md-task-select, .md-view .md-drop-zone{ border-radius: var(--r-md); }
+/* 阅读/预览：字号与行高走 ② 档；底色一律从 --accent 混出来（本页再无硬编码色） */
+.md-view .md-render{ font-size: 15px; line-height: 1.9; }
+.md-view .md-render blockquote{ margin: 15px 0; padding: 10px 15px; border-radius: 0 var(--r-md) var(--r-md) 0; background: color-mix(in srgb,var(--accent) 6%,var(--panel)); }
+.md-view .md-render th{ background: color-mix(in srgb,var(--accent) 8%,var(--panel)); }
+.md-view .md-render th, .md-view .md-render td{ padding: 9px 11px; }
+.md-view .md-render :not(pre) > code{ background: color-mix(in srgb,var(--accent) 8%,var(--panel)); }
+.md-view .md-render pre{ background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-md); }
 </style>
 </head>
 <body>
