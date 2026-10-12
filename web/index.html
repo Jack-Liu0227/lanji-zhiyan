@@ -373,34 +373,71 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 
 .page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .ph-acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.tc-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.tc-chip{display:inline-flex;align-items:center;gap:7px;border:1px solid color-mix(in srgb,var(--mc,var(--accent)) 45%,var(--line));border-radius:999px;background:color-mix(in srgb,var(--mc,var(--accent)) 10%,var(--panel));padding:4px 10px 4px 4px;font-size:12px}
-.tc-chip b{font-weight:600}
-.tc-chip i{font-style:normal;color:var(--muted);font-size:11px}
-.tc-chip .tc-av{width:22px;height:22px;border-radius:50%;background:color-mix(in srgb,var(--mc,var(--accent)) 26%,var(--panel2));display:inline-flex;align-items:center;justify-content:center;font-size:11px}
-.tc-chip .tc-x{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:11px;padding:0 2px}
-.tc-chip .tc-x:hover{color:var(--err)}
-.tc-add select{max-width:190px}
-.tc-teams{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-.tc-team{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;background:var(--panel2);color:var(--fg);padding:5px 12px;font-size:12px;cursor:pointer}
-.tc-team:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
-.tc-team.on{background:color-mix(in srgb,var(--accent) 18%,transparent);border-color:transparent;box-shadow:inset 2px 0 0 var(--accent);font-weight:600}
+/* ================= 团队页（方案 C · 流水线）：三列 = 团队 | 群聊时间线 | 本轮 ================= */
+.tc-page{display:flex;flex-direction:column;gap:12px;height:100%;min-height:0}
+.tc-page .page-head{flex:none}
+.tc-cols{flex:1;min-height:0;display:grid;grid-template-columns:256px minmax(0,1fr) 232px;gap:12px}
+.tc-panel{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.tc-ct{font-size:11px;letter-spacing:.14em;font-weight:700;color:var(--muted);margin:0;padding:11px 13px 8px}
+.tc-cb{min-height:0;flex:1;overflow:auto;padding:0 11px 11px}
+.tc-teams{display:flex;flex-direction:column;gap:5px}
+.tc-team{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:transparent;border:1px solid transparent;border-radius:10px;padding:9px 10px;color:var(--fg);font-size:13px;cursor:pointer}
+.tc-team:hover{background:var(--panel2)}
+.tc-team.on{background:color-mix(in srgb,var(--accent) 14%,transparent);box-shadow:inset 3px 0 0 var(--accent);font-weight:600}
 .tc-team.done{opacity:.6}
-.tc-team i{font-style:normal;color:var(--muted);font-size:11px}
-.tc-team.add{border-style:dashed}
-.btn.stop{background:color-mix(in srgb,var(--err) 16%,var(--panel));border-color:color-mix(in srgb,var(--err) 45%,var(--line));color:var(--err)}
-.as-mdl{display:block;margin-top:2px;font-size:11px;font-style:normal;color:var(--muted)}
-.tc-chat{max-height:46vh;overflow:auto;display:flex;flex-direction:column;gap:10px}
-.tc-msg{display:flex;gap:8px;align-items:flex-start;max-width:88%}
-.tc-msg.me{align-self:flex-end;flex-direction:row-reverse}
-.tc-msg .tc-av{flex:none;width:26px;height:26px;border-radius:50%;background:color-mix(in srgb,var(--mc,var(--accent)) 24%,var(--panel2));display:inline-flex;align-items:center;justify-content:center;font-size:12px;border-left:3px solid var(--mc,var(--accent))}
-.tc-body{min-width:0}
-.tc-who{font-size:11px;color:var(--muted);margin-bottom:2px}
-.tc-who .tc-at{margin-left:6px;opacity:.7}
-.tc-text{white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--line);background:var(--panel2);border-radius:12px;padding:8px 10px;font-size:13px}
-.tc-msg.me .tc-text{background:color-mix(in srgb,var(--accent) 14%,var(--panel));border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
-.tc-sys{align-self:center;color:var(--muted);font-size:12px;border:1px dashed var(--line);border-radius:999px;padding:3px 12px}
-.tc-empty{color:var(--muted);font-size:13px;text-align:center;padding:18px 6px}
+.tc-team b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.tc-team i{margin-left:auto;font-style:normal;font-size:10.5px;color:var(--muted);background:var(--panel2);border-radius:999px;padding:1px 8px;font-variant-numeric:tabular-nums}
+.tc-team.add{border:1px dashed var(--line);color:var(--muted);justify-content:center}
+.tc-cnt{color:var(--muted);font-size:11px;margin:9px 2px 8px;padding-bottom:8px;border-bottom:1px dashed var(--line)}
+.tc-row2{display:flex;gap:6px;margin:0 0 10px}
+.tc-row2 .btn{flex:1;height:30px;padding:0 10px;font-size:12px}
+.tc-chip{display:flex;align-items:center;gap:9px;width:100%;box-sizing:border-box;border:0;border-radius:9px;background:transparent;padding:6px 7px;font-size:12.5px}
+.tc-chip:hover{background:var(--panel2)}
+.tc-chip .tc-av{flex:none;width:26px;height:26px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;background:color-mix(in srgb,var(--mc,var(--accent)) 24%,var(--panel2));border:1px solid color-mix(in srgb,var(--mc,var(--accent)) 45%,transparent)}
+.tc-chip .tc-main{min-width:0;flex:1;line-height:1.25}
+.tc-chip b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tc-chip i{display:block;font-style:normal;color:var(--muted);font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tc-chip .tc-x{margin-left:auto;border:0;background:none;color:var(--muted);cursor:pointer;font-size:11px;padding:0 3px}
+.tc-chip .tc-x:hover{color:var(--err)}
+.tc-add{margin-top:8px;display:block}
+.tc-add select{width:100%;box-sizing:border-box;max-width:none}
+.tc-tl{min-height:0;flex:1;overflow:auto;padding:2px 14px 10px}
+.tc-msg{position:relative;display:flex;flex-direction:row;align-self:stretch;gap:12px;max-width:none;padding:0 0 14px}
+.tc-msg::before{content:"";position:absolute;left:13px;top:30px;bottom:0;width:1px;background:var(--line)}
+.tc-msg:last-child::before{display:none}
+.tc-msg .tc-av{flex:none;width:27px;height:27px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;z-index:1;background:var(--panel);border:2px solid var(--mc,var(--accent))}
+.tc-msg .tc-body{min-width:0;flex:1}
+.tc-msg .tc-who{display:flex;align-items:baseline;gap:8px;font-size:12px;color:var(--muted);margin:0}
+.tc-msg .tc-who b{color:var(--mc,var(--accent));font-weight:700;font-size:12.5px}
+.tc-msg .tc-idx{font-size:10.5px;color:var(--muted);background:var(--panel2);border-radius:4px;padding:0 5px;font-variant-numeric:tabular-nums}
+.tc-msg .tc-at{margin-left:auto;font-size:10.5px;font-variant-numeric:tabular-nums}
+.tc-msg .tc-text{margin-top:5px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.7;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+.tc-msg.me .tc-text{background:color-mix(in srgb,var(--accent) 12%,var(--panel));border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
+.tc-sys{position:relative;display:flex;gap:12px;align-items:flex-start;padding:0 0 14px}
+.tc-sys::before{content:"";position:absolute;left:13px;top:30px;bottom:0;width:1px;background:var(--line)}
+.tc-sys:last-child::before{display:none}
+.tc-sys .tc-av{flex:none;width:27px;height:27px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;z-index:1;background:var(--panel);border:2px solid color-mix(in srgb,var(--warn) 60%,transparent);color:var(--warn)}
+.tc-sys .tc-body{min-width:0;flex:1}
+.tc-sys .tc-who{display:flex;align-items:baseline;gap:8px;font-size:12px;color:var(--muted);margin:0}
+.tc-sys .tc-who b{color:var(--warn);font-weight:700;font-size:12.5px}
+.tc-sys .tc-text{margin-top:5px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;color:var(--muted);border:1px dashed var(--line);border-radius:10px;padding:8px 11px}
+.tc-empty{color:var(--muted);font-size:12.5px;text-align:center;padding:26px 10px;line-height:1.8}
+.tc-composer{flex:none;display:flex;gap:10px;align-items:flex-end;border-top:1px solid var(--line);padding:10px 11px}
+.tc-composer textarea{flex:1;min-height:38px}
+.tc-composer .btn{flex:none;height:38px;padding:0 14px;background:var(--accent);color:var(--accent-ink);border:0;font-weight:700}
+.tc-foot{flex:none;margin:0;padding:0 13px 10px;font-size:11px}
+.tc-prog{flex:none;height:4px;border-radius:999px;background:var(--panel2);overflow:hidden;margin:0 13px 10px}
+.tc-prog i{display:block;height:100%;background:var(--accent);transition:width .3s}
+.tc-step{display:flex;align-items:center;gap:8px;padding:6px 3px;font-size:12px;border-top:1px dashed color-mix(in srgb,var(--line) 70%,transparent)}
+.tc-step:first-child{border-top:0}
+.tc-step .d{flex:none;width:7px;height:7px;border-radius:50%;background:var(--muted)}
+.tc-step.now .d{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 20%,transparent)}
+.tc-step.idle{opacity:.5}
+.tc-step b{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tc-step em{margin-left:auto;font-style:normal;font-size:10.5px;color:var(--muted)}
+.tc-kv{font-size:11.5px;color:var(--muted);padding:3px 3px}
+.tc-kv b{color:var(--fg);font-weight:600}
+@media (max-width:1080px){.tc-cols{grid-template-columns:minmax(0,1fr)}.tc-panel{min-height:200px}}
 .hello-avatar{display:grid;width:48px;height:48px;flex:none;place-items:center;border-radius:50%;background:var(--panel2);border:1px solid var(--line);font-size:24px}
 .avatar-img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}
 .prof-photo-prev{width:44px;height:44px;border-radius:50%;object-fit:cover;border:1px solid var(--line);display:none}
@@ -1650,57 +1687,82 @@ async function renderTeam(m){
   const inTeam = new Set(picks.map(x=>x.assistant_id));
   const pool = (S.assistants||[]).filter(a=>a.enabled!==0 && !inTeam.has(a.id));
   const run = D.running;
+  const tr = D.transcript||[];
+  let lastUser = -1; tr.forEach((r,i)=>{ if(r.role==="user") lastUser = i; });
+  const spoken = new Set(tr.slice(lastUser+1).map(r=>r.sender).filter(Boolean));   // 这一轮里已经说过话的成员
+  let seq = 0;
   const bubble = (r)=>{
     const who = r.sender || (r.role==="user" ? "你" : "成员");
     const mm = picks.find(x=>x.name===who);
-    if(who==="系统") return `<div class="tc-sys">${esc(r.content||"")}</div>`;
+    const at = esc((r.at||"").replace("T"," ").slice(5,16));
+    if(who==="系统") return `<div class="tc-sys"><span class="tc-av">!</span><div class="tc-body"><div class="tc-who"><b>系统</b><span class="tc-at">${at}</span></div><div class="tc-text">${esc(r.content||"")}</div></div></div>`;
     const mine = r.role==="user";
-    return `<div class="tc-msg ${mine?"me":"them"}">
-      <span class="tc-av" style="${mm?`--mc:${tcColor(mm.color)}`:""}">${mine?"🙋":esc((mm&&mm.name||"?").slice(0,1))}</span>
-      <div class="tc-body"><div class="tc-who">${esc(who)}<span class="tc-at">${esc((r.at||"").replace("T"," ").slice(5,16))}</span></div>
+    const n = mine ? 0 : ++seq;
+    return `<div class="tc-msg ${mine?"me":"them"}" style="--mc:${mine?"var(--accent)":tcColor(mm&&mm.color)}">
+      <span class="tc-av">${mine?"🙋":esc((mm&&mm.name||"?").slice(0,1))}</span>
+      <div class="tc-body"><div class="tc-who"><b>${esc(who)}</b>${n?`<span class="tc-idx">#${n}</span>`:""}<span class="tc-at">${at}</span></div>
         <div class="tc-text">${esc(r.content||"")}</div></div></div>`;
   };
-  m.innerHTML = `<div class="page-head">
+  m.innerHTML = `<div class="tc-page">
+  <div class="page-head">
     <div><p class="inst-label">TEAM</p><h3>${esc(curT?curT.name:"团队")} <span class="pill">${picks.length}/${D.max||5}</span>
       <span class="pill">${curT&&curT.kind==="temp"?"机动":"固定"}</span>${curT&&curT.status==="done"?'<span class="pill">已收工</span>':""}</h3>
       <p class="hint">最多 5 个团队：<b>3 个固定</b>（常驻）+ <b>2 个机动</b>（用完自动释放）。成员从「助手」里选（一个团队最多 ${D.max||5} 人，助手背后接的是哪个模型，就用那个模型说话）。你发一句，成员之间互相 @ 派活、一轮轮推进；谁说「完成」就散会。</p></div>
-    <div class="ph-acts">${run?`<span class="pill">${esc(run.phase||"跑着")}</span><button class="btn ghost" id="tcStop">停止</button>`:""}
+    <div class="ph-acts">${run?`<span class="pill">${esc(run.phase||"跑着")}</span><span class="pill">第 ${run.turn||0}/${run.total||6} 轮</span><button class="btn ghost" id="tcStop">停止</button>`:""}
       <button class="btn ghost" id="tcRefresh">刷新</button></div></div>
-  <div class="card" style="margin-top:12px">
-    <div class="tc-teams">
-      ${TL.map(x=>`<button class="tc-team ${x.id===teamScope?"on":""} ${x.status==="done"?"done":""}" data-tc-team="${x.id}" title="${x.kind==="fixed"?"固定团队":"机动团队"}">
-        ${x.kind==="fixed"?"📌":"⏳"} ${esc(x.name)}<i>${x.picks||0}</i></button>`).join("")}
-      ${(teamList.temp||0) < (teamList.max_temp||2) ? `<button class="tc-team add" id="tcNewTeam">＋ 机动团队</button>`
-        : `<span class="hint" style="margin-left:6px">机动位满了（用完会自动释放）</span>`}
-      <span style="flex:1"></span>
-      <button class="btn ghost" id="tcRename" title="改当前团队的名字">改名</button>
-      ${curT&&curT.kind==="temp"?`<button class="btn ghost" id="tcDissolve" style="color:var(--err)" title="解散这个机动团队">解散</button>`:""}
-    </div>
-    <div class="hint" style="margin-top:6px">共 ${TL.length}/${teamList.max||5} 个团队（固定 ${teamList.fixed||0}/${teamList.max_fixed||3} · 机动 ${teamList.temp||0}/${teamList.max_temp||2}）</div>
-  </div>
-  <div class="card" style="margin-top:12px">
-    <div class="tc-bar">
-      ${leader?`<div class="tc-chip on"><span class="tc-av" style="--mc:var(--brand)">🧭</span><b>${esc(leader.name)}</b><i>Leader</i></div>`:""}
-      ${picks.map(x=>`<div class="tc-chip" style="--mc:${tcColor(x.color)}"><span class="tc-av">${esc((x.name||"?").slice(0,1))}</span>
-        <b>${esc(x.name)}</b><i>${esc((x.model?x.model+" · ":"")+(x.prompt?x.prompt.slice(0,8):"成员"))}</i>
-        <button class="tc-x" data-tc-del="${x.id}" title="移出">✕</button></div>`).join("")}
-      ${picks.length < (D.max||5) ? `<span class="tc-add">
-        <select class="control" id="tcPick"><option value="">＋ 从助手里选…</option>
-          ${pool.map(a=>`<option value="${a.id}">${esc(a.name)}${a.source==="builtin"?"（公开）":""}${a.model_id?" · "+esc(modelName(a.model_id)||"?"):" · 用当前激活模型"}</option>`).join("")}</select>
-        </span>` : `<span class="hint">已满 ${D.max||5} 人</span>`}
-    </div>
-    <div class="hint" style="margin-top:6px">${picks.length?esc(picks.map(x=>x.name).join(" · ")):"还没有成员 —— 先从右边选几个助手进来。"}</div>
-  </div>
-  <div class="card tc-chat" id="tcChat" style="margin-top:12px">
-    ${(D.transcript||[]).length ? (D.transcript||[]).map(bubble).join("")
-      : `<div class="tc-empty">🧭 团队群在这里。先选成员，然后说一句你要做的事 —— 比如「帮我挑一个钠电正极掺杂方向，产出候选表」。</div>`}
-  </div>
-  <div class="card" style="margin-top:12px">
-    <div style="display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start">
-      <textarea class="control" id="tcSay" rows="2" placeholder="跟团队说一句话…（Enter 发送，Shift+Enter 换行）"></textarea>
-      <button class="btn" id="tcSend">${run?"继续追一句":"发送并让团队推进"}</button></div>
-    <div class="hint" style="margin-top:6px">${run?`当前：${esc(run.current||"")}（第 ${run.turn||0}/${run.total||6} 轮）`: "没有在跑的轮次。"}</div>
-  </div>`;
+  <div class="tc-cols">
+    <section class="tc-panel">
+      <p class="tc-ct">团队</p>
+      <div class="tc-cb">
+        <div class="tc-teams">
+          ${TL.map(x=>`<button class="tc-team ${x.id===teamScope?"on":""} ${x.status==="done"?"done":""}" data-tc-team="${x.id}" title="${x.kind==="fixed"?"固定团队":"机动团队"}">
+            <span>${x.kind==="fixed"?"📌":"⏳"}</span><b>${esc(x.name)}</b><i>${x.picks||0}</i></button>`).join("")}
+          ${(teamList.temp||0) < (teamList.max_temp||2) ? `<button class="tc-team add" id="tcNewTeam">＋ 机动团队</button>`
+            : `<p class="hint" style="margin:4px 2px">机动位满了（用完会自动释放）</p>`}
+        </div>
+        <p class="tc-cnt">共 ${TL.length}/${teamList.max||5} 个团队（固定 ${teamList.fixed||0}/${teamList.max_fixed||3} · 机动 ${teamList.temp||0}/${teamList.max_temp||2}）</p>
+        <div class="tc-row2">
+          <button class="btn ghost" id="tcRename" title="改当前团队的名字">改名</button>
+          ${curT&&curT.kind==="temp"?`<button class="btn ghost" id="tcDissolve" style="color:var(--err)" title="解散这个机动团队">解散</button>`:""}
+        </div>
+        <p class="tc-ct" style="padding:4px 3px 6px">成员 ${picks.length}/${D.max||5}</p>
+        ${leader?`<div class="tc-chip" style="--mc:var(--brand)"><span class="tc-av">🧭</span><span class="tc-main"><b>${esc(leader.name)}</b><i>Leader · 主持派活</i></span></div>`:""}
+        ${picks.map(x=>`<div class="tc-chip" style="--mc:${tcColor(x.color)}"><span class="tc-av">${esc((x.name||"?").slice(0,1))}</span>
+          <span class="tc-main"><b>${esc(x.name)}</b><i>${esc((x.model?x.model+" · ":"")+(x.prompt?x.prompt.slice(0,8):"成员"))}</i></span>
+          <button class="tc-x" data-tc-del="${x.id}" title="移出">✕</button></div>`).join("")}
+        ${picks.length < (D.max||5) ? `<span class="tc-add"><select class="control" id="tcPick"><option value="">＋ 从助手里选…</option>
+            ${pool.map(a=>`<option value="${a.id}">${esc(a.name)}${a.source==="builtin"?"（公开）":""}${a.model_id?" · "+esc(modelName(a.model_id)||"?"):" · 用当前激活模型"}</option>`).join("")}</select></span>`
+          : `<p class="hint" style="margin:8px 3px">已满 ${D.max||5} 人</p>`}
+        <p class="hint" style="margin:8px 3px 0">${picks.length?esc(picks.map(x=>x.name).join(" · ")):"还没有成员 —— 先从下面选几个助手进来。"}</p>
+      </div>
+    </section>
+    <section class="tc-panel">
+      <p class="tc-ct">团队群 · 接力记录</p>
+      <div class="tc-tl" id="tcChat">
+        ${tr.length ? tr.map(bubble).join("")
+          : `<div class="tc-empty">🧭 团队群在这里。先选成员，然后说一句你要做的事 —— 比如「帮我挑一个钠电正极掺杂方向，产出候选表」。</div>`}
+      </div>
+      <div class="tc-composer">
+        <textarea class="control" id="tcSay" rows="2" placeholder="跟团队说一句话…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <button class="btn" id="tcSend">${run?"继续追一句":"发送并让团队推进"}</button>
+      </div>
+      <p class="hint tc-foot">${run?`当前：${esc(run.current||"")}（第 ${run.turn||0}/${run.total||6} 轮）`:"没有在跑的轮次。"}</p>
+    </section>
+    <section class="tc-panel">
+      <p class="tc-ct">本轮${run?` · 第 ${run.turn||0}/${run.total||6} 轮`:""}</p>
+      <div class="tc-prog"><i style="width:${run&&run.total?Math.round((run.turn||0)/run.total*100):0}%"></i></div>
+      <div class="tc-cb">
+        ${picks.length?picks.map(x=>{ const now = !!(run&&run.current===x.name);
+          return `<div class="tc-step ${now?"now":(spoken.has(x.name)?"":"idle")}"><span class="d"></span><b>${esc(x.name)}</b><em>${now?"在跑":(spoken.has(x.name)?"已说":"待命")}</em></div>`; }).join("")
+          :`<p class="hint" style="margin:6px 3px">还没有成员。</p>`}
+        <p class="tc-ct" style="padding:14px 3px 6px">本轮口径</p>
+        <div class="tc-kv">状态：<b>${run?esc(run.phase||"跑着"):"没有在跑的轮次"}</b></div>
+        <div class="tc-kv">当前：<b>${esc((run&&run.current)||"—")}</b></div>
+        <div class="tc-kv">轮次：<b>${run?`${run.turn||0} / ${run.total||6}`:"—"}</b></div>
+        <div class="tc-kv">成员：<b>${picks.length} / ${D.max||5}</b></div>
+      </div>
+    </section>
+  </div></div>`;
   const box = $("tcChat"); if(box) box.scrollTop = box.scrollHeight;
   m.querySelectorAll("[data-tc-team]").forEach(b=>b.onclick = ()=>{
     if(b.dataset.tcTeam === teamScope) return;
