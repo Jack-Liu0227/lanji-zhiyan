@@ -191,6 +191,8 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .msg-meta{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:10px}
 .msg-meta strong{color:var(--fg);font-weight:700}
 .msg-ava{display:grid;width:20px;height:20px;place-items:center;border-radius:6px;background:var(--panel2);font-size:11px}
+.q-av{background:transparent;border:0}
+.q-av img{width:100%;height:100%;display:block;object-fit:cover;border-radius:inherit}
 .msg-chip{border-radius:999px;background:var(--panel2);padding:1px 7px;font-size:9px}
 .msg-err{border:1px solid color-mix(in srgb,var(--err) 30%,var(--line));border-radius:10px;background:color-mix(in srgb,var(--err) 10%,transparent);padding:10px 12px;color:var(--err);font-size:12px}
 .tool-card{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;background:var(--panel);font-size:12px}
@@ -1967,12 +1969,14 @@ function renderHistory(){
     <div class="ah-foot">🕒 一个对话一份记忆 · 输出目录各自独立</div></aside>`;
 }
 
+const Q_AV = "/vendor/img/agent-q.png";     // 对话区的 agent 形象（Q 版小人，透明底，512²）
+const qAvatar = (px, r)=>`<span class="as-av q-av" style="width:${px}px;height:${px}px;${r?`border-radius:${r};`:""}"><img src="${Q_AV}" alt=""></span>`;
 function asEmpty(){                       // 照 AionUi SingleChatEmptyState：头像 + 名字 + 一行说明 + 推荐问题
   const a = (S.assistants||[]).find(x=>x.id === (((S.chats||[]).find(c=>c.id===curChat)||{}).assistant_id||"")) || null;
   let ps = []; try{ ps = JSON.parse((a&&a.prompts)||"[]"); }catch(e){ ps = []; }
   const chips = document.getElementById("msgs");
   return `<div style="display:flex;flex-direction:column;align-items:center;gap:20px;padding:0 24px;text-align:center;max-width:560px;margin:0 auto">
-    ${asAvatarOf(a, 48)}
+    ${qAvatar(56, "14px")}
     <div style="display:flex;flex-direction:column;gap:6px">
       <span style="font-size:16px;font-weight:600">${esc(a?a.name:"AI 助手")}</span>
       <span style="font-size:13px;color:var(--muted)">${esc(a&&a.description ? a.description : "有什么可以帮你的？直接说你要做什么。")}</span></div>
@@ -1993,7 +1997,7 @@ function renderAgent(m){
     ${renderHistory()}
     <section class="at" aria-label="对话主线">
       <header class="at-head">
-        <div class="at-heading"><span class="at-idwrap" id="at-who" title="这个对话绑的助手（去「助手」页管理）">${asAvatarOf(boundA, 26)}</span>
+        <div class="at-heading"><span class="at-idwrap" id="at-who" title="这个对话绑的助手（去「助手」页管理）">${qAvatar(32, "50%")}</span>
           <div><h1 id="at-title" class="at-title" title="点击改名">${esc(cur?cur.title:"Hi，今天有什么安排？")}</h1>
           <p id="at-sub">${esc(boundA?boundA.name:(assistantKey()+"（未绑助手）"))} · ${cur&&cur.task_id?`Partner · 绑定《${esc(projName(cur.task_id)||"项目")}》`:"全局 Leader · 跨项目"} · 产出 ${esc(cur?outName(cur.out_dir):"默认产出目录")}</p></div></div>
         <button class="at-profile" id="at-profile" title="在「设置」里改模型与权限">
@@ -2188,7 +2192,7 @@ function appendOne(box,ev){
   }
   else if(ev.type==="assistant"){
     el.className="msg-row msg-assistant";
-    el.innerHTML=`<div class="msg-meta"><span class="msg-ava">🤖</span><strong>Pi</strong><span class="msg-chip">${esc(assistantKey())}</span><span class="msg-chip">完成</span></div><div class="md">${md(ev.content||"…")}</div>`;
+    el.innerHTML=`<div class="msg-meta">${qAvatar(24, "6px")}<strong>Pi</strong><span class="msg-chip">${esc(assistantKey())}</span><span class="msg-chip">完成</span></div><div class="md">${md(ev.content||"…")}</div>`;
   }
   else if(ev.type==="error"){ el.className="msg-err"; el.textContent="⚠ "+(ev.message||"出错了"); }
   else if(ev.type==="tool_call"){
