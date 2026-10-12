@@ -3369,60 +3369,8 @@ async function wsRun(){
 async function loadTaskState(){
   try{ const d=await api(`/api/task?id=${encodeURIComponent(curTask)}`);
     const sm=d.stage_map||{}; Object.keys(STAGE).forEach(s=>{ const el=$("st-"+s); if(el&&sm[s]) el.className="pill ok"; });
-    pickers(d);
   }catch(e){}
 }
-function pickers(d){
-  const dl=$("pick-download");
-  if(dl){ const rs=(d.results||[]).filter(r=>r.pdf_url);
-    dl.innerHTML=rs.length?rs.slice(0,12).map(r=>`<div class="steprow"><span style="flex:1;min-width:0">${esc(r.title.slice(0,80))}</span><button class="btn ghost" data-dl="${r.id}">下载</button></div>`).join(""):"没有 OA 结果（先跑②，或该检索没有开放获取全文）";
-    dl.querySelectorAll("[data-dl]").forEach(b=>b.onclick=()=>runStage("download",b,{result_id:b.dataset.dl}));
-  }
-  const nt=$("pick-notes");
-  if(nt){ const ns=(d.notes||[]);
-    nt.innerHTML=ns.length?ns.slice(0,12).map(n=>`<div class="steprow"><span style="flex:1;min-width:0">${esc(n.title.slice(0,80))}</span><button class="btn ghost" data-note="${n.id}">整理</button></div>`).join(""):"还没有精读笔记";
-    nt.querySelectorAll("[data-note]").forEach(b=>b.onclick=()=>runStage("notes",b,{note_id:b.dataset.note})); }
-}
-async function runStage(stage,btn,extra){
-  const out=$("out-"+stage)||$("out-download");
-  const body={task_id:curTask,...(extra||{})};
-  if(stage==="idea") body.idea=$("in-idea").value.trim();
-  if(stage==="search"){ body.query=$("in-query").value.trim(); body.sources=[...document.querySelectorAll(".src:checked")].map(c=>c.value); }
-  if(stage==="write"){ body.section=$("in-sec").value; body.title=$("in-title").value; }
-  if(stage==="convert") body.format=$("in-fmt").value;
-  if(btn){btn.disabled=true;const o=btn.textContent;btn.textContent="运行中…";btn.dataset.o=o;}
-  out.className=""; out.innerHTML=`<div class="hint">正在执行…（模型步骤可能较久）</div>`;
-  try{
-    const r=await api("/api/workflow/"+stage,body);
-    out.innerHTML=resultHtml(stage,r);
-    if(stage==="download" && (r.paper?.id)){          // 下载即精读，少点一次
-      out.insertAdjacentHTML("beforeend",`<div class="hint" style="margin-top:8px">自动精读…</div>`);
-      const rd=await api("/api/workflow/read",{task_id:curTask,paper_id:r.paper.id});
-      out.insertAdjacentHTML("beforeend", resultHtml("read",rd));
-    }
-    await refreshState(false);
-    if(stage!=="download") await loadTaskState();
-  }catch(e){ out.innerHTML=`<div class="msg error" style="margin-top:8px">⚠ ${esc(e.message)}</div>`; }
-  if(btn){btn.disabled=false;btn.textContent=btn.dataset.o;}
-}
-function resultHtml(stage,r){
-  if(stage==="idea"){ const v=r.verdict||{};
-    return `<div class="card" style="margin-top:8px"><div class="grid2"><div><b>判定</b><div>${esc(v.verdict||"")}</div></div>
-      <div><b>评分</b><div>新颖性 ${esc(v.novelty_score??"")} · 可行性 ${esc(v.feasibility_score??"")}</div></div></div>
-      ${(v.risks||[]).length?`<div style="margin-top:8px"><b>风险</b><ul>${v.risks.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""}
-      ${(v.questions||[]).length?`<div><b>待答问题</b><ul>${v.questions.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""}</div>`; }
-  if(stage==="search") return `<div class="hint" style="margin-top:8px">共 ${r.found} 条，新增 ${r.saved.length} 条</div>
-    <table style="margin-top:6px"><tr><th>标题</th><th>来源</th><th>OA</th></tr>${r.results.slice(0,25).map(x=>`<tr><td>${esc(x.title)}</td><td>${esc(x.source)} ${esc(x.year)}</td><td>${x.pdf_url?"✔":""}</td></tr>`).join("")}</table>`;
-  if(stage==="download") return `<div class="hint" style="margin-top:8px">已入库，${r.pages||r.paper?.pages||"?"} 页。下面自动精读。</div>`;
-  if(stage==="notes"||stage==="read") return `<div class="hint" style="margin-top:8px">笔记 ${esc(r.note_id||"")}，证据 ${r.evidence??0} 条</div><div class="md">${md(r.markdown||"")}</div>`;
-  if(stage==="write") return `<div class="hint" style="margin-top:8px">已写入 ${esc(r.path||"")}</div><div class="md">${md((r.markdown||"").slice(0,4000))}</div>`;
-  if(stage==="review"){ const v=r.review||{}; return `<div class="card" style="margin-top:8px"><b>结论：${esc(v.verdict||"")}</b> ${esc(v.score??"")}
-    ${(v.major||[]).length?`<div style="margin-top:6px"><b>主要问题</b><ul>${v.major.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""}
-    ${(v.gaps||[]).length?`<div><b>证据缺口</b><ul>${v.gaps.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""}</div>`; }
-  if(stage==="convert") return `<div class="hint" style="margin-top:8px">已导出 ${esc(r.path||"")}（${r.bytes||0} 字节）</div>`;
-  return `<pre>${esc(JSON.stringify(r,null,2))}</pre>`;
-}
-
 /* ---------------- 项目 ---------------- */
 function renderTasks(m){
   // 卡片色带 2026-10-08：原来按顺序轮换莫兰迪六色（豆沙/米驼那组偏暖），与主题脱节 → 撤掉，统一吃 --accent。
