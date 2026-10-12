@@ -946,11 +946,21 @@ body.md-narrow .wctl button:hover { background: #eee; }
 
 /* ---- 论文翻译（工作流第 4 步：添加论文 → 元数据 → PDF 阅读器 → 中英互译 / 笔记模式 / 荧光笔） ---- */
 .tr{display:flex;flex-direction:column;gap:10px;height:100%;min-height:0}
-.tr-bar{display:flex;align-items:center;gap:10px;flex:none;height:40px}
-.tr-bar>.btn,.tr-bar>.tr-sel,.tr-bar>.tr-pageno,.tr-bar>.tr-ib,.tr-bar>.tr-zoom{height:34px;display:inline-flex;align-items:center;justify-content:center;line-height:1;box-sizing:border-box;margin:0}
-.tr-bar>.btn{padding:0 13px;font-size:13px}
-.tr-bar>.tr-ib{width:34px}
-.tr-bar>.tr-zoom{gap:6px}
+.tr-bar{display:flex;align-items:center;gap:10px;flex:none;height:44px}
+.tr-bar>.btn,.tr-bar>.tr-sel,.tr-bar>.tr-pageno,.tr-bar>.tr-zoom,.tr-bar>.tr-seg,.tr-bar>.tr-grp{height:36px;display:inline-flex;align-items:center;justify-content:center;line-height:1;box-sizing:border-box;margin:0}
+.tr-bar>.btn{padding:0 14px;font-size:13px}
+.tr-bar>.tr-zoom{gap:2px;padding:0 3px;border:1px solid var(--line);border-radius:9px;background:var(--panel)}
+.tr-bar>.tr-zoom>button{width:30px;height:30px;border:0;background:transparent;color:var(--fg);border-radius:7px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;font:inherit;font-size:15px;line-height:1}
+.tr-bar>.tr-zoom>button:hover{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+.tr-zoomv{min-width:44px;text-align:center;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.tr-seg,.tr-grp{display:inline-flex;padding:3px;gap:3px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.tr-seg-b{height:30px;padding:0 11px;border:0;border-radius:7px;background:transparent;color:var(--muted);font:inherit;font-size:12.5px;display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;cursor:pointer}
+.tr-seg-b:hover{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent)}
+.tr-seg-b.active{background:var(--accent);color:var(--accent-ink);font-weight:600}
+.tr-seg-b:disabled{opacity:.55;cursor:default}
+.tr-grp>.tr-ib{width:32px;height:30px;border:0;border-radius:7px;background:transparent;color:var(--muted);font-size:15px}
+.tr-grp>.tr-ib:hover{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent)}
+.tr-grp>.tr-ib.active{background:color-mix(in srgb,var(--accent) 20%,transparent);color:var(--accent)}
 .tr-status{flex:none;min-height:16px;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tr-spacer{flex:1}
 .tr-bar .btn-teal{background:var(--accent);color:var(--accent-ink,#0d1218);font-weight:600}
@@ -6033,13 +6043,17 @@ function trPanelHTML(active){
       <button class="btn btn-teal" id="trAdd">＋ 添加论文</button>
       <select id="trPick" class="tr-sel" title="这个项目文献库里已有的 PDF"><option value="">文献库已有…</option></select>
       <span class="tr-spacer"></span>
-      <span class="tr-zoom"><button class="tr-ib" id="trOut" title="缩小">−</button><button class="tr-ib" id="trIn" title="放大">＋</button></span>
+      <span class="tr-seg" id="trSeg">
+        <button class="tr-seg-b active" id="trBtnBack" title="只看原文（返回阅读器）">原文</button>
+        <button class="tr-seg-b" id="trBtnT" title="左边原文、右边中文">🌐 中英互译</button>
+        <button class="tr-seg-b" id="trBtnN" title="全屏：左边中文、右边随记随写">📝 笔记模式</button>
+      </span>
+      <span class="tr-grp">
+        <button class="tr-ib" id="trPenTop" title="荧光笔" aria-label="荧光笔">🖍</button>
+        <button class="tr-ib" id="trZenTop" title="全屏，左原文右中文，可拖分栏；左上角有缩放加减号（Esc 退出）" aria-label="专注模式">⛶</button>
+      </span>
+      <span class="tr-zoom"><button id="trOut" title="缩小" aria-label="缩小">−</button><span class="tr-zoomv" id="trZoomV">115%</span><button id="trIn" title="放大" aria-label="放大">＋</button></span>
       <span class="tr-pageno" id="trPageNo">0 / 0</span>
-      <button class="btn ghost" id="trPenTop">🖍 荧光笔</button>
-      <button class="btn ghost" id="trZenTop" title="全屏，左原文右中文，可拖分栏；左上角有缩放加减号（Esc 退出）">⛶ 专注模式</button>
-      <button class="btn" id="trBtnT">🌐 中英互译</button>
-      <button class="btn" id="trBtnN">📝 笔记模式</button>
-      <button class="btn ghost hidden" id="trBtnBack">↩ 还原</button>
     </div>
     <div class="tr-status"><span id="trMsg"></span></div>
     <div class="tr-meta" id="trMeta">
@@ -6108,7 +6122,7 @@ function trMsg(t){ const el=$("trMsg"); if(el) el.textContent = t || ""; }
 async function trOpen(pid){
   TR.pid = pid; TR.dual = false; TR.note = null;
   trView("read");
-  $("trBtnBack")?.classList.add("hidden");
+  trSegActive("read");
   $("trPen")?.classList.add("hidden"); TR.hlOn = false;
   trDualOff();
   TR.job = null; TR.words = {}; TR.prog = 0; trStopPoll();
@@ -6256,7 +6270,11 @@ function trZoom(d){
   else trReader(TR.pid);
   trZoomLabel();
 }
-function trZoomLabel(){ const v = $("trZenZoomV"); if(v) v.textContent = Math.round(TR.scale*100) + "%"; }
+function trZoomLabel(){
+  const t = Math.round(TR.scale * 100) + "%";
+  const v = $("trZenZoomV"); if(v) v.textContent = t;      // 专注模式左上角那个
+  const w = $("trZoomV");    if(w) w.textContent = t;      // 工具栏缩放组里那个
+}
 function trExitFull(){
   /* ✕ / Esc 的统一出口：笔记模式先退回阅读器，再把全屏收掉 */
   if(TR.view === "note") trBack();
@@ -6398,9 +6416,7 @@ async function trReloadB(v){
 function trDualOpen(v){
   TR.dual = true;
   trView("dual");
-  $("trBtnBack")?.classList.remove("hidden");
-  $("trBtnN")?.classList.remove("active");
-  $("trBtnT")?.classList.add("active");
+  trSegActive("dual");
   $("trStage").classList.add("dual");
   $("trPaneB").classList.remove("hidden");
   $("trSplit").classList.remove("hidden");
@@ -6415,6 +6431,12 @@ function trDualOpen(v){
 function trDedent(md){
   /* PDF 抽出来的正文常带缩进 —— markdown 会把 ≥4 空格的整段当代码块渲染成黑框，先去掉行首空白 */
   return (md || "").split("\n").map(l => l.replace(/^[ \t]+/, "")).join("\n");
+}
+function trSegActive(v){
+  /* 原文 / 中英互译 / 笔记模式 三个视图键的选中态只有这一处说了算 */
+  $("trBtnBack")?.classList.toggle("active", v === "read");
+  $("trBtnT")?.classList.toggle("active", v === "dual");
+  $("trBtnN")?.classList.toggle("active", v === "note");
 }
 function trView(v){
   /* 阅读器 / 双栏 / 笔记 三个视图的可见性只有这一处说了算 —— 免得异步加载回来把当前视图盖掉 */
@@ -6440,9 +6462,7 @@ async function trNoteMode(){
     TR.note = r.note; TR.noteText = r.text || "";
     trDualOff();
     trView("note");
-    $("trBtnBack")?.classList.remove("hidden");
-    $("trBtnT")?.classList.remove("active");
-    $("trBtnN")?.classList.add("active");
+    trSegActive("note");
     $("trNoteTitle").value = TR.note.title || "阅读笔记";
     $("trNoteSrc").value = TR.note.content || "";                 // 空白：他自己写
     trNoteApply();
@@ -6483,8 +6503,7 @@ function trBack(){
   trStopPoll();
   trDualOff();
   trView("read");
-  $("trBtnBack")?.classList.add("hidden");
-  $("trBtnT")?.classList.remove("active"); $("trBtnN")?.classList.remove("active");
+  trSegActive("read");
   TR.hlOn = false; $("trPen")?.classList.add("hidden");
   $("trBtnT").textContent = "🌐 中英互译"; $("trBtnT").disabled = false;
   if(TR.pid){ $("trDrop")?.classList.add("hidden"); trReader(TR.pid); } else $("trDrop")?.classList.remove("hidden");
@@ -6512,7 +6531,7 @@ function trBind(){
   $("trBtnT").onclick = ()=>trTranslate();
   $("trBtnN").onclick = ()=>trNoteMode();
   $("trBtnBack").onclick = ()=>trBack();
-  trPenInit(); trNoteBind(); trFillPick();
+  trPenInit(); trNoteBind(); trFillPick(); trZoomLabel();
   if(!TR.hlBound){ TR.hlBound = 1;                     // 文档级监听只挂一次（renderWorkflow 会反复调 trBind）
     document.addEventListener("mouseup", (e)=>{ if($("trStage")?.contains(e.target)) trHlOnMouseUp(e); });
     document.addEventListener("keydown", (e)=>{ if(e.key === "Escape"){ trPenPanel(false); trExitFull(); } });
