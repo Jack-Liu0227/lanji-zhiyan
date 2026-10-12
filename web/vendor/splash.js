@@ -7,7 +7,7 @@
      3) Interactive Hover Button — magicui   ：照抄（圆点 in 胶囊；悬停圆点放大填满 + 文字右移淡出 + 覆盖层带箭头滑入）
    只改内容与大小：标题 = Personal Research Workspace、按钮 = Enter；三个组件本身的视觉一律照原样
    （字标 fade 0.7 / blurK 3.5 / 手柄 size109 spread27 labels 都恢复成原组件默认）。
-   卡片尺寸由窗口定（server.py 的 CARD_W/CARD_H = 1180x597），点「进入」→ /api/win/maximize 铺回工作区。
+   卡片尺寸由窗口定（server.py 的 CARD_W/CARD_H = 1117x625），点「进入」→ /api/win/maximize 铺回工作区。
    可调项全在 CFG。
    ============================================================================ */
 (function () {
