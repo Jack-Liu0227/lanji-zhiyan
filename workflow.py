@@ -1532,6 +1532,8 @@ def is_paper_pdf(path: Any) -> bool:
         return False
     if p.with_suffix(".tex").exists():        # 旁边就是它的 .tex 源 → 这是编出来的
         return False
+    if ".no_watermark.zh." in low:            # BabelDOC 译文（xxx.no_watermark.zh.mono|dual.pdf）不是新论文
+        return False
     return True
 
 
@@ -1619,7 +1621,7 @@ def stage_deepread(db: WorkflowDB, task_id: str) -> dict[str, Any]:
     folder = db.pdir(task_id, "文献库")
     known = {p["filename"] for p in db.papers_of(task_id)}
     for pdf in sorted(folder.glob("*.pdf")):           # 手动下载后丢进「文献库」的也一起收进来
-        if pdf.name not in known:
+        if pdf.name not in known and is_paper_pdf(pdf):
             try:
                 db.ingest_pdf(task_id, pdf)
             except Exception:

@@ -31,6 +31,10 @@ class DeepreadTest(unittest.TestCase):
         (self.d / "_build" / "main.pdf").write_bytes(b"%PDF-1.4" + b"x" * 30000)
         (self.d / "overleaf").mkdir()
         (self.d / "overleaf" / "main.pdf").write_bytes(b"%PDF-1.4" + b"x" * 30000)
+        # 翻译产物：BabelDOC 把译文写回「文献库」，以前会被当成新论文又精读一遍
+        (self.d / "s41586.no_watermark.zh.mono.pdf").write_bytes(b"%PDF-1.4" + b"x" * 30000)
+        (self.d / "s41586.no_watermark.zh.dual.pdf").write_bytes(b"%PDF-1.4" + b"x" * 30000)
+        (self.d / "s41586.zh.mono.no_watermark.zh.mono.pdf").write_bytes(b"%PDF-1.4" + b"x" * 30000)
 
     def test_01_only_real_papers_pass(self):
         self.assertTrue(workflow.is_paper_pdf(self.paper))                 # 真论文
@@ -38,6 +42,9 @@ class DeepreadTest(unittest.TestCase):
         self.assertFalse(workflow.is_paper_pdf(self.d / "tiny.pdf"))       # 太小
         self.assertFalse(workflow.is_paper_pdf(self.d / "_build" / "main.pdf"))
         self.assertFalse(workflow.is_paper_pdf(self.d / "overleaf" / "main.pdf"))
+        self.assertFalse(workflow.is_paper_pdf(self.d / "s41586.no_watermark.zh.mono.pdf"))   # 译文
+        self.assertFalse(workflow.is_paper_pdf(self.d / "s41586.no_watermark.zh.dual.pdf"))   # 双语译文
+        self.assertFalse(workflow.is_paper_pdf(self.d / "s41586.zh.mono.no_watermark.zh.mono.pdf"))  # 译文的译文
         self.assertFalse(workflow.is_paper_pdf(self.d / "不存在.pdf"))      # 不存在也算不算
 
     def test_02_relevance_filter(self):
