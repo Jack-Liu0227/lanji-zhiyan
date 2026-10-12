@@ -1301,6 +1301,7 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .mp-svg{position:absolute;left:0;top:0;pointer-events:none}
 .mp-edge{fill:none;stroke:var(--line);stroke-width:1.4}
 .mp-edge.on{stroke:var(--accent);stroke-width:2}
+.mp-edge.dash{stroke-dasharray:4 4}
 .mp-elabel{fill:var(--muted);font-size:10.5px}
 .mp-node{position:absolute;border-radius:10px;border:1px solid var(--line);background:var(--panel2);cursor:pointer;
   padding:8px 10px;box-sizing:border-box;overflow:hidden;transition:border-color .12s,transform .12s}
@@ -1310,6 +1311,11 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .mp-node .t{font-size:12.5px;font-weight:600;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .mp-node .d{font-size:11.5px;color:var(--muted);line-height:1.4;margin-top:4px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .mp-node .k{position:absolute;right:7px;top:6px;font-size:10px;color:var(--muted)}
+.mp-node.ref{display:flex;align-items:center;padding:0 9px;height:34px}
+.mp-node.ref .t{-webkit-line-clamp:1;font-weight:400;font-size:12px;display:flex;align-items:center;min-width:0}
+.mp-node.ref .t>span.lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mp-pill{flex:none;font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:0 6px;margin-left:auto}
+.mp-node.sec .d{-webkit-line-clamp:2;margin-top:2px}
 .mp-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px;vertical-align:1px}
 .mp-empty{position:absolute;left:0;right:0;top:0;bottom:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:0 28px}
 .mp-empty .big{font-size:34px}
@@ -6689,14 +6695,14 @@ function mpLayout(){
   MP.edges.forEach(e=>{ if(!bySec[e.from]) bySec[e.from]=[]; bySec[e.from].push(e.to); });
   rest.forEach(n=>{ const hit = MP.edges.find(e=>e.to===n.id); (bySec[hit?hit.from:"__free__"] = bySec[hit?hit.from:"__free__"]||[]).push(n.id); });
   const pos = {}; let y = MP_W.pady, maxy = y;
-  const refW = 0, colH = 46 + MP_W.gapy;
+  const rowH = 34, colH = rowH + MP_W.gapy;                 /* 关联节点单行 34px（方案 A） */
   secs.forEach(sec=>{
     const kids = (bySec[sec.id]||[]).filter((v,i,a)=>a.indexOf(v)===i);
     const rows = Math.max(1, Math.ceil(kids.length/2));
-    const h = Math.max(64, rows*colH);
+    const h = Math.max(58, rows*colH - MP_W.gapy + 16);
     pos[sec.id] = {x:MP_W.padx, y, w:MP_W.sec, h, t:"section"};
     const x1 = MP_W.padx + MP_W.sec;
-    kids.forEach((kid,i)=>{ pos[kid] = {x:x1 + MP_W.gapx + (i%2)*(MP_W.ref+28), y: y + Math.floor(i/2)*colH, w:MP_W.ref, h:40, t:"ref"}; });
+    kids.forEach((kid,i)=>{ pos[kid] = {x:x1 + MP_W.gapx + (i%2)*(MP_W.ref+28), y: y + 8 + Math.floor(i/2)*colH, w:MP_W.ref, h:rowH, t:"ref"}; });
     y += h + 26; maxy = y;
   });
   const free = (bySec["__free__"]||[]).filter((v,i,a)=>a.indexOf(v)===i);
@@ -6704,6 +6710,23 @@ function mpLayout(){
   return {pos, h: maxy + free.length*colH + MP_W.pady, w: MP_W.padx*2 + MP_W.sec + MP_W.gapx*2 + MP_W.ref*2 + 28};
 }
 
+function mpOutlineNote(label){
+  /* 方案 A：小节节点下面那行「说明」——直接取大纲里 `### 小节` 后面那句 `- 说明：…` */
+  const md = MP.outline || ""; if(!md || !label) return "";
+  const key = String(label).replace(/[\s　]+/g, "");
+  const lines = md.split(/\r?\n/);
+  for(let i=0;i<lines.length;i++){
+    const h = lines[i].match(/^\s*#{2,4}\s+(.+?)\s*$/);
+    if(!h || h[1].replace(/[\s　]+/g,"") !== key) continue;
+    for(let j=i+1;j<Math.min(i+4,lines.length);j++){
+      const t = lines[j].trim();
+      if(/^#{2,4}\s/.test(t)) break;
+      const m = t.match(/^[-*]?\s*说明[：:]\s*(.+)$/);
+      if(m) return m[1].trim();
+    }
+  }
+  return "";
+}
 function mpPaint(){
   const box = $("mp-canvas"); if(!box) return;
   if(!MP.nodes.length){
@@ -6715,21 +6738,30 @@ function mpPaint(){
   }
   const L = mpLayout(), pos = L.pos;
   box.style.width = L.w + "px"; box.style.height = L.h + "px";
+  const NEG = /反例|反驳|冲突|不支持|反证|相左|相反/;
   const paths = [], labels = [];
   MP.edges.forEach(e=>{
     const a = pos[e.from], b = pos[e.to]; if(!a||!b) return;
     const x1 = a.x + a.w, y1 = a.y + a.h/2, x2 = b.x, y2 = b.y + b.h/2, mx = (x1+x2)/2;
-    paths.push(`<path class="mp-edge${(MP.sel===e.from||MP.sel===e.to)?" on":""}" d="M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}"/>`);
+    const on = (MP.sel === e.from || MP.sel === e.to);
+    paths.push(`<path class="mp-edge${on ? " on" : ""}${NEG.test(e.label || "") ? " dash" : ""}" d="M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}"/>`);
     if(e.label) labels.push(`<text class="mp-elabel" x="${mx-16}" y="${(y1+y2)/2-6}">${esc(e.label)}</text>`);
   });
   const cards = MP.nodes.map(n=>{
     const p = pos[n.id]; if(!p) return "";
-    const cls = n.type==="section" ? "mp-node sec" : "mp-node";
-    return `<div class="${cls}${MP.sel===n.id?" on":""}" data-mp="${esc(n.id)}" data-t="${p.t}"
+    const dot = `<span class="mp-dot" style="background:${MP_COL[n.type]||"var(--muted)"}"></span>`;
+    if(n.type === "section"){
+      const d = n.detail || mpOutlineNote(n.label);
+      return `<div class="mp-node sec${MP.sel===n.id?" on":""}" data-mp="${esc(n.id)}"
+        style="left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px">
+        <div class="t">${dot}${esc(n.label)}</div>
+        ${d?`<div class="d">${esc(d)}</div>`:""}
+      </div>`;
+    }
+    return `<div class="mp-node ref${MP.sel===n.id?" on":""}" data-mp="${esc(n.id)}"
       style="left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px">
-      <span class="k">${MP_TAG[n.type]||""}</span>
-      <div class="t"><span class="mp-dot" style="background:${MP_COL[n.type]||"var(--muted)"}"></span>${esc(n.label)}</div>
-      ${n.detail?`<div class="d">${esc(n.detail)}</div>`:""}
+      <div class="t" title="${esc(n.detail||"")}">${dot}<span class="lbl">${esc(n.label)}</span></div>
+      <span class="mp-pill">${MP_TAG[n.type]||""}</span>
     </div>`;
   }).join("");
   box.innerHTML = `<svg class="mp-svg" width="${L.w}" height="${L.h}">${paths.join("")}${labels.join("")}</svg>${cards}`;
