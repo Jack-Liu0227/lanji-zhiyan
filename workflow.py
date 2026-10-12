@@ -145,10 +145,10 @@ OAUTH_CONSOLE = {
     "cloudflare-workers-ai": "https://dash.cloudflare.com/",
 }
 
-STAGES = ["idea", "search", "download", "notes", "outline", "write", "review", "entrans", "convert"]
+STAGES = ["idea", "search", "download", "notes", "outline", "map", "write", "review", "entrans", "convert"]
 STAGE_LABEL = {
     "idea": "创新点审查", "search": "论文搜索", "download": "下载精读",
-    "notes": "论文翻译", "outline": "确认大纲", "write": "文章撰写", "review": "审查",
+    "notes": "论文翻译", "outline": "确认大纲", "map": "梳理精读", "write": "文章撰写", "review": "审查",
     "entrans": "中译英", "convert": "格式转换",
 }
 
@@ -2284,6 +2284,12 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         return outline_write(db, task_id, args.get("markdown", ""))
     if name == "outline_read":
         return outline_read(db, task_id)
+    if name == "map_write":
+        return map_write(db, task_id, args.get("data") or {})
+    if name == "map_read":
+        return map_read(db, task_id)
+    if name == "map_sources":
+        return map_sources(db, task_id)
     if name == "doc_write":
         return doc_write(db, task_id, scope or "outline", args.get("markdown", ""))
     if name == "doc_read":
@@ -2335,6 +2341,83 @@ def doc_read(db: "WorkflowDB", task_id: str, kind: str = "outline") -> dict[str,
     md = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else ""
     return {"path": str(p), "exists": p.is_file(), "markdown": md, "chars": len(md),
             "sections": len(re.findall(r"(?m)^## ", md)), "subs": len(re.findall(r"(?m)^### ", md))}
+
+
+# ---- 梳理精读（第 5 步）：大纲每个小标题 → 论文精读结论 / 实验数据 的谱系图 ----
+MAP_FILE = "谱系.json"
+MAP_TYPES = ("section", "paper", "note", "data")
+
+
+def map_path(db: "WorkflowDB", task_id: str) -> Path:
+    """一份 JSON，落在 <项目>/论文正文/谱系.json；没设项目位置就按项目 id 分名。"""
+    base = db.base_dir(task_id)
+    return (base / "论文正文" / MAP_FILE) if base else (OUT / f"谱系_{task_id[:8]}.json")
+
+
+def map_read(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
+    p = map_path(db, task_id)
+    raw: dict[str, Any] = {"nodes": [], "edges": []}
+    broken = False
+    if p.is_file():
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8", errors="replace") or "{}") or {}
+        except Exception:
+            raw, broken = {"nodes": [], "edges": []}, True
+    nodes = [n for n in (raw.get("nodes") or []) if isinstance(n, dict) and n.get("id") and n.get("label")]
+    ids = {n["id"] for n in nodes}
+    edges = [e for e in (raw.get("edges") or [])
+             if isinstance(e, dict) and e.get("from") in ids and e.get("to") in ids]
+    return {"path": str(p), "exists": p.is_file(), "broken": broken, "nodes": nodes, "edges": edges,
+            "updated": raw.get("updated") or "",
+            "sections": sum(1 for n in nodes if n.get("type") == "section"),
+            "refs": sum(1 for n in nodes if n.get("type") != "section")}
+
+
+def map_write(db: "WorkflowDB", task_id: str, data: Any) -> dict[str, Any]:
+    """整份覆盖写（和 doc_write 同口径）。不合规的节点/边直接丢掉，不报错 —— 模型给脏数据也要能落盘。"""
+    if isinstance(data, str):
+        data = json.loads(data or "{}")
+    if not isinstance(data, dict):
+        raise ValueError("谱系要给 {nodes:[…], edges:[…]} 结构的 JSON")
+    nodes, seen = [], set()
+    for n in (data.get("nodes") or []):
+        if not isinstance(n, dict) or not n.get("id") or not n.get("label"):
+            continue
+        nid = str(n["id"])
+        if nid in seen:
+            continue
+        seen.add(nid)
+        t = str(n.get("type") or "note")
+        nodes.append({"id": nid, "type": t if t in MAP_TYPES else "note",
+                      "label": str(n["label"])[:120], "detail": str(n.get("detail") or "")[:600],
+                      "ref": str(n.get("ref") or "")[:300]})
+    edges = [{"from": str(e["from"]), "to": str(e["to"]), "label": str(e.get("label") or "")[:40]}
+             for e in (data.get("edges") or [])
+             if isinstance(e, dict) and str(e.get("from")) in seen and str(e.get("to")) in seen]
+    p = map_path(db, task_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"nodes": nodes, "edges": edges, "updated": now()},
+                            ensure_ascii=False, indent=1), encoding="utf-8")
+    return map_read(db, task_id)
+
+
+def map_sources(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
+    """谱系图能挂哪些东西：大纲小标题 / 精读笔记 / 文献库 PDF / 实验数据（项目其余/数据 + 上传区）。"""
+    md = doc_read(db, task_id, "outline")["markdown"]
+    secs = re.findall(r"(?m)^###\s+(.+)$", md) or re.findall(r"(?m)^##\s+(.+)$", md)
+    base = db.base_dir(task_id)
+    def ls(d: Path, pats=("*",)):
+        out = []
+        if d.is_dir():
+            for f in sorted(d.rglob("*")):
+                if f.is_file() and any(f.match(x) for x in pats):
+                    out.append(f.relative_to(d).as_posix())
+        return out[:120]
+    notes = ls(base / "笔记") if base else ls(NOTES, ("*.md",))
+    papers = [p["filename"] for p in db.papers_of(task_id)]
+    data = (ls(base / "其余" / "数据") if base else []) + ls(DATA / "uploads")
+    return {"sections": [x.strip() for x in secs][:60], "notes": notes, "papers": papers[:60],
+            "data": list(dict.fromkeys(data))[:60], "map_path": str(map_path(db, task_id))}
 
 
 def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str) -> dict[str, Any]:
@@ -2494,6 +2577,21 @@ def doc_tools(kind: str) -> list[dict[str, Any]]:
 OUTLINE_TOOLS = doc_tools("outline")
 
 
+def map_tools() -> list[dict[str, Any]]:
+    """梳理精读这一步的工具：读写谱系 + 看数据源 + 附件/项目速览/检索/记忆（沿用 doc_tools 里那几个）。"""
+    keep = {"read_attachment", "library_overview", "knowledge_query", "memory_save"}
+    return [t for t in doc_tools("outline") if t["function"]["name"] in keep] + [
+        _schema("map_write", "把**整份**谱系图 JSON 覆盖写进项目那一份 谱系.json（就地改，不新建）。"
+                             "结构：{nodes:[{id,type,label,detail,ref}], edges:[{from,to,label}]}；"
+                             "type = section（大纲小标题）/ paper（论文精读结论）/ note（笔记）/ data（实验数据）；"
+                             "edges 的 from/to 必须都是已有节点 id。用户说「更新谱系」「按这个改」时就调它，给完整 JSON。",
+                {"data": {"type": "string", "description": "完整 JSON 字符串（nodes + edges）"}}, ["data"]),
+        _schema("map_read", "读回当前谱系图（一般不用，system 里已经带了最新那份）。", {}, []),
+        _schema("map_sources", "看这一步能挂什么：大纲小标题、项目里的精读笔记、文献库 PDF、实验数据文件。",
+                {}, []),
+    ]
+
+
 def outline_system(db: "WorkflowDB", task_id: str) -> str:
     """框架 agent 的 system：只做框架 + 固定格式 + 项目记忆 + 当前框架全文。"""
     task = db.summary(task_id)["task"]
@@ -2518,6 +2616,56 @@ def outline_system(db: "WorkflowDB", task_id: str) -> str:
 
 【项目记忆】
 %%MEMORY%%"""
+
+
+MAP_FALLBACK = ("把「大纲每个小标题」和「项目里的精读笔记 / 实验数据」连成一张谱系图：每一节挂上支撑它的论文结论"
+                "（写清是哪篇、什么结论、支持还是反驳），没有出处的写「待补」，不要编。")
+
+
+def map_system(db: "WorkflowDB", task_id: str) -> str:
+    task = db.summary(task_id)["task"]
+    out = doc_read(db, task_id, "outline")
+    cur = map_read(db, task_id)
+    src = map_sources(db, task_id)
+    skills = skill_text("research", "paper-reading-reports", "SKILL.md", cap=2500) or MAP_FALLBACK
+    return f"""你是「科研工作 1.0」里「梳理精读」这一步的**结构整理 agent**，用中文工作。
+
+硬规则：
+1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：**维护一张谱系图**（思维导图），把大纲的每个小标题和「支撑它的精读结论 / 实验数据」连起来。不做检索、下载、翻译、写作。
+2. 图存在 `{cur['path']}`（{'已有图' if cur['exists'] else '还没有图'}）—— 结构：
+   {{"nodes":[{{"id":"s1","type":"section","label":"2.1 掺杂元素筛选","detail":""}},
+             {{"id":"p1","type":"paper","label":"Left 2025","detail":"Cu 掺杂使带隙…","ref":"<笔记文件名或 paper_id>"}},
+             {{"id":"d1","type":"data","label":"XRD-2026-10.xlsx","detail":"主峰右移 0.2°","ref":"其余/数据/…"}}],
+    "edges":[{{"from":"s1","to":"p1","label":"支撑"}}]}}
+   type 只认 section / paper / note / data；edges 的 from/to 必须是已有节点 id。
+3. 用户说「更新谱系」「把 X 挂到 Y 下面」、或你们敲定改动时，**必须调用 map_write** 写**整份** JSON（覆盖同一份，不要只给片段、不要新建文件）。
+4. **必须有出处**：paper 节点的 detail 要写清是哪篇/哪条结论，data 节点要写清是哪个文件里的什么现象；**没有出处的节点不要画**，缺就写「待补：<还差什么>」。
+5. 用户上传的文件以「[附件] … 路径」出现，读它用 read_attachment。要挂实验数据先调 map_sources 看现成的文件清单。
+6. **能画就直接画**：用户给了材料就直接 map_write 落盘，然后说清这轮加了/改了哪几个节点；不要先反问一串。
+
+【本机精读规范（节点的 detail 按这个写）】
+{skills}
+
+【大纲（谱系图的骨架来源）】
+{out['markdown'][:5000] or '（还没有大纲 —— 提醒用户先去「确认大纲」）'}
+
+【可以挂上来的东西】
+- 大纲小标题：{'; '.join(src['sections']) or '（无）'}
+- 精读笔记：{'; '.join(src['notes'][:20]) or '（无）'}
+- 文献库 PDF：{'; '.join(src['papers'][:20]) or '（无）'}
+- 实验数据：{'; '.join(src['data'][:20]) or '（无）'}
+
+【当前谱系图】
+{json.dumps({'nodes': cur['nodes'], 'edges': cur['edges']}, ensure_ascii=False)[:6000] or '（还没有）'}
+
+【项目记忆】
+%%MEMORY%%"""
+
+
+def run_map(db: "WorkflowDB", task_id: str, text: str, emit: Any = None) -> dict[str, Any]:
+    """梳理精读：受限对话（读写谱系 + 附件 + 项目速览 + 记忆）。"""
+    system = map_system(db, task_id).replace("%%MEMORY%%", db.memory_block(task_id))
+    return run_agent(db, task_id, text, emit, max_steps=8, system=system, tools=map_tools(), scope="map")
 
 
 def run_outline(db: "WorkflowDB", task_id: str, text: str, emit: Any = None) -> dict[str, Any]:

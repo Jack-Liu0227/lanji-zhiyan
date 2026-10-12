@@ -36,6 +36,7 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
                       outline_read, outline_write, doc_read, doc_write, doc_seed, OUTLINE_TEMPLATE,
+                      run_map, map_read, map_write, map_sources,
                       cite_read, cite_add, cite_sync, conv_files, conv_run, conv_compile, conv_open,
                       en_state, en_run, CONV_FORMATS, _safe_path,
                       stage_download_selected, test_provider,
@@ -793,6 +794,13 @@ class Handler(BaseHTTPRequestHandler):
                                        "long": db.memory(tid, "long"),
                                        "messages": db.messages(tid, step),
                                        **doc_read(db, tid, step)})
+            if path == "/api/map/state":                  # 梳理精读：谱系图 + 能挂的源 + 大纲
+                with WorkflowDB(DB_PATH) as db:
+                    tid = q["id"][0]
+                    return self._json({"messages": db.messages(tid, "map"),
+                                       "outline": doc_read(db, tid, "outline"),
+                                       "sources": map_sources(db, tid),
+                                       **map_read(db, tid)})
             if path == "/api/en/state":                   # 中译英：默认源（正文.md）+ 上次译文
                 with WorkflowDB(DB_PATH) as db:
                     return self._json(en_state(db, q["id"][0]))
@@ -1024,6 +1032,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._sse(data)
         if path == "/api/idea":
             return self._sse(data, "idea")
+        if path == "/api/map":
+            return self._sse(data, "map")
         if path == "/api/outline":
             return self._sse(data, "outline")
         if path == "/api/write":
@@ -1185,6 +1195,10 @@ class Handler(BaseHTTPRequestHandler):
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(doc_seed(db, (data.get("task_id") or "").strip(),
                                                    data.get("step") or "outline"))
+                if path == "/api/map/save":                # 谱系图整份覆盖写（手改 / 前端拖节点后落盘）
+                    with WorkflowDB(DB_PATH) as db:
+                        return self._json(map_write(db, (data.get("task_id") or "").strip(),
+                                                    data.get("data") or {}))
                 if path == "/api/doc/save":                # 手动改/用回复落盘（三步共用）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(doc_write(db, (data.get("task_id") or "").strip(),
@@ -1359,7 +1373,7 @@ class Handler(BaseHTTPRequestHandler):
 
         db = WorkflowDB(DB_PATH)
         try:
-            runners = {"idea": run_idea, "outline": run_outline, "write": run_write, "review": run_review}
+            runners = {"idea": run_idea, "outline": run_outline, "map": run_map, "write": run_write, "review": run_review}
             (runners.get(step) or run_agent)(db, data.get("task_id", ""), data.get("message", ""), emit)
         except Exception as exc:
             emit({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
