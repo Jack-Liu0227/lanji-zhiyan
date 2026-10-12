@@ -469,7 +469,7 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .field-inline > span { flex-shrink: 0; white-space: nowrap; }
 .field-inline .tb-input, .field-inline .tb-select { flex: 1; min-width: 120px; }
 .btn {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;   /* 内容居中：inline-flex 默认是 flex-start，被拉宽的按键（三等分/定宽）文字会贴左（2026-10-12 他定的规矩：功能键一律居中） */
   padding: 8px 14px; border: 1px solid var(--line); background: var(--panel);
   color: inherit; border-radius: 8px; cursor: pointer; font-size: 13px;
   transition: all .15s; white-space: nowrap;
