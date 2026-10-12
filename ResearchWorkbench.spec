@@ -15,7 +15,7 @@ a = Analysis(
         ('build/icon.ico', 'build'),
         ('providers_catalog.json', '.'),
     ],
-    hiddenimports=['pymupdf', 'webview'],
+    hiddenimports=['pdfplumber', 'pypdf', 'webview'],   # PyMuPDF(AGPL) 已弃用，见 pdfio.py / requirements.txt
     hookspath=['hooks'],       # hooks/hook-workflow.py 用来顶掉同名 contrib 钩子（见该文件注释）
     hooksconfig={},
     runtime_hooks=[],
