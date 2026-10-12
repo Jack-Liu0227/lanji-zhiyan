@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import unittest
 
-ROOT = pathlib.Path(__file__).resolve().parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 HTML = ROOT / "web" / "index.html"
 JS = ROOT / "web" / "vendor" / "splash.js"
 SERVER = ROOT / "server.py"

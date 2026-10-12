@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """_trim_tail 自检：只裁「超出已翻页数」的尾部原页；范围内即使文字与原文相同（模型 fallback）也不许动。"""
 import os, sys, tempfile, unittest, pathlib
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fitz
 import papertran
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """_splice 自检：文档只增不减、乱序并行缺页补空白。"""
 import os, sys, tempfile, unittest, pathlib
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fitz
 import papertran
 
