@@ -133,31 +133,34 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .ah-new{display:grid;width:30px;height:30px;place-items:center;cursor:pointer;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--muted);font-size:15px}
 .ah-new:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--fg)}
 
-.ah-list{min-height:0;flex:1;overflow-y:auto;padding:8px}
-.ah-bind{font-style:normal;color:var(--accent)}
+.ah-list{min-height:0;flex:1;overflow-y:auto;padding:8px 8px 12px}
 .ah-bar{display:flex;min-height:32px;align-items:center;justify-content:space-between;gap:7px;margin-bottom:5px;border-bottom:1px solid var(--line);padding:0 3px 7px;color:var(--muted);font-size:11px}
 .ah-bar label{display:flex;align-items:center;gap:6px;cursor:pointer}
 .ah-bar input,.ah-check input{width:15px;height:15px;cursor:pointer;accent-color:var(--accent)}
 .ah-del-sel{cursor:pointer;border:1px solid var(--line);border-radius:7px;background:transparent;color:var(--muted);padding:3px 8px;font-size:11px}
 .ah-del-sel:hover:not(:disabled){border-color:var(--err);color:var(--err)}
 .ah-del-sel:disabled{opacity:.45;cursor:not-allowed}
-.ah-group+.ah-group{margin-top:12px}
-.ah-group-label{margin:5px 7px 4px;color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
-.ah-item-wrap{display:flex;min-width:0;align-items:center;gap:2px;border-radius:8px}
-.ah-item-wrap:hover{background:var(--panel2)}
-.ah-item-wrap.on{background:color-mix(in srgb,var(--accent) 12%,transparent)}
-.ah-check{display:grid;width:24px;height:36px;flex:none;place-items:center;cursor:pointer;border-radius:6px}
-.ah-item{display:flex;min-width:0;flex:1;cursor:pointer;align-items:center;gap:8px;border:1px solid transparent;border-radius:8px;background:transparent;padding:9px 8px;color:var(--muted);text-align:left}
-.ah-item:hover{border-color:var(--line);background:var(--panel2);color:var(--fg)}
-.ah-item.on{border-color:color-mix(in srgb,var(--accent) 26%,var(--line));background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--fg)}
-.ah-ico{display:grid;width:24px;height:24px;flex:none;place-items:center;border-radius:6px;background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);font-size:12px}
-.ah-copy{display:grid;min-width:0;flex:1;gap:2px}
-.ah-copy strong{overflow:hidden;color:inherit;font-size:11px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}
-.ah-copy span{overflow:hidden;color:var(--muted);font-size:9px;text-overflow:ellipsis;white-space:nowrap}
-.ah-dot{width:6px;height:6px;flex:none;border-radius:50%;background:var(--muted);opacity:.5}
-.ah-dot.run{background:var(--accent);opacity:1;box-shadow:0 0 7px color-mix(in srgb,var(--accent) 60%,transparent)}
-.ah-dot.done{background:var(--ok);opacity:1}
-.ah-del{opacity:0;cursor:pointer;border:0;background:none;color:var(--muted);padding:2px 4px;border-radius:5px;font-size:12px}
+.ah-group+.ah-group{margin-top:10px}
+.ah-group-label{display:flex;align-items:center;gap:8px;margin:10px 6px 6px;color:var(--muted);font-size:9.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+.ah-group-label i{font-style:normal;font-weight:400;letter-spacing:0;opacity:.75}
+.ah-group-label .ln{flex:1;height:1px;background:var(--line)}
+/* 方案 A：每条一张卡 */
+.ah-item-wrap{display:flex;min-width:0;align-items:center;gap:2px;margin-bottom:6px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.ah-item-wrap:hover{border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.ah-item-wrap.on{border-color:color-mix(in srgb,var(--accent) 45%,var(--line));border-left:3px solid var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.ah-check{opacity:0;display:grid;width:22px;height:34px;flex:none;place-items:center;cursor:pointer;border-radius:6px;transition:opacity .12s}
+.ah-item-wrap:hover .ah-check,.ah-item-wrap.on .ah-check,.ah-check:has(input:checked){opacity:1}
+.ah-item{display:flex;min-width:0;flex:1;cursor:pointer;align-items:center;gap:9px;border:0;border-radius:9px;background:transparent;padding:8px 4px;color:var(--fg);text-align:left}
+.ah-item-wrap.on .ah-item{padding-left:7px}
+.ah-av{width:30px;height:30px;flex:none;display:grid;place-items:center;border-radius:8px;overflow:hidden}
+.ah-av.ini{font-size:12.5px;font-weight:700;color:var(--accent);background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.ah-av img{width:100%;height:100%;object-fit:cover;display:block}
+.ah-copy{display:grid;min-width:0;flex:1;gap:3px}
+.ah-copy strong{overflow:hidden;color:inherit;font-size:13px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.ah-copy span{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;color:var(--muted);font-size:11.5px;text-overflow:ellipsis;white-space:nowrap}
+.ah-copy span i{font-style:normal;flex:none}
+.ah-pill{font-style:normal;flex:none;font-size:10px;color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent);border-radius:999px;padding:1px 7px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ah-del{opacity:0;cursor:pointer;border:0;background:none;color:var(--muted);padding:2px 7px 2px 4px;border-radius:5px;font-size:12px;transition:opacity .12s}
 .ah-item-wrap:hover .ah-del{opacity:1}
 .ah-del:hover{color:var(--err)}
 .ah-foot{display:flex;min-height:37px;align-items:center;gap:6px;border-top:1px solid var(--line);padding:0 13px;color:var(--muted);font-size:9px}
@@ -1992,19 +1995,35 @@ function historyGroups(pool){
   }
   return g;
 }
+function fmtAgo(iso){                        // 方案 A 的副标题用相对时间（完整时间放 title 里 hover 看）
+  if(!iso) return "";
+  const d = new Date(iso); if(isNaN(d.getTime())) return "";
+  const s = (Date.now() - d.getTime()) / 1000;
+  const hm = x => String(x.getHours()).padStart(2,"0") + ":" + String(x.getMinutes()).padStart(2,"0");
+  if(s < 60) return "刚刚";
+  if(s < 3600) return Math.floor(s / 60) + " 分钟前";
+  if(s < 86400) return Math.floor(s / 3600) + " 小时前";
+  const yd = new Date(); yd.setDate(yd.getDate() - 1);
+  if(d.toDateString() === yd.toDateString()) return "昨天 " + hm(d);
+  if(s < 86400 * 7) return Math.floor(s / 86400) + " 天前";
+  return fmtDate(iso).slice(0, 10);
+}
 function projName(id){ return ((S.tasks||[]).find(x=>x.id===id)||{}).title || ""; }
 function renderHistory(){
   const all = (S.chats||[]).slice();
   const groups = historyGroups(all);
-  const item = (t)=>`<div class="ah-item-wrap ${t.id===curChat?"on":""}">
+  const av = (t)=> t.task_id                                // 项目对话=项目首字色块；自由对话=Q 版小人
+      ? `<span class="ah-av ini">${esc((projName(t.task_id)||"项").slice(0,1))}</span>`
+      : `<span class="ah-av"><img src="${Q_AV}" alt=""></span>`;
+  const item = (t)=>`<div class="ah-item-wrap ${t.id===curChat?"on":""}" title="${esc(outName(t.out_dir))} · ${esc(fmtDate(t.updated_at))}">
       <label class="ah-check" title="选择"><input type="checkbox" data-sel="${t.id}" ${ahSel.has(t.id)?"checked":""}></label>
-      <button class="ah-item ${t.id===curChat?"on":""}" data-open="${t.id}">
-        <span class="ah-ico">${t.task_id?"🧭":"💬"}</span>
+      <button class="ah-item" data-open="${t.id}">
+        ${av(t)}
         <span class="ah-copy"><strong>${esc(t.title)}</strong>
-          <span>${t.task_id?`<em class="ah-bind">📁 ${esc(projName(t.task_id)||"项目")}</em> · `:""}${esc(outName(t.out_dir))} · ${fmtDate(t.updated_at)}</span></span>
-        <span class="ah-dot ${t.id===curChat?"run":""}"></span></button>
+          <span>${t.task_id?`<em class="ah-pill">${esc(projName(t.task_id)||"项目")}</em>`:""}<i>${esc(fmtAgo(t.updated_at))}</i></span></span></button>
       <button class="ah-del" data-del="${t.id}" title="删除对话">🗑</button></div>`;
-  const list = Object.entries(groups).map(([k,v])=> v.length?`<div class="ah-group"><p class="ah-group-label">${k}</p>${v.map(item).join("")}</div>`:"").join("");
+  const list = Object.entries(groups).map(([k,v])=> v.length
+      ? `<div class="ah-group"><p class="ah-group-label">${k}<span class="ln"></span><i>${v.length}</i></p>${v.map(item).join("")}</div>` : "").join("");
   return `<aside class="ah" aria-label="对话历史">
     <div class="ah-head"><div><p class="eyebrow">WORKSPACE</p><h2>对话</h2></div>
       <button class="ah-new" id="ah-new" title="新建对话">＋</button></div>
