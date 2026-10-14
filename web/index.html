@@ -743,11 +743,17 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .as-chip{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:8px 12px;font-size:13px;color:var(--fg);cursor:pointer;transition:border-color .15s,color .15s}
 .as-chip:hover{border-color:var(--accent);color:var(--accent)}
 
-.wf-rail{display:flex;flex-direction:column;min-height:0;margin:-16px 0;padding:16px 12px 16px 0;border-right:4px solid var(--line)}   /* 4px、用全局边框色；负边距顶到 #main 上下边缘（-16px 跟 .main 的 padding 走） */
-.wf-step{width:100%;padding:8px 10px;margin-bottom:2px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--fg);font-size:14px;text-align:center;cursor:pointer}
+.wf-rail{display:flex;flex-direction:column;min-height:0;margin:0 0 -16px;padding:0 12px 16px 0;border-right:4px solid var(--line)}   /* 上边界：不再向上打穿；下端 -16px 让竖线仍抵到框架底 */
+.wf-collapse{margin-bottom:6px;background:none;border:1px solid var(--line);border-radius:7px;height:26px;color:var(--muted);cursor:pointer;font-size:13px;line-height:1}
+.wf-collapse:hover{border-color:var(--accent);color:var(--accent)}   /* 4px、用全局边框色；负边距顶到 #main 上下边缘（-16px 跟 .main 的 padding 走） */
+.wf-step{width:100%;padding:8px 10px;margin-bottom:2px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--fg);font-size:14px;text-align:center;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px}
 .wf-step:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .wf-step.on{background:color-mix(in srgb,var(--accent) 20%,transparent);box-shadow:inset 2px 0 0 var(--accent);border-color:transparent;font-weight:600}
-.wf-body{display:flex;min-width:0;min-height:0;margin:-16px -16px -16px 0}   /* 右区抵到上/右/下框架 */
+.wf-page.min{grid-template-columns:56px 1fr}
+.wf-page.min .wf-lbl{display:none}
+.wf-page.min .wf-step{padding:8px 0}
+.wf-page.min .wf-rail{padding-right:10px}
+.wf-body{display:flex;min-width:0;min-height:0;margin:0 -16px -16px 0}   /* 右区抵到上/右/下框架 */
 .wf-body>*{flex:1;min-width:0}
 .wf-body .card{margin-bottom:0;height:100%;min-height:0;display:flex;flex-direction:column}
 /* 右区里的对话页收窄共享 .at 的大边距，让功能区填满 */
@@ -2459,6 +2465,7 @@ const WF_ORDER=["idea","search","download","notes","outline","map","write","revi
 const PANELS = { idea: ideaPanelHTML, search: searchPanelHTML, download: downloadPanelHTML, notes: trPanelHTML,
   map: mapPanelHTML, outline: (a)=>docPanelHTML("outline", a), write: (a)=>docPanelHTML("write", a), review: (a)=>docPanelHTML("review", a), convert: convPanelHTML, entrans: enPanelHTML };   // 有专门功能区的步骤；其余留白卡
 let wfStep=localStorage.getItem("rw-wf-step")||"idea";
+let wfMin=localStorage.getItem("rw-wf-min")==="1";
 
 /* ==== 创新点审查（这一步 = 100% 绑项目的受限对话页，记忆分长期/短期两区）==== */
 let iwView="conversation", iwMsgs=[], iwEvents=[], iwOut="", iwStat={turns:0,calls:0,tok:0};
@@ -3147,12 +3154,14 @@ function renderWorkflow(m){
       <span class="hint">绑定《${esc((S.tasks||[]).find(t=>t.id===curTask)?.title||"当前项目")}》· 只在这个项目范围内工作；跨项目的事回首页 Agent（全局 Leader）</span>
       <span style="flex:1"></span>
       <button class="btn ghost" id="wfToLeader">回首页 Leader →</button></div>
-    <div class="wf-page">
-      <div class="wf-rail">${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}">${STAGE[s]}</button>`).join("")}</div>
+    <div class="wf-page${wfMin?" min":""}">
+      <div class="wf-rail"><button class="wf-collapse" id="wf-collapse" title="${wfMin?"展开步骤条":"折叠步骤条"}">${wfMin?"›":"‹"}</button>${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}" title="${STAGE[s]}"><span class="wf-ico">${STAGE[s].split(" ")[0]}</span><span class="wf-lbl">${STAGE[s]}</span></button>`).join("")}</div>
       <div class="wf-body">${WF_ORDER.map(s=> PANELS[s] ? PANELS[s](s===wfStep)
         : `<div class="card" id="panel-${s}"${s===wfStep?"":' style="display:none"'}><h3>${STAGE[s]}</h3><div id="out-${s}"></div></div>`).join("")}</div>
     </div>`;
   if(!curTask) return;
+  const wfc = m.querySelector("#wf-collapse");
+  if(wfc) wfc.onclick=()=>{ wfMin=!wfMin; localStorage.setItem("rw-wf-min",wfMin?"1":"0"); renderWorkflow(m); };
   m.querySelectorAll(".wf-step").forEach(b=>b.onclick=()=>{
     wfStep=b.dataset.step; localStorage.setItem("rw-wf-step",wfStep);
     m.querySelectorAll(".wf-step").forEach(x=>x.classList.toggle("on",x.dataset.step===wfStep));
