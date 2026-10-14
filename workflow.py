@@ -161,6 +161,24 @@ def _text(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", value or "")).strip()
 
 
+# ------------------------------------------------------------ 内置定时任务 ----
+# 抄自原版（TS 科研工作台）的 DEFAULT_AGENT_SCHEDULE_RULES：4 条内置规则，id 原样保留，
+# 这样重复播种是「只补缺」而不是反复插入；prompt 换成我们这套（检索 → 精读 → 落盘）的说法。
+BUILTIN_SCHEDULES = [
+    {"id": "builtin.schedule.last30days", "name": "Last 30 days 每日资讯推送",
+     "cron": "0 9 * * *", "output_dir": "每日资讯推送",
+     "prompt": "检索近 30 天的 AI 最新资讯（大模型 / 智能体 / 材料信息学等方向），逐条给出标题、来源链接、一句话要点，写成中文简报落盘到 每日资讯推送/。抓不到全文的只记标题与链接，别编内容。"},
+    {"id": "builtin.schedule.literature-matrix", "name": "文献矩阵推送",
+     "cron": "0 9 * * *", "output_dir": "文献矩阵",
+     "prompt": "按主题「长上下文检索」做文献矩阵：每篇抽 题目 / 方法 / 数据 / 结论 / 局限 五列，取近 30 天的文献，写成 Markdown 表格落盘到 文献矩阵/。原文没写的字段留空，不补。"},
+    {"id": "builtin.schedule.literature-review-push", "name": "文献综述推送",
+     "cron": "0 9 * * *", "output_dir": "文献综述",
+     "prompt": "按主题「长上下文检索」写文献综述：分主题归纳现状与空白，逐条带引用（作者+年份），优先近 30 天，落盘到 文献综述/。观点与原文一致，不夸大。"},
+    {"id": "builtin.schedule.feishu-daily-msg", "name": "每日文献推送（飞书消息）",
+     "cron": "0 9 * * *", "output_dir": "每日文献推送",
+     "prompt": "挑近 1 天里最值得推的文献，写成一条可直接发飞书的短消息（≤300 字，含 3 条链接），落盘到 每日文献推送/。"},
+]
+
 class WorkflowDB(ResearchDB):
     def __init__(self, path: str | Path):
         super().__init__(path)
@@ -232,6 +250,8 @@ class WorkflowDB(ResearchDB):
               started_at TEXT NOT NULL, ended_at TEXT NOT NULL DEFAULT '', output_path TEXT NOT NULL DEFAULT '',
               summary TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '')""")
         self.assistant_seed(BUILTIN_ASSISTANTS)      # 公开助手（内置）：只补缺，不覆盖改过的
+        _recent = self.db.execute("SELECT id FROM research_tasks ORDER BY updated_at DESC LIMIT 1").fetchone()
+        self.schedule_seed(BUILTIN_SCHEDULES, _recent["id"] if _recent else "")   # 内置定时任务：只补缺（没有项目就先留空，等用户绑）
         self.db.execute("""CREATE TABLE IF NOT EXISTS teams (
               id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'fixed',
               status TEXT NOT NULL DEFAULT 'idle', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
@@ -464,6 +484,21 @@ class WorkflowDB(ResearchDB):
         self.db.execute("DELETE FROM schedule_runs WHERE schedule_id=?", (str(sid or ""),))
         self.db.execute("DELETE FROM schedules WHERE id=?", (str(sid or ""),))
         self.db.commit()
+
+    def schedule_seed(self, builtins: list[dict[str, Any]], project_id: str = "") -> int:
+        """内置定时任务：只补缺，不覆盖用户改过的、也不复活用户删过的（照 assistant_seed）。"""
+        n = 0
+        for b in builtins:
+            if self.db.execute("SELECT 1 FROM schedules WHERE id=?", (b["id"],)).fetchone():
+                continue
+            self.db.execute(
+                "INSERT INTO schedules (id,name,prompt,project_id,frequency,cron,output_dir,enabled,"
+                "last_run_at,next_run_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,'','',?,?)",
+                (b["id"], b["name"], b["prompt"], project_id, b.get("frequency", "daily"),
+                 b.get("cron", "0 9 * * *"), b.get("output_dir", "定时任务"), now(), now()))
+            n += 1
+        self.db.commit()
+        return n
 
     def schedule_mark_run(self, sid: str, last_run_at: str, next_run_at: str) -> None:
         self.db.execute("UPDATE schedules SET last_run_at=?, next_run_at=?, updated_at=? WHERE id=?",

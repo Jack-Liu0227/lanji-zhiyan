@@ -277,6 +277,19 @@ def due_list(now: datetime | None = None) -> list[dict[str, Any]]:
                 and s["next_run_at"] and s["next_run_at"] <= stamp]
 
 
+def arrange() -> int:
+    """给「启用了、非 manual、但还没排期」的规则补上 next_run_at（内置任务种下来时是空的）。"""
+    with workflow.WorkflowDB(_db_path()) as db:
+        rows = [s for s in db.schedules()
+                if s["enabled"] and s.get("frequency") != "manual" and not s["next_run_at"]]
+    n = 0
+    for s in rows:
+        with workflow.WorkflowDB(_db_path()) as db:
+            db.schedule_mark_run(s["id"], s["last_run_at"], next_run_at(s["cron"], datetime.now()))
+        n += 1
+    return n
+
+
 def catch_up() -> int:
     """启动补跑：错过 ≤6 小时的点补跑一次（原版：每日任务最多补跑一次），更久远的只重排。"""
     now = datetime.now()
@@ -327,6 +340,7 @@ def start() -> None:
 
 def _loop() -> None:
     try:
+        arrange()        # 先给新种的内置任务排期，再判断有没有错过的点
         catch_up()
     except Exception:
         traceback.print_exc()

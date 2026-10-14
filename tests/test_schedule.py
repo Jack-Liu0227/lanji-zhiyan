@@ -90,9 +90,10 @@ class TestStore(unittest.TestCase):
         self.assertEqual(again["name"], "改名了")
         self.assertEqual(again["enabled"], 0)
         with workflow.WorkflowDB(_DB) as db:
-            self.assertEqual(len(db.schedules()), 1)
+            mine = lambda: [x for x in db.schedules() if not x["id"].startswith("builtin.schedule.")]
+            self.assertEqual(len(mine()), 1)                 # 表里还有 4 条内置规则，这里只数用户自己的
             db.schedule_delete(row["id"])
-            self.assertEqual(db.schedules(), [])
+            self.assertEqual(mine(), [])
 
     def test_runs_upsert_and_cascade(self):
         row = self.make()
@@ -152,3 +153,39 @@ class TestStore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestBuiltinSchedules(unittest.TestCase):
+    """内置定时任务 = 原版 TS 那 4 条，只补缺、不重复、不覆盖。"""
+
+    def test_seeded_and_idempotent(self):
+        want = {b["id"] for b in workflow.BUILTIN_SCHEDULES}
+        self.assertEqual(len(want), 4)
+        with workflow.WorkflowDB(_DB) as db:
+            got = {s["id"]: s for s in db.schedules() if s["id"].startswith("builtin.schedule.")}
+            self.assertEqual(set(got), want)                       # 4 条都在
+            for b in workflow.BUILTIN_SCHEDULES:
+                row = got[b["id"]]
+                self.assertEqual(row["name"], b["name"])
+                self.assertEqual(row["cron"], "0 9 * * *")
+                self.assertEqual(row["frequency"], "daily")
+                self.assertEqual(row["output_dir"], b["output_dir"])
+                self.assertEqual(row["prompt"], b["prompt"])
+                self.assertEqual(row["enabled"], 1)
+            db.schedule_save({"id": "builtin.schedule.last30days", "name": "用户改的名字", "prompt": "改过了",
+                              "project_id": "", "frequency": "daily", "cron": "0 9 * * *",
+                              "output_dir": "每日资讯推送", "enabled": False})
+            n = db.schedule_seed(workflow.BUILTIN_SCHEDULES, "")   # 再播一次
+            self.assertEqual(n, 0)                                  # 一条都不补
+            row = [s for s in db.schedules() if s["id"] == "builtin.schedule.last30days"][0]
+            self.assertEqual((row["name"], row["enabled"]), ("用户改的名字", 0))   # 用户改的不被覆盖
+
+    def test_arrange_fills_next_run(self):
+        """启用了但还没排期的规则，arrange() 会给它补上 next_run_at。"""
+        with workflow.WorkflowDB(_DB) as db:      # 只清排期，别动别的字段（别的用例也读这张表）
+            db.db.execute("UPDATE schedules SET next_run_at='' WHERE id='builtin.schedule.feishu-daily-msg'")
+            db.db.commit()
+        self.assertGreaterEqual(schedule.arrange(), 1)
+        with workflow.WorkflowDB(_DB) as db:
+            row = [s for s in db.schedules() if s["id"] == "builtin.schedule.feishu-daily-msg"][0]
+            self.assertTrue(row["next_run_at"], "arrange() 之后应该有排期时间")
