@@ -153,7 +153,6 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .ah-item{display:flex;min-width:0;flex:1;cursor:pointer;align-items:center;gap:9px;border:0;border-radius:9px;background:transparent;padding:8px 4px;color:var(--fg);text-align:left}
 .ah-item-wrap.on .ah-item{padding-left:7px}
 .ah-av{width:30px;height:30px;flex:none;display:grid;place-items:center;border-radius:8px;overflow:hidden}
-.ah-av.ini{font-size:12.5px;font-weight:700;color:var(--accent);background:color-mix(in srgb,var(--accent) 16%,transparent)}
 .ah-av img{width:100%;height:100%;object-fit:cover;display:block}
 .ah-copy{display:grid;min-width:0;flex:1;gap:3px}
 .ah-copy strong{overflow:hidden;color:inherit;font-size:13px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
@@ -2012,9 +2011,12 @@ function projName(id){ return ((S.tasks||[]).find(x=>x.id===id)||{}).title || ""
 function renderHistory(){
   const all = (S.chats||[]).slice();
   const groups = historyGroups(all);
-  const av = (t)=> t.task_id                                // 项目对话=项目首字色块；自由对话=Q 版小人
-      ? `<span class="ah-av ini">${esc((projName(t.task_id)||"项").slice(0,1))}</span>`
-      : `<span class="ah-av"><img src="${Q_AV}" alt=""></span>`;
+  const byBorn = [...all].sort((a, b)=> String(a.created_at || "").localeCompare(String(b.created_at || "")));
+  const av = (t)=>{                                          // 头像按「创建顺序」轮流取，不跟着更新时间跳
+    const i = Math.max(0, byBorn.findIndex(c=>c.id === t.id));
+    return `<span class="ah-av"><img src="${AH_AV[i % AH_AV.length]}" alt="" loading="lazy"
+      onerror="this.src='${Q_AV}'"></span>`;                 // 文件缺了就退回主形象
+  };
   const item = (t)=>`<div class="ah-item-wrap ${t.id===curChat?"on":""}" title="${esc(outName(t.out_dir))} · ${esc(fmtDate(t.updated_at))}">
       <label class="ah-check" title="选择"><input type="checkbox" data-sel="${t.id}" ${ahSel.has(t.id)?"checked":""}></label>
       <button class="ah-item" data-open="${t.id}">
@@ -2034,7 +2036,8 @@ function renderHistory(){
     <div class="ah-foot">🕒 一个对话一份记忆 · 输出目录各自独立</div></aside>`;
 }
 
-const Q_AV = "/vendor/img/agent-q.png";     // 对话区的 agent 形象（Q 版小人，透明底，512²）
+const Q_AV = "/vendor/img/agent-q.png";
+const AH_AV = Array.from({length: 7}, (_, i)=>`/vendor/img/av${i + 1}.png`);   // 对话列表头像池（q/ 里那 7 张）     // 对话区的 agent 形象（Q 版小人，透明底，512²）
 const qAvatar = (px, r)=>`<span class="as-av q-av" style="width:${px}px;height:${px}px;${r?`border-radius:${r};`:""}"><img src="${Q_AV}" alt=""></span>`;
 function asEmpty(){                       // 照 AionUi SingleChatEmptyState：头像 + 名字 + 一行说明 + 推荐问题
   const a = (S.assistants||[]).find(x=>x.id === (((S.chats||[]).find(c=>c.id===curChat)||{}).assistant_id||"")) || null;
