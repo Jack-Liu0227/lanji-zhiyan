@@ -3155,7 +3155,7 @@ function renderWorkflow(m){
       <span style="flex:1"></span>
       <button class="btn ghost" id="wfToLeader">回首页 Leader →</button></div>
     <div class="wf-page${wfMin?" min":""}">
-      <div class="wf-rail"><button class="wf-collapse" id="wf-collapse" title="${wfMin?"展开步骤条":"折叠步骤条"}">${wfMin?"›":"‹"}</button>${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}" title="${STAGE[s]}"><span class="wf-ico">${STAGE[s].split(" ")[0]}</span><span class="wf-lbl">${STAGE[s]}</span></button>`).join("")}</div>
+      <div class="wf-rail"><button class="wf-collapse" id="wf-collapse" title="${wfMin?"展开步骤条":"折叠步骤条"}">${wfMin?"›":"‹"}</button>${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}" title="${STAGE[s]}"><span class="wf-ico">${STAGE[s].split(" ")[0]}</span><span class="wf-lbl">${STAGE[s].slice(STAGE[s].indexOf(" ")+1)}</span></button>`).join("")}</div>
       <div class="wf-body">${WF_ORDER.map(s=> PANELS[s] ? PANELS[s](s===wfStep)
         : `<div class="card" id="panel-${s}"${s===wfStep?"":' style="display:none"'}><h3>${STAGE[s]}</h3><div id="out-${s}"></div></div>`).join("")}</div>
     </div>`;
