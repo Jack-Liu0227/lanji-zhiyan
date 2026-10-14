@@ -743,10 +743,10 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .as-chip{border:1px solid var(--line);background:var(--panel);border-radius:12px;padding:8px 12px;font-size:13px;color:var(--fg);cursor:pointer;transition:border-color .15s,color .15s}
 .as-chip:hover{border-color:var(--accent);color:var(--accent)}
 
-.wf-rail{display:flex;flex-direction:column;min-height:0;margin:0 0 -16px;padding:0 12px 16px 0;border-right:4px solid var(--line)}   /* 上边界：不再向上打穿；下端 -16px 让竖线仍抵到框架底 */
+.wf-rail{display:flex;flex-direction:column;flex-wrap:nowrap;min-height:0;overflow-y:auto;overflow-x:hidden;margin:0 0 -16px;padding:0 12px 16px 0;border-right:4px solid var(--line)}   /* 上边界：不再向上打穿；下端 -16px 让竖线仍抵到框架底 */
 .wf-collapse{margin-bottom:6px;background:none;border:1px solid var(--line);border-radius:7px;height:26px;color:var(--muted);cursor:pointer;font-size:13px;line-height:1}
 .wf-collapse:hover{border-color:var(--accent);color:var(--accent)}   /* 4px、用全局边框色；负边距顶到 #main 上下边缘（-16px 跟 .main 的 padding 走） */
-.wf-step{width:100%;padding:8px 10px;margin-bottom:2px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--fg);font-size:14px;text-align:center;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px}
+.wf-step{flex:0 0 auto;min-height:38px;width:100%;padding:8px 10px;margin-bottom:2px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--fg);font-size:14px;text-align:center;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px}
 .wf-step:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .wf-step.on{background:color-mix(in srgb,var(--accent) 20%,transparent);box-shadow:inset 2px 0 0 var(--accent);border-color:transparent;font-weight:600}
 .wf-page.min{grid-template-columns:56px 1fr}
