@@ -20,6 +20,8 @@ py -3.10 apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己�
 
 依赖：**Python 3.10**（`py -3.10`，只有它的 site-packages 里有 pywebview）。第三方依赖见 `requirements.txt`（全部 BSD/MIT/PSF，无 AGPL）。
 
+**下载安装**（GitHub Releases）：<https://github.com/3276166289-code/research-workbench/releases/latest> —— 两个资产：`ResearchWorkbench-Setup.exe`（单文件安装器，双击即装、自动建桌面快捷方式）与 `ResearchWorkbench.zip`（免安装，解压双击里面的 `ResearchWorkbench.exe`）。
+
 **自己打包**：双击 `toolsuild.bat`（用 `tools\ResearchWorkbench.spec`，入口 `apps/desktop/server.py`）→ `dist\ResearchWorkbench\`；要单文件安装器再打 `tools\ResearchWorkbench-Setup.spec`（入口 `tools/installer.py`）。**必须用 3.10 打包**，否则运行时会静默退回带黑标题栏的 Edge 窗口。
 
 ---

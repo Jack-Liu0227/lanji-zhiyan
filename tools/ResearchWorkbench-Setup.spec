@@ -1,11 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
+import os
+_ROOT = os.path.dirname(os.path.abspath(SPECPATH))     # SPECPATH = tools/，仓库根在上一层
+
 a = Analysis(
-    ['tools/installer.py'],
+    [os.path.join(_ROOT, 'tools', 'installer.py')],
     pathex=[],
     binaries=[],
-    datas=[('dist/ResearchWorkbench', 'ResearchWorkbench')],
+    datas=[(os.path.join(_ROOT, 'dist', 'ResearchWorkbench'), 'ResearchWorkbench')],
     hiddenimports=['win32com.client'],
     hookspath=[],
     hooksconfig={},
