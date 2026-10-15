@@ -13,13 +13,13 @@ _PKGS = [os.path.join(_ROOT, 'packages', n) for n in
          ('database', 'workspace-core', 'workspace-service', 'connectors', 'ai-runtime')]
 
 a = Analysis(
-    ['apps/desktop/server.py'],
+    [os.path.join(_ROOT, 'apps', 'desktop', 'server.py')],
     pathex=_PKGS,
     binaries=[],
     datas=[
-        ('apps/desktop/web', 'web'),
-        ('tools/build/icon.ico', 'build'),
-        ('packages/contracts/providers_catalog.json', 'packages/contracts'),
+        (os.path.join(_ROOT, 'apps', 'desktop', 'web'), 'web'),
+        (os.path.join(_ROOT, 'tools', 'build', 'icon.ico'), 'build'),
+        (os.path.join(_ROOT, 'packages', 'contracts', 'providers_catalog.json'), 'packages/contracts'),
     ],
     hiddenimports=['pdfplumber', 'pypdf', 'cryptography', 'PIL', 'pypdfium2', 'webview',
                    'research_core', 'workflow', 'team', 'schedule', 'papertran', 'zotero', 'vault',
@@ -27,7 +27,7 @@ a = Analysis(
     # 说明：pdfminer.six / pdfplumber 里有条件导入（cryptography 处理加密 PDF、PIL/pypdfium2 渲染），
     # 静态分析看不到，必须显式列出；PyMuPDF(AGPL) 已弃用，见 pdfio.py。
    # cryptography: pdfminer.six 里是条件导入，静态分析看不到   # PyMuPDF(AGPL) 已弃用，见 pdfio.py / requirements.txt
-    hookspath=['tools/hooks'],       # hooks/hook-workflow.py 用来顶掉同名 contrib 钩子（见该文件注释）
+    hookspath=[os.path.join(_ROOT, 'tools', 'hooks')],       # hooks/hook-workflow.py 用来顶掉同名 contrib 钩子（见该文件注释）
     hooksconfig={},
     runtime_hooks=[],
     # 应用一行都没用到下面这些；它们是被 3.10 里别的包连带拖进来的（torch 还是 CUDA 版）。
@@ -61,7 +61,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='tools/build/icon.ico',
+    icon=os.path.join(_ROOT, 'tools', 'build', 'icon.ico'),
     contents_directory='.',
 )
 coll = COLLECT(
