@@ -28,8 +28,8 @@ import papertran                 # 论文翻译页：PDF 服务 / 元数据 / Ba
 import rss                       # 情报日报：RSS 抓取/解析
 import vault                     # 知识库：Obsidian Vault 扫描 / 状态写回
 import workflow
-import schedule                  # 定时任务：抄原版 automation（只在应用活着时调度）
-import team                      # 团队：Leader + Partner 成员 + 派活队列（抄 AionUi Teams）
+import schedule                  # 定时任务：只在应用活着时调度
+import team                      # 团队：Leader + 成员 + 派活队列
 import zotero                    # Zotero 本机 Local API 只读接入（笔记页；不碰 zotero.sqlite）
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
@@ -381,7 +381,7 @@ def catalog_cards(db: Any) -> list[dict[str, Any]]:
 
 
 def settings_meta() -> dict[str, Any]:
-    """工具 = 本 app 的 TOOL_SPECS；技能 = 本机 Hermes skills；MCP = 本机 Hermes 配置里的服务器。只读。"""
+    """工具 = 本 app 的 TOOL_SPECS；技能 = 本机技能目录；MCP = 本机配置里的服务器。只读。"""
     tools = [{"name": t["function"]["name"], "desc": (t["function"].get("description") or "")}
              for t in workflow.TOOL_SPECS]
     skills, mcp = [], []
@@ -409,7 +409,7 @@ def settings_meta() -> dict[str, Any]:
                 else:
                     mcp.append({"name": name, "cmd": str((spec or {}).get("command") or (spec or {}).get("url") or "")[:120]})
         except Exception as exc:
-            mcp = [{"name": "（读取 Hermes 配置失败）", "cmd": str(exc)[:80]}]
+            mcp = [{"name": "（读取本机配置失败）", "cmd": str(exc)[:80]}]
     sk_all = len(list(sk.glob("*/SKILL.md"))) + len(list(sk.glob("*/*/SKILL.md"))) if sk.is_dir() else 0
     return {"tools": tools, "skills": skills, "skills_total": sk_all, "mcp": mcp,
             "hermes_dir": str(sk), "mcp_cfg": str(cfg)}
@@ -491,7 +491,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(out)
 
 
-    # ---------------- 邮箱（IMAP / SMTP，移植 lit 的 src/mailRoutes.js） ----------------
+    # ---------------- 邮箱（IMAP / SMTP） ----------------
     _RE_MAIL_MSG = re.compile(r"^/api/mail/accounts/([^/]+)/messages/(\d+)(?:/attachments/(\d+))?$")
     _RE_MAIL_SEEN_ALL = re.compile(r"^/api/mail/accounts/([^/]+)/messages/seen-all$")
     _RE_MAIL_SEEN = re.compile(r"^/api/mail/accounts/([^/]+)/messages/(\d+)/seen$")
@@ -874,7 +874,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(team.board((q.get("id") or [""])[0]))
                 except ValueError as exc:
                     return self._json({"error": str(exc), "members": [], "tasks": [], "counts": {}}, 400)
-            if path == "/api/schedules":                 # 定时任务页：规则 + 最近运行（照原版两块结构）
+            if path == "/api/schedules":                 # 定时任务页：规则 + 最近运行
                 with WorkflowDB(DB_PATH) as db:
                     return self._json({"schedules": db.schedules(), "runs": db.schedule_runs(),
                                        "freq": schedule.FREQ_LABELS, "run_status": schedule.RUN_STATUS,
@@ -1242,7 +1242,7 @@ class Handler(BaseHTTPRequestHandler):
                             return self._json({"chat": db.bind_chat(b.get("id", ""), b.get("task_id", ""))})
                         except ValueError as exc:
                             return self._json({"error": str(exc)}, 400)
-                if path == "/api/chat/rename":               # 对话改名（照 AionUi 标题点击改名）
+                if path == "/api/chat/rename":               # 对话改名（点标题原地改）
                     b = data or {}
                     with WorkflowDB(DB_PATH) as db:
                         db.db.execute("UPDATE chats SET title=?, updated_at=? WHERE id=?",

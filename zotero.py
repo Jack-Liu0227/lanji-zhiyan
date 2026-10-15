@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Zotero 接入（只读）—— 笔记页用。
 
-抄原版「科研工作台」的接入约定（它的 packages/connectors/src/zotero.ts 与
+Zotero 接入约定（
 .agents/roles/zotero-local.md）：
 
   · 只走 Zotero **本机 Local API**（默认 http://127.0.0.1:23119/api/）；

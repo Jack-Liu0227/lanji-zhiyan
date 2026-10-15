@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """团队（A 档）：Leader + Partner 成员 + 派活队列 + 运行事件。
 
-抄 AionUi 的 Teams 模型（`packages/desktop/src/common/types/team/teamTypes.ts`）：
-  · 角色 `role = 'leader' | 'teammate'`；**Leader 恒为成员列表第一个、不可移除**（AionUi 原话）；
+团队模型（Leader + 成员 + 派活队列 + 运行事件）：
+  · 角色 `role = 'leader' | 'teammate'`；**Leader 恒为成员列表第一个、不可移除**；
   · 成员状态 `pending | idle | active | completed | failed | dormant` → 这里落成 idle|queued|running|done|failed|blocked；
-  · 任务看板（AionUi 的 Activity：TaskCard + MessageCard）→ 这里落成 team_tasks + team_events。
+  · 任务看板（派活卡 + 消息卡）→ 落成 team_tasks + team_events。
 
-与原版的**硬差别（如实说明）**：AionUi 每个成员是独立 agent 进程、能真并行；本应用单进程、
+本应用的**硬差别（如实说明）**：多成员协作靠独立 agent 进程才换得到真并行；本应用单进程、
 模型调用阻塞 → 这里是**串行队列**（一次只跑一个成员），排队状态在界面上明确显示。
 """
 from __future__ import annotations
@@ -44,7 +44,7 @@ def _now() -> str:
 
 # ---------------- 成员 ----------------
 def ensure_leader(task_id: str) -> dict[str, Any]:
-    """确保团队里有 leader 行（幂等）。AionUi：Leader 恒为列表第一个、不可移除。"""
+    """确保团队里有 leader 行（幂等）。Leader 恒为列表第一个、不可移除。"""
     if not (task_id or "").strip():
         raise ValueError("团队要挂在一个项目或对话上（scope 不能是空）")
     with workflow.WorkflowDB(_db_path()) as db:
@@ -79,7 +79,7 @@ def remove_member(member_id: str) -> dict[str, Any]:
         if not row:
             raise ValueError("成员不存在")
         if row["role"] == "leader":
-            raise ValueError("Leader 不能移除（AionUi 同款规则）")
+            raise ValueError("Leader 不能移除（既定规则）")
         db.team_member_remove(member_id)
         return {"removed": member_id}
 
@@ -122,7 +122,7 @@ def board(task_id: str, limit: int = 40) -> dict[str, Any]:
         counts[t["status"]] = counts.get(t["status"], 0) + 1
     return {"members": mem, "tasks": tasks, "counts": counts,
             "leader_brief": LEADER_BRIEF, "steps": STEPS,
-            "serial_note": "单进程串行队列：一次只跑一个成员（AionUi 是真并行，那是独立 agent 进程换来的）",
+            "serial_note": "单进程串行队列：一次只跑一个成员（真并行要独立 agent 进程）",
             "running": sorted(RUNNING)}
 
 
@@ -276,7 +276,7 @@ if __name__ == "__main__":       # 手跑自检：python team.py
 # ============================ v2：成员=助手 + 团队内 AI 聊天平台 ============================
 
 MAX_PICKS = 5            # 一个团队最多选 5 个助手（Leader 是常驻主持，不占名额）
-# 身份色：0 号固定给 Leader，其余照 AionUi TEAM_MEMBER_PALETTE 的低饱和 slate 系
+# 身份色：0 号固定给 Leader，其余走低饱和 slate 系
 MEMBER_COLORS = ["var(--brand)", "#5c9ea4", "#b58a5e", "#8f7fb5", "#7fa06a", "#b57f92"]
 STOP_WORDS = ("完成", "全部完成", "已全部完成", "DONE", "收工")
 
@@ -295,7 +295,7 @@ def picks(scope: str) -> list[dict[str, Any]]:
 
 
 def add_assistant(scope: str, assistant_id: str) -> dict[str, Any]:
-    """把一个助手拉进团队（照 AionUi：团队成员就是助手实例）。最多 MAX_PICKS 个。"""
+    """把一个助手拉进团队（团队成员就是助手实例）。最多 MAX_PICKS 个。"""
     with workflow.WorkflowDB(_db_path()) as db:
         asst = db.assistant(assistant_id)
         if not asst:
@@ -329,7 +329,7 @@ def say(scope: str, text: str, start: bool = True) -> dict[str, Any]:
 
 
 def next_speaker(text: str, names: list[str], last: str | None) -> str | None:
-    """交接规则（照 AionUi 的 @ 交接）：说了收工词就散会；@ 谁就归谁；没说就按顺序轮下一个。"""
+    """交接规则（@ 交接）：说了收工词就散会；@ 谁就归谁；没说就按顺序轮下一个。"""
     if not names:
         return None
     blob = text or ""

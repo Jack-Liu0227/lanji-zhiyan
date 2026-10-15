@@ -1,4 +1,4 @@
-"""mail.py —— 邮箱（IMAP 收信 / SMTP 发信），移植自 lit 的 src/mail.js。
+"""mail.py —— 邮箱（IMAP 收信 / SMTP 发信）。
 
 lit 用的是 Node 的 imapflow + mailparser + nodemailer；这里全部用 Python 标准库
 （imaplib / smtplib / email）重写，模板方法一一对应：
@@ -187,7 +187,7 @@ def _build_client(acc: dict[str, Any]) -> imaplib.IMAP4:
         conn = imaplib.IMAP4(host, port, timeout=25)
     try:
         # 网易邮箱强制要求客户端先发 ID，否则返回「Unsafe Login」
-        conn.xatom("ID", '("name" "SciTerminal" "version" "1.0.0" "vendor" "SciTerminal")')
+        conn.xatom("ID", '("name" "ResearchWorkbench" "version" "1.0" "vendor" "ResearchWorkbench")')
     except Exception:
         pass
     conn.login(str(acc.get("email")), str(acc.get("password")))

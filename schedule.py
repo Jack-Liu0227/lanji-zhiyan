@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
-"""定时任务 —— 抄原版「科研工作台」的自动化（`features/automation.tsx` + `ScheduleCoordinator`），
+"""定时任务 —— 进程内调度：规则卡 + 每次运行记录 + 启动补跑。
 按本应用的实际能力落地。
 
-保留的语义（与原版一致）：
+保留的语义：
   · **只在应用进程活着时调度**：关掉科研工作 1.0 就不会后台执行（界面里原话照抄这句）；
   · 启动时对「错过的时间点」**最多补跑一次**，之后等下一个时间点；
   · 每次触发都落一条运行记录（状态/开始结束/输出路径/摘要/失败或阻断原因）；
-  · **预检不过直接标 blocked，不生成产物**（原版：预检不通过不会生成成功产物）；
+  · **预检不过直接标 blocked，不生成产物**（预检不通过不生成产物）；
   · 输出目录 = **项目目录内的相对路径**；绝对路径、盘符、`..`、隐藏目录（如 .obsidian）一律拒绝
-    （对应原版 `inspectAgentOutputFolder` 的安全谓词，越界不许静默改写）；
+    （输出目录安全谓词：越界不许静默改写）；
   · 归档后的任务不再自动运行（`enabled` 置 0 + 软删）。
 
-与原版的差别（如实说明）：原版跑内嵌 Pi Agent + skill 目录 + Obsidian 直投 + 审批策略/CAS 修订；
+本应用的取舍：模型直连、不内置 agent 运行时与审批策略；
 这里跑本应用自己的 Agent（`workflow.run_agent`），产物写成 markdown 落到项目目录。
 未做：时区字段（用本机时区）、skill 目录探测、运行中实时推送到前台。
 """
@@ -43,7 +43,7 @@ def _db_path() -> Path:
     return Path(server.DB_PATH)
 
 
-TICK = 30                     # 秒：每 30 秒看一遍到点的任务（原版也是进程内轮询）
+TICK = 30                     # 秒：每 30 秒看一遍到点的任务（进程内轮询）
 CATCHUP_GRACE = 6 * 3600      # 启动补跑：错过超过 6 小时的点只重排、不补跑
 FREQ_LABELS = {"manual": "手动", "hourly": "每小时", "daily": "每天",
                "weekdays": "工作日", "weekly": "每周", "custom": "自定义 Cron"}
@@ -168,7 +168,7 @@ def describe(expr: str) -> str:
 
 
 def inspect_output_dir(raw: str) -> tuple[bool, str]:
-    """项目目录内的相对路径才放行（对应原版的 inspectAgentOutputFolder）。"""
+    """项目目录内的相对路径才放行（输出目录安全谓词）。"""
     v = str(raw or "").strip().replace("\\", "/")
     if not v:
         return False, "输出目录不能为空"
@@ -235,7 +235,7 @@ def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None
     if not sched.get("enabled"):
         return finish("canceled", reason="任务已暂停")
     if not str(sched.get("project_id") or "").strip():
-        return finish("blocked", reason="未绑定项目：Agent 需要项目上下文（原版允许「全部项目」，本应用的 Agent 按项目组织）")
+        return finish("blocked", reason="未绑定项目：Agent 需要项目上下文（本应用的 Agent 按项目组织）")
     ok, why = valid(sched.get("cron") or "")
     if not ok:
         return finish("blocked", reason=f"Cron 不可用：{why}")
@@ -291,7 +291,7 @@ def arrange() -> int:
 
 
 def catch_up() -> int:
-    """启动补跑：错过 ≤6 小时的点补跑一次（原版：每日任务最多补跑一次），更久远的只重排。"""
+    """启动补跑：错过 ≤6 小时的点补跑一次（每日任务最多补跑一次），更久远的只重排。"""
     now = datetime.now()
     done = 0
     with workflow.WorkflowDB(_db_path()) as db:
