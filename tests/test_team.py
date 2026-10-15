@@ -41,7 +41,7 @@ class TeamTest(unittest.TestCase):
         self.assertEqual(ms[0]["role"], "leader")
         self.assertEqual(team.members(self.tid)[0]["id"], ms[0]["id"])       # 幂等，不会重复播种
         with self.assertRaises(ValueError):
-            team.remove_member(ms[0]["id"])                                  # AionUi 同款：Leader 不可移除
+            team.remove_member(ms[0]["id"])                                  # 既定规则：Leader 不可移除
 
     def test_assign_requires_existing_member(self) -> None:
         with self.assertRaises(ValueError):

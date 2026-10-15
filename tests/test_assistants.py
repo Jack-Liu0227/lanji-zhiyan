@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""助手（照 AionUi Assistant）自检：内置播种 / 只读不可删 / 保存更新 / 对话绑定 / 规则进 system。
+"""助手自检：内置播种 / 只读不可删 / 保存更新 / 对话绑定 / 规则进 system。
 
     python -m unittest test_assistants -v
 """

@@ -163,7 +163,7 @@ def _text(value: str) -> str:
 
 
 # ------------------------------------------------------------ 内置定时任务 ----
-# 抄自原版（TS 科研工作台）的 DEFAULT_AGENT_SCHEDULE_RULES：4 条内置规则，id 原样保留，
+# 内置定时规则（DEFAULT 清单）：4 条，id 固定，
 # 这样重复播种是「只补缺」而不是反复插入；prompt 换成我们这套（检索 → 精读 → 落盘）的说法。
 BUILTIN_SCHEDULES = [
     {"id": "builtin.schedule.last30days", "name": "Last 30 days 每日资讯推送",
@@ -213,7 +213,7 @@ class WorkflowDB(ResearchDB):
               task_id TEXT NOT NULL, result_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
               path TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
               PRIMARY KEY (task_id, result_id))""")
-        # 团队（A 档：Leader + Partner 成员 + 派活队列 + 运行事件）—— 抄 AionUi Teams 的模型
+        # 团队（Leader + 成员 + 派活队列 + 运行事件）
         self.db.execute("""CREATE TABLE IF NOT EXISTS assistants (
   id TEXT PRIMARY KEY, source TEXT NOT NULL DEFAULT 'user', name TEXT NOT NULL,
   avatar TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
@@ -450,7 +450,7 @@ class WorkflowDB(ResearchDB):
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
-    # ---------- 定时任务（照原版 automation：规则 + 每次运行一条记录） ----------
+    # ---------- 定时任务（规则 + 每次运行一条记录） ----------
     def schedules(self) -> list[dict[str, Any]]:
         return [dict(r) for r in self.db.execute("SELECT * FROM schedules ORDER BY created_at").fetchall()]
 
@@ -632,7 +632,7 @@ class WorkflowDB(ResearchDB):
                         (uuid.uuid4().hex, team_task_id, task_id, kind, text[:2000], now()))
         self.db.commit()
 
-    # ---------- 助手（照 AionUi Assistant：我的 / 公开；点进去设提示词） ----------
+    # ---------- 助手（我的 / 公开；点进去设提示词） ----------
     def assistants(self) -> list[dict[str, Any]]:
         rows = self.db.execute("SELECT * FROM assistants ORDER BY source='builtin', sort_order, created_at").fetchall()
         return [dict(r) for r in rows]
@@ -2195,7 +2195,7 @@ IDEA_TOOLS = [
 ]
 
 
-# 博导 skill：直接读本机 Hermes 装的 skill 正文（找不到就用内置精简版）
+# 博导 skill：直接读本机技能目录里的 skill 正文（找不到就用内置精简版）
 SKILL_ROOTS = [Path(os.environ["RW_SKILL_DIR"])] if os.environ.get("RW_SKILL_DIR") else []
 SKILL_ROOTS.append(Path.home() / "AppData" / "Local" / "hermes" / "skills")
 
@@ -2274,14 +2274,14 @@ def _knowledge_query(db: "WorkflowDB", task_id: str, query: str) -> dict[str, An
 _DELEGATE_SYSTEM = ("你是被派活的子 agent：只看得到这条任务本身，看不到父对话的历史。只做这一件事，"
                     "做完给一份不超过 300 字的摘要：结论 + 关键事实/数字 + 产物路径。不要复述任务、不要寒暄。")
 
-# 子 agent 只给只读工具（写操作留在父对话手里，跟 Hermes 的「subagent 不许越权」一个口径）
+# 子 agent 只给只读工具（写操作留在父对话手里，子 agent 不许越权）
 _SUB_TOOL_NAMES = ("library_overview", "knowledge_query", "paper_search", "paper_read")
 _SUB_TOOLS = [t for t in TOOL_SPECS if t.get("function", {}).get("name") in _SUB_TOOL_NAMES]
 
 
 def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: Any = None,
               profile: dict[str, Any] | None = None, scope: str = "", parallel: int = 3) -> dict[str, Any]:
-    """把子任务并行派给**独立上下文**的子 agent，只把摘要带回父对话（抄 Hermes 的 delegate_task）。
+    """把子任务并行派给**独立上下文**的子 agent，只把摘要带回父对话。
 
     隔离靠三件已有机制拼出来，不新建东西：
       * 每个子 agent 一个全新的 `scope`（db.messages(task_id, scope) 因此是空的）→ 看不到父对话历史；
@@ -2295,19 +2295,24 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
         return {"ok": False, "error": "delegate 需要至少一个子任务（jobs[].prompt）"}
     path = db.path
 
+    sub_events: list[dict[str, Any]] = []          # 子 agent 的事件也回给父，回放（F5）时才有分行
+
     def one(i: int, job: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         title = str(job.get("title") or f"子任务 {i + 1}")[:40]
         sid = "sub-" + uuid.uuid4().hex[:8]
         rec: dict[str, Any] = {"i": i, "title": title, "scope": sid, "summary": "", "steps": 0, "ok": True}
 
         def child_emit(ev: dict[str, Any]) -> None:
+            tagged = {**ev, "sub": sid, "sub_title": title}
+            sub_events.append(tagged)              # 收进父的事件流 → F5 回放也能看到分行
             if emit:
-                emit({**ev, "sub": sid, "sub_title": title})
+                emit(tagged)
 
         try:
             with WorkflowDB(path) as cdb:                      # 子 agent 自己一条连接
+                sub_events.append({"type": "sub", "phase": "start", "sub": sid, "sub_title": title})
                 if emit:
-                    emit({"type": "sub", "phase": "start", "sub": sid, "sub_title": title})
+                    emit(sub_events[-1])
                 r = run_agent(cdb, task_id, str(job["prompt"]), emit=child_emit,
                               max_steps=int(job.get("max_steps") or 4), system=_DELEGATE_SYSTEM,
                               tools=_SUB_TOOLS, publish=False, scope=sid, profile=profile)
@@ -2316,9 +2321,10 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
         except Exception as exc:                               # 一个子 agent 崩了不影响其它
             rec["ok"] = False
             rec["summary"] = f"（子任务失败：{exc}）"
+        sub_events.append({"type": "sub", "phase": "done", "sub": sid, "sub_title": title,
+                          "ok": rec["ok"], "summary": rec["summary"][:160]})
         if emit:
-            emit({"type": "sub", "phase": "done", "sub": sid, "sub_title": title,
-                  "ok": rec["ok"], "chars": len(rec["summary"])})
+            emit(sub_events[-1])
         return i, rec
 
     got: dict[int, dict[str, Any]] = {}
@@ -2328,7 +2334,7 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
     order = [got[i] for i in range(len(jobs))]
     _nl = chr(10)
     digest = (_nl + _nl).join("## " + r["title"] + _nl + (r["summary"] or "（空）") for r in order)
-    return {"ok": True, "delegated": order, "digest": digest,
+    return {"ok": True, "delegated": order, "digest": digest, "sub_events": sub_events,
             "hint": "把 digest 里的要点综合进你的回答；需要细节再向用户说明是哪路子 agent 给的。"}
 
 
@@ -2830,7 +2836,7 @@ CRITIC_TOOLS = [
             {"query": {"type": "string", "description": "关键词"}}, ["query"]),
 ]
 
-# 委派能力缝到每个「有 agent 跟人对话」的受限工具表后面（Hermes 式：能对话就能往下派活；
+# 委派能力缝到每个「有 agent 跟人对话」的受限工具表后面（能对话就能往下派活；
 # 子 agent 只有只读工具，所以这是加视野、不是提权）
 for _lst in (IDEA_TOOLS, EVIDENCE_TOOLS, CRITIC_TOOLS):
     if DELEGATE_TOOL not in _lst:
@@ -3352,6 +3358,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             say(ev); events.append(ev)
             try:
                 result = _tool_impl(name, db, ctx_id, args, scope, emit=emit, profile=profile)
+                if isinstance(result, dict) and result.get("sub_events"):
+                    events.extend(result["sub_events"])      # 子 agent 的事件并进本轮 → 回放可还原
                 ok, brief = True, _brief(name, result)
             except Exception as exc:
                 result, ok, brief = {"error": f"{type(exc).__name__}: {exc}"}, False, f"失败：{exc}"

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""delegate（Hermes 式委派）自检：独立上下文 / 只回摘要 / 真并行 / 只读工具 / 不写父对话历史。
+"""delegate（子 agent 委派）自检：独立上下文 / 只回摘要 / 真并行 / 只读工具 / 不写父对话历史。
 
     python -m unittest tests.test_delegate -v
 """

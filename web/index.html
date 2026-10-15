@@ -287,7 +287,7 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .proj-row .go.del{color:var(--err);font-weight:400;padding:0 4px}
 .proj-add:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
 
-/* ===== 定时任务（版式照原版 automation.tsx：页头+编辑器栅格+任务卡+说明+运行记录；配色用本应用变量） ===== */
+/* ===== 定时任务（页头 + 编辑器栅格 + 规则卡 + 说明 + 运行记录；配色走主题变量） ===== */
 .sch-eyebrow,.inst-label{font-size:11px;letter-spacing:.08em;color:var(--muted);font-weight:600;text-transform:uppercase;margin:0 0 4px}
 .sch-head{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}
 .sch-head h3{margin:0;font-size:16px}
@@ -315,7 +315,7 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .sch-run .det{flex-basis:100%;font-size:11.5px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
 .sch-run .acts{margin-left:auto;display:flex;gap:6px}
 
-/* ===== 项目空间（版式照原版 project-space.tsx：页头+tab+概览四卡+快照；色/控件全走主题变量） ===== */
+/* ===== 项目空间（页头 + tab + 概览四卡 + 快照；色/控件全走主题变量） ===== */
 .wf-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 10px}
 .wf-head .hint{font-size:12.5px}
 .sp-tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);margin-top:12px}
@@ -369,7 +369,7 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .proj-new .lb{border-radius:10px}
 
 
-/* ================= 日历页：四块卡片，上下 3:1，上排 2:1，下排 1:1（样式数值直接取 lit 的 public/style.css，变量映射到本项目的 --accent/--line/--muted/--err/--panel/--panel2） ================= */
+/* ================= 日历页：四块卡片，上下 3:1，上排 2:1，下排 1:1（数值全走本项目的 --accent/--line/--muted/--err/--panel/--panel2） ================= */
 .cal-page{display:grid;grid-template-rows:3fr 1fr;gap:14px;height:100%;min-height:0}
 .cal-mid{display:grid;grid-template-columns:2fr 1fr;gap:14px;min-height:0}
 /* 左列再分两层：问候卡 : 日历 = 1 : 2.2（照草图比例），问候卡内容整体居中 */
@@ -837,7 +837,7 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .sw.doton::before{width:19px;height:19px}
 .sidebar-foot .swatches{padding:6px 10px 2px;display:grid;grid-template-columns:repeat(7,1fr);gap:6px;justify-items:center}   /* 一行七个，14 色正好两行 */
 .md h1,.md h2,.md h3{margin:10px 0 6px}.md ul{margin:6px 0 6px 18px}.md code{background:var(--panel2);padding:1px 4px;border-radius:4px}
-/* ---------------- 大笔记（照抄 lit 的 Markdown 笔记，变量换成我们的主题） ---------------- */
+/* ---------------- 大笔记（Markdown 笔记编辑器，配色走主题变量） ---------------- */
 .seg-tabs{display:inline-flex;background:var(--panel2);border-radius:10px;padding:3px;gap:2px}
 .seg-tab{border:none;background:none;font-family:inherit;font-size:13px;padding:7px 16px;border-radius:8px;cursor:pointer;color:var(--muted)}
 .seg-tab.active{background:var(--panel);color:var(--accent);font-weight:700;box-shadow:var(--shadow)}
@@ -1115,7 +1115,7 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 #splash.out{opacity:0}
 #splash .sp-globe{position:absolute;left:0;right:0;top:-12.7%;height:79%;width:100%;display:block;touch-action:none;user-select:none}
 #splash .sp-word{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none}   /* 字标铺满整卡：手柄三角/坐标标签要有原组件的空间比例；不吃指针事件，地球才拖得动 */
-/* 「Enter」= magicui Interactive Hover Button 照抄：胶囊 + 圆点；悬停时圆点放大填满、文字右移淡出、覆盖层(文字+箭头)滑入 */
+/* 「Enter」悬停按钮：胶囊 + 圆点；悬停时圆点放大填满、文字右移淡出、覆盖层(文字+箭头)滑入 */
 #splash .sp-go{position:absolute;left:50%;top:86%;transform:translate(-50%,-50%);display:block;width:auto;padding:12px 36px;border:1px solid var(--line);border-radius:9999px;background:linear-gradient(180deg,var(--bg) 0%,color-mix(in srgb,var(--bg) 44%,#0B0C0E) 100%);color:var(--fg);font:800 24px/1 "Inter","Segoe UI","Microsoft YaHei",system-ui,sans-serif;letter-spacing:-0.02em;text-align:center;cursor:pointer;overflow:hidden}   /* top =（标题行 71.9% + 卡底 100%）/2；字体/字重/字距与字标同一套 */
 #splash .sp-in{display:flex;align-items:center;justify-content:center;gap:12px}
 #splash .sp-dot{width:12px;height:12px;flex:none;border-radius:9999px;background:linear-gradient(180deg,var(--accent) 47.9%,color-mix(in srgb,var(--accent) 44%,#0B0C0E) 52.1%);transition:all .3s}   /* 蓝态=字标同款纵向渐变。圆点要 scale(100.8) 放大到 ~1210px 去填胶囊，所以渐变只占 47.9~52.1% 这一小段 —— 放大后刚好铺满 49px 的胶囊高度（胶囊高度变了要同步改这两个数） */
@@ -1331,6 +1331,16 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .mp-card .row{display:flex;gap:8px;align-items:center}
 .mp-src{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px 0}
 .mp-chip{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px;background:var(--panel2)}
+/* ---- 子 agent 分行（委派：独立上下文、只读、只回摘要） ---- */
+.sub-row{display:flex;align-items:center;gap:8px;margin:6px 0 2px;padding:6px 10px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;background:color-mix(in srgb,var(--accent) 8%,transparent);font-size:12px}
+.sub-row .sub-ico{color:var(--accent);flex:none}
+.sub-row .sub-title{font-weight:600;flex:none;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sub-row .sub-note{color:var(--muted);font-size:11px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sub-row .sub-state{color:var(--muted);font-size:11px;flex:none}
+.sub-row.done{border-left-color:var(--ok)}
+.sub-row.bad{border-left-color:var(--err)}
+.sub-row.bad .sub-state{color:var(--err)}
+.sub-tag{font-size:10.5px;color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);border-radius:999px;padding:1px 6px;flex:none;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -1354,7 +1364,7 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
   </div>
 </div>
 
-<!-- 个人资料弹窗（照 lit 的填写页面；学校/专业/年级/进度按「其余信息不显示」删掉） -->
+<!-- 个人资料弹窗（只留常用字段；其余信息不显示） -->
 <div id="profileModal" class="modal hidden">
   <div class="modal-mask"></div>
   <div class="modal-dialog" style="width:400px">
@@ -1499,7 +1509,7 @@ let seq = 1;
 const $ = (id)=>document.getElementById(id);
 const esc = (s)=>String(s??"").replace(/[&<>"]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
-/* ---- Markdown 管线（照抄 lit：marked + KaTeX 扩展 + DOMPurify 白名单） ---- */
+/* ---- Markdown 管线（marked + KaTeX 扩展 + DOMPurify 白名单） ---- */
 if(window.marked && window.marked.use){
   window.marked.use({gfm:true, breaks:true, extensions:[
     {name:"blockKatex", level:"block", start:(src)=>src.indexOf("$$"),
@@ -1526,7 +1536,7 @@ const clock = (d = new Date())=>{ const w = "日一二三四五六"[d.getDay()];
   return `${d.getFullYear()}.${d.getMonth()+1}.${d.getDate()} 周${w} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
 
 async function api(path, opts){
-  // 两种调用约定都吃：api(path, {字段}) = POST JSON；api(path, {method,headers,body}) = 原样 fetch（lit 的邮箱代码是后者）
+  // 两种调用约定都吃：api(path, {字段}) = POST JSON；api(path, {method,headers,body}) = 原样 fetch
   let init = {};
   if(opts && (opts.method || opts.body || opts.headers)) init = {...opts};
   else if(opts) init = {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(opts)};
@@ -1698,9 +1708,9 @@ function needTask(){
 }
 
 
-/* ---------------- 助手（照 AionUi AssistantSettings/home + editor ----------------
+/* ---------------- 助手（个人资料 + 编辑器 ----------------
    我的助手 / 公开助手 两栏；点卡片进编辑器（身份 / 提示词 / 规则 / 默认模型）。
-   公开助手只读，只能「复制为我的」——照 AionUi 的权限表。 ---------------- */
+   公开助手只读，只能「复制为我的」。 ---------------- */
 let asView = "mine";                       // mine | official | edit
 let asEdit = { id:"", source:"user", name:"", avatar:"", description:"", rules:"", prompts:[], model_id:"" };
 
@@ -1727,7 +1737,7 @@ function asCard(a){
     </div></div>`;
 }
 
-/* ---------------- 团队（照 AionUi Teams：成员=助手实例、Leader 恒第一、身份色） ---------------- */
+/* ---------------- 团队（成员=助手实例、Leader 恒第一、身份色） ---------------- */
 let teamScope = localStorage.getItem("rw-team-chat") || "";
 let teamData = null, teamBusy = false, teamTick = null, teamList = null;
 function tcColor(i){ const P=["var(--brand)","#5c9ea4","#b58a5e","#8f7fb5","#7fa06a","#b57f92"]; return P[(i||0)%P.length]; }
@@ -2045,7 +2055,7 @@ function renderHistory(){
 const Q_AV = "/vendor/img/agent-q.png";
 const AH_AV = Array.from({length: 7}, (_, i)=>`/vendor/img/av${i + 1}.png`);   // 对话列表头像池（q/ 里那 7 张）     // 对话区的 agent 形象（Q 版小人，透明底，512²）
 const qAvatar = (px, r)=>`<span class="as-av q-av" style="width:${px}px;height:${px}px;${r?`border-radius:${r};`:""}"><img src="${Q_AV}" alt=""></span>`;
-function asEmpty(){                       // 照 AionUi SingleChatEmptyState：头像 + 名字 + 一行说明 + 推荐问题
+function asEmpty(){                       // 空状态：头像 + 名字 + 一行说明 + 推荐问题
   const a = (S.assistants||[]).find(x=>x.id === (((S.chats||[]).find(c=>c.id===curChat)||{}).assistant_id||"")) || null;
   let ps = []; try{ ps = JSON.parse((a&&a.prompts)||"[]"); }catch(e){ ps = []; }
   const chips = document.getElementById("msgs");
@@ -2130,7 +2140,7 @@ function renderAgent(m){
       </div>
     </section></div>`;
   const tEl = $("at-title");
-  if(tEl && cur) tEl.onclick = ()=>{          // 照 AionUi ChatTitleEditor：点标题原地改名
+  if(tEl && cur) tEl.onclick = ()=>{          // 点标题原地改名
     const inp = document.createElement("input");
     inp.className = "control"; inp.value = cur.title; inp.style.cssText = "font-size:16px;font-weight:700;max-width:320px";
     tEl.replaceWith(inp); inp.focus(); inp.select();
@@ -2257,18 +2267,34 @@ function appendOne(box,ev){
     ev.events.forEach(e=>appendOne(box,e));
   }
   const el=document.createElement("div");
+  if(ev.sub) el.style.marginLeft="14px";                 // 子 agent 的行缩进一层
   if(ev.type==="user"){
     el.className="msg-row msg-user";
     el.innerHTML=`<div class="msg-meta"><span class="msg-ava">👤</span><strong>你</strong><time>${esc(ev.at?fmtDate(ev.at):clock())}</time></div><p>${esc(ev.content)}</p>`;
   }
   else if(ev.type==="assistant"){
     el.className="msg-row msg-assistant";
-    el.innerHTML=`<div class="msg-meta">${qAvatar(24, "6px")}<strong>Pi</strong><span class="msg-chip">${esc(assistantKey())}</span><span class="msg-chip">完成</span></div><div class="md">${md(ev.content||"…")}</div>`;
+    el.innerHTML=`<div class="msg-meta">${qAvatar(24, "6px")}<strong>Pi</strong>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}<span class="msg-chip">${esc(assistantKey())}</span><span class="msg-chip">完成</span></div><div class="md">${md(ev.content||"…")}</div>`;
   }
   else if(ev.type==="error"){ el.className="msg-err"; el.textContent="⚠ "+(ev.message||"出错了"); }
+  else if(ev.type==="sub"){
+    if(ev.phase==="start"){
+      el.className="sub-row"; el.id="sub-"+ev.sub;
+      el.innerHTML=`<span class="sub-ico">⤷</span><span class="sub-title">${esc(ev.sub_title||"子任务")}</span>
+        <span class="sub-note">独立上下文 · 只读工具 · 跑完只回摘要</span><span class="sub-state">运行中…</span>`;
+      box.appendChild(el); box.scrollTop=box.scrollHeight; return;
+    }
+    const row=$("sub-"+ev.sub);
+    if(row){
+      row.classList.add(ev.ok===false?"bad":"done");
+      const st=row.querySelector(".sub-state"); if(st) st.textContent=ev.ok===false?"失败":"完成";
+      const nt=row.querySelector(".sub-note"); if(nt) nt.textContent=ev.summary||"（已回摘要）";
+    }
+    box.scrollTop=box.scrollHeight; return;
+  }
   else if(ev.type==="tool_call"){
     el.className="tool-card"; el.id="tc"+(seq++);
-    el.innerHTML=`<details open><summary><span>🔧</span><span class="tool-name">${esc(ev.name)}</span>
+    el.innerHTML=`<details open><summary><span>🔧</span><span class="tool-name">${esc(ev.name)}</span>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}
       <span class="tool-detail">调用中…</span><span class="tool-dur">进行中</span></summary>
       <div class="tool-body"><p class="tool-blk">Input</p><pre>${esc(JSON.stringify(ev.args||{},null,2))}</pre></div></details>`;
     box.appendChild(el); box.scrollTop=box.scrollHeight; return;
@@ -2288,7 +2314,7 @@ function appendOne(box,ev){
   else return;
   box.appendChild(el); box.scrollTop=box.scrollHeight;
 }
-/* ---------------- 附件（照 Hermes composer 的 + 菜单 / 拖放 / 粘贴，同一套入口） ---------------- */
+/* ---------------- 附件（+ 菜单 / 拖放 / 粘贴，同一套入口） ---------------- */
 const atts = [];                                  // 待发送附件；页签重渲染不丢
 const fmtSize = (n)=> !n ? "" : n>=1048576 ? (n/1048576).toFixed(1)+"MB" : Math.max(1,Math.round(n/1024))+"KB";
 
@@ -2347,7 +2373,7 @@ function wireDrop(el){                            // 照 use-composer-drop：进
   el.ondrop      = (e)=>{ if(!has(e.dataTransfer)) return; e.preventDefault(); depth=0; el.classList.remove("drop-on"); addFiles([...e.dataTransfer.files]); };
 }
 
-/* 量高度用隐藏镜像那个 textarea（Hermes 同款做法）：直接读真实框的 scrollHeight 会把
+/* 量高度用隐藏镜像那个 textarea：直接读真实框的 scrollHeight 会把
    占位提示的折行也算进去，空框就涨成好几行。镜像只放真正的内容，宽度跟真实框对齐。 */
 const TA_MIN = 42, TA_MAX = 200;                 // 单行高度跟着 .composer textarea 的 padding/行高走
 let taMirror = null;
@@ -3744,7 +3770,7 @@ function renderCalendar(m){
   $("todayInput").onkeydown = e=>{ if(e.key==="Enter"){ e.preventDefault(); add(); } };
 }
 
-/* 邮箱页标记：照抄 lit public/index.html 的 viewMail + 两个弹窗 */
+/* 邮箱页标记：收件箱视图 + 两个弹窗 */
 const MAIL_HTML = `<div class="mail-page"><!-- ===== 视图：邮箱 ===== -->
       <section id="viewMail" class="view">
         <div class="mail-wrap">
@@ -5001,7 +5027,7 @@ async function kbPickVault(){
 }
 
 
-/* ---------------- 笔记（大笔记：照抄 lit 的 Markdown 笔记，不绑项目） ---------------- */
+/* ---------------- 笔记（大笔记：Markdown 编辑器，不绑项目） ---------------- */
 let mdNotes=[], mdActiveId=null, mdSaveTimer=null, mdLoaded=false, mdFocusOn=false, mdNarrowOn=false, mdFocusPrev="split";
 
 function markdownNoteClean(html){
@@ -5242,7 +5268,7 @@ function mdBind(m){
     root.classList.remove("md-view-dragging");
   }));
 }
-/* ---------------- Zotero 接入（只读；照原版科研工作台：本机 Local API 127.0.0.1:23119） ----------------
+/* ---------------- Zotero 接入（只读；本机 Local API 127.0.0.1:23119） ----------------
    不读 zotero.sqlite、不写回、不后台同步。取到的条目走原有「新建笔记」，所以前台流程不变。 */
 let zotRows = [], zotStart = 0, zotMore = false;
 const zotSub = (it)=>[ (it.creators||[]).slice(0,3).join(", "), it.year, it.venue ].filter(Boolean).join(" · ");
@@ -5304,7 +5330,7 @@ function zotBind(){
 }
 zotBind();
 
-/* ---------------- 定时任务（照原版 automation：规则卡 + 运行记录；语义「只在应用活着时调度」） ---------------- */
+/* ---------------- 定时任务（规则卡 + 运行记录；语义「只在应用活着时调度」） ---------------- */
 let schRows = [], schRuns = [], schFreq = {}, schRunStatus = {}, schRetryable = [], schEdit = null, schFeedback = "";
 const SCH_PRESETS = {manual:"", hourly:"0 * * * *", daily:"0 9 * * *", weekdays:"0 9 * * 1-5", weekly:"0 9 * * 1"};
 
@@ -5448,7 +5474,7 @@ async function renderSchedules(m){
 }
 const schTaskName = (id)=> (S.tasks||[]).find(t=>t.id===id)?.title || "";
 
-/* ---------------- 项目空间（照原版 project-space：页头 + tab + 概览四卡 + 快照；
+/* ---------------- 项目空间（页头 + tab + 概览四卡 + 快照；
      只聚合本应用真有的数据，「任务/矩阵/资源关系/知识库」四个 tab 没有对应物 → 不做空壳） ---------------- */
 let spTab = "overview", spId = null, spTeam = null, spOpen = null;
 const SP_TABS = [["overview","概览"],["team","团队"],["papers","文献"],["notes","笔记"],["calendar","日程"]];
@@ -5956,7 +5982,7 @@ function setPanel(){
   if(!setMeta) return `<div class="card"><h3>${setSec==="skills"?"Skill":"MCP"} 服务器</h3><div class="hint">正在读本机配置…</div></div>`;
   if(setMeta.__err) return `<div class="card"><h3>读不到</h3><div class="hint">${esc(setMeta.__err)}</div></div>`;
   if(setSec === "skills") return `<div class="card"><h3>Skill <span class="pill">${(setMeta.skills||[]).length}</span></h3>
-      <div class="hint">本机技能包（只读）：<code>${esc(setMeta.hermes_dir||"")}</code> —— 安装/更新在 Hermes 里做。</div>
+      <div class="hint">本机技能包（只读）：<code>${esc(setMeta.hermes_dir||"")}</code> —— 安装/更新在技能目录里做。</div>
       <table><tr><th>技能</th><th>说明</th></tr>${(setMeta.skills||[]).map(x=>`<tr><td><code>${esc(x.name)}</code></td><td class="muted">${esc(x.desc)}</td></tr>`).join("")}</table></div>`;
   return `<div class="card"><h3>MCP <span class="pill">${(setMeta.mcp||[]).length}</span></h3>
       <div class="hint">本机配置里的 MCP 服务器（只读）：<code>${esc(setMeta.mcp_cfg||"")}</code></div>
@@ -6023,7 +6049,7 @@ setInterval(()=>{ const el=document.querySelector(".topbar .date"); if(el) el.te
   const g=$("calHelloText"); if(g) g.textContent=helloText(); }, 30000);   // 顶栏日期/时间自己走；问候语跟着时间变
 refreshState().catch(e=>{ $("main").innerHTML=`<div class="msg error">加载失败：${esc(e.message)}</div>`; });
 
-/* ---------------- 情报日报（RSS，来源固定 5 个；照科研工作台 features/intel-daily 的读侧：
+/* ---------------- 情报日报（RSS，来源固定 5 个；读侧：
      来源/关键词/年份三条件筛选 + 手动刷新） ---------------- */
 let itSrc = "", itQ = "", itYear = "", itItems = [], itTotal = 0, itTimer = 0, itSources = [];
 

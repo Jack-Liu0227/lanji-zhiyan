@@ -156,7 +156,7 @@ if __name__ == "__main__":
 
 
 class TestBuiltinSchedules(unittest.TestCase):
-    """内置定时任务 = 原版 TS 那 4 条，只补缺、不重复、不覆盖。"""
+    """内置定时任务 = 那 4 条，只补缺、不重复、不覆盖。"""
 
     def test_seeded_and_idempotent(self):
         want = {b["id"] for b in workflow.BUILTIN_SCHEDULES}
