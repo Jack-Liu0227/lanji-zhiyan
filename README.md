@@ -14,13 +14,13 @@
 
 ```powershell
 cd C:\Users\24410\Desktop\科研agent\research-workbench
-启动科研工作1.0.bat                  # 或 python server.py（自动开窗，满屏无边框）
-python server.py --port 8765 --no-open   # 只起服务，自己开浏览器
+tools\启动科研工作1.0.bat               # 或 py -3.10 apps\desktop\server.py（自动开窗，满屏无边框）
+py -3.10 apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开浏览器
 ```
 
 依赖：**Python 3.10**（`py -3.10`，只有它的 site-packages 里有 pywebview）。第三方依赖见 `requirements.txt`（全部 BSD/MIT/PSF，无 AGPL）。
 
-**自己打包**：双击 `build.bat`（用 `ResearchWorkbench.spec`，入口 `server.py`）→ `dist\ResearchWorkbench\`；要单文件安装器再打 `ResearchWorkbench-Setup.spec`（入口 `installer.py`）。**必须用 3.10 打包**，否则运行时会静默退回带黑标题栏的 Edge 窗口。
+**自己打包**：双击 `toolsuild.bat`（用 `tools\ResearchWorkbench.spec`，入口 `apps/desktop/server.py`）→ `dist\ResearchWorkbench\`；要单文件安装器再打 `tools\ResearchWorkbench-Setup.spec`（入口 `tools/installer.py`）。**必须用 3.10 打包**，否则运行时会静默退回带黑标题栏的 Edge 窗口。
 
 ---
 
@@ -48,20 +48,20 @@ python server.py --port 8765 --no-open   # 只起服务，自己开浏览器
 ## 三、怎么验（改完必跑）
 
 ```bash
-自检.bat                                       # 一条命令跑完：Python 自检 + 前端主题自检 + JS 语法
-py -3.10 -m unittest discover -s tests -t .    # 108 项自检（等价的第一条）
-node web/theme.test.mjs                        # 主题配色（HSL 往返 / 明暗推导 / 对比度 ≥ AA）
+tools\自检.bat                                  # 一条命令跑完：Python 自检 + 前端主题自检 + JS 语法
+py -3.10 -m unittest discover -s tests -t .    # 114 项自检（等价的第一条）
+node apps/desktop/web/theme.test.mjs            # 主题配色（HSL 往返 / 明暗推导 / 对比度 ≥ AA）
 ```
 
-改完 `.py` **必须关窗重开**（窗口就是服务进程，关窗即退）；只改 `web/` 按 F5 即可。
+改完 `.py` **必须关窗重开**（窗口就是服务进程，关窗即退）；只改 `apps/desktop/web/` 按 F5 即可。
 
-验 UI 的套路（不碰真库）：起临时实例 `RESEARCH_WORKBENCH_DB="$TEMP/x.sqlite3" py -3.10 server.py --port 8799 --no-open`，再用无头 Edge + CDP 驱动页面读数/截图。
+验 UI 的套路（不碰真库）：起临时实例 `RESEARCH_WORKBENCH_DB="C:/Users/<你>/AppData/Local/Temp/x.sqlite3" py -3.10 apps/desktop/server.py --port 8799 --no-open`，再用无头 Edge + CDP 驱动页面读数/截图。**注意别用 `/tmp/...`**：MSYS 的 `/tmp` 不会被翻译，原生 Python 会当成 `C:	mp\`，库就建到别处去了。
 
 ---
 
 ## 四、模型与 Agent
 
-- **40 家 Provider 目录**（`providers_catalog.json`，从科研工作台的 pi-ai SDK 导出）：卡片制，填 Key → 发现模型/手填 → 采用 → 点 chip 设为默认。Key 不回显（服务端只回 `key_present`）。
+- **40 家 Provider 目录**（`packages/contracts/providers_catalog.json`）：卡片制，填 Key → 发现模型/手填 → 采用 → 点 chip 设为默认。Key 不回显（服务端只回 `key_present`）。
 - 本机只实现 **`openai-completions`** 这一条协议；另 20 家能配置、能测、卡片标「协议未接」，设默认会被拦住。
 - **助手 = 一个接进来的模型**：绑了助手就用它接的模型（Agent 页 / 十步 / 团队接力全认）。
 - **Agent 工具**：`library_overview` `knowledge_query` `calendar_add` `idea_review` `paper_search` `paper_download` `paper_read` `notes_compose` `draft_write` `draft_review` `format_convert` + 团队 `team_board` `team_assign`；另有按步限定的作用域工具（大纲/撰写/审查的 `doc_write`/`doc_read`/`cite_add`，梳理精读的 `map_write`/`map_read`/`map_sources`）。
@@ -84,12 +84,14 @@ node web/theme.test.mjs                        # 主题配色（HSL 往返 / 明
 
 | 文件 | 干什么 |
 |---|---|
-| `server.py` | 纯标准库 HTTP 服务（ThreadingHTTPServer）：静态页 + JSON API + `/api/agent` 等 SSE；启动即开无边框窗 |
-| `workflow.py` | 十步工作流、三源检索、OA 下载、精读、翻译、大纲/撰写/审查/谱系、引用台账、中译英、格式转换、日历、模型档案、Agent 工具循环、项目记忆与六子目录 |
+| `apps/desktop/server.py` | 纯标准库 HTTP 服务（ThreadingHTTPServer）：静态页 + JSON API + `/api/agent` 等 SSE；启动即开无边框窗。**桌面快捷方式直接指这个文件** |
+| `packages/workspace-service/workflow.py` | 十步工作流、三源检索、OA 下载、精读、翻译、大纲/撰写/审查/谱系、引用台账、中译英、格式转换、日历、模型档案、Agent 工具循环（含子 agent 委派）、项目记忆与六子目录 |
 | `research_core.py` | 核心库：SQLite、任务、PDF 入库（SHA256 去重/逐页文本）、证据闸门、导出 |
 | `team.py` / `schedule.py` / `rss.py` / `vault.py` / `zotero.py` / `mail.py` / `papertran.py` / `pdfio.py` / `guards.py` / `integrations.py` | 团队、定时任务、情报日报、Obsidian、Zotero（只读本地 API）、邮箱、论文翻译、PDF 适配层、出站脱敏+引用核验、Obsidian 预览写入 |
-| `web/` | 单文件前端 `index.html`（CSS/JS 全内联）+ `vendor/`（marked / DOMPurify / KaTeX / pdf.js / lunar / splash / kb3d）+ 主题自检 |
-| `tests/` | 自检 13 个文件（108 项） |
-| `providers_catalog.json` / `requirements.txt` / `*.spec` / `build.bat` / `install.ps1` / `installer.py` | 目录与打包 |
+| `apps/desktop/web/` | 单文件前端 `index.html`（CSS/JS 全内联）+ `vendor/`（marked / DOMPurify / KaTeX / pdf.js / lunar / splash / kb3d）+ 主题自检 |
+| `tests/` | 自检 14 个文件（114 项） |
+| `tools/` | `自检.bat` / `build.bat` / `启动科研工作1.0.bat` / `*.spec` / `install.ps1` / `installer.py` / `hooks/` / `build/icon.ico`（打包与自检都在这里） |
+| `packages/` | 按目标仓的分包布局：`database`（research_core）/ `workspace-service`（workflow·team·schedule·papertran）/ `connectors`（zotero·vault·mail·rss·integrations）/ `workspace-core`（guards·pdfio）/ `contracts`（Provider 目录）/ `ai-runtime`（agent 运行时占位，见其 README） |
+| `docs/` | `交接.md`（内部交接，gitignore 外的说明在 README） |
 | `data/` | 全部数据（`research.sqlite3` + `papers/` `notes/` `out/` `uploads/`） |
 | `交接.md` | 给下一个会话的交接（现状 / 坑 / 待办） |

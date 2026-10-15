@@ -19,7 +19,9 @@ import tempfile
 
 # ---------------- 来自 test_web_fetch.py ----------------
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+WEB = ROOT / "apps" / "desktop" / "web"
+for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
+    sys.path.insert(0, str(ROOT / "packages" / _n))
 
 CALL = re.compile(r"fetch\((.*?)\)", re.S)
 EXEMPT = "/api/upload"          # 唯一豁免：它走原始字节 body，server.py 在闸门之前就 return 了
@@ -28,7 +30,7 @@ EXEMPT = "/api/upload"          # 唯一豁免：它走原始字节 body，serve
 class WebFetchTest(unittest.TestCase):
     def test_post_fetches_carry_json_header(self) -> None:
         bad = []
-        files = [ROOT / "web" / "index.html"] + sorted((ROOT / "web" / "vendor").glob("*.js"))
+        files = [WEB / "index.html"] + sorted((WEB / "vendor").glob("*.js"))
         for f in files:
             for m in CALL.finditer(f.read_text(encoding="utf-8")):
                 arg = m.group(1)
@@ -42,9 +44,9 @@ class WebFetchTest(unittest.TestCase):
 
 # ---------------- 来自 test_splash_card.py ----------------
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-HTML = ROOT / "web" / "index.html"
-JS = ROOT / "web" / "vendor" / "splash.js"
-SERVER = ROOT / "server.py"
+HTML = WEB / "index.html"
+JS = WEB / "vendor" / "splash.js"
+SERVER = ROOT / "apps" / "desktop" / "server.py"
 
 TITLE = "Personal Research Workspace"
 GO = "Enter"
@@ -86,7 +88,7 @@ class MainScriptSyntaxTest(unittest.TestCase):
     这种错 py_compile / 肉眼都抓不到，只有把脚本抠出来 node --check 才看得见。"""
 
     def test_main_inline_script_parses(self):
-        h = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        h = (WEB / "index.html").read_text(encoding="utf-8")
         blocks = re.findall(r"<script(?![^>]*src=)[^>]*>(.*?)</script>", h, re.S)
         main = max(blocks, key=len)
         tmp = pathlib.Path(tempfile.mkstemp(suffix=".js")[1])

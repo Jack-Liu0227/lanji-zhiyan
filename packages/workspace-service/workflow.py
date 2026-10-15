@@ -32,7 +32,9 @@ from typing import Any
 from research_core import ResearchDB
 
 HERE = Path(__file__).resolve().parent
-DATA = HERE / "data"
+_SRC = HERE.parents[1]                              # packages/（源码树里）
+ROOT = _SRC.parent if (_SRC / "contracts").is_dir() else HERE   # 打包后模块被平铺到 exe 目录
+DATA = ROOT / "data"
 PAPERS = DATA / "papers"
 NOTES = DATA / "notes"
 OUT = DATA / "out"
@@ -87,7 +89,11 @@ CREATE TABLE IF NOT EXISTS providers (
 
 # 内置 Provider 目录：从科研工作台内嵌的 pi-ai SDK 里导出（40 家），不手抄
 # 见同目录 providers_catalog.json（id / name / base_url / wire / auth / 模型 id）
-CATALOG_PATH = Path(__file__).resolve().parent / "providers_catalog.json"
+CATALOG_PATH = next((p for p in (
+    ROOT / "packages" / "contracts" / "providers_catalog.json",   # 源码树
+    ROOT / "contracts" / "providers_catalog.json",                # 打包后（数据按 datas 落位）
+    HERE / "providers_catalog.json",
+) if p.is_file()), ROOT / "packages" / "contracts" / "providers_catalog.json")
 try:
     PROVIDER_CATALOG: dict[str, dict[str, Any]] = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
 except (OSError, ValueError):

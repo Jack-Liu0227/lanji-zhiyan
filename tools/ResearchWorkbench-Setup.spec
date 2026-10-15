@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['installer.py'],
+    ['tools/installer.py'],
     pathex=[],
     binaries=[],
     datas=[('dist/ResearchWorkbench', 'ResearchWorkbench')],

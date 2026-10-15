@@ -24,6 +24,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+# ---- 仓库根与 packages/ 各包挂上 sys.path（照目标仓的 packages 布局）----
+ROOT = Path(__file__).resolve().parents[2]
+if not (ROOT / "packages").is_dir():            # 打包后模块被平铺到 exe 目录，数据目录也在那儿
+    ROOT = Path(__file__).resolve().parent
+for _p in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
+    _d = ROOT / "packages" / _p
+    if _d.is_dir() and str(_d) not in sys.path:
+        sys.path.insert(0, str(_d))
+
 import papertran                 # 论文翻译页：PDF 服务 / 元数据 / BabelDOC 任务
 import rss                       # 情报日报：RSS 抓取/解析
 import vault                     # 知识库：Obsidian Vault 扫描 / 状态写回
@@ -43,10 +52,10 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
 
 HERE = Path(__file__).resolve().parent
 WEB = HERE / "web"
-DB_PATH = Path(os.environ.get("RESEARCH_WORKBENCH_DB", HERE / "data" / "research.sqlite3"))
+DB_PATH = Path(os.environ.get("RESEARCH_WORKBENCH_DB", ROOT / "data" / "research.sqlite3"))
 schedule.DB_PATH = DB_PATH          # 定时任务共用同一个库（schedule 不反向 import server）
 team.DB_PATH = DB_PATH              # 团队共用同一个库
-UPLOADS = HERE / "data" / "uploads"
+UPLOADS = ROOT / "data" / "uploads"
 PORT = 8765
 CARD_W, CARD_H = 1117, 625      # 「开始卡片」尺寸（CSS 逻辑像素）
 CARD_PIN = True                 # True=窗口一直钉在卡片尺寸；点「进入」走 /api/win/maximize 后放掉

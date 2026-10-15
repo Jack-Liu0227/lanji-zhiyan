@@ -13,7 +13,9 @@ from workflow import SOURCES, WorkflowDB, download_pdf, run_agent, stage_convert
 # python -m unittest test_deepread -v
 import os
 import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
+    sys.path.insert(0, os.path.join(_ROOT, "packages", _n))
 import pathlib
 
 
@@ -282,7 +284,9 @@ class WorkflowTest(unittest.TestCase):
 
         from _pdf_fixture import write_text_pdf
 
-        import server as srv
+        import importlib.util                # 服务模块在 apps/desktop/server.py：按路径加载
+        _sp = importlib.util.spec_from_file_location("rw_server", _ROOT + "/apps/desktop/server.py")
+        srv = importlib.util.module_from_spec(_sp); _sp.loader.exec_module(srv)
 
         srv.DB_PATH = Path(self.td.name) / "wb.sqlite3"      # 指到本测试的临时库
         srv.UPLOADS = Path(self.td.name) / "uploads"

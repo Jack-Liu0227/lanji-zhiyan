@@ -7,7 +7,9 @@ import os
 import sys
 import time
 import unittest
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
+    sys.path.insert(0, os.path.join(_ROOT, "packages", _n))
 import papertran  # noqa: E402
 # _splice 自检：第一段只取请求区间、第二段能把文档撑长、乱序并行缺页补空白。
 import pathlib

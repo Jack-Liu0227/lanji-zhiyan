@@ -7,7 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_ROOT = str(Path(__file__).resolve().parent.parent)
+for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
+    sys.path.insert(0, str(Path(_ROOT) / "packages" / _n))
 
 import workflow  # noqa: E402
 

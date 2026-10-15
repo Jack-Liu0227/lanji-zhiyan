@@ -1,25 +1,33 @@
 # -*- mode: python ; coding: utf-8 -*-
 # 打包：build.bat（或 python -m PyInstaller ResearchWorkbench.spec --noconfirm --clean）
 # 关键三条（少一条打出来的包就是坏的）：
-#   1) datas 必须带 web/（界面）和 build/icon.ico（窗口图标），否则界面对了图标也缺
-#   2) contents_directory='.' 让 web/ 与 exe 同目录 —— server.py 用 HERE/web、workflow.py 用
-#      __file__ 的 parent 找 providers_catalog.json，两种写法都指向 exe 所在目录才对得上
+#   1) datas 必须带界面目录（apps/desktop/web）、Provider 目录（packages/contracts）和窗口图标，缺一个就坏
+#   2) contents_directory='.'：界面目录与 exe 同目录 —— 服务与工作流都按「自己所在目录往上找」定位资源
+#   3) pathex 必须带 packages/ 各包：入口在 apps/desktop/，静态分析要从那儿顺着 import 找过去
 #   3) upx=False：UPX 压缩是杀软误报的主要来源
 
+import os
+
+_ROOT = os.path.dirname(os.path.abspath(SPECPATH))          # SPECPATH = tools/，仓库根在上一层
+_PKGS = [os.path.join(_ROOT, 'packages', n) for n in
+         ('database', 'workspace-core', 'workspace-service', 'connectors', 'ai-runtime')]
+
 a = Analysis(
-    ['server.py'],
-    pathex=[],
+    ['apps/desktop/server.py'],
+    pathex=_PKGS,
     binaries=[],
     datas=[
-        ('web', 'web'),
-        ('build/icon.ico', 'build'),
-        ('providers_catalog.json', '.'),
+        ('apps/desktop/web', 'web'),
+        ('tools/build/icon.ico', 'build'),
+        ('packages/contracts/providers_catalog.json', 'packages/contracts'),
     ],
-    hiddenimports=['pdfplumber', 'pypdf', 'cryptography', 'PIL', 'pypdfium2', 'webview'],
+    hiddenimports=['pdfplumber', 'pypdf', 'cryptography', 'PIL', 'pypdfium2', 'webview',
+                   'research_core', 'workflow', 'team', 'schedule', 'papertran', 'zotero', 'vault',
+                   'mail', 'rss', 'integrations', 'guards', 'pdfio'],
     # 说明：pdfminer.six / pdfplumber 里有条件导入（cryptography 处理加密 PDF、PIL/pypdfium2 渲染），
     # 静态分析看不到，必须显式列出；PyMuPDF(AGPL) 已弃用，见 pdfio.py。
    # cryptography: pdfminer.six 里是条件导入，静态分析看不到   # PyMuPDF(AGPL) 已弃用，见 pdfio.py / requirements.txt
-    hookspath=['hooks'],       # hooks/hook-workflow.py 用来顶掉同名 contrib 钩子（见该文件注释）
+    hookspath=['tools/hooks'],       # hooks/hook-workflow.py 用来顶掉同名 contrib 钩子（见该文件注释）
     hooksconfig={},
     runtime_hooks=[],
     # 应用一行都没用到下面这些；它们是被 3.10 里别的包连带拖进来的（torch 还是 CUDA 版）。
@@ -53,7 +61,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='build/icon.ico',
+    icon='tools/build/icon.ico',
     contents_directory='.',
 )
 coll = COLLECT(

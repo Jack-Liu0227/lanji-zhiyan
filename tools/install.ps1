@@ -1,25 +1,24 @@
 ﻿<#
   科研工作 1.0 安装器（Windows）
   ------------------------------------------------------------------
-  给别人用（从 GitHub Releases 拉最新版，装到 %LOCALAPPDATA%、建桌面快捷方式、直接启动）：
-      irm https://raw.githubusercontent.com/3276166289-code/research-workbench/main/install.ps1 | iex
-
-  自己从本地打包目录装（开发时用）：
+  从本地打包目录装（装到 %LOCALAPPDATA%、建桌面快捷方式、直接启动）：
       .\install.ps1 -Source .\dist\ResearchWorkbench
+
+  说明：走 GitHub Releases 在线拉取那条路已停用（仓库不再发布），只保留本地安装。
 
   重复安装安全：数据目录 data/ 不覆盖，用户库/笔记都在。
   注意：本文件必须存成**带 BOM 的 UTF-8**。Windows PowerShell 5.1 按 GBK 读无 BOM 脚本，
         中文会把脚本解析崩，而且报错行号是假的（现象：复制、建快捷方式都执行了，最后一条才炸）。
 #>
 param(
-    [string]$Repo = "3276166289-code/research-workbench",
     [string]$InstallRoot = "$env:LOCALAPPDATA\Programs\ResearchWorkbench",
     [string]$Source = ""
 )
 $ErrorActionPreference = "Stop"
 
 if (-not $Source) {
-    $url = "https://github.com/$Repo/releases/latest/download/ResearchWorkbench.zip"
+    throw "没给 -Source：在线拉取已停用，请用 -Source .\dist\ResearchWorkbench"
+    $url = "https://example.invalid/ResearchWorkbench.zip"
     $zip = Join-Path $env:TEMP "ResearchWorkbench.zip"
     $tmp = Join-Path $env:TEMP "rw-unpack"
     Write-Host "下载最新版：$url"

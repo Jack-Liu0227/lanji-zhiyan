@@ -13,7 +13,9 @@ import threading
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
+    sys.path.insert(0, os.path.join(_ROOT, "packages", _n))
 
 import workflow                                   # noqa: E402
 from workflow import WorkflowDB, run_agent        # noqa: E402

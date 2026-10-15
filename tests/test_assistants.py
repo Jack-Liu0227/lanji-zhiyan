@@ -8,7 +8,9 @@ from __future__ import annotations
 import json
 import os
 import sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
+    sys.path.insert(0, os.path.join(_ROOT, "packages", _n))
 import pathlib
 import tempfile
 import unittest
