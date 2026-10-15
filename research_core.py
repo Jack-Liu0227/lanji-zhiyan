@@ -93,6 +93,7 @@ class ResearchDB:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path)
+        self.db.execute("PRAGMA busy_timeout=5000")   # 子 agent 并行时各自一条连接，别立刻报 database is locked
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
         self.db.commit()

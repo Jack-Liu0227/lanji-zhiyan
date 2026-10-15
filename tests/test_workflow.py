@@ -389,7 +389,7 @@ class WorkflowTest(unittest.TestCase):
                      "function": {"name": "library_overview", "arguments": "{}"}}]}
             return {"role": "assistant", "content": "好。", "tool_calls": []}
 
-        def fake_tool_impl(name, db, task_id, args, scope=""):
+        def fake_tool_impl(name, db, task_id, args, scope="", **kw):   # 新签名会带 emit/profile
             ids.append(task_id)
             return {"ok": True}
 

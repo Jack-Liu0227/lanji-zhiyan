@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 
@@ -2148,7 +2149,20 @@ def _schema(name: str, desc: str, props: dict[str, Any], required: list[str] | N
             "parameters": {"type": "object", "properties": props, "required": required or []}}}
 
 
+DELEGATE_TOOL = _schema("delegate", "把 1-4 个互不依赖的子任务**并行**派给独立上下文的子 agent，各自跑完只回一份摘要。"
+            "适合：分别读/算好几篇文献或好几个方向、需要独立视角复核、单条线索太长会挤爆上下文时。"
+            "子 agent 看不到这段对话历史、只有只读工具；写操作留在你（父 agent）手里。",
+            {"jobs": {"type": "array", "items": {"type": "object", "properties": {
+                "title": {"type": "string", "description": "子任务短名，用于前台分行显示"},
+                "prompt": {"type": "string", "description": "这一份要独立完成的任务，写清对象与要交的东西"},
+                "max_steps": {"type": "integer", "description": "最多几步工具循环，默认 4"}},
+                "required": ["prompt"]}},
+                "parallel": {"type": "integer", "description": "并行度，默认 3"}},
+            ["jobs"])
+
+
 TOOL_SPECS = [
+DELEGATE_TOOL,
     _schema("library_overview", "查看当前任务的文献/检索结果/笔记/证据数量和最近条目，先调它了解现状。", {}),
     _schema("idea_review", "审查一个创新点：给新颖性/可行性/证据充分度评分、风险与待答问题。", {"idea": {"type": "string", "description": "待审查的创新点"}}, ["idea"]),
     _schema("paper_search", "在 OpenAlex/Crossref/arXiv 检索论文并入库。", {
@@ -2257,8 +2271,73 @@ def _knowledge_query(db: "WorkflowDB", task_id: str, query: str) -> dict[str, An
     return {"query": query, "hits": hits[:20], "total": len(hits)}
 
 
-def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], scope: str = "") -> Any:
+_DELEGATE_SYSTEM = ("你是被派活的子 agent：只看得到这条任务本身，看不到父对话的历史。只做这一件事，"
+                    "做完给一份不超过 300 字的摘要：结论 + 关键事实/数字 + 产物路径。不要复述任务、不要寒暄。")
+
+# 子 agent 只给只读工具（写操作留在父对话手里，跟 Hermes 的「subagent 不许越权」一个口径）
+_SUB_TOOL_NAMES = ("library_overview", "knowledge_query", "paper_search", "paper_read")
+_SUB_TOOLS = [t for t in TOOL_SPECS if t.get("function", {}).get("name") in _SUB_TOOL_NAMES]
+
+
+def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: Any = None,
+              profile: dict[str, Any] | None = None, scope: str = "", parallel: int = 3) -> dict[str, Any]:
+    """把子任务并行派给**独立上下文**的子 agent，只把摘要带回父对话（抄 Hermes 的 delegate_task）。
+
+    隔离靠三件已有机制拼出来，不新建东西：
+      * 每个子 agent 一个全新的 `scope`（db.messages(task_id, scope) 因此是空的）→ 看不到父对话历史；
+      * `publish=False` → 子 agent 不写对话历史、不落 assistant 回复（跟「撰写流水线内部子 agent」同一条路）；
+      * 只读工具表 `_SUB_TOOLS` → 子 agent 不能改库。
+    子 agent 各自**新开一条连接**（同库不同连接），事件打上 `sub`/`sub_title` 供前台分行显示。
+    # ponytail: 单机 SQLite，父子各一条连接 + busy_timeout；真要高并发再上 WAL 或连接池
+    """
+    jobs = [j for j in (jobs or []) if str(j.get("prompt") or "").strip()][:4]
+    if not jobs:
+        return {"ok": False, "error": "delegate 需要至少一个子任务（jobs[].prompt）"}
+    path = db.path
+
+    def one(i: int, job: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        title = str(job.get("title") or f"子任务 {i + 1}")[:40]
+        sid = "sub-" + uuid.uuid4().hex[:8]
+        rec: dict[str, Any] = {"i": i, "title": title, "scope": sid, "summary": "", "steps": 0, "ok": True}
+
+        def child_emit(ev: dict[str, Any]) -> None:
+            if emit:
+                emit({**ev, "sub": sid, "sub_title": title})
+
+        try:
+            with WorkflowDB(path) as cdb:                      # 子 agent 自己一条连接
+                if emit:
+                    emit({"type": "sub", "phase": "start", "sub": sid, "sub_title": title})
+                r = run_agent(cdb, task_id, str(job["prompt"]), emit=child_emit,
+                              max_steps=int(job.get("max_steps") or 4), system=_DELEGATE_SYSTEM,
+                              tools=_SUB_TOOLS, publish=False, scope=sid, profile=profile)
+            rec["summary"] = (r.get("reply") or "").strip()[:2000]
+            rec["steps"] = len(r.get("events") or [])
+        except Exception as exc:                               # 一个子 agent 崩了不影响其它
+            rec["ok"] = False
+            rec["summary"] = f"（子任务失败：{exc}）"
+        if emit:
+            emit({"type": "sub", "phase": "done", "sub": sid, "sub_title": title,
+                  "ok": rec["ok"], "chars": len(rec["summary"])})
+        return i, rec
+
+    got: dict[int, dict[str, Any]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(parallel, len(jobs)))) as ex:
+        for i, rec in ex.map(lambda p: one(*p), list(enumerate(jobs))):
+            got[i] = rec
+    order = [got[i] for i in range(len(jobs))]
+    _nl = chr(10)
+    digest = (_nl + _nl).join("## " + r["title"] + _nl + (r["summary"] or "（空）") for r in order)
+    return {"ok": True, "delegated": order, "digest": digest,
+            "hint": "把 digest 里的要点综合进你的回答；需要细节再向用户说明是哪路子 agent 给的。"}
+
+
+def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], scope: str = "",
+               emit: Any = None, profile: dict[str, Any] | None = None) -> Any:
     """scope = 当前步骤（''/'idea'/'outline'/'write'/'review'）—— doc_read/doc_write 据此决定动哪个文件。"""
+    if name == "delegate":
+        return _delegate(db, task_id, args.get("jobs") or [], emit=emit, profile=profile,
+                         scope=scope, parallel=int(args.get("parallel") or 3))
     if name in ("team_board", "team_assign"):
         import team as _team                                  # 延迟导入：team 反向依赖 workflow
         tid = _team_project(db, task_id, args.get("project", ""))
@@ -2750,6 +2829,13 @@ CRITIC_TOOLS = [
     _schema("knowledge_query", "在项目知识库（精读笔记 + 证据原文块）里按关键词检索，核对正文里的数字/论断有没有出处。",
             {"query": {"type": "string", "description": "关键词"}}, ["query"]),
 ]
+
+# 委派能力缝到每个「有 agent 跟人对话」的受限工具表后面（Hermes 式：能对话就能往下派活；
+# 子 agent 只有只读工具，所以这是加视野、不是提权）
+for _lst in (IDEA_TOOLS, EVIDENCE_TOOLS, CRITIC_TOOLS):
+    if DELEGATE_TOOL not in _lst:
+        _lst.append(DELEGATE_TOOL)
+
 
 
 def evidence_system(db: "WorkflowDB", task_id: str) -> str:
@@ -3265,7 +3351,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             ev = {"type": "tool_call", "name": name, "args": args, "id": call.get("id")}
             say(ev); events.append(ev)
             try:
-                result = _tool_impl(name, db, ctx_id, args, scope)
+                result = _tool_impl(name, db, ctx_id, args, scope, emit=emit, profile=profile)
                 ok, brief = True, _brief(name, result)
             except Exception as exc:
                 result, ok, brief = {"error": f"{type(exc).__name__}: {exc}"}, False, f"失败：{exc}"
