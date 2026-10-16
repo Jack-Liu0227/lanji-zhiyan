@@ -6,13 +6,13 @@ rem 本机 py 启动器里还注册着 uv 的 Astral/CPython3.11，踩过「起�
 rem → 静默退回 Edge --app 窗口（带黑标题栏，用户要的就是别带）。3.10 才装了 PyMuPDF/python-docx/pywebview。
 set PY310=%LOCALAPPDATA%\Programs\Python\Python310
 if exist "%PY310%\pythonw.exe" (
-  start "" "%PY310%\pythonw.exe" "%~dp0..pps\desktop\server.py"
+  start "" "%PY310%\pythonw.exe" "%~dp0..\apps\desktop\server.py"
   exit /b
 )
 rem 兜底：3.10 不在默认位置时退回 pyw -3.10 / pythonw
 where pyw >nul 2>nul
 if %errorlevel%==0 (
-  start "" pyw -3.10 "%~dp0..pps\desktop\server.py"
+  start "" pyw -3.10 "%~dp0..\apps\desktop\server.py"
   exit /b
 )
-start "" pythonw "%~dp0..pps\desktop\server.py"
+start "" pythonw "%~dp0..\apps\desktop\server.py"

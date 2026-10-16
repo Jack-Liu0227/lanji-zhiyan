@@ -760,9 +760,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(litgraph(db, tid))
             if path == "/api/state":
                 with WorkflowDB(DB_PATH) as db:
+                    all_tasks = db.tasks()
+                    if not all_tasks:
+                        db.create_task(
+                            "锂金属固态电池界面反应动力学与多尺度演化研究",
+                            "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
+                            "固态锂电池, 复合固态电解质, 锂金属负极",
+                        )
+                        all_tasks = db.tasks()
                     active = db.active_model()
                     return self._json({
-                        "tasks": [{**dict(t), "stage_now": db.stage_now(t["id"], t["stage"])} for t in db.tasks()],
+                        "tasks": [{**dict(t), "stage_now": db.stage_now(t["id"], t["stage"])} for t in all_tasks],
                         "chats": db.chats(),
                         "assistants": db.assistants(),
                         "models": [{**m, "api_key": "***" if m["api_key"] else ""} for m in db.models()],
@@ -1185,7 +1193,8 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/en/run":                   # 一键翻译（中文 markdown → 英文 markdown）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(en_run(db, (data.get("task_id") or "").strip(),
-                                                 data.get("text") or "", data.get("name") or ""))
+                                                 data.get("text") or "", data.get("name") or "",
+                                                 style=data.get("style", "formal")))
                 if path == "/api/conv/compile":              # 编译代码区打开的那份 .tex
                     return self._json(conv_compile(data.get("path", "")))
                 if path == "/api/conv/open":                 # 用系统默认程序打开
@@ -1429,7 +1438,13 @@ def main() -> int:
     if busy:
         print(f"科研工作 1.0 已在运行：{url}")
     else:
-        WorkflowDB(DB_PATH).close()
+        with WorkflowDB(DB_PATH) as _db:
+            if not _db.tasks():
+                _db.create_task(
+                    "锂金属固态电池界面反应动力学与多尺度演化研究",
+                    "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
+                    "固态锂电池, 复合固态电解质, 锂金属负极",
+                )
         srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         schedule.start()          # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）

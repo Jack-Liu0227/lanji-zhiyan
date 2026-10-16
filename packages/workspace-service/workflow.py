@@ -32,8 +32,7 @@ from typing import Any
 from research_core import ResearchDB
 
 HERE = Path(__file__).resolve().parent
-_SRC = HERE.parents[1]                              # packages/（源码树里）
-ROOT = _SRC.parent if (_SRC / "contracts").is_dir() else HERE   # 打包后模块被平铺到 exe 目录
+ROOT = HERE.parents[1] if (HERE.parents[1] / "packages").is_dir() else HERE   # 源码树根 / 打包后 exe 根
 DATA = ROOT / "data"
 PAPERS = DATA / "papers"
 NOTES = DATA / "notes"
@@ -1474,24 +1473,42 @@ def stage_idea(db: WorkflowDB, task_id: str, idea: str) -> dict[str, Any]:
         {"role": "system", "content": '你是严格的科研选题评审（博导视角）。只返回 JSON：'
          '{"type":"Novel Problem|Novel Method|New Setting","story":"一句话讲清","flaws":[{"flaw":"","severity":"CRITICAL|MAJOR","defense":""}],'
          '"dims":{"Higher":0-10,"Faster":0-10,"Stronger":0-10,"Cheaper":0-10,"Broader":0-10},'
-         '"dims_evidence":{"Higher":"","Faster":"","Stronger":"","Cheaper":"","Broader":""},'
+         '"dims_f":{"F1":0-10,"F2":0-10,"F3":0-10,"F4":0-10,"F5":0-10},'
+         '"dims_evidence":{"F1":"","F2":"","F3":"","F4":"","F5":""},'
+         '"falsifications":[{"risk":"HIGH|MEDIUM","criticism":"审稿人潜在质疑","defense":"防御实验设计"}],'
          '"verdict":"Strong Accept|Accept with Revisions|Reject and Pivot","reason":"","next":["下一步 1","下一步 2"]}'
-         '。评分从 5 起、凭证据或机理调分；判 Strong Accept 必须 ≥2 个维度 ≥8 且无 CRITICAL 缺陷。'},
+         '。F1=理论突破度，F2=逻辑闭环度，F3=实验完备性，F4=数据可达性，F5=领域紧迫性。'
+         '反向证伪必须提出3种审稿人最尖锐的质疑与Reject风险，并设计防御实验。判 Strong Accept 必须 ≥2 个维度 ≥8 且无 CRITICAL 缺陷。'},
         {"role": "user", "content": f"研究任务：{task['title']}\n研究问题：{task['question']}\n关键词 / 材料体系：{task['material_system']}\n\n待审查创新点：\n{idea}"},
     ])
     dims = out.get("dims") or {}
     dim_txt = "　".join(f"{k}：{v}/10" for k, v in dims.items() if v is not None) or "（未给分）"
+    f_dims = out.get("dims_f") or {}
+    f_labels = {"F1": "F1 理论突破度", "F2": "F2 逻辑闭环度", "F3": "F3 实验完备性", "F4": "F4 数据可达性", "F5": "F5 领域紧迫性"}
+    f_txt = "　".join(f"{f_labels.get(k, k)}：{v}/10" for k, v in f_dims.items() if v is not None) if f_dims else ""
     flaws = out.get("flaws") or []
     flaw_lines = [f"- [{x.get('severity')}] {x.get('flaw')}　→ {x.get('defense')}" for x in flaws] or ["- 无"]
+    fals = out.get("falsifications") or []
+    fal_lines = [f"- **[{x.get('risk','MEDIUM')}] 质疑**：{x.get('criticism','')}\n  - 🛡️ **防御实验**：{x.get('defense','')}" for x in fals] or []
     next_lines = [f"- {x}" for x in (out.get("next") or [])]
-    md = "\n".join([
+    md_parts = [
         f"# 创新点审查 · {task['title']}", "",
         f"- 类型：{out.get('type','')}", f"- 一句话：{out.get('story','')}", "",
-        f"- 五维：{dim_txt}", f"- 判定：**{out.get('verdict','')}**", "", f"**理由**：{out.get('reason','')}", "",
+        f"- 五维指标：{dim_txt}",
+    ]
+    if f_txt:
+        md_parts.append(f"- 博导评审矩阵：{f_txt}")
+    md_parts += [
+        f"- 判定：**{out.get('verdict','')}**", "", f"**理由**：{out.get('reason','')}", "",
         "## 致命缺陷", *flaw_lines,
+    ]
+    if fal_lines:
+        md_parts += ["", "## 反向证伪与防御实验设计", *fal_lines]
+    md_parts += [
         "", "## 下一步", *next_lines, "",
         "> 模型意见是草稿式审查，最终判断以导师与证据为准。",
-    ])
+    ]
+    md = "\n".join(md_parts)
     note = db.add_note(task_id, f"创新点审查 · {task['title']}", md)
     db.log_step(task_id, "idea", "done", f"判定 {out.get('verdict','')}")
     db.add_memory(task_id, "long", f"创新点审查结论：{out.get('verdict','')}｜理由：{out.get('reason','')[:160]}")
@@ -2076,23 +2093,38 @@ def en_chunks(md: str, limit: int = EN_LIMIT) -> list[str]:
     return out
 
 
-EN_SYSTEM = ("你是学术论文翻译。把用户给的**中文** markdown 译成**英文** markdown，"
-             "只输出译文本身：不要任何解释、前言、总结，也不要用 ``` 围栏包起来。"
-             "要求：markdown 结构原样保留（#/##/### 层级、列表、表格、加粗、分隔线）；"
-             "公式、LaTeX、DOI、URL、数字、人名、机构名、[引用] 原样保留；"
-             "术语用材料/计算领域的常用英文说法；不增删内容，不合并段落。")
+EN_SYSTEM_STYLES = {
+    "formal": "你是专业的材料/计算科学英文学术润色与翻译专家。使用严谨纯正的学术标准英语，符合 Nature/Science/Cell 等顶刊用词规范与句式结构。",
+    "concise": "你是注重高信息密度的学术编辑。在保持学术严密性的前提下，追求极简凝练，精简冗余介词短语与被动语态，提升表达紧凑度与可读性。",
+    "impactful": "你是资深顶刊论文润色专家。着重强化研究的创新贡献与突破性，选用具有学术感染力与说服力的精准强动词与权威句式。",
+}
+EN_SYSTEM = EN_SYSTEM_STYLES["formal"] + (
+    "把用户给的**中文** markdown 译成**英文** markdown，"
+    "只输出译文本身：不要任何解释、前言、总结，也不要用 ``` 围栏包起来。"
+    "要求：markdown 结构原样保留（#/##/### 层级、列表、表格、加粗、分隔线）；"
+    "公式、LaTeX、DOI、URL、数字、人名、机构名、[引用] 原样保留；"
+    "术语用材料/计算领域的常用英文说法；不增删内容，不合并段落。"
+)
 
 
-def en_translate(profile: dict[str, Any], md: str) -> dict[str, Any]:
+def en_translate(profile: dict[str, Any], md: str, style: str = "formal") -> dict[str, Any]:
     """分片并发翻（顺序保持），返回 {text, chunks, ms}。"""
     from concurrent.futures import ThreadPoolExecutor
     chunks = en_chunks(md)
     if not chunks:
         return {"text": "", "chunks": 0, "ms": 0}
     t0 = time.time()
+    style_desc = EN_SYSTEM_STYLES.get(style, EN_SYSTEM_STYLES["formal"])
+    sys_prompt = (
+        f"{style_desc}把用户给的**中文** markdown 译成**英文** markdown，"
+        "只输出译文本身：不要任何解释、前言、总结，也不要用 ``` 围栏包起来。"
+        "要求：markdown 结构原样保留（#/##/### 层级、列表、表格、加粗、分隔线）；"
+        "公式、LaTeX、DOI、URL、数字、人名、机构名、[引用] 原样保留；"
+        "术语用材料/计算领域的常用英文说法；不增删内容，不合并段落。"
+    )
 
     def one(piece: str) -> str:
-        out = chat(profile, [{"role": "system", "content": EN_SYSTEM},
+        out = chat(profile, [{"role": "system", "content": sys_prompt},
                              {"role": "user", "content": piece}], temperature=0.1, max_tokens=4096)
         out = re.sub(r"^```(?:markdown|md)?\s*\n|```\s*$", "", (out or "").strip()).strip()
         return out
@@ -2100,7 +2132,7 @@ def en_translate(profile: dict[str, Any], md: str) -> dict[str, Any]:
     with ThreadPoolExecutor(max_workers=4) as pool:
         parts = list(pool.map(one, chunks))
     return {"text": "\n\n".join(p for p in parts if p), "chunks": len(chunks),
-            "ms": int((time.time() - t0) * 1000)}
+            "ms": int((time.time() - t0) * 1000), "style": style}
 
 
 def en_state(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
@@ -2112,7 +2144,7 @@ def en_state(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
             "source_exists": src.is_file(), "result_exists": res.is_file()}
 
 
-def en_run(db: "WorkflowDB", task_id: str, text: str, name: str = "") -> dict[str, Any]:
+def en_run(db: "WorkflowDB", task_id: str, text: str, name: str = "", style: str = "formal") -> dict[str, Any]:
     """一键翻译：中文 markdown → 英文 markdown，存成 <源名>_en.md（和源同一目录）。"""
     md = (text or "").strip()
     if not md:
@@ -2120,7 +2152,7 @@ def en_run(db: "WorkflowDB", task_id: str, text: str, name: str = "") -> dict[st
     profile = db.active_model()
     if not profile:
         raise RuntimeError("还没配模型：去「模型」页加一个 OpenAI 兼容接口并设为当前模型")
-    out = en_translate(profile, md)
+    out = en_translate(profile, md, style=style)
     stem = re.sub(r"[\\/:*?\"<>|]+", "_", (name or "正文").strip()) or "正文"
     stem = stem[:-3] if stem.lower().endswith(".md") else stem
     folder = _doc_dir(db, task_id)
@@ -2130,7 +2162,7 @@ def en_run(db: "WorkflowDB", task_id: str, text: str, name: str = "") -> dict[st
     db.log_step(task_id, "entrans", "done", f"译成 {dest.name}")
     return {"path": str(dest), "name": dest.name, "text": out["text"], "chars": len(out["text"]),
             "sections": len(re.findall(r"(?m)^#{1,6} ", out["text"])), "src_chars": len(md),
-            "chunks": out["chunks"], "ms": out["ms"]}
+            "chunks": out["chunks"], "ms": out["ms"], "style": style}
 
 
 def compose_draft(db: WorkflowDB, task_id: str) -> str:
@@ -3024,7 +3056,11 @@ def review_system(db: "WorkflowDB", task_id: str) -> str:
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：审这篇文章的正文并帮用户改。
-2. **直接审，别反问**：用户说「审一遍」就把大思路上的问题给出来（最多 3 条，按严重度排：结论站不站得住 / 逻辑链 / 证据充分度 / 与前沿的关系），每条说清「问题 → 为什么是问题 → 怎么改」。没有正文就提醒他先去「论文撰写」。
+2. **三重视角严格审稿模拟器**：用户说「审一遍」或请求评审时，从三位审稿人视角给出独立打分（1-10分）与犀利评审意见：
+   - **Reviewer 1 (严谨派 / 方法论)**：核查实验对照组、显著性检验、基线模型对比以及实验复现可行性；
+   - **Reviewer 2 (挑剔派 / 理论贡献与创新度)**：严苛检验主要贡献增量、与前人工作的区分度，是否存在过度声明 (Overclaiming)；
+   - **Reviewer 3 (落地派 / 工程与泛化应用)**：关注实验条件苛刻度、跨领域适用性、成本与工业放大限制；
+   最后给出综合决议（Accept / Minor Revision / Major Revision / Reject）和逐段可操作的修改建议。没有正文就提醒他先去「论文撰写」。
 3. 用户在左侧用荧光笔标了「需要改的细节」，会以「[我的标注] …」出现在消息里 —— 逐条回应，别漏。
 4. 需要改正文时调用 doc_write 写**整份** markdown（就地覆盖 `正文.md`）；只讨论不改也可以。
 5. 不编造文献与数据；页码/数字对不上的不当结论。你的意见是草稿式判断，最终以导师与证据为准。
