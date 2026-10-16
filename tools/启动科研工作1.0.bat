@@ -1,18 +1,50 @@
 @echo off
+setlocal
 chcp 65001 >nul
-cd /d "%~dp0.."
-rem 无控制台启动。**写死 Python 3.10 的绝对路径** —— 别再用 `pyw -3.10`：
-rem 本机 py 启动器里还注册着 uv 的 Astral/CPython3.11，踩过「起出来的是 3.11」→ 3.11 没装 pywebview
-rem → 静默退回 Edge --app 窗口（带黑标题栏，用户要的就是别带）。3.10 才装了 PyMuPDF/python-docx/pywebview。
-set PY310=%LOCALAPPDATA%\Programs\Python\Python310
-if exist "%PY310%\pythonw.exe" (
-  start "" "%PY310%\pythonw.exe" "%~dp0..\apps\desktop\server.py"
-  exit /b
+cd /d "%~dp0.." || exit /b 1
+
+rem Resolve a console interpreter first, rather than trusting pyw to exist.
+set "PY="
+if exist ".venv\Scripts\python.exe" call :select_python "%CD%\.venv\Scripts\python.exe"
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python310\python.exe" call :select_python "%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
+if not defined PY (
+  for /f "delims=" %%P in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do call :select_python "%%P"
 )
-rem 兜底：3.10 不在默认位置时退回 pyw -3.10 / pythonw
-where pyw >nul 2>nul
-if %errorlevel%==0 (
-  start "" pyw -3.10 "%~dp0..\apps\desktop\server.py"
-  exit /b
+if not defined PY (
+  for /f "delims=" %%P in ('where python 2^>nul') do if not defined PY call :select_python "%%P"
 )
-start "" pythonw "%~dp0..\apps\desktop\server.py"
+if not defined PY goto :no_python
+
+rem Import failures occur before server.py's own error handler is installed.
+if not exist "data" mkdir "data"
+set "LOG=%CD%\data\startup.log"
+"%PY%" -c "import runpy, sys; print('Python:', sys.executable, flush=True); runpy.run_path('apps/desktop/server.py', run_name='startup_check')" > "%LOG%" 2>&1
+if errorlevel 1 goto :failed
+
+rem Use pythonw from the exact environment that passed the startup check.
+for %%P in ("%PY%") do set "PYW=%%~dpPpythonw.exe"
+if not exist "%PYW%" set "PYW=%PY%"
+start "" "%PYW%" "%CD%\apps\desktop\server.py" %*
+if errorlevel 1 goto :failed
+exit /b 0
+
+:select_python
+"%~1" -c "import sys; raise SystemExit(sys.version_info < (3, 10))" >nul 2>&1
+if not errorlevel 1 set "PY=%~1"
+exit /b 0
+
+:no_python
+echo [ERROR] Python 3.10 or newer was not found.
+echo Install Python, then run: python -m pip install -r requirements.txt
+pause
+exit /b 1
+
+:failed
+echo [ERROR] Application startup check or process launch failed.
+if exist "%LOG%" type "%LOG%"
+echo.
+echo Check dependencies with:
+echo "%PY%" -m pip install -r "%CD%\requirements.txt"
+echo Log: "%LOG%"
+pause
+exit /b 1

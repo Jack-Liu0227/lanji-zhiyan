@@ -13,12 +13,14 @@
 **从源码跑（开发）**：
 
 ```powershell
-cd C:\Users\24410\Desktop\科研agent\research-workbench
-tools\启动科研工作1.0.bat               # 或 py -3.10 apps\desktop\server.py（自动开窗，满屏无边框）
-py -3.10 apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开浏览器
+cd research-workbench
+tools\启动科研工作1.0.bat               # 自动选择本机 Python，打开无边框桌面窗口
+python apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开浏览器
 ```
 
-依赖：**Python 3.10**（`py -3.10`，只有它的 site-packages 里有 pywebview）。第三方依赖见 `requirements.txt`（全部 BSD/MIT/PSF，无 AGPL）。
+源码运行需要 **Python 3.10 或更新版本**（已验证 3.13.5）。启动脚本依次检查项目 `.venv`、旧版默认安装位置的 3.10、`py -3` 和 PATH 中的 `python`，并使用同一环境的 `pythonw.exe` 开窗。第三方依赖见 `requirements.txt`（全部 BSD/MIT/PSF，无 AGPL），需安装在选中的 Python 环境中。
+
+如果启动检查失败，脚本会显示错误并暂停，详细信息保存在 `data/startup.log`；服务启动后的异常见 `apps/desktop/data/server-error.log`。按错误提示，用选中的 Python 执行 `-m pip install -r requirements.txt` 修复依赖。
 
 **下载安装**（GitHub Releases）：<https://github.com/3276166289-code/research-workbench/releases/latest> —— 两个资产：`ResearchWorkbench-Setup.exe`（单文件安装器，双击即装、自动建桌面快捷方式）与 `ResearchWorkbench.zip`（免安装，解压双击里面的 `ResearchWorkbench.exe`）。
 
@@ -51,7 +53,7 @@ py -3.10 apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己�
 
 ```bash
 tools\自检.bat                                  # 一条命令跑完：Python 自检 + 前端主题自检 + JS 语法
-py -3.10 -m unittest discover -s tests -t .    # 114 项自检（等价的第一条）
+python -m unittest discover -s tests -t .    # Python 自检（等价的第一条）
 node apps/desktop/web/theme.test.mjs            # 主题配色（HSL 往返 / 明暗推导 / 对比度 ≥ AA）
 ```
 

@@ -5452,7 +5452,6 @@ function zotBind(){
   const box = $("zoteroModal"); if(!box) return;
   box.querySelector(".modal-mask").onclick = zotClose;
   $("btnZotClose").onclick = zotClose;
-  $("btnZotClose2").onclick = zotClose;
   $("zotCollection").onchange = ()=>zotLoad(true).catch(e=>mdFail(e,"读条目"));
   $("zotSearch").onclick = ()=>zotLoad(true).catch(e=>mdFail(e,"搜索"));
   $("zotQuery").onkeydown = (e)=>{ if(e.key === "Enter") zotLoad(true).catch(err=>mdFail(err,"搜索")); };
