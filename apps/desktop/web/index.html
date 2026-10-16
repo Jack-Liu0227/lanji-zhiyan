@@ -1341,6 +1341,41 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .sub-row.bad{border-left-color:var(--err)}
 .sub-row.bad .sub-state{color:var(--err)}
 .sub-tag{font-size:10.5px;color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);border-radius:999px;padding:1px 6px;flex:none;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---- v1.2.0 Command Palette (Ctrl+K) ---- */
+.cmd-palette-dialog{width:560px;max-width:92vw;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,0.5);backdrop-filter:blur(16px);padding:0;overflow:hidden;animation:cmdFadeIn .15s ease-out}
+@keyframes cmdFadeIn{from{opacity:0;transform:scale(0.97) translateY(-8px)}to{opacity:1;transform:scale(1) translateY(0)}}
+.cmd-palette-head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel2)}
+.cmd-palette-ico{font-size:18px;color:var(--accent)}
+.cmd-palette-input{flex:1;background:transparent;border:none;outline:none;font-size:15px;color:var(--ink);font-family:inherit}
+.cmd-palette-badge{font-size:11px;font-weight:600;padding:2px 6px;border-radius:4px;background:var(--panel);border:1px solid var(--line);color:var(--muted)}
+.cmd-palette-body{max-height:380px;overflow-y:auto;padding:8px}
+.cmd-item{display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--ink);transition:background .1s ease}
+.cmd-item:hover, .cmd-item.active{background:color-mix(in srgb, var(--accent) 15%, transparent);color:var(--accent)}
+.cmd-item .cmd-ico{font-size:16px;width:24px;text-align:center;flex:none}
+.cmd-item .cmd-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmd-item .cmd-sub{font-size:11px;color:var(--muted);margin-left:6px}
+.cmd-item .cmd-tag{font-size:10.5px;padding:2px 8px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);color:var(--muted);flex:none}
+.cmd-palette-foot{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);background:var(--panel2)}
+.cmd-palette-foot kbd{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-family:monospace;margin-right:2px}
+
+/* ---- v1.2.0 Diff Viewer & Review Studio ---- */
+.diff-dialog{width:880px;max-width:92vw;max-height:86vh;display:flex;flex-direction:column}
+.diff-modal-body{flex:1;overflow-y:auto;padding:12px 16px;font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace;font-size:12.5px;line-height:1.6}
+.diff-stats{display:flex;gap:14px;align-items:center;margin-bottom:12px;font-family:inherit;font-size:12px;color:var(--muted)}
+.diff-stats .add{color:var(--ok);font-weight:600}
+.diff-stats .del{color:var(--err);font-weight:600}
+.diff-split-view{display:flex;flex-direction:column;gap:2px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:8px;max-height:52vh;overflow-y:auto}
+.diff-line{display:flex;gap:10px;padding:2px 6px;border-radius:4px;white-space:pre-wrap;word-break:break-all}
+.diff-line.same{color:var(--muted)}
+.diff-line.add{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.diff-line.del{background:color-mix(in srgb,var(--err) 18%,transparent);color:var(--err);text-decoration:line-through}
+
+/* ---- v1.2.0 Skeleton UI ---- */
+.skeleton-box{position:relative;overflow:hidden;background:var(--panel2);border-radius:6px}
+.skeleton-box::after{position:absolute;top:0;right:0;bottom:0;left:0;transform:translateX(-100%);background-image:linear-gradient(90deg,rgba(255,255,255,0) 0,rgba(255,255,255,0.06) 20%,rgba(255,255,255,0.12) 60%,rgba(255,255,255,0));animation:shimmer 1.8s infinite;content:''}
+@keyframes shimmer{100%{transform:translateX(100%)}}
+.skeleton-line{height:14px;margin-bottom:8px;border-radius:4px;background:color-mix(in srgb,var(--line) 40%,transparent)}
 </style>
 </head>
 <body>
@@ -1402,7 +1437,45 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
       </div>
       <div id="zotList" class="md-note-list" style="max-height:44vh;overflow:auto"></div>
     </div>
-    <div class="modal-foot"><button class="btn" id="btnZotClose2">关闭</button></div>
+  </div>
+</div>
+
+<!-- 全局命令面板 (Command Palette - Ctrl+K) -->
+<div id="cmdPaletteModal" class="modal hidden">
+  <div class="modal-mask" id="cmdPaletteMask"></div>
+  <div class="modal-dialog cmd-palette-dialog">
+    <div class="cmd-palette-head">
+      <span class="cmd-palette-ico">⚡</span>
+      <input id="cmdPaletteInput" class="cmd-palette-input" placeholder="输入命令、跳转步骤、搜索模块或项目… (Esc 退出)" autocomplete="off">
+      <span class="cmd-palette-badge">Ctrl+K</span>
+    </div>
+    <div class="cmd-palette-body" id="cmdPaletteResults" role="listbox"></div>
+    <div class="cmd-palette-foot">
+      <span><kbd>↑</kbd><kbd>↓</kbd> 导航</span>
+      <span><kbd>Enter</kbd> 执行</span>
+      <span><kbd>Esc</kbd> 关闭</span>
+      <span><kbd>Alt+1..0</kbd> 工作流直达</span>
+    </div>
+  </div>
+</div>
+
+<!-- Diff 对比与双向合并面板 (Diff Review Studio) -->
+<div id="diffModal" class="modal hidden">
+  <div class="modal-mask" id="diffModalMask"></div>
+  <div class="modal-dialog modal-wide diff-dialog">
+    <div class="modal-head">
+      <h3><span id="diffModalTitle">正文变更对比与双向合并</span></h3>
+      <button class="modal-close" id="btnDiffClose">✕</button>
+    </div>
+    <div class="modal-body diff-modal-body">
+      <div class="diff-stats" id="diffStats"></div>
+      <div class="diff-split-view" id="diffContainer"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="btnDiffAccept" class="btn btn-primary">全部接受变更 (Accept)</button>
+      <button id="btnDiffReject" class="btn ghost">拒绝建议并保留原版 (Reject)</button>
+      <button id="btnDiffCancel" class="btn">关闭</button>
+    </div>
   </div>
 </div>
 
@@ -1703,8 +1776,26 @@ function render(){
 }
 
 function needTask(){
-  if(!curTask) return `<div class="card"><h3>还没有选项目</h3><div class="hint">工作流、Agent、文献都挂在项目上。先去「项目」页建一个，或用右上角下拉选一个。</div><button class="btn" style="margin-top:10px" onclick="openTab('tasks')">去建项目</button></div>`;
+  if(!curTask && S.tasks && S.tasks.length){
+    curTask = S.tasks[0].id;
+    localStorage.setItem("rw-task", curTask);
+  }
+  if(!curTask) return `<div class="card"><h3>还没有选项目</h3><div class="hint">工作流、Agent、文献都挂在项目上。先去「项目」页建一个，或一键初始化示例科研课题。</div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn" onclick="openTab('tasks')">去建项目</button><button class="btn ghost" id="btnInitDefaultTask" onclick="initDefaultProject()">一键初始化示例科研项目</button></div></div>`;
   return "";
+}
+
+async function initDefaultProject(){
+  try{
+    const res = await api("/api/task/create", {
+      title: "锂金属固态电池界面反应动力学与多尺度演化研究",
+      question: "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
+      material_system: "固态锂电池, 复合固态电解质, 锂金属负极"
+    });
+    curTask = res.id;
+    localStorage.setItem("rw-task", curTask);
+    await refreshState(false);
+    render();
+  }catch(e){ alert("初始化项目失败: " + e.message); }
 }
 
 
@@ -2582,8 +2673,10 @@ function docPanelHTML(k, active){
           ${c.hl ? `<button class="btn ghost" id="${k}-pen" title="打开荧光笔：在左边拖选文字即可标注">🖍 荧光笔</button>` : ""}
           ${c.seed ? `<button class="btn ghost" id="${k}-seed" title="${c.seed}">${c.seed}</button>` : ""}
           <button class="btn hidden" id="${k}-pull" title="模型不支持工具调用时会把内容写在回复里 —— 点这里把那一段写进文件">${c.pull}</button>
+          <button class="btn ghost" id="${k}-diff" title="对比正文变更并双向合并">⇄ 差异对比</button>
           <button class="btn ghost" id="${k}-edit" title="直接在左边改 markdown">✎ 手改</button>
           <button class="btn ghost hidden" id="${k}-edit-save">保存</button>
+          <button class="btn ghost hidden" id="${k}-restore" title="恢复自动保存的本地草稿快照">↻ 恢复快照</button>
           ${c.cite ? `<button class="btn ghost" id="${k}-cite" title="后台的引用台账：每一处引用的位置 + 文献信息（题名/作者/出处/DOI/页数）">📑 引用台账</button>` : ""}
           <button class="btn ghost" id="${k}-reload" title="从磁盘重新读">↻</button>
         </div>
@@ -2797,6 +2890,42 @@ function docBind(k, m){
          st.cand = ""; docShow(k, r); docShowCand(k); docMsg(k, `已用这条回复更新（${r.chars || 0} 字）`); }
     catch(e){ docMsg(k, "写入失败：" + e.message); }
   };
+  if(docEl(k, "diff")) docEl(k, "diff").onclick = ()=>{
+    const st = docState(k);
+    const srcEl = docEl(k, "src");
+    const currentText = (srcEl && !srcEl.classList.contains("hidden") ? srcEl.value : (st.markdown || "")).trim();
+    const candidateText = (st.cand || "").trim() || currentText;
+    showDiffModal(currentText, candidateText, async (acceptedText)=>{
+      try{
+        const r = await api("/api/doc/save", { task_id: curTask, step: k, markdown: acceptedText });
+        st.cand = ""; docShow(k, r); docShowCand(k); docMsg(k, `已采纳合并变更（${r.chars || 0} 字）`);
+      }catch(e){ docMsg(k, "合并保存失败：" + e.message); }
+    });
+  };
+  const draftKey = `rw-draft-${k}-${curTask||""}`;
+  const restoreBtn = docEl(k, "restore");
+  if(restoreBtn){
+    const saved = localStorage.getItem(draftKey);
+    if(saved && saved !== (docState(k).markdown||"").trim()) restoreBtn.classList.remove("hidden");
+    restoreBtn.onclick = ()=>{
+      const val = localStorage.getItem(draftKey);
+      if(!val) return;
+      const srcEl = docEl(k, "src");
+      if(srcEl){ srcEl.value = val; docEdit(k, true); docMsg(k, "已从本地快照恢复草稿"); }
+    };
+  }
+  const curSrcEl = docEl(k, "src");
+  if(curSrcEl && !curSrcEl._autoSaveBound){
+    curSrcEl._autoSaveBound = true;
+    let sTimer = 0;
+    curSrcEl.addEventListener("input", ()=>{
+      clearTimeout(sTimer);
+      sTimer = setTimeout(()=>{
+        localStorage.setItem(draftKey, curSrcEl.value);
+        if(restoreBtn) restoreBtn.classList.remove("hidden");
+      }, 800);
+    });
+  }
   if(DOC_UI[k].cite) docEl(k, "cite").onclick = ()=>{
     if(docState(k).showCite) docLoad(k); else docShowCite(k); };
   if(docEl(k, "reload")) docEl(k, "reload").onclick = ()=>docLoad(k);
@@ -3053,6 +3182,11 @@ function enPanelHTML(active){
     <div class="en-bar">
       <button class="btn btn-teal" id="en-add" title="选一个中文 markdown 文件（也可以直接拖进来）">＋ 添加文件</button>
       <select class="en-sel" id="en-pick" title="项目里的中文 markdown"><option value="">项目里的文件…</option></select>
+      <select class="en-sel" id="en-style" title="润色与翻译风格">
+        <option value="formal">标准学术 (Nature/Cell Formal)</option>
+        <option value="concise">极简凝练 (Concise & Dense)</option>
+        <option value="impactful">强调突破 (Impactful & Strong)</option>
+      </select>
       <span class="en-spacer"></span>
       <span class="en-msg" id="en-msg"></span>
       <button class="btn btn-teal" id="en-run" title="把左边中文 markdown 译成英文 markdown">⚡ 一键翻译</button>
@@ -3132,7 +3266,7 @@ async function enRun(){
   if(!text) return enMsg("还没有中文内容 —— 点左上 ＋ 选文件，或先去「论文撰写」写出正文");
   btn.disabled = true; enMsg("正在翻译…（分片并发，长文也就几十秒）");
   try{
-    const r = await api("/api/en/run", { task_id: curTask, text, name: EN.name || "正文.md" });
+    const r = await api("/api/en/run", { task_id: curTask, text, name: EN.name || "正文.md", style: $("en-style")?.value || "formal" });
     if(r.error) throw new Error(r.error);
     if(!$("en-out").value.trim() || confirm("右边已经有译文了：覆盖它吗？")) $("en-out").value = r.text || "";
     EN.path = r.path || EN.path; $("en-outname").textContent = r.name || "";
@@ -6927,6 +7061,331 @@ async function mpUpload(files){
   await mpLoad();
   docMsg("map", "数据文件进来了 —— 跟 agent 说一句「把刚上传的这份挂到某一节下面」它就会画进谱系图。");
 }
+
+/* ==================== v1.2.0 全局命令面板 & 差异对比 & 快捷键流 ==================== */
+
+// ---------- Diff 对比与双向合并 ----------
+let diffAcceptCallback = null;
+let diffRejectCallback = null;
+
+function computeDiff(oldStr, newStr) {
+  const oldLines = String(oldStr || "").split("\n");
+  const newLines = String(newStr || "").split("\n");
+  const diffs = [];
+  let i = 0, j = 0;
+  let additions = 0, deletions = 0;
+
+  while (i < oldLines.length || j < newLines.length) {
+    if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
+      diffs.push({ type: "same", text: oldLines[i] });
+      i++; j++;
+    } else if (j < newLines.length && (i >= oldLines.length || !oldLines.slice(i, i + 6).includes(newLines[j]))) {
+      diffs.push({ type: "add", text: newLines[j] });
+      additions++;
+      j++;
+    } else if (i < oldLines.length) {
+      diffs.push({ type: "del", text: oldLines[i] });
+      deletions++;
+      i++;
+    } else {
+      diffs.push({ type: "add", text: newLines[j] });
+      additions++;
+      j++;
+    }
+  }
+  return { lines: diffs, additions, deletions, total: diffs.length };
+}
+
+function showDiffModal(oldText, newText, onAccept, onReject) {
+  const modal = $("diffModal");
+  if (!modal) return;
+  diffAcceptCallback = onAccept || null;
+  diffRejectCallback = onReject || null;
+
+  const result = computeDiff(oldText, newText);
+  const statsEl = $("diffStats");
+  if (statsEl) {
+    statsEl.innerHTML = `<span>总比对行数: ${result.total}</span> <span class="add">+${result.additions} 新增</span> <span class="del">-${result.deletions} 删除</span>`;
+  }
+  const cont = $("diffContainer");
+  if (cont) {
+    cont.innerHTML = result.lines.map((l, idx) => {
+      const sym = l.type === "add" ? "+ " : (l.type === "del" ? "- " : "  ");
+      return `<div class="diff-line ${l.type}"><span style="user-select:none;color:var(--muted);width:32px;text-align:right">${idx + 1}</span><span>${sym}${esc(l.text)}</span></div>`;
+    }).join("");
+  }
+  modal.classList.remove("hidden");
+}
+
+function closeDiffModal() {
+  const modal = $("diffModal");
+  if (modal) modal.classList.add("hidden");
+  diffAcceptCallback = null;
+  diffRejectCallback = null;
+}
+
+$("btnDiffClose")?.addEventListener("click", closeDiffModal);
+$("btnDiffCancel")?.addEventListener("click", closeDiffModal);
+$("diffModalMask")?.addEventListener("click", closeDiffModal);
+$("btnDiffAccept")?.addEventListener("click", () => {
+  if (diffAcceptCallback) diffAcceptCallback();
+  closeDiffModal();
+});
+$("btnDiffReject")?.addEventListener("click", () => {
+  if (diffRejectCallback) diffRejectCallback();
+  closeDiffModal();
+});
+
+
+// ---------- 全局命令面板 (Command Palette - Ctrl+K) ----------
+let cmdActiveIndex = 0;
+let cmdItems = [];
+
+function buildCommandList() {
+  const items = [];
+
+  const NAV_ITEMS = [
+    { id: "agent", title: "Agent 全局对话", ico: "💬", cat: "导航" },
+    { id: "assistants", title: "助手管理", ico: "🤖", cat: "导航" },
+    { id: "team", title: "团队协作", ico: "👥", cat: "导航" },
+    { id: "calendar", title: "日历与日程", ico: "📅", cat: "导航" },
+    { id: "tasks", title: "项目管理", ico: "📁", cat: "导航" },
+    { id: "space", title: "项目空间", ico: "🌌", cat: "导航" },
+    { id: "workflow", title: "工作流总览", ico: "🔀", cat: "导航" },
+    { id: "schedules", title: "定时任务", ico: "⏰", cat: "导航" },
+    { id: "library", title: "知识库 (Obsidian)", ico: "📚", cat: "导航" },
+    { id: "notes", title: "笔记中心", ico: "📝", cat: "导航" },
+    { id: "intel", title: "情报日报 (RSS)", ico: "📡", cat: "导航" },
+    { id: "mail", title: "邮箱通讯", ico: "✉️", cat: "导航" },
+    { id: "settings", title: "系统设置", ico: "⚙️", cat: "导航" },
+  ];
+  NAV_ITEMS.forEach(n => {
+    items.push({
+      text: n.title,
+      sub: `跳转至 ${n.title}`,
+      ico: n.ico,
+      cat: "主模块",
+      run: () => openTab(n.id)
+    });
+  });
+
+  WF_ORDER.forEach((s, idx) => {
+    const rawName = STAGE[s] || s;
+    const ico = rawName.split(" ")[0] || "✦";
+    const name = rawName.slice(rawName.indexOf(" ") + 1) || rawName;
+    items.push({
+      text: `Step ${idx + 1}: ${name}`,
+      sub: `直达工作流第 ${idx + 1} 步`,
+      ico: ico,
+      cat: "工作流步骤",
+      run: () => {
+        openTab("workflow");
+        wfStep = s;
+        localStorage.setItem("rw-wf-step", wfStep);
+        renderWorkflow($("main"));
+      }
+    });
+  });
+
+  (S.tasks || []).forEach(t => {
+    items.push({
+      text: `项目: ${t.title}`,
+      sub: t.question || "切换当前科研课题",
+      ico: "📂",
+      cat: "项目",
+      run: () => {
+        curTask = t.id;
+        localStorage.setItem("rw-task", curTask);
+        render();
+      }
+    });
+  });
+
+  items.push({
+    text: "切换深色主题 (Dark Theme)",
+    sub: "Dark Obsidian 纯黑极简学术模式",
+    ico: "🌙",
+    cat: "主题",
+    run: () => {
+      document.documentElement.dataset.theme = "dark";
+      localStorage.setItem("rw-theme", "dark");
+      applyTheme(currentPrimary());
+    }
+  });
+  items.push({
+    text: "切换浅色主题 (Light Theme)",
+    sub: "Paper White 高清高对比度纸质模式",
+    ico: "☀️",
+    cat: "主题",
+    run: () => {
+      document.documentElement.dataset.theme = "light";
+      localStorage.setItem("rw-theme", "light");
+      applyTheme(currentPrimary());
+    }
+  });
+  items.push({
+    text: "从 Zotero 导入文献",
+    sub: "检索本地 Zotero 条目并导入",
+    ico: "📖",
+    cat: "工具",
+    run: () => openZotero()
+  });
+
+  return items;
+}
+
+function openCommandPalette() {
+  const modal = $("cmdPaletteModal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+  const input = $("cmdPaletteInput");
+  if (input) {
+    input.value = "";
+    input.focus();
+  }
+  cmdActiveIndex = 0;
+  renderCommandResults("");
+}
+
+function closeCommandPalette() {
+  const modal = $("cmdPaletteModal");
+  if (modal) modal.classList.add("hidden");
+}
+
+function renderCommandResults(query) {
+  const listEl = $("cmdPaletteResults");
+  if (!listEl) return;
+  const q = String(query || "").trim().toLowerCase();
+  const all = buildCommandList();
+  cmdItems = q ? all.filter(item =>
+    item.text.toLowerCase().includes(q) ||
+    item.sub.toLowerCase().includes(q) ||
+    item.cat.toLowerCase().includes(q)
+  ) : all;
+
+  if (cmdActiveIndex >= cmdItems.length) cmdActiveIndex = Math.max(0, cmdItems.length - 1);
+
+  if (!cmdItems.length) {
+    listEl.innerHTML = `<div style="text-align:center;padding:24px 0;color:var(--muted);font-size:13px">未找到匹配的命令或模块</div>`;
+    return;
+  }
+
+  listEl.innerHTML = cmdItems.map((item, idx) => `
+    <div class="cmd-item ${idx === cmdActiveIndex ? "active" : ""}" data-cmd-idx="${idx}">
+      <span class="cmd-ico">${item.ico}</span>
+      <span class="cmd-text">${esc(item.text)}<span class="cmd-sub">${esc(item.sub)}</span></span>
+      <span class="cmd-tag">${esc(item.cat)}</span>
+    </div>
+  `).join("");
+
+  listEl.querySelectorAll(".cmd-item").forEach(el => {
+    el.onmouseenter = () => {
+      cmdActiveIndex = Number(el.dataset.cmdIdx);
+      listEl.querySelectorAll(".cmd-item").forEach((x, i) => x.classList.toggle("active", i === cmdActiveIndex));
+    };
+    el.onclick = () => {
+      executeActiveCommand();
+    };
+  });
+
+  const activeEl = listEl.querySelector(".cmd-item.active");
+  if (activeEl) activeEl.scrollIntoView({ block: "nearest" });
+}
+
+function executeActiveCommand() {
+  if (cmdItems[cmdActiveIndex] && typeof cmdItems[cmdActiveIndex].run === "function") {
+    const act = cmdItems[cmdActiveIndex].run;
+    closeCommandPalette();
+    try { act(); } catch(e) { console.error(e); }
+  }
+}
+
+window.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
+    e.preventDefault();
+    const modal = $("cmdPaletteModal");
+    if (modal && !modal.classList.contains("hidden")) {
+      closeCommandPalette();
+    } else {
+      openCommandPalette();
+    }
+    return;
+  }
+
+  const pModal = $("cmdPaletteModal");
+  if (pModal && !pModal.classList.contains("hidden")) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeCommandPalette();
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (cmdItems.length) {
+        cmdActiveIndex = (cmdActiveIndex + 1) % cmdItems.length;
+        renderCommandResults($("cmdPaletteInput")?.value || "");
+      }
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (cmdItems.length) {
+        cmdActiveIndex = (cmdActiveIndex - 1 + cmdItems.length) % cmdItems.length;
+        renderCommandResults($("cmdPaletteInput")?.value || "");
+      }
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      executeActiveCommand();
+      return;
+    }
+  }
+
+  if (e.key === "Escape") {
+    closeDiffModal();
+    const prof = $("profileModal");
+    if (prof && !prof.classList.contains("hidden")) prof.classList.add("hidden");
+    const zot = $("zoteroModal");
+    if (zot && !zot.classList.contains("hidden")) zot.classList.add("hidden");
+  }
+
+  if (e.altKey && !e.ctrlKey && !e.metaKey) {
+    const code = e.key;
+    let stepIndex = -1;
+    if (code >= "1" && code <= "9") stepIndex = parseInt(code, 10) - 1;
+    else if (code === "0") stepIndex = 9;
+
+    if (stepIndex >= 0 && stepIndex < WF_ORDER.length) {
+      e.preventDefault();
+      openTab("workflow");
+      wfStep = WF_ORDER[stepIndex];
+      localStorage.setItem("rw-wf-step", wfStep);
+      renderWorkflow($("main"));
+      return;
+    }
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    const act = document.activeElement;
+    if (act && (act.tagName === "TEXTAREA" || act.tagName === "INPUT")) {
+      const parentAt = act.closest(".composer, .at-dock, .ol-grid");
+      if (parentAt) {
+        const sendBtn = parentAt.querySelector(".send-btn, #send, button[id$='-send']");
+        if (sendBtn && !sendBtn.disabled) {
+          e.preventDefault();
+          sendBtn.click();
+        }
+      }
+    }
+  }
+});
+
+$("cmdPaletteMask")?.addEventListener("click", closeCommandPalette);
+$("cmdPaletteInput")?.addEventListener("input", (e) => {
+  cmdActiveIndex = 0;
+  renderCommandResults(e.target.value);
+});
 
 </script>
 </body>

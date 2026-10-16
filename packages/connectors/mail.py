@@ -28,9 +28,8 @@ from pathlib import Path
 from typing import Any
 
 HERE = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("RESEARCH_WORKBENCH_DATA", HERE.parents[1].parent / "data"))
-if not DATA_DIR.is_dir():                            # 打包后模块被平铺到 exe 目录
-    DATA_DIR = HERE / "data"
+ROOT = HERE.parents[1] if (HERE.parents[1] / "packages").is_dir() else HERE
+DATA_DIR = Path(os.environ.get("RESEARCH_WORKBENCH_DATA", ROOT / "data"))
 MAIL_FILE = DATA_DIR / "mail.json"
 
 # ---------- 常见邮箱服务商预设（与 lit MAIL_PROVIDERS 逐字一致） ----------
