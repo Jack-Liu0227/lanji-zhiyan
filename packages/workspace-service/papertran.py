@@ -153,9 +153,28 @@ def _read_state(out_dir: Path, paper_id: str) -> dict[str, Any]:
         return {}
 
 
-def status(paper_id: str) -> dict[str, Any]:
+def status(paper_id: str, out_dir: Path | None = None) -> dict[str, Any]:
     with _LOCK:
-        return dict(JOBS.get(paper_id) or {"state": "idle"})
+        job = JOBS.get(paper_id)
+        if job:
+            return dict(job)
+    cand_dirs = [out_dir] if out_dir else [Path("data/out/translations"), Path("data/uploads"), Path("data/out")]
+    for d in cand_dirs:
+        if d and d.is_dir():
+            st = _read_state(d, paper_id)
+            if st:
+                done = bool(st.get("done"))
+                pages_done = int(st.get("pages_done") or 0)
+                total = int(st.get("total") or 0)
+                if done:
+                    return {"state": "done", "pct": 100, "msg": "已有译文（断点缓存）",
+                            "pages_done": total, "total_pages": total}
+                if pages_done > 0:
+                    pct = int(pages_done * 100 / max(1, total)) if total else 0
+                    return {"state": "interrupted", "pct": pct,
+                            "msg": f"任务可断点恢复（第 1-{pages_done} 页已完成）",
+                            "pages_done": pages_done, "total_pages": total}
+    return {"state": "idle"}
 
 
 def _env() -> dict[str, str]:
