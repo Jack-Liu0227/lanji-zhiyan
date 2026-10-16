@@ -91,11 +91,17 @@ def excerpt_matches(excerpt: str, page_text: str) -> bool:
 class ResearchDB:
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if str(self.path) != ":memory:":
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=5000")   # 子 agent 并行时各自一条连接，别立刻报 database is locked
         self.db.row_factory = sqlite3.Row
+        try:
+            import migrations
+            migrations.run_migrations(self.db, db_path=self.path if str(self.path) != ":memory:" else None)
+        except Exception:
+            pass
         self.db.executescript(SCHEMA)
         self.db.commit()
 
@@ -303,6 +309,131 @@ class ResearchDB:
         papers = self.db.execute("SELECT COUNT(*) n FROM papers WHERE task_id=?", (task_id,)).fetchone()["n"]
         evidence = self.db.execute("SELECT COUNT(*) n FROM evidence e JOIN papers p ON p.id=e.paper_id WHERE p.task_id=?", (task_id,)).fetchone()["n"]
         return {"task": dict(task), "papers": papers, "evidence": evidence}
+
+    # ---------- 可靠性扩展：任务持久化、重试、可恢复运行与审计事件 ----------
+    def create_async_task(self, kind: str, owner_id: str, idempotency_key: str = "", checkpoint: dict[str, Any] | None = None, task_id: str = "") -> dict[str, Any]:
+        tid = task_id or uuid.uuid4().hex
+        t = now()
+        cp = json.dumps(checkpoint or {}, ensure_ascii=False)
+        self.db.execute(
+            "INSERT INTO tasks (id, kind, owner_id, status, progress, checkpoint, cancel_requested, idempotency_key, created_at, updated_at)"
+            " VALUES (?, ?, ?, 'pending', 0, ?, 0, ?, ?, ?)",
+            (tid, kind, owner_id, cp, idempotency_key or None, t, t)
+        )
+        self.db.commit()
+        return self.get_async_task(tid) or {}
+
+    def get_async_task(self, task_id: str) -> dict[str, Any] | None:
+        row = self.db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not row:
+            return None
+        res = dict(row)
+        try:
+            res["checkpoint"] = json.loads(res.get("checkpoint") or "{}")
+        except Exception:
+            res["checkpoint"] = {}
+        return res
+
+    def get_async_task_by_idempotency(self, key: str) -> dict[str, Any] | None:
+        if not key:
+            return None
+        row = self.db.execute("SELECT * FROM tasks WHERE idempotency_key=?", (key,)).fetchone()
+        if not row:
+            return None
+        res = dict(row)
+        try:
+            res["checkpoint"] = json.loads(res.get("checkpoint") or "{}")
+        except Exception:
+            res["checkpoint"] = {}
+        return res
+
+    def update_async_task(self, task_id: str, status: str = "", progress: float | None = None,
+                          checkpoint: dict[str, Any] | None = None, cancel_requested: bool | None = None) -> dict[str, Any] | None:
+        cur = self.get_async_task(task_id)
+        if not cur:
+            return None
+        sets, vals = ["updated_at=?"], [now()]
+        if status:
+            sets.append("status=?")
+            vals.append(status)
+        if progress is not None and progress >= 0:
+            sets.append("progress=?")
+            vals.append(float(progress))
+        if checkpoint is not None:
+            sets.append("checkpoint=?")
+            vals.append(json.dumps(checkpoint, ensure_ascii=False))
+        if cancel_requested is not None:
+            sets.append("cancel_requested=?")
+            vals.append(1 if cancel_requested else 0)
+        vals.append(task_id)
+        self.db.execute(f"UPDATE tasks SET {', '.join(sets)} WHERE id=?", vals)
+        self.db.commit()
+        return self.get_async_task(task_id)
+
+    def record_task_attempt(self, task_id: str, attempt: int, status: str, error_code: str = "",
+                            started_at: str = "", ended_at: str = "") -> dict[str, Any]:
+        aid = uuid.uuid4().hex
+        s_at = started_at or now()
+        self.db.execute(
+            "INSERT INTO task_attempts (id, task_id, attempt, status, error_code, started_at, ended_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (aid, task_id, attempt, status, error_code, s_at, ended_at)
+        )
+        self.db.commit()
+        return {"id": aid, "task_id": task_id, "attempt": attempt, "status": status, "error_code": error_code,
+                "started_at": s_at, "ended_at": ended_at}
+
+    def record_run_event(self, run_id: str, event_id: int, kind: str, payload: dict[str, Any] | str) -> dict[str, Any]:
+        pl = json.dumps(payload, ensure_ascii=False) if isinstance(payload, dict) else str(payload)
+        t = now()
+        self.db.execute(
+            "INSERT OR REPLACE INTO run_events (run_id, event_id, kind, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+            (run_id, event_id, kind, pl, t)
+        )
+        self.db.commit()
+        return {"run_id": run_id, "event_id": event_id, "kind": kind, "payload": payload, "created_at": t}
+
+    def get_run_events(self, run_id: str, after_id: int = 0) -> list[dict[str, Any]]:
+        rows = self.db.execute(
+            "SELECT run_id, event_id, kind, payload, created_at FROM run_events WHERE run_id=? AND event_id>? ORDER BY event_id ASC",
+            (run_id, after_id)
+        ).fetchall()
+        out = []
+        for r in rows:
+            pl = r["payload"]
+            try:
+                pl = json.loads(pl)
+            except Exception:
+                pass
+            out.append({"run_id": r["run_id"], "event_id": r["event_id"], "kind": r["kind"], "payload": pl, "created_at": r["created_at"]})
+        return out
+
+    def record_audit_event(self, actor: str, assistant_id: str = "", tool: str = "", project_id: str = "",
+                           input_hash: str = "", outcome: str = "ok", duration_ms: int = 0) -> dict[str, Any]:
+        ev_id = uuid.uuid4().hex
+        t = now()
+        self.db.execute(
+            "INSERT INTO audit_events (id, actor, assistant_id, tool, project_id, input_hash, outcome, duration_ms, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ev_id, actor, assistant_id, tool, project_id, input_hash, outcome, int(duration_ms), t)
+        )
+        self.db.commit()
+        return {"id": ev_id, "actor": actor, "assistant_id": assistant_id, "tool": tool, "project_id": project_id,
+                "input_hash": input_hash, "outcome": outcome, "duration_ms": duration_ms, "created_at": t}
+
+    def get_audit_events(self, project_id: str = "", assistant_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        clauses, vals = [], []
+        if project_id:
+            clauses.append("project_id=?")
+            vals.append(project_id)
+        if assistant_id:
+            clauses.append("assistant_id=?")
+            vals.append(assistant_id)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        vals.append(int(limit))
+        rows = self.db.execute(f"SELECT * FROM audit_events{where} ORDER BY created_at DESC LIMIT ?", vals).fetchall()
+        return [dict(r) for r in rows]
+
 
 
 def extract_ai(db: ResearchDB, task_id: str, paper_id: str, base_url: str, api_key: str, model: str) -> dict[str, Any]:

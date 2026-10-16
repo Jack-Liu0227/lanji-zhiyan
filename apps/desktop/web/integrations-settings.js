@@ -3,8 +3,11 @@
   "use strict";
   const e = value => esc(String(value ?? ""));
   let assistantId = "", projectId = "", preview = null, generation = 0;
+  // Device authorization sessions are keyed by assistant so switching assistants can
+  // never display or poll another assistant's QR/session.
+  const registrationSessions = new Map();
   const style = document.createElement("style");
-  style.textContent = `.integration-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.integration-grid .field{display:grid;gap:6px}.integration-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin:14px 0}.integration-result{white-space:pre-wrap;overflow-wrap:anywhere;max-height:380px;overflow:auto}.integration-docs{display:flex;gap:16px;flex-wrap:wrap;margin:12px 0}.integration-json{min-height:190px;width:100%;font-family:Consolas,monospace}.integration-error{color:var(--err);white-space:pre-wrap}.integration-status{padding:12px;border:1px solid var(--line);border-radius:9px;margin:12px 0}@media(max-width:760px){.integration-grid{grid-template-columns:1fr}}`;
+  style.textContent = `.integration-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.integration-grid .field{display:grid;gap:6px}.integration-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin:14px 0}.integration-result{white-space:pre-wrap;overflow-wrap:anywhere;max-height:380px;overflow:auto}.integration-docs{display:flex;gap:16px;flex-wrap:wrap;margin:12px 0}.integration-json{min-height:190px;width:100%;font-family:Consolas,monospace}.integration-error{color:var(--err);white-space:pre-wrap}.integration-status{padding:12px;border:1px solid var(--line);border-radius:9px;margin:12px 0}.feishu-registration{margin:14px 0;padding:14px;border:1px solid var(--line);border-radius:10px;background:color-mix(in srgb,var(--panel) 88%,var(--accent) 12%)}.feishu-registration-grid{display:grid;grid-template-columns:minmax(150px,220px) 1fr;gap:14px;align-items:start}.feishu-qr{min-height:170px;display:grid;place-items:center;padding:10px;border:1px dashed var(--line);border-radius:8px;background:var(--panel);text-align:center}.feishu-qr img,.feishu-qr canvas{display:block;max-width:100%;width:220px;height:220px;object-fit:contain;background:#fff}.feishu-qr a{overflow-wrap:anywhere}.feishu-countdown{font-variant-numeric:tabular-nums;font-weight:600}@media(max-width:760px){.integration-grid{grid-template-columns:1fr}.feishu-registration-grid{grid-template-columns:1fr}.feishu-qr img,.feishu-qr canvas{width:190px;height:190px}}`;
   document.head.appendChild(style);
   for (const item of [["feishu", "↗", "飞书机器人"], ["zotero", "Z", "Zotero 写入与同步"]]) {
     if (!SET_SECS.some(section => section[0] === item[0])) SET_SECS.push(item);
@@ -23,6 +26,119 @@
   function optionRows(rows, selected, label) {
     return rows.map(row => `<option value="${e(row.id)}" ${row.id === selected ? "selected" : ""}>${e(row[label])}</option>`).join("");
   }
+  function registrationMarkup(cfg) {
+    const session = registrationSessions.get(assistantId);
+    const region = session?.region || cfg.registration_region || cfg.region || "feishu";
+    const active = session && session.status === "pending";
+    const qr = active ? (session.qrUrl || session.verificationUriComplete || "") : "";
+    const qrImage = active && session.qrDataUri && /^data:image\/(?:svg\+xml|png);/i.test(session.qrDataUri) ? `<img src="${e(session.qrDataUri)}" alt="飞书扫码二维码">` : "";
+    const statusText = active ? "等待手机确认授权…" : session?.status === "success" ? "绑定成功" : session ? e(session.message || "尚未开始扫码绑定") : "尚未开始扫码绑定";
+    return `<div class="feishu-registration" data-feishu-registration>
+      <h4 style="margin:0 0 6px">手机扫码绑定助手</h4>
+      <p class="hint" style="margin-top:0">使用飞书/Lark 官方 Device Authorization：选择区域后生成一次性二维码，用手机飞书扫描并确认，即可把该账号绑定到当前助手。授权会话仅保存于本机服务端。</p>
+      <div class="integration-grid">
+        <label class="field"><span>区域</span><select class="control" id="fs-region"><option value="feishu" ${region === "feishu" ? "selected" : ""}>飞书（中国大陆）</option><option value="lark" ${region === "lark" ? "selected" : ""}>Lark（国际版）</option></select></label>
+        <div class="integration-actions" style="margin:0;align-items:end"><button class="btn" id="fs-device-begin">${active ? "重新生成二维码" : "手机扫码绑定"}</button><button class="btn ghost" id="fs-device-cancel" ${active ? "" : "hidden"}>取消会话</button></div>
+      </div>
+      <div class="feishu-registration-grid" style="margin-top:12px">
+        <div class="feishu-qr" id="fs-device-qr">${qrImage || (qr ? `<div><div class="hint">请用手机打开或扫描官方授权链接</div><a href="${e(qr)}" target="_blank" rel="noopener noreferrer">打开飞书授权链接</a></div>` : `<span class="hint">点击“手机扫码绑定”生成二维码</span>`)}</div>
+        <div><div class="integration-status" id="fs-device-status" style="margin:0">${statusText}</div>
+          <div class="hint" id="fs-device-countdown" style="margin-top:8px">${active && session.expiresAt ? "二维码有效期计算中…" : ""}</div>
+          <div class="hint" style="margin-top:8px">如果当前客户端不支持显示二维码，可点击上方官方链接，在手机浏览器或飞书中完成确认。</div></div>
+      </div>
+    </div>`;
+  }
+  function registrationStatus(text, kind) {
+    const box = field("fs-device-status");
+    if (box) { box.textContent = text; box.dataset.state = kind || ""; }
+  }
+  function renderRegistrationSession(session) {
+    if (!session || assistantId !== session.assistantId || setSec !== "feishu") return;
+    const qr = session.status === "pending" ? (session.qrUrl || session.verificationUriComplete || "") : "";
+    const qrBox = field("fs-device-qr");
+    if (qrBox) {
+      const qrImage = session.status === "pending" && session.qrDataUri && /^data:image\/(?:svg\+xml|png);/i.test(session.qrDataUri) ? `<img src="${e(session.qrDataUri)}" alt="飞书扫码二维码">` : "";
+      qrBox.innerHTML = qrImage || (qr ? `<div><div class="hint">用手机飞书扫描二维码，或打开官方授权链接</div><a href="${e(qr)}" target="_blank" rel="noopener noreferrer">打开飞书授权链接</a></div>` : `<span class="hint">二维码地址为空，请重试</span>`);
+    }
+    const cancel = field("fs-device-cancel"); if (cancel) cancel.hidden = session.status !== "pending";
+    const begin = field("fs-device-begin"); if (begin) begin.textContent = session.status === "pending" ? "重新生成二维码" : "手机扫码绑定";
+    registrationStatus(session.status === "pending" ? "等待手机确认授权…" : session.status === "success" ? "绑定成功" : session.message || "授权失败", session.status);
+    if (session.status === "success" && session.openId) registrationStatus(`绑定成功（open_id: ${session.openId}）`, "success");
+  }
+  function updateRegistrationCountdown(session) {
+    if (!session || assistantId !== session.assistantId || setSec !== "feishu") return;
+    const box = field("fs-device-countdown");
+    if (!box || !session.expiresAt) return;
+    const seconds = Math.max(0, Math.ceil((session.expiresAt - Date.now()) / 1000));
+    box.textContent = seconds ? `二维码剩余有效期：${Math.floor(seconds / 60)}分${String(seconds % 60).padStart(2, "0")}秒` : "二维码已过期，请重新生成";
+    if (!seconds && session.status === "pending") {
+      session.status = "error"; session.message = "二维码已过期";
+      if (session.timer) { clearTimeout(session.timer); session.timer = null; }
+      renderRegistrationSession(session);
+    }
+  }
+  function startRegistrationCountdown(session) {
+    if (session.countdownTimer) clearInterval(session.countdownTimer);
+    if (!session.expiresAt) return;
+    updateRegistrationCountdown(session);
+    session.countdownTimer = setInterval(() => {
+      if (!registrationSessions.has(session.assistantId) || registrationSessions.get(session.assistantId) !== session || session.status !== "pending") {
+        clearInterval(session.countdownTimer); session.countdownTimer = null; return;
+      }
+      if (assistantId !== session.assistantId || setSec !== "feishu") {
+        clearInterval(session.countdownTimer); session.countdownTimer = null; return;
+      }
+      updateRegistrationCountdown(session);
+    }, 1000);
+  }
+  function scheduleRegistrationPoll(session, delay) {
+    if (!session || session.status !== "pending") return;
+    if (session.timer) clearTimeout(session.timer);
+    session.timer = setTimeout(() => { session.timer = null; pollRegistration(session); }, Math.max(1000, Number(delay || session.intervalMs || 5000)));
+  }
+  async function pollRegistration(session) {
+    if (!session || registrationSessions.get(session.assistantId) !== session || session.status !== "pending") return;
+    // A session is deliberately ignored while another assistant is selected. It can
+    // resume when that assistant is selected again without exposing its QR/session.
+    if (assistantId !== session.assistantId || setSec !== "feishu") return;
+    try {
+      const result = await api("/api/feishu/registration/poll", {assistant_id: session.assistantId, session_id: session.sessionId});
+      if (registrationSessions.get(session.assistantId) !== session || assistantId !== session.assistantId || setSec !== "feishu") return;
+      const status = String(result.status || "pending").toLowerCase();
+      if (["pending", "authorization_pending", "slow_down"].includes(status)) {
+        const returnedInterval = Number(result.interval || 0);
+        if (returnedInterval > 0) session.intervalMs = Math.max(1000, returnedInterval < 100 ? returnedInterval * 1000 : returnedInterval);
+        else if (status === "slow_down") session.intervalMs = Math.max(1000, (session.intervalMs || 5000) + 5000);
+        if (result.region) session.region = result.region;
+        if (result.expires_in) session.expiresAt = Date.now() + Number(result.expires_in) * 1000;
+        registrationStatus(status === "slow_down" ? "请稍候，飞书要求降低轮询频率…" : "等待手机确认授权…", "pending");
+        if (result.immediate) {
+          session.timer = setTimeout(() => { session.timer = null; pollRegistration(session); }, 0);
+        } else scheduleRegistrationPoll(session, session.intervalMs);
+      } else if (["success", "authorized", "complete"].includes(status)) {
+        session.status = "success"; session.openId = result.open_id || result.user_info?.open_id || "";
+        session.message = "绑定成功"; if (session.timer) clearTimeout(session.timer);
+        if (session.countdownTimer) clearInterval(session.countdownTimer);
+        renderRegistrationSession(session);
+        const resultBox = field("integration-result"); if (resultBox) resultBox.textContent = `手机扫码绑定成功${session.openId ? `（open_id: ${session.openId}）` : ""}。`;
+        await loadFeishu();
+      } else {
+        session.status = "error"; session.message = result.message || result.error || `授权失败（${status}）`;
+        if (session.countdownTimer) clearInterval(session.countdownTimer);
+        renderRegistrationSession(session);
+      }
+    } catch (err) {
+      if (registrationSessions.get(session.assistantId) !== session) return;
+      session.status = "error"; session.message = err?.message || String(err);
+      if (session.countdownTimer) clearInterval(session.countdownTimer);
+      renderRegistrationSession(session);
+    }
+  }
+  function startRegistrationPolling(session) {
+    if (!session || session.status !== "pending" || !session.sessionId) return;
+    renderRegistrationSession(session); startRegistrationCountdown(session);
+    if (!session.timer) scheduleRegistrationPoll(session, session.intervalMs || 5000);
+  }
   async function loadFeishu() {
     const ticket = ++generation;
     if (!assistantId && S.assistants.length) assistantId = S.assistants[0].id;
@@ -34,6 +150,7 @@
       <label class="field"><span>配置哪个助手</span><select class="control" id="int-assistant">${optionRows(S.assistants || [], assistantId, "name")}</select></label>
       ${docs({"创建 / 管理飞书应用": result.docs.console, "官方 OAuth 授权说明": result.docs.oauth, "机器人消息权限": result.docs.bot, "自定义机器人说明": result.docs.webhook})}
       <div class="integration-status">扫码授权：<b>${cfg.authorized ? "已完成" : "未完成"}</b>${cfg.expires_at ? ` · 用户令牌${cfg.expires_at * 1000 > Date.now() ? "有效" : "已过期，请重新扫码"}` : ""} · Webhook：${cfg.webhook_present ? "已配置" : "未配置"}<br><span class="hint">机器人发送使用应用租户令牌；用户扫码用于授权和绑定默认收件人。应用需启用机器人、发布、开放 im:message:send_as_bot，并确保机器人可以联系收件人。</span></div>
+      ${registrationMarkup(cfg)}
       <div class="integration-grid">
         <label class="field"><span>App ID</span><input class="control" id="fs-app" value="${e(cfg.app_id)}" placeholder="cli_..."></label>
         <label class="field"><span>App Secret${cfg.app_secret_present ? "（已保存，留空保留）" : ""}</span><input class="control" type="password" id="fs-secret" autocomplete="new-password"></label>
@@ -50,6 +167,30 @@
       <div class="integration-actions"><input class="control" id="fs-message" value="览籍智研飞书机器人连接测试" style="flex:1"><button class="btn ghost" id="fs-test">发送测试消息</button></div>
       <div id="integration-error" class="integration-error"></div><div id="integration-result" class="integration-result"></div></div>`;
     field("int-assistant").onchange = async event => { assistantId = event.target.value; await loadFeishu(); };
+    field("fs-device-begin").onclick = event => action(event.target, async () => {
+      const previous = registrationSessions.get(assistantId);
+      if (previous?.timer) clearTimeout(previous.timer);
+      if (previous?.countdownTimer) clearInterval(previous.countdownTimer);
+      const region = field("fs-region").value;
+      const started = await api("/api/feishu/registration/begin", {assistant_id: assistantId, region});
+      const session = {assistantId, sessionId: started.session_id || started.sessionId, region: started.region || region,
+        qrUrl: started.qr_url || started.qrUrl || started.verification_uri_complete || started.verificationUriComplete || started.verification_uri || "",
+        qrDataUri: started.qr_svg || started.qr_data_uri || started.qr_image || "",
+        verificationUriComplete: started.verification_uri_complete || started.verificationUriComplete || "", intervalMs: Math.max(1000, Number(started.interval || 5) * (Number(started.interval || 0) < 100 ? 1000 : 1)),
+        expiresAt: Date.now() + Math.max(1, Number(started.expires_in || 600)) * 1000, status: String(started.status || "pending").toLowerCase()};
+      if (!session.sessionId) throw new Error("服务器未返回授权会话，请重试");
+      registrationSessions.set(assistantId, session); renderRegistrationSession(session); startRegistrationPolling(session);
+      const resultBox = field("integration-result"); if (resultBox) resultBox.textContent = "已生成扫码会话，请用手机飞书扫描二维码并确认授权。";
+    });
+    field("fs-device-cancel").onclick = event => action(event.target, async () => {
+      const session = registrationSessions.get(assistantId); if (!session) return;
+      if (session.timer) clearTimeout(session.timer); if (session.countdownTimer) clearInterval(session.countdownTimer);
+      try { await api("/api/feishu/registration/cancel", {assistant_id: assistantId, session_id: session.sessionId}); } finally {
+        session.status = "cancelled"; session.message = "已取消扫码会话"; renderRegistrationSession(session);
+      }
+    });
+    const existingRegistration = registrationSessions.get(assistantId);
+    if (existingRegistration?.status === "pending") startRegistrationPolling(existingRegistration);
     field("fs-save").onclick = event => action(event.target, async () => {
       await api("/api/feishu/config", {assistant_id: assistantId, app_id: field("fs-app").value.trim(), app_secret: field("fs-secret").value,
         redirect_uri: field("fs-redirect").value.trim(), scopes: field("fs-scopes").value.trim(), receive_id: field("fs-recipient").value.trim(),

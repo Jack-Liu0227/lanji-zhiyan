@@ -371,9 +371,20 @@ def _stdio_command(config: dict) -> list[str]:
     return [resolved, *args]
 
 
+_SERVER_SEMAPHORES: dict[str, threading.Semaphore] = {}
+_SEMAPHORE_LOCK = threading.Lock()
+
+def _get_mcp_semaphore(server_key: str, limit: int = 4) -> threading.Semaphore:
+    with _SEMAPHORE_LOCK:
+        if server_key not in _SERVER_SEMAPHORES:
+            _SERVER_SEMAPHORES[server_key] = threading.Semaphore(limit)
+        return _SERVER_SEMAPHORES[server_key]
+
+
 class _MCPConnection:
     def __init__(self, config: dict):
         self.config = config
+        self.server_key = str(config.get("name") or config.get("url") or config.get("command") or "mcp")
         self.timeout = float(config.get("timeout", 30))
         self.proc = None
         self.lines = queue.Queue()
@@ -420,10 +431,26 @@ class _MCPConnection:
 
     def _drain_stderr(self):
         # Drain without logging: stderr may contain credentials or private data.
-        while self.proc.stderr.read(4096):
+        # Enforce max 2 MiB stderr limit to prevent uncontrolled memory/CPU exhaustion.
+        total = 0
+        max_bytes = 2 * 1024 * 1024
+        try:
+            while chunk := self.proc.stderr.read(4096):
+                total += len(chunk)
+                if total > max_bytes:
+                    try:
+                        self.proc.terminate()
+                    except OSError:
+                        pass
+                    break
+        except Exception:
             pass
 
     def call(self, method: str, params: dict, notification: bool = False):
+        with _get_mcp_semaphore(self.server_key):
+            return self._call_inner(method, params, notification=notification)
+
+    def _call_inner(self, method: str, params: dict, notification: bool = False):
         self.counter += 1
         payload = {"jsonrpc": "2.0", "method": method, "params": params}
         if not notification:
@@ -482,16 +509,27 @@ class _MCPConnection:
 
     def close(self):
         if self.proc:
-            if self.proc.poll() is None:
-                self.proc.terminate()
             try:
-                self.proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait(timeout=3)
-            for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
-                if stream:
-                    stream.close()
+                if self.proc.poll() is None:
+                    try:
+                        self.proc.terminate()
+                    except OSError:
+                        pass
+                try:
+                    self.proc.wait(timeout=2)
+                except (subprocess.TimeoutExpired, OSError):
+                    try:
+                        self.proc.kill()
+                        self.proc.wait(timeout=2)
+                    except OSError:
+                        pass
+            finally:
+                for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+                    if stream and not getattr(stream, "closed", True):
+                        try:
+                            stream.close()
+                        except Exception:
+                            pass
         elif self.session_id:
             try:
                 headers = {**self.config.get("headers", {}), "Mcp-Session-Id": self.session_id,

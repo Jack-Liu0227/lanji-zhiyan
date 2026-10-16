@@ -272,34 +272,45 @@ def _spawn(paper_id: str, cmd: list[str], env: dict[str, str], fh: Any, a: int, 
                             creationflags=_CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP)
     phase, done, tot = "", 0, 0
     last = [time.monotonic()]
+    stop_event = threading.Event()
 
     def _watch() -> None:                  # 卡死看门狗：读循环会阻塞在 readline 上，只能另起线程盯
-        while proc.poll() is None:
+        while not stop_event.wait(0.2):
+            if proc.poll() is not None:
+                return
             if time.monotonic() - last[0] > STALL_SECONDS:
-                fh.write(f"!!! 超过 {STALL_SECONDS}s 没有任何输出，判定卡死并终止\n")
-                fh.flush()
+                with _LOG_LOCK:
+                    fh.write(f"!!! 超过 {STALL_SECONDS}s 没有任何输出，判定卡死并终止\n")
+                    fh.flush()
                 proc.kill()
                 return
-            time.sleep(5)
 
-    threading.Thread(target=_watch, daemon=True).start()
-    for line in proc.stdout or []:
-        last[0] = time.monotonic()
-        with _LOG_LOCK:
-            fh.write(line)
-            fh.flush()
-        ph = _phase(line)
-        if ph:
-            phase = ph
-        if "translate" in line.lower() or "-----" in line or "━" in line:
-            for cand in _PROG.finditer(line):        # 只认 "已完成/总数"（时间戳 0:00:10/0:00:06 会被 done>total 挡掉）
-                x, y = int(cand.group(1)), int(cand.group(2))
-                if 0 < x <= y:
-                    done, tot = x, y
-                    break
-        msg = f"第 {a}-{b} 页 · {phase or '准备中'}" + (f" {done}/{tot}" if tot else "")
-        with _LOCK:
-            JOBS[paper_id] = {**JOBS.get(paper_id, {}), "state": "running", "msg": msg}
+    watch_thread = threading.Thread(target=_watch, daemon=True)
+    watch_thread.start()
+    try:
+        if proc.stdout:
+            for line in proc.stdout:
+                last[0] = time.monotonic()
+                with _LOG_LOCK:
+                    fh.write(line)
+                    fh.flush()
+                ph = _phase(line)
+                if ph:
+                    phase = ph
+                if "translate" in line.lower() or "-----" in line or "━" in line:
+                    for cand in _PROG.finditer(line):        # 只认 "已完成/总数"（时间戳 0:00:10/0:00:06 会被 done>total 挡掉）
+                        x, y = int(cand.group(1)), int(cand.group(2))
+                        if 0 < x <= y:
+                            done, tot = x, y
+                            break
+                msg = f"第 {a}-{b} 页 · {phase or '准备中'}" + (f" {done}/{tot}" if tot else "")
+                with _LOCK:
+                    JOBS[paper_id] = {**JOBS.get(paper_id, {}), "state": "running", "msg": msg}
+    finally:
+        stop_event.set()
+        watch_thread.join(timeout=2)
+        if proc.stdout:
+            proc.stdout.close()
     return proc.wait()
 
 

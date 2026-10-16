@@ -47,6 +47,8 @@ import folder_picker
 import feishu
 import zotero_sync
 import agent_integrations
+import reproduction_routes
+from run_manager import RunManager
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
@@ -481,12 +483,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8")
 
     def _extension_route(self, method: str, path: str, body: dict, query: dict) -> bool:
-        prefixes = ("/api/agent-settings", "/api/capabilities", "/api/workflow/layouts", "/api/feishu/", "/api/zotero/web/")
+        prefixes = (
+            "/api/agent-settings", "/api/capabilities", "/api/workflow/layouts", "/api/feishu/", "/api/zotero/web/",
+            "/api/projects", "/api/papers/", "/api/chats", "/api/assistants", "/api/teams/", "/api/runs/",
+            "/api/mcp/", "/api/audit/",
+        )
         if not path.startswith(prefixes):
             return False
         try:
             with WorkflowDB(DB_PATH) as db:
-                for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync):
+                for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync, reproduction_routes):
                     result = extension.route(method, path, body, query, db)
                     if result is not None:
                         # These explicit user actions may reveal credentials; never put them in general state.
@@ -797,7 +803,12 @@ class Handler(BaseHTTPRequestHandler):
                 tool_target = ROOT / "tools" / "home" / "home.png"
                 if tool_target.is_file():
                     return self._send(200, tool_target.read_bytes(), "image/png")
-                return self._static("/home.png")
+            if path.startswith("/api/runs/") and path.endswith("/stream"):
+                m_run_stream = re.match(r"^/api/runs/([^/]+)/stream$", path)
+                if m_run_stream:
+                    run_id = m_run_stream.group(1)
+                    last_id = int(self.headers.get("Last-Event-ID") or (q.get("after") or [0])[0] or 0)
+                    return self._stream_run(run_id, last_id)
             if self._extension_route("GET", path, {}, q):
                 return
             if self._mail_route("GET", path, q, None):
@@ -1427,15 +1438,87 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
 
-    # ---------- Agent 事件流（SSE，close-delimited） ----------
-    def _sse(self, data: dict[str, Any], step: str = "") -> None:
-        self.protocol_version = "HTTP/1.0"  # 无 Content-Length 时按关闭分帧
-        self.close_connection = True
+    # ---------- Agent 事件流（SSE，支持 HTTP/1.1 长连接、事件持久化与 Last-Event-ID 重放） ----------
+    def _stream_run(self, run_id: str, after_id: int = 0) -> None:
+        self.protocol_version = "HTTP/1.1"
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "keep-alive")
         self.end_headers()
+
+        with WorkflowDB(DB_PATH) as db:
+            past_events = db.get_run_events(run_id, after_id=after_id)
+
+        last_sent = after_id
+        for ev in past_events:
+            last_sent = ev["event_id"]
+            wire = {
+                "event_id": ev["event_id"],
+                "run_id": ev["run_id"],
+                "type": ev["kind"],
+                "payload": ev["payload"],
+                "created_at": ev["created_at"],
+            }
+            try:
+                self.wfile.write(f"id: {ev['event_id']}\ndata: {json.dumps(wire, ensure_ascii=False, default=str)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+            except OSError:
+                return
+
+        run = RunManager.get_instance().get_run(run_id)
+        if not run or run.status in ("done", "failed", "cancelled"):
+            return
+
+        queue = []
+        cond = threading.Condition()
+
+        def on_event(ev_record: dict[str, Any]) -> None:
+            with cond:
+                if ev_record.get("event_id", 0) > last_sent:
+                    queue.append(ev_record)
+                    cond.notify()
+
+        run.add_listener(on_event)
+        try:
+            while run.status == "running":
+                with cond:
+                    if not queue:
+                        signaled = cond.wait(timeout=15.0)
+                        if not signaled:
+                            try:
+                                self.wfile.write(b": heartbeat\n\n")
+                                self.wfile.flush()
+                            except OSError:
+                                return
+                    to_send = list(queue)
+                    queue.clear()
+
+                for ev in to_send:
+                    try:
+                        self.wfile.write(f"id: {ev.get('event_id', '')}\ndata: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n".encode("utf-8"))
+                        self.wfile.flush()
+                    except OSError:
+                        return
+                    if ev.get("type") in ("done", "cancelled", "error"):
+                        return
+        finally:
+            run.remove_listener(on_event)
+
+    def _sse(self, data: dict[str, Any], step: str = "") -> None:
+        self.protocol_version = "HTTP/1.1"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        db = WorkflowDB(DB_PATH)
+        tid = str(data.get("task_id") or data.get("chat_id") or "")
+        idemp = str(data.get("idempotency_key") or "")
+        run = RunManager.get_instance().create_run(task_id=tid, idempotency_key=idemp, db=db)
 
         had_error = False
 
@@ -1445,14 +1528,15 @@ class Handler(BaseHTTPRequestHandler):
             # retain that state so the persisted step cannot be marked done.
             if isinstance(ev, dict) and ev.get("type") == "error":
                 had_error = True
+            ev_record = run.emit(ev, db=db)
             try:
+                eid = ev_record.get("event_id", 0)
+                self.wfile.write(f"id: {eid}\n".encode("utf-8"))
                 self.wfile.write(("data: " + json.dumps(ev, ensure_ascii=False, default=str) + "\n\n").encode("utf-8"))
                 self.wfile.flush()
             except OSError:
                 pass
 
-        db = WorkflowDB(DB_PATH)
-        tid = str(data.get("task_id") or "")
         track = bool(step and db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
         try:
             if track:

@@ -40,7 +40,7 @@ class WebRuntimeTest(unittest.TestCase):
             port = probe.getsockname()[1]
         cls.url = f"http://127.0.0.1:{port}/"
         env = dict(os.environ, RESEARCH_WORKBENCH_DB=str(Path(temporary.name) / "research.sqlite3"),
-                   PYTHONIOENCODING="utf-8")
+                   PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
         server = subprocess.Popen(
             [sys.executable, str(ROOT / "apps/desktop/server.py"), "--port", str(port), "--no-open"],
             cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
@@ -62,7 +62,7 @@ class WebRuntimeTest(unittest.TestCase):
                 time.sleep(0.1)
         else:
             log.seek(0)
-            raise RuntimeError("Test server failed to start: " + log.read())
+            raise RuntimeError(f"Test server failed to start (rc={server.poll()}): {log.read()}")
 
         playwright = sync_playwright().start()
         cls.addClassCleanup(playwright.stop)

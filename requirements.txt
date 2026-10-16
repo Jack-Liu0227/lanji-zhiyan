@@ -7,3 +7,4 @@ python-docx==1.2.0       # MIT            导出 Word（workflow.py）
 pywebview==6.2.1         # BSD-3-Clause   桌面窗口（server.py；纯命令行跑服务不需要）
 PyYAML==6.0.3            # MIT            读配置（server.py）
 pywin32==312             # PSF-2.0        可选：仅 installer.py 用，已包在 try/except 内
+qrcode==8.2              # BSD-3-Clause   Local SVG QR codes for Feishu device authorization

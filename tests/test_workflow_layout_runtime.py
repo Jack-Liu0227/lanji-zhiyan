@@ -37,6 +37,7 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
             with self.page.expect_response(lambda response: response.url.endswith("/api/task/create")):
                 self.page.locator("#t-go").click()
             self.page.wait_for_function("S.tasks.some(t=>t.title==='Bottom card project')")
+            self.page.wait_for_selector("dialog.wfl-project-dialog", state="detached")
             self.assertEqual(self.page.locator("dialog.wfl-project-dialog").count(), 0)
             self.assertIn("项目已创建", self.page.locator(".wfl-project-notice").inner_text())
             tid = self.page.evaluate("curTask")

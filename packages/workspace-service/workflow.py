@@ -255,6 +255,18 @@ class WorkflowDB(ResearchDB):
               trigger TEXT NOT NULL DEFAULT 'scheduler', status TEXT NOT NULL DEFAULT 'running',
               started_at TEXT NOT NULL, ended_at TEXT NOT NULL DEFAULT '', output_path TEXT NOT NULL DEFAULT '',
               summary TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '')""")
+        cols_sch = {r["name"] for r in self.db.execute("PRAGMA table_info(schedules)")}
+        if "last_run_at" not in cols_sch:
+            self.db.execute("ALTER TABLE schedules ADD COLUMN last_run_at TEXT NOT NULL DEFAULT ''")
+        if "next_run_at" not in cols_sch:
+            self.db.execute("ALTER TABLE schedules ADD COLUMN next_run_at TEXT NOT NULL DEFAULT ''")
+        cols_runs = {r["name"] for r in self.db.execute("PRAGMA table_info(schedule_runs)")}
+        if "name" not in cols_runs:
+            self.db.execute("ALTER TABLE schedule_runs ADD COLUMN name TEXT NOT NULL DEFAULT ''")
+        if "trigger" not in cols_runs:
+            self.db.execute("ALTER TABLE schedule_runs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'scheduler'")
+        if "reason" not in cols_runs:
+            self.db.execute("ALTER TABLE schedule_runs ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
         self.assistant_seed(BUILTIN_ASSISTANTS)      # 公开助手（内置）：只补缺，不覆盖改过的
         _recent = self.db.execute("SELECT id FROM research_tasks ORDER BY updated_at DESC LIMIT 1").fetchone()
         self.schedule_seed(BUILTIN_SCHEDULES, _recent["id"] if _recent else "")   # 内置定时任务：只补缺（没有项目就先留空，等用户绑）
@@ -1138,6 +1150,11 @@ def chat_raw(profile: dict[str, Any], messages: list[dict[str, Any]], tools: lis
     """返回 assistant message 原始结构（含 tool_calls），供 agent 循环使用。"""
     if not profile:
         raise RuntimeError("尚未配置模型：到「模型」页添加一个 OpenAI 兼容接口并设为当前模型。")
+    try:
+        import runtime
+        return runtime.call(profile, messages, tools=tools, temperature=temperature, timeout=timeout, max_tokens=max_tokens)
+    except (ImportError, ModuleNotFoundError):
+        pass
     guards.scrub(messages, note=f"→ {profile.get('model') or '?'}")   # 出站闸门：个人信息/密钥就地打码，再发出去
     if profile.get("api", "openai-completions") != "openai-completions":
         from agent_protocols import complete
@@ -3474,6 +3491,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 args = {}
             ev = {"type": "tool_call", "name": name, "args": args, "id": call.get("id")}
             say(ev); events.append(ev)
+            t_tool_start = time.monotonic()
             try:
                 if name not in allowed_names:
                     raise PermissionError("当前助手未获准使用此工具：" + name)
@@ -3488,6 +3506,13 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 ok, brief = True, _brief(name, result)
             except Exception as exc:
                 result, ok, brief = {"error": f"{type(exc).__name__}: {exc}"}, False, f"失败：{exc}"
+            duration_ms = int((time.monotonic() - t_tool_start) * 1000)
+            try:
+                inp_hash = hashlib.sha256(json.dumps(args, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:16]
+                db.record_audit_event(actor=aid or "user", assistant_id=aid, tool=name, project_id=ctx_id,
+                                      input_hash=inp_hash, outcome="ok" if ok else "error", duration_ms=duration_ms)
+            except Exception:
+                pass
             path = result.get("path") if isinstance(result, dict) else None
             ev2 = {"type": "tool_result", "name": name, "ok": ok, "summary": brief,
                    "path": path or "", "id": call.get("id")}

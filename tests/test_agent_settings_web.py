@@ -154,6 +154,49 @@ class AgentSettingsWebTest(unittest.TestCase):
         self.assertEqual(page.locator("#ag-team-session").input_value(), previous)
         self.assertEqual(self.errors, [])
 
+    def test_feishu_device_session_ui_is_assistant_scoped(self):
+        page = self.page
+        first = page.evaluate("S.assistants[0]?.id || ''")
+        self.assertTrue(first)
+        second = self.post("/api/agent-settings/assistant-save", {"name": "Feishu device UI assistant", "enabled": False})["assistant"]["id"]
+        page.evaluate("refreshState(false)")
+        page.evaluate("""() => {
+          const realApi = api;
+          window.__registrationCalls = [];
+          api = async (path, body) => {
+            if (path.startsWith('/api/feishu/registration/')) {
+              window.__registrationCalls.push({path, body});
+              if (path.endsWith('/begin')) return {
+                assistant_id: body.assistant_id, session_id: 'session-' + body.assistant_id,
+                region: body.region, qr_url: 'https://accounts.feishu.cn/device?user_code=TEST',
+                qr_svg: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCI+PHJlY3Qgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIiBmaWxsPSIjMDAwIi8+PC9zdmc+',
+                interval: 30, expires_in: 60, status: 'pending'
+              };
+              if (path.endsWith('/poll')) return {status: 'pending', interval: 30, expires_in: 60};
+              return {status: 'cancelled'};
+            }
+            return realApi(path, body);
+          };
+        }""")
+        page.evaluate("id => IntegrationSettings.openFeishu(id)", first)
+        page.wait_for_selector("#fs-region")
+        page.locator("#fs-region").select_option("lark")
+        page.locator("#fs-device-begin").click()
+        page.wait_for_selector("#fs-device-qr img")
+        self.assertIn(first, page.evaluate("__registrationCalls.find(c => c.path.endsWith('/begin')).body.assistant_id"))
+
+        page.locator("#int-assistant").select_option(second)
+        page.wait_for_function("document.querySelector('#fs-device-qr')?.innerText.includes('点击')")
+        self.assertEqual(page.locator("#fs-device-qr img").count(), 0)
+        page.locator("#int-assistant").select_option(first)
+        page.wait_for_selector("#fs-device-qr img")
+        self.assertEqual(page.locator("#fs-region").input_value(), "lark")
+        page.locator("#fs-device-cancel").click()
+        page.wait_for_function("document.querySelector('#fs-device-status')?.innerText.includes('已取消')")
+        cancel = page.evaluate("__registrationCalls.find(c => c.path.endsWith('/cancel'))")
+        self.assertEqual(cancel["body"], {"assistant_id": first, "session_id": "session-" + first})
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()
