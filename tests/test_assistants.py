@@ -49,12 +49,12 @@ class AssistantTest(unittest.TestCase):
         self.assertEqual(len(self.db.assistants()), N)                # 不重复
         self.assertTrue(all(json.loads(x["prompts"] or "[]") for x in a))   # 每个都有推荐问题
 
-    def test_02_builtin_immutable_and_undeletable(self):
+    def test_02_builtin_editable_but_undeletable(self):
         with self.assertRaises(ValueError):
             self.db.assistant_delete("builtin-searcher")
-        with self.assertRaises(ValueError):
-            self.db.assistant_save("builtin-searcher", name="改了")
-        self.assertEqual(self.db.assistant("builtin-searcher")["name"], "文献检索员")
+        self.db.assistant_save("builtin-searcher", name="改了", reasoning="high", enabled=0)
+        self.assertEqual(self.db.assistant("builtin-searcher")["name"], "改了")
+        self.assertNotIn("builtin-searcher", {a["id"] for a in self.db.selectable_assistants()})
 
     def test_03_user_crud(self):
         a = self.db.assistant_save("a-test1", name="我的助手", avatar="🧪", description="d",

@@ -303,7 +303,7 @@ class TeamChatTest(unittest.TestCase):
         self.assertEqual(team.next_speaker("", names, "丙"), "甲")             # 轮到尾巴回开头
 
     # ---------- 成员 = 从助手里选，最多 5 个 ----------
-    def test_02_members_are_assistants_and_capped(self):
+    def test_02_members_are_assistants_without_truncation(self):
         self.assertEqual(team.picks(self.scope), [])
         m = self._pick()
         self.assertEqual(m["name"], "文献检索员")
@@ -323,9 +323,8 @@ class TeamChatTest(unittest.TestCase):
                 db.assistant_save("x-%d" % i, name="凑数%d" % i)
         team.add_assistant(self.scope, "x-0")
         self.assertEqual(len(team.picks(self.scope)), 5)   # 满 5 个
-        with self.assertRaises(ValueError) as e:
-            team.add_assistant(self.scope, "x-1")
-        self.assertIn("最多 5 个", str(e.exception))
+        team.add_assistant(self.scope, "x-1")
+        self.assertEqual(len(team.picks(self.scope)), 6)
 
     def test_03_leader_is_not_a_pick(self):
         team.ensure_leader(self.scope)
@@ -397,7 +396,7 @@ class TeamChatTest(unittest.TestCase):
         self._pick()
         st = team.chat_state(self.scope)
         self.assertIn("members", st)
-        self.assertEqual(st["max"], 5)
+        self.assertGreater(st["max"], 5)
         self.assertEqual(len(st["palette"]), 6)
         self.assertTrue(st["colors"])
         self.assertIsNone(st["running"])

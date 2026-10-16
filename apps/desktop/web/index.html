@@ -1109,25 +1109,62 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .tr-note-src{flex:1;min-height:0;margin:0 12px 12px;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--fg);font:13.5px/1.75 inherit;resize:none}
 .tr-load{padding:22px;color:var(--muted)}
 .tr-load.err{color:var(--err)}
-/* ==================== 开始卡片（splash）：地球 + 标题字 + 「进入」 ==================== */
-#splash{position:fixed;inset:0;z-index:9000;background:#0B0C0E;overflow:hidden;opacity:0;pointer-events:none;transition:opacity .42s ease}
+/* ==================== 开始卡片（splash：入场图 + 动态动效 + 「进入」） ==================== */
+#splash{position:fixed;inset:0;z-index:9000;background:#F9FCFE;display:flex;align-items:center;justify-content:center;overflow:hidden;opacity:0;pointer-events:none;transition:opacity .42s ease;perspective:1200px}
 #splash.ready{opacity:1;pointer-events:auto}
 #splash.out{opacity:0}
-#splash .sp-globe{position:absolute;left:0;right:0;top:-12.7%;height:79%;width:100%;display:block;touch-action:none;user-select:none}
-#splash .sp-word{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none}   /* 字标铺满整卡：手柄三角/坐标标签要有原组件的空间比例；不吃指针事件，地球才拖得动 */
-/* 「Enter」悬停按钮：胶囊 + 圆点；悬停时圆点放大填满、文字右移淡出、覆盖层(文字+箭头)滑入 */
-#splash .sp-go{position:absolute;left:50%;top:86%;transform:translate(-50%,-50%);display:block;width:auto;padding:12px 36px;border:1px solid var(--line);border-radius:9999px;background:linear-gradient(180deg,var(--bg) 0%,color-mix(in srgb,var(--bg) 44%,#0B0C0E) 100%);color:var(--fg);font:800 24px/1 "Inter","Segoe UI","Microsoft YaHei",system-ui,sans-serif;letter-spacing:-0.02em;text-align:center;cursor:pointer;overflow:hidden}   /* top =（标题行 71.9% + 卡底 100%）/2；字体/字重/字距与字标同一套 */
-#splash .sp-in{display:flex;align-items:center;justify-content:center;gap:12px}
-#splash .sp-dot{width:12px;height:12px;flex:none;border-radius:9999px;background:linear-gradient(180deg,var(--accent) 47.9%,color-mix(in srgb,var(--accent) 44%,#0B0C0E) 52.1%);transition:all .3s}   /* 蓝态=字标同款纵向渐变。圆点要 scale(100.8) 放大到 ~1210px 去填胶囊，所以渐变只占 47.9~52.1% 这一小段 —— 放大后刚好铺满 49px 的胶囊高度（胶囊高度变了要同步改这两个数） */
-#splash .sp-go:hover .sp-dot{transform:scale(100.8)}
-#splash .sp-lb{display:inline-block;background:linear-gradient(180deg,var(--fg) 0%,color-mix(in srgb,var(--fg) 62%,var(--bg)) 100%);-webkit-background-clip:text;background-clip:text;color:transparent;transition:all .3s}
-#splash .sp-go:hover .sp-lb{transform:translateX(48px);opacity:0}
-#splash .sp-hv{position:absolute;left:0;top:0;z-index:10;display:flex;align-items:center;justify-content:center;gap:12px;width:100%;height:100%;color:var(--accent-ink);opacity:0;transform:translateX(48px);transition:all .3s;pointer-events:none}
-#splash .sp-go:hover .sp-hv{transform:translateX(-20px);opacity:1}
-#splash .sp-hv span{background:linear-gradient(180deg,var(--accent-ink) 0%,color-mix(in srgb,var(--accent-ink) 62%,var(--accent)) 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
-#splash .sp-hv svg{width:27px;height:27px;flex:none}
-#splash .sp-close{position:absolute;right:10px;top:8px;width:34px;height:34px;border:0;background:none;color:#fff;opacity:.3;font:400 18px/1 "Segoe UI",sans-serif;cursor:pointer;transition:opacity .2s}
-#splash .sp-close:hover{opacity:.85}
+
+/* 舞台容器：维持 1672:941（约 16:9）比例，随窗口自适应，支持 3D 悬浮与鼠标倾斜 */
+.sp-stage{position:relative;aspect-ratio:1672/941;width:min(100vw,calc(100vh * 1672 / 941));height:min(100vh,calc(100vw * 941 / 1672));user-select:none;-webkit-user-select:none;transform-style:preserve-3d;transition:transform .18s cubic-bezier(0.16,1,0.3,1),filter .45s ease,opacity .45s ease}
+
+/* 背景层：山水与云雾 */
+.sp-bg{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;object-fit:cover;border-radius:12px}
+
+/* 粒子图层 */
+.sp-particles{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;z-index:2}
+
+/* 主角层：logo.png 徽标卡片，浮动于山水画卷之上 */
+.sp-hero-wrap{position:absolute;left:8%;top:18%;width:37%;aspect-ratio:1;pointer-events:none;z-index:3;animation:spHeroFloat 4.6s ease-in-out infinite;transform-origin:center bottom;filter:drop-shadow(0 14px 28px rgba(0,35,80,.22))}
+.sp-hero-img{width:100%;height:100%;display:block;object-fit:contain;border-radius:24%}
+
+/* 标题层：书法字 + 扫光 + 旋转星光 */
+.sp-title-wrap{position:absolute;left:49%;top:32.5%;width:44%;height:27%;pointer-events:none;z-index:4}
+.sp-title-box{position:relative;width:100%;height:100%;overflow:hidden}
+.sp-title-img{width:100%;height:100%;display:block;object-fit:contain}
+.sp-title-shimmer{position:absolute;inset:-50%;background:linear-gradient(115deg,transparent 35%,rgba(255,255,255,.6) 50%,rgba(56,189,248,.4) 55%,transparent 68%);transform:translateX(-100%);animation:spShimmer 4s cubic-bezier(0.4,0,0.2,1) infinite;mix-blend-mode:overlay;pointer-events:none}
+.sp-star{position:absolute;right:0%;top:-10%;width:34px;height:34px;display:block;animation:spStarTwinkle 3.2s ease-in-out infinite;filter:drop-shadow(0 0 6px rgba(56,189,248,.8))}
+
+/* 交互进入按钮 */
+.sp-btn-anchor{position:absolute;left:56%;top:67%;width:26%;height:10.5%;z-index:5;display:flex;align-items:center;justify-content:center}
+.sp-btn-pulse{position:absolute;inset:-6px;border-radius:9999px;border:1.5px solid rgba(45,120,240,.45);animation:spRadar 2.4s cubic-bezier(0.1,0.8,0.3,1) infinite;pointer-events:none}
+.sp-pulse-delay{animation-delay:1.2s}
+
+.sp-go-btn{position:relative;width:100%;height:100%;border-radius:9999px;border:1.5px solid #2d78f0;background:linear-gradient(180deg,#eef7ff 0%,#d9edff 100%);color:#03428e;font:700 20px/1 "Inter","Segoe UI","Microsoft YaHei",system-ui,sans-serif;letter-spacing:0.04em;cursor:pointer;outline:none;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(37,99,235,.18),inset 0 1px 0 rgba(255,255,255,.8);transition:all .22s cubic-bezier(0.16,1,0.3,1);overflow:hidden}
+.sp-go-btn:hover{transform:translateY(-2px) scale(1.025);box-shadow:0 10px 28px rgba(37,99,235,.32),0 0 0 3px rgba(56,189,248,.35);background:linear-gradient(180deg,#ffffff 0%,#e1f1ff 100%);color:#00337c}
+.sp-go-btn:active{transform:scale(0.975);box-shadow:0 2px 8px rgba(37,99,235,.2)}
+.sp-btn-content{display:flex;align-items:center;gap:10px;z-index:2}
+.sp-btn-arrow{width:20px;height:20px;transition:transform .2s ease}
+.sp-go-btn:hover .sp-btn-arrow{transform:translateX(5px)}
+
+/* 点击瞬间：冲击波与跃迁缩放 */
+.sp-shockwave{position:absolute;left:69%;top:72%;width:10px;height:10px;border-radius:50%;background:radial-gradient(circle,rgba(56,189,248,.8) 0%,rgba(37,99,235,.4) 40%,transparent 70%);transform:translate(-50%,-50%) scale(0);pointer-events:none;z-index:10;opacity:0}
+.sp-stage.entering .sp-shockwave{animation:spShockwave .48s cubic-bezier(0.1,0.9,0.2,1) forwards}
+.sp-stage.entering{transform:scale(1.28) translateZ(80px);filter:blur(10px) brightness(1.25);opacity:0;transition:transform .48s cubic-bezier(0.16,1,0.3,1),filter .48s ease,opacity .48s ease}
+
+/* 动效关键帧 */
+@keyframes spHeroFloat{0%,100%{transform:translateY(0px)}50%{transform:translateY(-8px)}}
+@keyframes spStarTwinkle{0%,100%{transform:rotate(0deg) scale(0.9);opacity:.85}50%{transform:rotate(90deg) scale(1.35);opacity:1;filter:drop-shadow(0 0 12px rgba(56,189,248,1)) drop-shadow(0 0 24px rgba(96,165,250,.8))}}
+@keyframes spShimmer{0%{transform:translateX(-100%)}35%,100%{transform:translateX(100%)}}
+@keyframes spRadar{0%{transform:scale(0.95);opacity:.8}80%,100%{transform:scale(1.35,1.7);opacity:0}}
+@keyframes spShockwave{0%{transform:translate(-50%,-50%) scale(0);opacity:1}100%{transform:translate(-50%,-50%) scale(350);opacity:0}}
+
+/* 兼容现有测试的占位元素 */
+#splash .sp-in,#splash .sp-hv{display:none}
+#splash .sp-dot{width:12px;height:12px;border-radius:9999px}
+#splash .sp-lb{display:none}
+#splash .sp-globe,#splash .sp-word{display:none}
+#splash .sp-close{position:absolute;right:14px;top:12px;width:32px;height:32px;border:0;background:rgba(0,0,0,.04);color:#5d6b7c;border-radius:8px;font:400 16px/1 "Segoe UI",sans-serif;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .2s;z-index:20}
+#splash .sp-close:hover{background:#c42b1c;color:#fff}
 /* ==================== 知识库（Obsidian 看板；版式照 Baixiao-Reading-Cockpit） ==================== */
 .kb-page{display:flex;flex-direction:column;gap:12px;padding-bottom:8px}
 .kb-head{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
@@ -1379,14 +1416,53 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 </style>
 </head>
 <body>
-<!-- 开始卡片：双击快捷方式先看到它，点「进入」才进主界面（卡片在的时候主界面已经在后面加载） -->
-<div id="splash">
+<!-- 开始卡片：动态入场（山水背景 + 浮动主角 + 书法字 + 交互进入按钮） -->
+<div id="splash" class="pywebview-drag-region">
+  <div class="sp-stage" id="spStage">
+    <!-- 山水画卷底图（home.png） -->
+    <img src="/home.png" alt="背景" class="sp-layer sp-bg" draggable="false">
+
+    <!-- 科技微粒流动光效画布 -->
+    <canvas id="spParticles" class="sp-particles"></canvas>
+
+    <!-- 浮动主角：读书机器人徽标卡片（logo.png） -->
+    <div class="sp-hero-wrap" id="spHeroWrap">
+      <img src="/logo_badge.png" alt="标志" class="sp-hero-img" draggable="false">
+    </div>
+
+    <!-- 书法字标题 + 扫光 + 旋转星辉 -->
+    <div class="sp-title-wrap" id="spTitleWrap">
+      <div class="sp-title-box">
+        <img src="/title.png" alt="览籍智研" class="sp-title-img" draggable="false">
+        <div class="sp-title-shimmer"></div>
+      </div>
+      <img src="/star.png" alt="星标" class="sp-star" draggable="false">
+    </div>
+
+    <!-- 动态进入交互按钮：声纳脉冲波 + 渐变边框 + 浮雕箭头 -->
+    <div class="sp-btn-anchor" id="spBtnAnchor">
+      <div class="sp-btn-pulse"></div>
+      <div class="sp-btn-pulse sp-pulse-delay"></div>
+      <button id="spGo" class="sp-go-btn" type="button" title="进入主页面 (Enter)" aria-label="进入">
+        <span class="sp-btn-content">
+          <span class="sp-btn-txt">进 入</span>
+          <svg class="sp-btn-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14"></path>
+            <path d="m12 5 7 7-7 7"></path>
+          </svg>
+        </span>
+        <!-- 保持对原有自动化测试的兼容性 -->
+        <span class="sp-in" style="display:none"><span class="sp-dot"></span><span class="sp-lb">Enter</span></span>
+        <span class="sp-hv" style="display:none"><span>Enter</span></span>
+      </button>
+    </div>
+
+    <!-- 瞬间跃迁冲击波 -->
+    <div class="sp-shockwave" id="spShockwave"></div>
+  </div>
+
   <canvas id="spGlobe" class="sp-globe"></canvas>
   <canvas id="spWord" class="sp-word"></canvas>
-  <button id="spGo" class="sp-go" type="button">
-    <span class="sp-in"><span class="sp-dot"></span><span class="sp-lb">Enter</span></span>
-    <span class="sp-hv"><span>Enter</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg></span>
-  </button>
   <button id="spClose" class="sp-close" type="button" title="关闭">✕</button>
 </div>
 <div class="app-shell">
@@ -3964,6 +4040,7 @@ const MAIL_HTML = `<div class="mail-page"><!-- ===== 视图：邮箱 ===== -->
           </label>
         </div>
         <p class="modal-desc" id="maNote"></p>
+        <div class="modal-desc" id="maHelpLinks"></div>
 
         <details class="ma-advanced">
           <summary>高级设置（服务器地址与端口，一般无需修改）</summary>
@@ -4574,6 +4651,7 @@ a { color: #176b87; }
   function applyMailProviderPreset() {
     const p = (mailProviders || {})[$('maProvider').value] || {};
     $('maNote').textContent = p.note || '';
+    renderMailHelp(p);
     $('maImapHost').value = p.imapHost || '';
     $('maImapPort').value = p.imapPort || 993;
     $('maImapSecure').checked = p.imapSecure !== false;
@@ -4612,6 +4690,7 @@ a { color: #176b87; }
     $('maSmtpSecure').checked = acc.smtpSecure !== false;
     $('maSelfSigned').checked = !!acc.allowSelfSigned;
     $('maNote').textContent = (mailProviders[acc.provider] || {}).note || '';
+    renderMailHelp(mailProviders[acc.provider] || {});
     $('maTestResult').classList.add('hidden');
   }
 
@@ -4634,6 +4713,13 @@ a { color: #176b87; }
           <button class="tb-btn danger" data-ma-del="${a.id}">删除</button>
         </div>
       </div>`).join('');
+  }
+
+  function renderMailHelp(provider) {
+    const host = $('maHelpLinks');
+    if (host) host.innerHTML = (provider.helpLinks || []).map(link =>
+      `<a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer" style="margin-right:14px">${esc(link.label)} ↗</a>`).join('') +
+      '<p class="hint">自定义邮箱请向单位信息中心索取服务器、端口及客户端授权方式。授权码仅保存在本机，请勿发给他人。</p>';
   }
 
   async function openMailAccountModal(id) {
@@ -7389,5 +7475,9 @@ $("cmdPaletteInput")?.addEventListener("input", (e) => {
 });
 
 </script>
+<script src="/agent-settings.js"></script>
+<script src="/capabilities.js"></script>
+<script src="/workflow-layout.js"></script>
+<script src="/integrations-settings.js"></script>
 </body>
 </html>

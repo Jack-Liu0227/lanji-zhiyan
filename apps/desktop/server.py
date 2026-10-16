@@ -40,6 +40,13 @@ import workflow
 import schedule                  # 定时任务：只在应用活着时调度
 import team                      # 团队：Leader + 成员 + 派活队列
 import zotero                    # Zotero 本机 Local API 只读接入（笔记页；不碰 zotero.sqlite）
+import agent_settings
+import capabilities
+import workflow_layout
+import folder_picker
+import feishu
+import zotero_sync
+import agent_integrations
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
@@ -277,7 +284,7 @@ def _webview_window(url: str, stamp: int) -> bool:
             f"{APP_TITLE} · v{stamp}", url + "&pw=1",
             frameless=True, easy_drag=False,      # 拖动靠 .pywebview-drag-region（顶栏），不是抓哪儿拖哪儿
             x=int(x / s), y=int(y / s), width=int(w / s), height=int(h / s),
-            min_size=(int(420 / s), int(380 / s)), background_color="#111821")   # 逻辑像素！专注模式的「窄栏」只有 580 物理，按 DPI 反算，否则会把窗口钳在 ~690 宽
+            min_size=(int(420 / s), int(380 / s)), background_color="#F9FCFE")   # 逻辑像素！专注模式的「窄栏」只有 580 物理，按 DPI 反算，否则会把窗口钳在 ~690 宽
         webview.start(gui="edgechromium", private_mode=False,   # 关掉隐私模式，localStorage/头像才留得住
                       storage_path=str(HERE / "data" / "webview"),
                       icon=str(icon) if icon.is_file() else None,
@@ -451,6 +458,10 @@ class Handler(BaseHTTPRequestHandler):
     def _static(self, rel: str) -> None:
         """web/ 下的静态文件（只给 /vendor/ 用：农历库 lunar.js）。防目录穿越。"""
         target = (WEB / urllib.parse.unquote(rel).lstrip("/")).resolve()
+        if (WEB.resolve() not in target.parents or not target.is_file()) and rel.strip("/") == "home.png":
+            alt = ROOT / "tools" / "home" / "home.png"
+            if alt.is_file():
+                return self._send(200, alt.read_bytes(), "image/png")
         if WEB.resolve() not in target.parents or not target.is_file():
             return self._send(404, b"not found", "text/plain; charset=utf-8")
         self._send(200, target.read_bytes(), self.MIME.get(target.suffix.lower(), "application/octet-stream"))
@@ -468,6 +479,32 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, payload: Any, code: int = 200) -> None:
         payload = self._scrub(payload)
         self._send(code, json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8")
+
+    def _extension_route(self, method: str, path: str, body: dict, query: dict) -> bool:
+        prefixes = ("/api/agent-settings", "/api/capabilities", "/api/workflow/layouts", "/api/feishu/", "/api/zotero/web/")
+        if not path.startswith(prefixes):
+            return False
+        try:
+            with WorkflowDB(DB_PATH) as db:
+                for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync):
+                    result = extension.route(method, path, body, query, db)
+                    if result is not None:
+                        # These explicit user actions may reveal credentials; never put them in general state.
+                        reveal = path.endswith(("/provider-secret", "/mcp/reveal"))
+                        if reveal:
+                            self._send(200, json.dumps(result, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8")
+                        elif path == "/api/feishu/callback":
+                            message = "飞书授权完成，可以关闭此页面并返回览籍智研。机器人发送仍需应用已发布及相应权限。"
+                            self._send(200, ("<!doctype html><html lang='zh-CN'><meta charset='utf-8'><title>飞书授权完成</title><h2>" + message + "</h2></html>").encode("utf-8"), "text/html; charset=utf-8")
+                        else:
+                            self._json(result)
+                        return True
+            self._json({"error": "not found"}, 404)
+        except (ValueError, KeyError) as exc:
+            self._json({"error": str(exc)}, 400)
+        except Exception as exc:
+            self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
+        return True
 
     def _body(self) -> dict[str, Any]:
         n = int(self.headers.get("Content-Length") or 0)
@@ -752,6 +789,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, (WEB / "index.html").read_bytes(), "text/html; charset=utf-8")
             if path.startswith("/vendor/"):
                 return self._static(path)
+            if path in ("/agent-settings.js", "/capabilities.js", "/workflow-layout.js", "/integrations-settings.js"):
+                return self._static(path)
+            if path.endswith((".png", ".jpg", ".jpeg", ".svg", ".ico", ".woff2")):
+                return self._static(path)
+            if path in ("/tools/home/home.png", "/home/home.png"):
+                tool_target = ROOT / "tools" / "home" / "home.png"
+                if tool_target.is_file():
+                    return self._send(200, tool_target.read_bytes(), "image/png")
+                return self._static("/home.png")
+            if self._extension_route("GET", path, {}, q):
+                return
             if self._mail_route("GET", path, q, None):
                 return
             if path == "/api/win/state":
@@ -878,7 +926,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/deepread/status":           # 精读进度（前端每 2 秒问一次）
                 return self._json(deepread_state((q.get("task_id") or [""])[0]) or {"phase": ""})
             if path == "/api/settings/meta":            # 设置页分区要的元数据：工具 / 技能 / MCP
-                return self._json(settings_meta())
+                with WorkflowDB(DB_PATH) as db:
+                    project = (q.get("project_id") or [""])[0]
+                    row = db.db.execute("SELECT base_dir FROM research_tasks WHERE id=?", (project,)).fetchone()
+                    return self._json(capabilities.settings_meta(db, str(row["base_dir"] or "") if row else ""))
             if path == "/api/teams":                     # 团队清单（多团队：2 固定 + 3 机动）
                 try:
                     return self._json(team.teams())
@@ -976,7 +1027,7 @@ class Handler(BaseHTTPRequestHandler):
                                        "total": db.rss_count(sid, kw, yr)})
             if path == "/api/tools":
                 return self._json({"tools": [{"name": t["function"]["name"],
-                                              "description": t["function"]["description"]} for t in TOOL_SPECS]})
+                                              "description": t["function"]["description"]} for t in [*workflow.TOOL_SPECS, *agent_integrations.tool_specs()]]})
             if path == "/api/providers":
                 with WorkflowDB(DB_PATH) as db:
                     return self._json({"providers": catalog_cards(db),
@@ -1031,6 +1082,8 @@ class Handler(BaseHTTPRequestHandler):
         if origin and not re.match(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", origin):
             return self._json({"error": "来源不被允许"}, 403)
         data = self._body()
+        if self._extension_route("POST", path, data, q):
+            return
         if self._mail_route("POST", path, q, data):
             return
         if path == "/api/vault/status":            # 看板上的状态写回笔记 frontmatter
@@ -1384,7 +1437,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
 
+        had_error = False
+
         def emit(ev: dict[str, Any]) -> None:
+            nonlocal had_error
+            # Some runners report failures as an event and return normally;
+            # retain that state so the persisted step cannot be marked done.
+            if isinstance(ev, dict) and ev.get("type") == "error":
+                had_error = True
             try:
                 self.wfile.write(("data: " + json.dumps(ev, ensure_ascii=False, default=str) + "\n\n").encode("utf-8"))
                 self.wfile.flush()
@@ -1392,10 +1452,19 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
         db = WorkflowDB(DB_PATH)
+        tid = str(data.get("task_id") or "")
+        track = bool(step and db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
         try:
+            if track:
+                db.log_step(tid, step, "running", "开始执行")
             runners = {"idea": run_idea, "outline": run_outline, "map": run_map, "write": run_write, "review": run_review}
-            (runners.get(step) or run_agent)(db, data.get("task_id", ""), data.get("message", ""), emit)
+            (runners.get(step) or run_agent)(db, tid, data.get("message", ""), emit)
+            if track:
+                db.log_step(tid, step, "failed" if had_error else "done",
+                            "执行过程报告错误" if had_error else "执行完成")
         except Exception as exc:
+            if track:
+                db.log_step(tid, step, "failed", str(exc)[:300])
             emit({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
             emit({"type": "done", "content": ""})
         finally:
@@ -1404,26 +1473,15 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- 通用 Agent 对话（不绑项目） ----------
     def _pick_folder(self, initial: str = "", title: str = "选择产出文件夹") -> dict[str, Any]:
-        """弹本机原生「选择文件夹」对话框（服务就跑在这台机器上）。
-        放子进程里跑：Tk 必须在它自己的主线程里建，HTTP 处理线程里建不可靠。"""
-        helper = ("import sys, pathlib, tkinter as tk, tkinter.filedialog as fd\n"
-                  "r = tk.Tk(); r.withdraw(); r.attributes('-topmost', True)\n"
-                  "p = fd.askdirectory(title=sys.argv[3] or '选择产出文件夹', initialdir=sys.argv[2] or str(pathlib.Path.home()))\n"
-                  "r.destroy(); Path(sys.argv[1]).write_text(p or '', encoding='utf-8')\n")
-        tmp = Path(tempfile.mkstemp(suffix=".txt")[1])
-        try:
-            proc = subprocess.run([sys.executable, "-c", helper, str(tmp), initial or "", title or ""],
-                                  capture_output=True, timeout=600)
-            if proc.returncode != 0:
-                return {"error": "打不开文件夹选择框：" + proc.stderr.decode("utf-8", "replace").strip()[:200]}
-            return {"dir": tmp.read_text(encoding="utf-8").strip()}
-        except Exception as exc:
-            return {"error": f"打不开文件夹选择框：{type(exc).__name__}: {exc}"}
-        finally:
-            tmp.unlink(missing_ok=True)
+        return folder_picker.pick_folder(initial, title)
 
 
 def main() -> int:
+    # Frozen builds launch this process as a tiny native dialog helper.  Handle
+    # that mode before checking the web bundle or starting the HTTP service.
+    if "--pick-folder-helper" in sys.argv:
+        idx = sys.argv.index("--pick-folder-helper")
+        return folder_picker.helper_main(sys.argv[idx + 1:])
     port = PORT
     if "--port" in sys.argv:
         port = int(sys.argv[sys.argv.index("--port") + 1])

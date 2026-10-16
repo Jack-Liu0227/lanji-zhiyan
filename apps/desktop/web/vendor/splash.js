@@ -734,25 +734,158 @@ function mkWord(canvas, host) {
   };
 }
 
-/* ---------------- 3) 卡片装配 + 「进入」 ---------------- */
+/* ---------------- 3) 卡片装配 + 动态微粒与「进入」 ---------------- */
+function mkParticles(canvas) {
+  if (!canvas) return null;
+  var ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  var pts = [];
+  var N = 40;
+  var alive = true;
+  var raf = 0;
+  var warp = false;
+
+  function resize() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = (canvas.clientWidth || 1000) * dpr;
+    canvas.height = (canvas.clientHeight || 560) * dpr;
+    ctx.scale(dpr, dpr);
+  }
+  resize();
+
+  for (var i = 0; i < N; i++) {
+    pts.push({
+      x: Math.random() * (canvas.clientWidth || 1000),
+      y: Math.random() * (canvas.clientHeight || 560),
+      vx: (Math.random() - 0.4) * 0.4,
+      vy: -(Math.random() * 0.6 + 0.2),
+      r: Math.random() * 2.2 + 0.8,
+      a: Math.random() * 0.6 + 0.25,
+      hue: Math.random() > 0.3 ? 205 : 190
+    });
+  }
+
+  function tick() {
+    if (!alive) return;
+    var w = canvas.clientWidth || 1000;
+    var h = canvas.clientHeight || 560;
+    ctx.clearRect(0, 0, w, h);
+
+    for (var i = 0; i < pts.length; i++) {
+      var p = pts[i];
+      if (warp) {
+        p.vx *= 1.1;
+        p.vy *= 1.1;
+        p.x += p.vx * 3.5;
+        p.y += p.vy * 3.5;
+      } else {
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.y < -10) { p.y = h + 10; p.x = Math.random() * w; }
+        if (p.x < -10) p.x = w + 10;
+        if (p.x > w + 10) p.x = -10;
+      }
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = "hsla(" + p.hue + ", 95%, 68%, " + p.a + ")";
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = "hsla(" + p.hue + ", 100%, 65%, 0.8)";
+      ctx.fill();
+    }
+    raf = requestAnimationFrame(tick);
+  }
+  raf = requestAnimationFrame(tick);
+
+  return {
+    setWarp: function () {
+      warp = true;
+      var cx = (canvas.clientWidth || 1000) * 0.69;
+      var cy = (canvas.clientHeight || 560) * 0.72;
+      for (var i = 0; i < pts.length; i++) {
+        var dx = pts[i].x - cx;
+        var dy = pts[i].y - cy;
+        var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        pts[i].vx = (dx / dist) * 14;
+        pts[i].vy = (dy / dist) * 14;
+      }
+    },
+    dispose: function () {
+      alive = false;
+      if (raf) cancelAnimationFrame(raf);
+    }
+  };
+}
+
 function boot() {
   var sp = document.getElementById("splash");
   if (!sp || window.__rwSplashDone) return;
   window.__rwSplashDone = true;
-  var g = mkGlobe(document.getElementById("spGlobe"));
-  var w = mkWord(document.getElementById("spWord"), sp);
+  var g = null, w = null;
+  var glbEl = document.getElementById("spGlobe");
+  var wrdEl = document.getElementById("spWord");
+  if (glbEl && glbEl.offsetWidth > 0 && glbEl.offsetHeight > 0) g = mkGlobe(glbEl);
+  if (wrdEl && wrdEl.offsetWidth > 0 && wrdEl.offsetHeight > 0) w = mkWord(wrdEl, sp);
+
+  var ptsEngine = mkParticles(document.getElementById("spParticles"));
+  var stage = document.getElementById("spStage");
+  var heroWrap = document.getElementById("spHeroWrap");
+  var titleWrap = document.getElementById("spTitleWrap");
+
+  function onMove(ev) {
+    if (!stage || window.__rwSplashGone) return;
+    var rect = sp.getBoundingClientRect();
+    var x = (ev.clientX - rect.left) / rect.width - 0.5;
+    var y = (ev.clientY - rect.top) / rect.height - 0.5;
+    stage.style.transform = "rotateX(" + (-y * 6).toFixed(2) + "deg) rotateY(" + (x * 8).toFixed(2) + "deg)";
+    if (heroWrap) heroWrap.style.transform = "translate(" + (x * 10).toFixed(1) + "px, " + (y * 6).toFixed(1) + "px)";
+    if (titleWrap) titleWrap.style.transform = "translate(" + (x * -6).toFixed(1) + "px, " + (y * -4).toFixed(1) + "px)";
+  }
+
+  function onLeaveStage() {
+    if (!stage || window.__rwSplashGone) return;
+    stage.style.transform = "rotateX(0deg) rotateY(0deg)";
+    if (heroWrap) heroWrap.style.transform = "none";
+    if (titleWrap) titleWrap.style.transform = "none";
+  }
+
+  sp.addEventListener("mousemove", onMove);
+  sp.addEventListener("mouseleave", onLeaveStage);
 
   function leave() {
     if (sp.classList.contains("out")) return;
-    sp.classList.add("out");
+    window.removeEventListener("keydown", onKey);
+    sp.removeEventListener("mousemove", onMove);
+    sp.removeEventListener("mouseleave", onLeaveStage);
+
+    if (stage) stage.classList.add("entering");
+    if (ptsEngine) ptsEngine.setWarp();
+
     try { fetch("/api/win/maximize", { method: "POST", headers: { "Content-Type": "application/json" } }); } catch (e) {}   // 卡片 → 铺回工作区（服务端 POST 只收 application/json：少了这个头就是静默 415，全屏不生效）
+
+    setTimeout(function () {
+      sp.classList.add("out");
+    }, 280);
+
     setTimeout(function () {
       if (g) g.dispose();
       if (w) w.dispose();
+      if (ptsEngine) ptsEngine.dispose();
       sp.style.display = "none";
       window.__rwSplashGone = true;
-    }, 460);
+    }, 500);
   }
+
+  function onKey(ev) {
+    if (ev.key === "Enter" || ev.code === "Enter" || ev.code === "NumpadEnter") {
+      if (!window.__rwSplashGone && !sp.classList.contains("out")) {
+        ev.preventDefault();
+        leave();
+      }
+    }
+  }
+  window.addEventListener("keydown", onKey);
+
   var go = document.getElementById("spGo");
   if (go) {
     var glab = go.querySelectorAll(".sp-lb, .sp-hv > span");   // 文字只留 CFG 一处
