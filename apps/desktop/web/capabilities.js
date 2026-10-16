@@ -14,10 +14,26 @@
     .cap-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
     .cap-toolbar .control{min-width:150px;max-width:270px}.cap-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
     .cap-grid .card{margin:0;min-width:0}.cap-grid h4{margin:0 0 8px;overflow-wrap:anywhere}.cap-grid p{white-space:pre-wrap;overflow-wrap:anywhere}
-    .cap-card-actions{display:flex;gap:7px;margin-top:14px;flex-wrap:wrap}.cap-table{overflow:auto;max-height:65vh;border:1px solid var(--line);border-radius:10px}
-    .cap-table table{margin:0;min-width:max-content}.cap-table th{position:sticky;top:0;background:var(--bg);z-index:2}
-    .cap-table th:first-child,.cap-table td:first-child{position:sticky;left:0;background:var(--bg);z-index:1;max-width:280px;white-space:normal;overflow-wrap:anywhere}
-    .cap-table th:first-child{z-index:3}.cap-table input{width:18px;height:18px;cursor:pointer}
+    .cap-card-actions{display:flex;gap:7px;margin-top:14px;flex-wrap:wrap}
+    .cap-matrix-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px}
+    .cap-cats{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+    .cap-cat-pill{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s}
+    .cap-cat-pill:hover{border-color:var(--accent);color:var(--fg)}
+    .cap-cat-pill.on{background:color-mix(in srgb,var(--accent) 15%,transparent);border-color:var(--accent);color:var(--accent)}
+    .cap-th-corner{display:flex;align-items:center;justify-content:space-between;gap:8px}
+    .cap-th-col{display:flex;flex-direction:column;align-items:center;gap:4px;white-space:nowrap;padding:4px 0}
+    .cap-row-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+    .cap-row-title{min-width:0;line-height:1.3}
+    .cap-bulk-btns{display:flex;align-items:center;gap:4px;flex-shrink:0}
+    .cap-btn-mini{font-size:10.5px;padding:1px 6px;border-radius:4px;border:1px solid var(--line);background:var(--panel);cursor:pointer;line-height:1.4;transition:all .15s}
+    .cap-btn-mini.on:hover{background:color-mix(in srgb,var(--accent) 20%,transparent);border-color:var(--accent);color:var(--accent)}
+    .cap-btn-mini.off:hover{background:color-mix(in srgb,var(--err,#bd3f34) 20%,transparent);border-color:var(--err,#bd3f34);color:var(--err,#bd3f34)}
+    .cap-table{overflow:auto;max-height:calc(100vh - 280px);min-height:360px;border:1px solid var(--line);border-radius:10px;position:relative}
+    .cap-table table{margin:0;min-width:max-content;border-collapse:separate;border-spacing:0}
+    .cap-table th{position:sticky;top:0;background:var(--panel2,var(--bg));z-index:2;border-bottom:1px solid var(--line);padding:8px 10px}
+    .cap-table th:first-child,.cap-table td:first-child{position:sticky;left:0;background:var(--panel,var(--bg));z-index:1;min-width:260px;max-width:320px;white-space:normal;overflow-wrap:anywhere;box-shadow:1px 0 0 var(--line)}
+    .cap-table th:first-child{z-index:3;background:var(--panel2,var(--bg))}
+    .cap-table input{width:18px;height:18px;cursor:pointer}
     .cap-overlay{position:fixed;inset:0;z-index:9000;background:#0008;display:flex;align-items:center;justify-content:center;padding:18px}
     .cap-dialog{background:var(--panel,var(--bg));border:1px solid var(--line);border-radius:16px;padding:22px;width:min(1050px,95vw);max-height:90vh;overflow:auto;box-shadow:0 24px 80px #0005}
     .cap-dialog-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:14px}.cap-dialog h3{margin:0;overflow-wrap:anywhere}
@@ -76,14 +92,90 @@
     const global = meta.bindings.find(item => item.assistant_id === "*" && item.kind === kind && item.item_id === itemId);
     return global ? Boolean(global.enabled) : meta.default_enabled !== false;
   }
+  let currentCategory = "all";
+  function itemCategory(item) {
+    const text = ((item.label || "") + " " + (item.description || item.desc || "") + " " + (item.id || item.name || "")).toLowerCase();
+    if (/arxiv|pubmed|scholar|search|cite|lit|bib|paper|检索|文献|引文|阅读|深度阅读/.test(text)) return "literature";
+    if (/write|doc|outline|draft|review|compile|edit|写作|大纲|起草|评审|排版|正文|修改/.test(text)) return "writing";
+    if (/file|folder|vault|note|library|obsidian|read|attachment|skill_read|知识|工作区|笔记|附件/.test(text)) return "workspace";
+    if (/feishu|zotero|mail|hook|webhook|飞书|邮件|集成|通讯/.test(text)) return "integration";
+    return "general";
+  }
+  const CATEGORIES = [
+    {id: "all", label: "全部"},
+    {id: "literature", label: "🔎 文献检索"},
+    {id: "writing", label: "✍️ 论文写作"},
+    {id: "workspace", label: "📚 知识与工作区"},
+    {id: "integration", label: "🔌 协同集成"},
+    {id: "general", label: "⚙️ 基础通用"}
+  ];
+
   function filtered(meta) {
     const needle = search.trim().toLocaleLowerCase();
-    return (meta[setSec] || []).filter(item => !needle || [item.name, item.label, item.description, item.desc].some(value => String(value || "").toLocaleLowerCase().includes(needle)));
+    let list = meta[setSec] || [];
+    if (currentCategory !== "all") {
+      list = list.filter(item => itemCategory(item) === currentCategory);
+    }
+    if (needle) {
+      list = list.filter(item => [item.name, item.label, item.description, item.desc].some(value => String(value || "").toLocaleLowerCase().includes(needle)));
+    }
+    return list;
   }
   function drawMatrix(meta, items) {
     const kind = kinds[setSec];
-    const assistants = [{id: "*", name: "默认 / 未绑定助手"}, ...meta.assistants];
-    return `<p class="hint">勾选立即保存并在服务端执行时校验；默认启用，可为每个助手独立关闭。横向滚动查看全部 ${meta.assistants.length} 个助手，没有截断。</p><div class="cap-table"><table><thead><tr><th>${labels[setSec]}</th>${assistants.map(a => `<th title="${e(a.id)}">${e(a.name)}${a.enabled === 0 ? "（未启用）" : ""}</th>`).join("")}</tr></thead><tbody>${items.map(item => `<tr><td><strong>${e(item.label || item.name)}</strong>${item.scope ? `<br><span class="hint">${e(item.scope)}</span>` : ""}</td>${assistants.map(a => `<td style="text-align:center"><input type="checkbox" data-cap-binding data-kind="${kind}" data-item="${e(item.id)}" data-assistant="${e(a.id)}" aria-label="${e(a.name + ' / ' + item.name)}" ${checked(meta, a.id, kind, item.id) ? "checked" : ""}></td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    const assistants = [{id: "*", name: "默认 / 未绑定专家"}, ...meta.assistants];
+    return `
+      <div class="cap-matrix-header">
+        <p class="hint" style="margin:0">勾选立即保存；支持横向/纵向/全局一键全开全关。滚轮可横纵平滑滑动，表头与能力列常驻固定。</p>
+        <div class="cap-cats">
+          ${CATEGORIES.map(c => `<button class="cap-cat-pill ${currentCategory === c.id ? "on" : ""}" data-cap-cat="${c.id}">${c.label}</button>`).join("")}
+        </div>
+      </div>
+      <div class="cap-table" id="capTableWrap">
+        <table>
+          <thead>
+            <tr>
+              <th>
+                <div class="cap-th-corner">
+                  <span>${labels[setSec]} (${items.length})</span>
+                  <div class="cap-bulk-btns">
+                    <button class="cap-btn-mini on" id="cap-mat-all-on" title="将当前分类下所有项对所有专家全部启用">全开</button>
+                    <button class="cap-btn-mini off" id="cap-mat-all-off" title="将当前分类下所有项对所有专家全部停用">全关</button>
+                  </div>
+                </div>
+              </th>
+              ${assistants.map(a => `<th title="${e(a.id)}">
+                <div class="cap-th-col">
+                  <b>${e(a.name)}${a.enabled === 0 ? "（未启用）" : ""}</b>
+                  <div class="cap-bulk-btns">
+                    <button class="cap-btn-mini on" data-col-toggle="${e(a.id)}" data-action="1" title="为该专家全部启用当前列">全开</button>
+                    <button class="cap-btn-mini off" data-col-toggle="${e(a.id)}" data-action="0" title="为该专家全部停用当前列">全关</button>
+                  </div>
+                </div>
+              </th>`).join("")}
+            </tr>
+          </thead>
+          <tbody>
+            ${items.length ? items.map(item => `<tr>
+              <td>
+                <div class="cap-row-head">
+                  <div class="cap-row-title">
+                    <strong>${e(item.label || item.name)}</strong>
+                    ${item.scope ? `<br><span class="hint">${e(item.scope)}</span>` : ""}
+                  </div>
+                  <div class="cap-bulk-btns">
+                    <button class="cap-btn-mini on" data-row-toggle="${e(item.id)}" data-action="1" title="为此项启用所有专家（横向全部启用）">全开</button>
+                    <button class="cap-btn-mini off" data-row-toggle="${e(item.id)}" data-action="0" title="为此项停用所有专家（横向全部停用）">全关</button>
+                  </div>
+                </div>
+              </td>
+              ${assistants.map(a => `<td style="text-align:center">
+                <input type="checkbox" data-cap-binding data-kind="${kind}" data-item="${e(item.id)}" data-assistant="${e(a.id)}" aria-label="${e(a.name + ' / ' + item.name)}" ${checked(meta, a.id, kind, item.id) ? "checked" : ""}>
+              </td>`).join("")}
+            </tr>`).join("") : `<tr><td colspan="${assistants.length + 1}" style="text-align:center;padding:24px;color:var(--muted)">当前分类下暂无项目</td></tr>`}
+          </tbody>
+        </table>
+      </div>`;
   }
   function drawCards(meta, items) {
     if (!items.length) return `<div class="card"><h4>没有找到${labels[setSec]}</h4><p class="hint">${setSec === "skills" ? "将技能放入下方 .agents/skills 目录中的 SKILL.md；然后刷新。" : "请调整搜索条件或添加配置。"}</p></div>`;
@@ -94,10 +186,77 @@
     const selected = document.activeElement?.id === "cap-search";
     const position = selected ? document.activeElement.selectionStart : 0;
     const items = filtered(meta);
-    host.innerHTML = `<div class="card"><h3>${labels[section]} <span class="pill">${items.length} / ${(meta[section] || []).length}</span></h3><div class="cap-toolbar"><select class="control" id="cap-project" aria-label="项目技能作用域"><option value="">用户技能（全局）</option>${(S.tasks || []).map(task => `<option value="${e(task.id)}" ${task.id === projectId ? "selected" : ""}>${e(task.title)}</option>`).join("")}</select><input class="control" id="cap-search" value="${e(search)}" placeholder="搜索名称、说明" aria-label="搜索能力"><button class="btn ${view === "list" ? "" : "ghost"}" data-cap-view="list">列表</button><button class="btn ${view === "matrix" ? "" : "ghost"}" data-cap-view="matrix">助手启用矩阵</button><button class="btn ghost" id="cap-refresh">刷新</button>${section === "mcp" ? `<button class="btn" id="cap-mcp-json">JSON 编辑 / 密钥</button>` : ""}</div><p class="hint">${section === "skills" ? "默认读取用户 ~/.agents/skills，选择项目后叠加项目 .agents/skills；同名项目技能优先。预览编辑会直接写入显示的 SKILL.md。" : section === "tools" ? "Tools 与 MCP 独立管理。可以编辑内置工具的显示名称及给模型的说明；工具实现与参数结构只读。" : "保存 JSON 不启动进程。仅点击连接或助手实际调用已发现工具时执行本地命令/联网；请只使用可信 MCP。"}</p>${section === "mcp" ? `<p class="hint">凭据保护：${e(meta.storage_security)}。环境变量、请求头、命令参数和密钥默认隐藏。</p>` : ""}</div>${view === "matrix" ? drawMatrix(meta, items) : drawCards(meta, items)}${section === "skills" ? `<div class="card cap-hint"><h4>技能搜索目录（后者优先）</h4>${meta.skill_roots.map(root => `<p class="hint"><code>${e(root.path)}</code> · ${e(root.scope)} · ${root.exists ? "存在" : "尚未创建"}</p>`).join("")}</div>` : ""}<p class="cap-error" data-error role="alert"></p>`;
+    host.innerHTML = `<div class="card"><h3>${labels[section]} <span class="pill">${items.length} / ${(meta[section] || []).length}</span></h3><div class="cap-toolbar"><select class="control" id="cap-project" aria-label="项目技能作用域"><option value="">用户技能（全局）</option>${(S.tasks || []).map(task => `<option value="${e(task.id)}" ${task.id === projectId ? "selected" : ""}>${e(task.title)}</option>`).join("")}</select><input class="control" id="cap-search" value="${e(search)}" placeholder="搜索名称、说明" aria-label="搜索能力"><button class="btn ${view === "list" ? "" : "ghost"}" data-cap-view="list">列表</button><button class="btn ${view === "matrix" ? "" : "ghost"}" data-cap-view="matrix">专家启用矩阵</button><button class="btn ghost" id="cap-refresh">刷新</button>${section === "mcp" ? `<button class="btn" id="cap-mcp-json">JSON 编辑 / 密钥</button>` : ""}</div><p class="hint">${section === "skills" ? "默认读取用户 ~/.agents/skills，选择项目后叠加项目 .agents/skills；同名项目技能优先。预览编辑会直接写入显示的 SKILL.md。" : section === "tools" ? "Tools 与 MCP 独立管理。可以编辑内置工具的显示名称及给模型的说明；工具实现与参数结构只读。" : "保存 JSON 不启动进程。仅点击连接或专家实际调用已发现工具时执行本地命令/联网；请只使用可信 MCP。"}</p>${section === "mcp" ? `<p class="hint">凭据保护：${e(meta.storage_security)}。环境变量、请求头、命令参数和密钥默认隐藏。</p>` : ""}</div>${view === "matrix" ? drawMatrix(meta, items) : drawCards(meta, items)}${section === "skills" ? `<div class="card cap-hint"><h4>技能搜索目录（后者优先）</h4>${meta.skill_roots.map(root => `<p class="hint"><code>${e(root.path)}</code> · ${e(root.scope)} · ${root.exists ? "存在" : "尚未创建"}</p>`).join("")}</div>` : ""}<p class="cap-error" data-error role="alert"></p>`;
     host.querySelector("#cap-project").onchange = event => { projectId = event.target.value; load(); };
     host.querySelector("#cap-search").oninput = event => { search = event.target.value; paint(host, meta); };
     host.querySelectorAll("[data-cap-view]").forEach(button => button.onclick = () => { view = button.dataset.capView; paint(host, meta); });
+    host.querySelectorAll("[data-cap-cat]").forEach(b => b.onclick = () => { currentCategory = b.dataset.capCat; paint(host, meta); });
+    const matAllOn = host.querySelector("#cap-mat-all-on");
+    if (matAllOn) matAllOn.onclick = async () => {
+      const list = filtered(meta);
+      const kind = kinds[setSec];
+      const assistants = [{id: "*"}, ...meta.assistants];
+      const updates = [];
+      list.forEach(item => { assistants.forEach(a => { updates.push({assistant_id: a.id, kind, item_id: item.id, enabled: true}); }); });
+      try {
+        await api("/api/capabilities/bindings", {...context(), bindings: updates});
+        updates.forEach(u => {
+          meta.bindings = meta.bindings.filter(x => !(x.assistant_id === u.assistant_id && x.kind === u.kind && x.item_id === u.item_id));
+          meta.bindings.push(u);
+        });
+        paint(host, meta);
+        notify("已全部启用当前项");
+      } catch (err) { fail(host, err); }
+    };
+    const matAllOff = host.querySelector("#cap-mat-all-off");
+    if (matAllOff) matAllOff.onclick = async () => {
+      const list = filtered(meta);
+      const kind = kinds[setSec];
+      const assistants = [{id: "*"}, ...meta.assistants];
+      const updates = [];
+      list.forEach(item => { assistants.forEach(a => { updates.push({assistant_id: a.id, kind, item_id: item.id, enabled: false}); }); });
+      try {
+        await api("/api/capabilities/bindings", {...context(), bindings: updates});
+        updates.forEach(u => {
+          meta.bindings = meta.bindings.filter(x => !(x.assistant_id === u.assistant_id && x.kind === u.kind && x.item_id === u.item_id));
+          meta.bindings.push(u);
+        });
+        paint(host, meta);
+        notify("已全部停用当前项");
+      } catch (err) { fail(host, err); }
+    };
+    host.querySelectorAll("[data-row-toggle]").forEach(b => b.onclick = async () => {
+      const itemId = b.dataset.rowToggle;
+      const enable = b.dataset.action === "1";
+      const kind = kinds[setSec];
+      const assistants = [{id: "*"}, ...meta.assistants];
+      const updates = assistants.map(a => ({assistant_id: a.id, kind, item_id: itemId, enabled: enable}));
+      try {
+        await api("/api/capabilities/bindings", {...context(), bindings: updates});
+        updates.forEach(u => {
+          meta.bindings = meta.bindings.filter(x => !(x.assistant_id === u.assistant_id && x.kind === u.kind && x.item_id === u.item_id));
+          meta.bindings.push(u);
+        });
+        paint(host, meta);
+        notify(enable ? "已启用该项所有专家" : "已停用该项所有专家");
+      } catch (err) { fail(host, err); }
+    });
+    host.querySelectorAll("[data-col-toggle]").forEach(b => b.onclick = async () => {
+      const aid = b.dataset.colToggle;
+      const enable = b.dataset.action === "1";
+      const kind = kinds[setSec];
+      const list = filtered(meta);
+      const updates = list.map(item => ({assistant_id: aid, kind, item_id: item.id, enabled: enable}));
+      try {
+        await api("/api/capabilities/bindings", {...context(), bindings: updates});
+        updates.forEach(u => {
+          meta.bindings = meta.bindings.filter(x => !(x.assistant_id === u.assistant_id && x.kind === u.kind && x.item_id === u.item_id));
+          meta.bindings.push(u);
+        });
+        paint(host, meta);
+        notify(enable ? "已全部启用该专家" : "已全部停用该专家");
+      } catch (err) { fail(host, err); }
+    });
     host.querySelector("#cap-refresh").onclick = () => update().catch(error => fail(host, error));
     host.querySelectorAll("[data-cap-binding]").forEach(input => input.onchange = async () => {
       const next = input.checked;
@@ -205,7 +364,7 @@
     const card = document.createElement("div");
     card.className = "card";
     card.dataset.capAssistant = assistant.id;
-    card.innerHTML = `<h3>助手能力</h3><p class="hint">查看并配置 ${e(assistant.name)} 的 Skills、Tools、MCP 启用状态。服务端会校验每次工具执行权限。</p><div class="cap-card-actions"><button class="btn ghost" data-open-cap>配置能力</button></div>`;
+    card.innerHTML = `<h3>专家能力</h3><p class="hint">查看并配置 ${e(assistant.name)} 的 Skills、Tools、MCP 启用状态。服务端会校验每次工具执行权限。</p><div class="cap-card-actions"><button class="btn ghost" data-open-cap>配置能力</button></div>`;
     container.appendChild(card);
     card.querySelector("[data-open-cap]").onclick = async () => {
       try {

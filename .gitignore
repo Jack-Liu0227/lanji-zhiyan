@@ -1,5 +1,7 @@
 # 运行时数据：模型 API key、下载的 PDF、笔记、上传物都在 data/ 里 —— 绝不上传
 data/
+*.db
+*.sqlite3
 
 # 构建产物
 dist/

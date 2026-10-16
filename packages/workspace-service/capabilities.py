@@ -698,7 +698,20 @@ def route(method: str, path: str, body: dict, query: dict, db) -> dict | None:
         conn.execute("INSERT OR REPLACE INTO capability_tool_metadata VALUES(?,?,?)", (name, label, description))
         conn.commit()
         return {"ok": True}
-    if method == "POST" and path == "/api/capabilities/binding":
+    if method == "POST" and path in ("/api/capabilities/binding", "/api/capabilities/bindings"):
+        conn = _ensure(db)
+        if "bindings" in body and isinstance(body["bindings"], list):
+            items = body["bindings"]
+            for b in items:
+                aid = str(b.get("assistant_id", ""))
+                kind = str(b.get("kind", ""))
+                item_id = str(b.get("item_id", ""))
+                enabled_val = int(bool(b.get("enabled")))
+                if kind in ("skill", "tool", "mcp") and item_id:
+                    conn.execute("INSERT OR REPLACE INTO capability_bindings VALUES(?,?,?,?)",
+                                 (aid, kind, item_id, enabled_val))
+            conn.commit()
+            return {"ok": True, "count": len(items)}
         aid, kind, item_id = (str(body.get(key, "")) for key in ("assistant_id", "kind", "item_id"))
         if aid != "*" and aid not in {item["id"] for item in _assistants(db)}:
             raise ValueError("Assistant not found")
@@ -709,7 +722,6 @@ def route(method: str, path: str, body: dict, query: dict, db) -> dict | None:
                  {item["id"] for item in list_tools(db)} | {"skill_read"} | {_mcp_name(s, t["name"]) for s, t in _cached_tools(db)})
         if item_id not in valid:
             raise ValueError("Capability not found")
-        conn = _ensure(db)
         conn.execute("INSERT OR REPLACE INTO capability_bindings VALUES(?,?,?,?)", (aid, kind, item_id, int(body["enabled"])))
         conn.commit()
         return {"ok": True}

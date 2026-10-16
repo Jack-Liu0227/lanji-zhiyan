@@ -10,7 +10,7 @@
   const effortLabels = {auto:"Agent 决定",none:"不推理",minimal:"最小",low:"低",medium:"中",high:"高",xhigh:"极高"};
   const permissionLabels = {auto:"Agent 决定",read_only:"只读",workspace_write:"工作区写入",full_access:"Full Access（危险）"};
   const efforts = Object.keys(effortLabels), permissions = Object.keys(permissionLabels);
-  let registry = null, assistantFilter = "user", assistantId = null, teamSession = "";
+  let registry = null, assistantFilter = "all", assistantId = null, teamSession = "";
   let viewEpoch = 0;
   let dialog = null;
   const css = document.createElement("style");
@@ -183,16 +183,64 @@
         return;
       }
       const list = S.assistants.filter(a => assistantFilter === "all" || (assistantFilter === "user" ? a.source === "user" : a.source !== "user"));
-      container.innerHTML = `<div class="ag-head"><div><p class="inst-label">ASSISTANTS</p><h3>助手</h3><p class="hint">所有我的助手和已启用公开助手均可被选择；没有数量截断。点击卡片预览、编辑和查看历史。</p></div><button class="btn btn-primary" id="ag-assistant-new">新建助手</button></div><div class="ag-row">${[["user","我的助手"],["public","公开助手"],["all","全部"]].map(([id,label]) => `<button class="btn ${assistantFilter === id ? "btn-primary" : ""}" data-ag-as-filter="${id}">${label}</button>`).join("")}</div><div class="ag-grid">${list.map(a => `<article class="card"><h4>${h(a.avatar)} ${h(a.name)}</h4><p class="ag-meta">${h(a.description)}</p><p class="ag-meta">${a.source === "user" ? "我的 · 始终可选" : a.enabled ? "公开 · 已启用" : "公开 · 未启用"} · ${h(S.models.find(m => m.id === a.model_id)?.name || "自动模型")}</p><button class="btn" data-ag-assistant="${h(a.id)}">查看 / 编辑</button></article>`).join("") || `<p class="hint">尚无助手，点击“新建助手”。</p>`}</div>`;
+      container.innerHTML = `<div class="ag-head"><div><p class="inst-label">EXPERTS</p><h3>专家</h3><p class="hint">所有我的专家和已启用系统专家均可被选择；没有数量截断。点击卡片右上角可立即启用/停用。</p></div><div class="ag-row"><button class="btn btn-sm" id="ag-as-all-on">全部启用</button><button class="btn btn-sm ghost" id="ag-as-all-off">全部停用</button><button class="btn btn-primary" id="ag-assistant-new">＋ 新建专家</button></div></div><div class="ag-row">${[["all","全部专家"],["public","系统专家"],["user","我的专家"]].map(([id,label]) => `<button class="btn ${assistantFilter === id ? "btn-primary" : ""}" data-ag-as-filter="${id}">${label}</button>`).join("")}</div><div class="ag-grid">${list.map(a => `<article class="card"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><h4>${h(a.avatar || "👨‍🔬")} ${h(a.name)}</h4><button class="as-toggle ${a.enabled !== 0 ? "on" : "off"}" data-ag-as-toggle="${h(a.id)}" title="${a.enabled !== 0 ? "已启用（点击停用）" : "未启用（点击启用）"}"><span class="as-knob"></span><span class="as-toggle-txt">${a.enabled !== 0 ? "已启用" : "未启用"}</span></button></div><p class="ag-meta">${h(a.description || "（暂无专长描述）")}</p><p class="ag-meta">${a.source === "user" ? "自建 · 始终可选" : (a.enabled ? "系统 · 已启用" : "系统 · 未启用")} · ${h(S.models.find(m => m.id === a.model_id)?.name || "自动模型")}</p><div class="ag-row" style="margin-top:8px;gap:8px"><button class="btn btn-primary as-go" data-ag-chat-as="${h(a.id)}">💬 去对话</button><button class="btn" data-ag-assistant="${h(a.id)}">查看 / 编辑</button></div></article>`).join("") || `<p class="hint">尚无专家，点击“新建专家”。</p>`}</div>`;
       el("ag-assistant-new").onclick = () => assistantEditor({id:"",name:"",rules:"",enabled:1});
+      const bOn = el("ag-as-all-on"), bOff = el("ag-as-all-off");
+      if (bOn) bOn.onclick = async () => {
+        const ids = list.map(x => x.id);
+        if (!ids.length) return;
+        try {
+          await api("/api/assistant/batch-toggle", {ids, enabled: 1});
+          await saved();
+          render();
+        } catch(err) { alert("批量启用失败：" + err.message); }
+      };
+      if (bOff) bOff.onclick = async () => {
+        const ids = list.map(x => x.id);
+        if (!ids.length) return;
+        try {
+          await api("/api/assistant/batch-toggle", {ids, enabled: 0});
+          await saved();
+          render();
+        } catch(err) { alert("批量停用失败：" + err.message); }
+      };
       container.querySelectorAll("[data-ag-as-filter]").forEach(b => b.onclick = () => { assistantFilter = b.dataset.agAsFilter; render(); });
       container.querySelectorAll("[data-ag-assistant]").forEach(b => b.onclick = () => { assistantId = b.dataset.agAssistant; render(); });
+      container.querySelectorAll("[data-ag-as-toggle]").forEach(b => b.onclick = async (e) => {
+        e.stopPropagation();
+        const aid = b.dataset.agAsToggle;
+        const a = S.assistants.find(x => x.id === aid);
+        if (!a) return;
+        const next = a.enabled === 0 ? 1 : 0;
+        try {
+          await api("/api/assistant/toggle", {id: aid, enabled: next});
+          a.enabled = next;
+          await saved();
+          render();
+        } catch(err) { alert("切换状态失败：" + err.message); }
+      });
+      container.querySelectorAll("[data-ag-chat-as]").forEach(b => b.onclick = async (e) => {
+        e.stopPropagation();
+        const aid = b.dataset.agChatAs;
+        if (typeof useAssistant === "function") {
+          await useAssistant(aid);
+        } else {
+          try {
+            const r = await api("/api/chat/create", {});
+            const cid = r.id || r.chat?.id;
+            await api("/api/chat/assistant", {id: cid, assistant_id: aid});
+            curChat = cid; localStorage.setItem("rw-chat", cid);
+            await refreshState(false);
+            openTab("agent");
+          } catch(err) { alert("开启对话失败：" + err.message); }
+        }
+      });
     } catch(e) { error(container,e); }
   };
 
   async function memberEditor(tid, member = {}) {
     const pool = registry.selectable || [];
-    const d = modal(member.id ? "编辑团队角色" : "添加团队成员", `<div class="ag-form"><label><span>助手</span><select class="control" id="ag-m-assistant"><option value="">使用自定义角色</option>${pool.map(a => `<option value="${h(a.id)}" ${a.id === member.assistant_id ? "selected" : ""}>${h(a.name)}</option>`).join("")}</select></label><label><span>角色名称</span><input class="control" id="ag-m-name" value="${h(member.name)}"></label>${policyFields(member,"ag-m")}<label class="ag-wide"><span>团队内职责（叠加助手规则）</span><textarea class="control" id="ag-m-prompt" rows="5">${h(member.prompt)}</textarea></label><button class="btn btn-primary" id="ag-m-save">保存角色</button>${member.id && member.role !== "leader" ? `<button class="btn" id="ag-m-leader">设为 Leader</button><button class="btn ghost" id="ag-m-remove">移出团队</button>` : ""}</div>`);
+    const d = modal(member.id ? "编辑团队角色" : "添加团队成员", `<div class="ag-form"><label><span>专家</span><select class="control" id="ag-m-assistant"><option value="">使用自定义角色</option>${pool.map(a => `<option value="${h(a.id)}" ${a.id === member.assistant_id ? "selected" : ""}>${h(a.name)}</option>`).join("")}</select></label><label><span>角色名称</span><input class="control" id="ag-m-name" value="${h(member.name)}"></label>${policyFields(member,"ag-m")}<label class="ag-wide"><span>团队内职责（叠加专家规则）</span><textarea class="control" id="ag-m-prompt" rows="5">${h(member.prompt)}</textarea></label><button class="btn btn-primary" id="ag-m-save">保存角色</button>${member.id && member.role !== "leader" ? `<button class="btn" id="ag-m-leader">设为 Leader</button><button class="btn ghost" id="ag-m-remove">移出团队</button>` : ""}</div>`);
     el("ag-m-assistant").onchange = () => { const a = pool.find(x => x.id === el("ag-m-assistant").value); if (a) { el("ag-m-name").value = a.name; el("ag-m-prompt").value = a.rules || ""; } };
     el("ag-m-save").onclick = async () => {
       try { const policy = policies("ag-m"); if (!risk(member.permission,policy.permission)) return; await request("member-save",{team_id:tid,member_id:member.id,assistant_id:el("ag-m-assistant").value,name:el("ag-m-name").value,prompt:el("ag-m-prompt").value,...policy}); d.close(); teamList = null; render(); } catch(e) { error(d.querySelector("[role=status]"),e); }
@@ -204,7 +252,7 @@
     const d = modal(t.id ? "编辑团队" : "新建持久团队", `<div class="ag-stack"><label>团队名称<input class="control" id="ag-t-name" value="${h(t.name)}"></label><label>团队描述<textarea class="control" id="ag-t-desc" rows="4">${h(t.description)}</textarea></label><button class="btn btn-primary" id="ag-t-save">保存团队</button></div>`);
     el("ag-t-save").onclick = async () => { try { const r = await request("team-save",{id:t.id,name:el("ag-t-name").value,description:el("ag-t-desc").value}); teamScope = r.team.id; localStorage.setItem("rw-team-chat",teamScope); teamSession = ""; teamList = null; d.close(); render(); } catch(e) { error(d.querySelector("[role=status]"),e); } };
   }
-  renderTeam = async function(container) {
+  const renderTeamSettings = async function(container) {
     if (!S.loaded || !container) return;
     const expectedRoute = route(), epoch = ++viewEpoch;
     clearTimeout(teamTick);
@@ -212,25 +260,21 @@
       await load();
       const all = (await api("/api/teams")).teams || [];
       if (!all.some(t => t.id === teamScope)) teamScope = all[0]?.id || "";
-      if (!teamScope) { container.innerHTML = `<div class="card"><h3>团队</h3><button class="btn" id="ag-team-empty">新建团队</button></div>`; el("ag-team-empty").onclick = () => teamEditor(); return; }
+      if (!teamScope) { container.innerHTML = `<div class="card"><h3>团队配置</h3><button class="btn" id="ag-team-empty">新建团队</button></div>`; el("ag-team-empty").onclick = () => teamEditor(); return; }
       const data = await api(endpoint + "team-detail?id=" + encodeURIComponent(teamScope) + (teamSession ? "&session_id=" + encodeURIComponent(teamSession) : ""));
       if (!container.isConnected || route() !== expectedRoute || epoch !== viewEpoch) return;
       const t = data.team || all.find(x => x.id === teamScope) || {}, running = data.running;
-      const selected = data.session;
-      container.innerHTML = `<div class="ag-head"><div><p class="inst-label">TEAMS · ${all.length}</p><h3>团队与会话</h3><p class="hint">Leader 和成员均可编辑助手、模型、推理与权限。运行以串行接力推进，历史会话持久保存。</p></div><button class="btn btn-primary" id="ag-team-new">新建团队</button></div><div class="ag-team"><nav class="ag-team-nav">${all.map(t => `<button class="btn ${t.id === teamScope ? "btn-primary" : ""}" data-ag-team="${h(t.id)}">${h(t.name)}<br><small>${t.kind === "custom" ? "持久团队" : t.kind === "fixed" ? "预设团队" : "机动团队"}</small></button>`).join("")}</nav><section><div class="card"><div class="ag-head"><div><h3>${h(t.name)}</h3><p class="hint">${h(t.description)}</p></div><button class="btn" id="ag-team-edit">编辑团队</button></div><div class="ag-grid">${data.members.map(m => `<button class="card ag-member" data-ag-member="${h(m.id)}" style="text-align:left"><b>${m.role === "leader" ? "Leader · " : "成员 · "}${h(m.name)}</b><p class="ag-meta">${h(m.model_id ? S.models.find(x => x.id === m.model_id)?.name || "模型已移除" : "跟随助手 / 当前模型")}</p><span class="ag-meta">${h(effortLabels[m.reasoning] || "Agent 决定")} · ${h(permissionLabels[m.permission] || "Agent 决定")}</span></button>`).join("")}</div><button class="btn" id="ag-member-new" style="margin-top:12px">添加成员（全部可用助手）</button></div><div class="card" style="margin-top:12px"><div class="ag-row"><label style="flex:1">历史会话<select class="control" id="ag-team-session">${data.sessions.map(s => `<option value="${h(s.id)}" ${s.id === selected.id ? "selected" : ""}>${h(s.title)} · ${h(fmtDate(s.updated_at))}${s.active ? " · 当前" : ""}</option>`).join("")}</select></label><button class="btn" id="ag-session-new">新建会话</button>${running ? `<button class="btn" id="ag-team-stop">停止运行</button>` : ""}</div><p class="hint">${running ? h(running.phase) : "当前未运行"}${!selected.active ? " · 正在预览历史会话；选择后可继续" : ""}</p><div class="ag-transcript" id="ag-team-transcript">${data.messages.map(m => `<div class="ag-message"><strong>${h(m.sender || (m.role === "user" ? "你" : "助手"))} · ${h(fmtDate(m.created_at))}</strong><div>${h(m.content)}</div></div>`).join("") || `<p class="hint">此会话暂无消息。输入任务，让 Leader 和团队开始协作。</p>`}</div><div class="ag-stack"><textarea class="control" id="ag-team-input" rows="3" placeholder="告诉团队你要完成的工作…"></textarea><button class="btn btn-primary" id="ag-team-send">发送并推进团队</button></div></div></section></div>`;
+      const selected = data.session || {};
+      container.innerHTML = `<div class="ag-head"><div><p class="inst-label">TEAMS · ${all.length}</p><h3>团队管理与角色配置</h3><p class="hint">在此创建与编排团队。设置 Leader、成员角色、指定模型、推理强度及 Full Access 权限。日常团队协作对话请直接前往主界面「团队」研讨室。</p></div><div class="ag-row"><button class="btn btn-primary" id="ag-team-new">新建团队</button><button class="btn" id="ag-team-go-chat">进入团队对话 💬</button></div></div><div class="ag-team"><nav class="ag-team-nav">${all.map(t => `<button class="btn ${t.id === teamScope ? "btn-primary" : ""}" data-ag-team="${h(t.id)}">${h(t.name)}<br><small>${t.kind === "custom" ? "持久团队" : t.kind === "fixed" ? "预设团队" : "机动团队"}</small></button>`).join("")}</nav><section><div class="card"><div class="ag-head"><div><h3>${h(t.name)}</h3><p class="hint">${h(t.description)}</p></div><div class="ag-row"><button class="btn" id="ag-team-edit">编辑团队</button>${t.kind === "temp" ? `<button class="btn ghost" id="ag-team-dissolve" style="color:var(--err)">解散</button>` : ""}</div></div><div class="ag-grid">${data.members.map(m => `<button class="card ag-member" data-ag-member="${h(m.id)}" style="text-align:left"><b>${m.role === "leader" ? "Leader · " : "成员 · "}${h(m.name)}</b><p class="ag-meta">${h(m.model_id ? S.models.find(x => x.id === m.model_id)?.name || "模型已移除" : "跟随助手 / 当前模型")}</p><span class="ag-meta">${h(effortLabels[m.reasoning] || "Agent 决定")} · ${h(permissionLabels[m.permission] || "Agent 决定")}</span></button>`).join("")}</div><button class="btn" id="ag-member-new" style="margin-top:12px">添加成员（全部可用助手）</button></div><div class="card" style="margin-top:12px"><div class="ag-row"><label style="flex:1">会话历史记录<select class="control" id="ag-team-session">${(data.sessions || []).map(s => `<option value="${h(s.id)}" ${s.id === selected.id ? "selected" : ""}>${h(s.title)} · ${h(fmtDate(s.updated_at))}${s.active ? " · 当前" : ""}</option>`).join("")}</select></label><button class="btn" id="ag-session-new">新建会话</button></div><p class="hint">团队对话请在主界面的「团队」研讨室进行全屏沉浸交流。</p></div></section></div>`;
       el("ag-team-new").onclick = () => teamEditor();
       el("ag-team-edit").onclick = () => teamEditor(t);
+      if (el("ag-team-dissolve")) el("ag-team-dissolve").onclick = async () => { if (!confirm("解散这个机动团队？")) return; try { await api("/api/teams/dissolve",{id:teamScope}); teamScope = ""; render(); } catch(e) { alert(e.message); } };
+      el("ag-team-go-chat").onclick = () => { openTab("team"); render(); };
       el("ag-member-new").onclick = () => memberEditor(teamScope);
       container.querySelectorAll("[data-ag-team]").forEach(b => b.onclick = () => { teamScope = b.dataset.agTeam; teamSession = ""; localStorage.setItem("rw-team-chat",teamScope); render(); });
       container.querySelectorAll("[data-ag-member]").forEach(b => b.onclick = () => memberEditor(teamScope,data.members.find(m => m.id === b.dataset.agMember)));
       el("ag-team-session").onchange = async e => { try { teamSession = e.target.value; await request("team-session",{team_id:teamScope,session_id:teamSession}); render(); } catch(e) { alert(e.message); } };
       el("ag-session-new").onclick = async () => { try { const r = await request("team-session",{team_id:teamScope,create:true}); teamSession = r.session.id; render(); } catch(e) { alert(e.message); } };
-      if (el("ag-team-stop")) el("ag-team-stop").onclick = async () => { await api("/api/team/chat/stop",{scope:teamScope}); render(); };
-      const send = async () => { const text = el("ag-team-input").value.trim(); if (!text) return; try { if (!selected.active) await request("team-session",{team_id:teamScope,session_id:selected.id}); await request("team-say",{team_id:teamScope,text}); render(); } catch(e) { alert(e.message); } };
-      el("ag-team-send").onclick = send;
-      el("ag-team-input").onkeydown = e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } };
-      const transcript = el("ag-team-transcript"); transcript.scrollTop = transcript.scrollHeight;
-      if (running) teamTick = setTimeout(() => { if (container.isConnected && !el("ag-team-input")?.value && !dialog) renderTeam(container); },2000);
     } catch(e) { error(container,e); }
   };
 
@@ -263,7 +307,7 @@
     if (setSec === "teams") {
       container.innerHTML = `<div class="page-head"><h3>设置 / 团队</h3><button class="btn" id="ag-settings-back">返回设置</button></div><div id="ag-settings-teams"></div>`;
       el("ag-settings-back").onclick = () => { setSec = "theme"; render(); };
-      renderTeam(el("ag-settings-teams"));
+      renderTeamSettings(el("ag-settings-teams"));
       return;
     }
     originalSettings(container);
@@ -273,5 +317,6 @@
       b.onclick = () => { setSec = "teams"; render(); }; nav.append(b);
     }
   };
+  window.renderTeamSettings = renderTeamSettings;
   window.AgentSettings = {eligible,openAssistant(id) { assistantId = id; openTab("assistants"); },openProvider:providerEditor};
 })();

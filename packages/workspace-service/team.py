@@ -439,16 +439,20 @@ def _round(scope: str, turns: int) -> None:
 
 
 def chat_state(scope: str) -> dict[str, Any]:
-    """团队页要的一切：这个团队 + 成员（带色 + 各自模型）+ 群记录 + 正在跑的状态 + 上限。"""
+    """团队页要的一切：这个团队 + 成员（带色 + 各自模型）+ 群记录 + 正在跑的状态 + 会话历史 + 上限。"""
     ensure_leader(scope)
     with workflow.WorkflowDB(_db_path()) as db:
+        import agent_settings
+        cur_session = agent_settings.session(db, scope)
+        sessions = [dict(r) for r in db.db.execute("SELECT * FROM team_sessions WHERE team_id=? ORDER BY updated_at DESC", (scope,))]
         ms = members(scope)
         for m in ms:
             m["model"] = _member_model(db, m)
         t_rec = db.team(scope)
     return {"team": t_rec, "members": ms, "max": MAX_PICKS, "palette": MEMBER_COLORS,
             "transcript": transcript(scope), "running": TEAM_RUNS.get(scope),
-            "colors": {m["id"]: color_of(m) for m in ms}}
+            "colors": {m["id"]: color_of(m) for m in ms},
+            "session": cur_session, "sessions": sessions}
 
 
 # ==================== v3：多团队（2 固定 + 3 机动）+ 成员各用自己的模型 ====================

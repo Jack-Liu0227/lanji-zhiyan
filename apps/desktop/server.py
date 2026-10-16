@@ -1143,11 +1143,27 @@ class Handler(BaseHTTPRequestHandler):
                             if path == "/api/chat/assistant":
                                 db.set_chat_assistant(b.get("id", ""), b.get("assistant_id", ""))
                                 return self._json({"ok": True})
+                            if path == "/api/assistant/toggle":
+                                aid = (b.get("id") or "").strip()
+                                cur = db.assistant(aid)
+                                if not cur:
+                                    return self._json({"error": "助手不存在"}, 404)
+                                target = int(b["enabled"]) if "enabled" in b else (0 if cur.get("enabled", 1) else 1)
+                                return self._json({"assistant": db.assistant_save(aid, enabled=target)})
+                            if path == "/api/assistant/batch-toggle":
+                                ids = b.get("ids")
+                                target = int(b.get("enabled", 1))
+                                count = db.assistants_batch_toggle(ids=ids, enabled=target)
+                                return self._json({"ok": True, "count": count})
                             if path == "/api/assistant/save":
                                 fid = (b.get("id") or "").strip() or ("a-" + os.urandom(4).hex())
-                                return self._json({"assistant": db.assistant_save(fid, name=b.get("name"),
-                                    avatar=b.get("avatar"), description=b.get("description"), rules=b.get("rules"),
-                                    prompts=json.dumps(b.get("prompts") or [], ensure_ascii=False), model_id=b.get("model_id"))})
+                                kwargs: dict[str, Any] = {}
+                                for k in ("name", "avatar", "description", "rules", "model_id", "enabled", "reasoning", "permission"):
+                                    if k in b:
+                                        kwargs[k] = b[k]
+                                if "prompts" in b:
+                                    kwargs["prompts"] = b["prompts"]
+                                return self._json({"assistant": db.assistant_save(fid, **kwargs)})
                             if path == "/api/assistant/delete":
                                 db.assistant_delete(b.get("id", ""))
                                 return self._json({"ok": True})
@@ -1176,6 +1192,13 @@ class Handler(BaseHTTPRequestHandler):
                             return self._json(team.say(b.get("scope", ""), b.get("text", "")))
                         if path == "/api/team/chat/stop":
                             return self._json(team.stop(b.get("scope", "")))
+                        if path == "/api/team/chat/session":
+                            with WorkflowDB(DB_PATH) as db:
+                                import agent_settings
+                                s = agent_settings.session(db, b.get("scope", ""), b.get("session_id", ""), create=bool(b.get("create")), title=str(b.get("title") or ""))
+                                db.db.execute("UPDATE team_sessions SET active=(id=?) WHERE team_id=?", (s["id"], b.get("scope", "")))
+                                db.db.commit()
+                                return self._json({"session": s})
                     except ValueError as exc:
                         return self._json({"error": str(exc)}, 400)
 

@@ -700,6 +700,18 @@ class WorkflowDB(ResearchDB):
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM assistants WHERE id=?", (aid,)).fetchone())
 
+    def assistants_batch_toggle(self, ids: list[str] | None = None, enabled: int = 1) -> int:
+        target = 1 if enabled else 0
+        if ids is not None:
+            if not ids:
+                return 0
+            placeholders = ",".join("?" for _ in ids)
+            self.db.execute(f"UPDATE assistants SET enabled=?, updated_at=? WHERE id IN ({placeholders})", (target, now(), *ids))
+        else:
+            self.db.execute("UPDATE assistants SET enabled=?, updated_at=?", (target, now()))
+        self.db.commit()
+        return self.db.total_changes
+
     def assistant_delete(self, aid: str) -> None:
         cur = self.assistant(aid)
         if cur and cur["source"] == "builtin":
