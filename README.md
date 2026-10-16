@@ -1,4 +1,4 @@
-# 科研工作 1.0
+# 览籍智研
 
 面向科研人员/课题组的**证据优先**科研工作台：选题 → 检索 → 精读 → 梳理 → 写作 → 投稿一条链，AI 只出草稿，每一步都留证据、都能人工复核。
 
@@ -8,13 +8,13 @@
 
 ## 一、安装（Windows）
 
-**直发（现在这条路）**：拿 `科研工作1.0-安装程序.exe`（单文件安装器）双击即可 —— 装到 `%LOCALAPPDATA%\Programs\ResearchWorkbench`，桌面建快捷方式并启动。**重装不动数据**（库/PDF/笔记都在 `data\`）。
+**直发（现在这条路）**：拿 `览籍智研-安装程序.exe`（单文件安装器）双击即可 —— 装到 `%LOCALAPPDATA%\Programs\ResearchWorkbench`，桌面建快捷方式并启动。**重装不动数据**（库/PDF/笔记都在 `data\`）。
 
 **从源码跑（开发）**：
 
 ```powershell
 cd research-workbench
-tools\启动科研工作1.0.bat               # 自动选择本机 Python，打开无边框桌面窗口
+tools\启动览籍智研.bat               # 自动选择本机 Python，打开无边框桌面窗口
 python apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开浏览器
 ```
 
@@ -52,10 +52,13 @@ python apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开
 ## 三、怎么验（改完必跑）
 
 ```bash
-tools\自检.bat                                  # 一条命令跑完：Python 自检 + 前端主题自检 + JS 语法
+tools\自检.bat                                  # 一条命令跑完：Python 自检 + 前端主题自检 + 悬空 id 体检 + JS 语法
 python -m unittest discover -s tests -t .    # Python 自检（等价的第一条）
 node apps/desktop/web/theme.test.mjs            # 主题配色（HSL 往返 / 明暗推导 / 对比度 ≥ AA）
+node apps/desktop/web/ids.test.mjs              # 悬空 id（$("x") 引用了页面里没有的 id）
 ```
+
+> **改前端别只看「语法过没过」**：单文件前端里一句**顶层** `$("x").onclick = …` 撞上已不存在的 id 就会抛错，它后面所有初始化一行都不跑 —— 页面变成空壳，而 HTTP 状态、窗口标题、单测全绿。收尾请连 CDP 量一次侧栏（`#sidebar` 的 `innerHTML` 长度应为数千字符、`.nav-item` 应为 14 个）。
 
 改完 `.py` **必须关窗重开**（窗口就是服务进程，关窗即退）；只改 `apps/desktop/web/` 按 F5 即可。
 
@@ -94,7 +97,7 @@ node apps/desktop/web/theme.test.mjs            # 主题配色（HSL 往返 / �
 | `team.py` / `schedule.py` / `rss.py` / `vault.py` / `zotero.py` / `mail.py` / `papertran.py` / `pdfio.py` / `guards.py` / `integrations.py` | 团队、定时任务、情报日报、Obsidian、Zotero（只读本地 API）、邮箱、论文翻译、PDF 适配层、出站脱敏+引用核验、Obsidian 预览写入 |
 | `apps/desktop/web/` | 单文件前端 `index.html`（CSS/JS 全内联）+ `vendor/`（marked / DOMPurify / KaTeX / pdf.js / lunar / splash / kb3d）+ 主题自检 |
 | `tests/` | 自检 14 个文件（114 项） |
-| `tools/` | `自检.bat` / `build.bat` / `启动科研工作1.0.bat` / `*.spec` / `install.ps1` / `installer.py` / `hooks/` / `build/icon.ico`（打包与自检都在这里） |
+| `tools/` | `自检.bat` / `build.bat` / `启动览籍智研.bat` / `*.spec` / `install.ps1` / `installer.py` / `hooks/` / `build/icon.ico`（打包与自检都在这里） |
 | `packages/` | 按目标仓的分包布局：`database`（research_core）/ `workspace-service`（workflow·team·schedule·papertran）/ `connectors`（zotero·vault·mail·rss·integrations）/ `workspace-core`（guards·pdfio）/ `contracts`（Provider 目录）/ `ai-runtime`（agent 运行时占位，见其 README） |
 | `docs/` | `交接.md`（内部交接，gitignore 外的说明在 README） |
 | `data/` | 全部数据（`research.sqlite3` + `papers/` `notes/` `out/` `uploads/`） |

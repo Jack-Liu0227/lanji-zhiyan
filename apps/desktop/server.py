@@ -1,4 +1,4 @@
-"""科研工作 1.0 · 本地服务
+"""览籍智研 · 本地服务
 
 纯标准库 HTTP 服务，把 workflow.py 的能力暴露给 web/index.html 单页界面。
 启动后自动开一个 Edge 应用窗口（无浏览器边框），失败则退回默认浏览器。
@@ -59,7 +59,7 @@ UPLOADS = ROOT / "data" / "uploads"
 PORT = 8765
 CARD_W, CARD_H = 1117, 625      # 「开始卡片」尺寸（CSS 逻辑像素）
 CARD_PIN = True                 # True=窗口一直钉在卡片尺寸；点「进入」走 /api/win/maximize 后放掉
-APP_TITLE = "科研工作 1.0"      # 窗口标题前缀（web/index.html 会追加 " · v<构建戳>"）
+APP_TITLE = "览籍智研"      # 窗口标题前缀（web/index.html 会追加 " · v<构建戳>"）
 STAMP = 0                       # web/index.html 的时间戳；无边框窗口靠它认「自己那扇窗」
 
 
@@ -261,7 +261,10 @@ def _webview_window(url: str, stamp: int) -> bool:
         import webview
     except Exception:
         return False
-    icon = HERE / "build" / "icon.ico"
+    # 打包后图标在 exe 目录的 build/icon.ico（spec 把 tools/build 打进去），源码跑在 tools/build/icon.ico
+    icon = ROOT / "build" / "icon.ico"
+    if not icon.is_file():
+        icon = ROOT / "tools" / "build" / "icon.ico"
     x, y, w, h = _work_area()
     s = _dpi_scale()      # pywebview 把 x/y/宽高当逻辑像素再乘 DPI，先除回去，起来后再钉准
     cw, ch = int(round(CARD_W * s)), int(round(CARD_H * s))   # 先按「开始卡片」大小居中开窗，「进入」再铺满
@@ -1436,7 +1439,7 @@ def main() -> int:
     STAMP = stamp
     url = f"http://127.0.0.1:{port}/?v={stamp}"
     if busy:
-        print(f"科研工作 1.0 已在运行：{url}")
+        print(f"览籍智研已在运行：{url}")
     else:
         with WorkflowDB(DB_PATH) as _db:
             if not _db.tasks():
@@ -1449,7 +1452,7 @@ def main() -> int:
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         schedule.start()          # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
         team.start_worker()       # 团队派活队列（串行：一次跑一个成员）
-        print(f"科研工作 1.0 已启动：{url}")
+        print(f"览籍智研已启动：{url}")
     if "--no-open" not in sys.argv:
         # 已经有「这一版」的窗口 → 把它从最小化恢复并置前，不再开新的
         same = [h for h, title in _app_windows() if f"v{stamp}" in title]

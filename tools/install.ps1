@@ -1,5 +1,5 @@
 ﻿<#
-  科研工作 1.0 安装器（Windows）
+  览籍智研安装器（Windows）
   ------------------------------------------------------------------
   从本地打包目录装（装到 %LOCALAPPDATA%、建桌面快捷方式、直接启动）：
       .\install.ps1 -Source .\dist\ResearchWorkbench
@@ -40,7 +40,7 @@ if (-not (Test-Path (Join-Path $Source "ResearchWorkbench.exe"))) {
 # 覆盖安装前先关掉旧进程，否则文件被占用
 Get-Process ResearchWorkbench -ErrorAction SilentlyContinue | Stop-Process -Force
 
-Write-Progress -Activity "科研工作 1.0 安装" -Status "复制到 $InstallRoot" -PercentComplete 10
+Write-Progress -Activity "览籍智研安装" -Status "复制到 $InstallRoot" -PercentComplete 10
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 $files = Get-ChildItem -Path $Source -Recurse -File
 for ($i = 0; $i -lt $files.Count; $i++) {
@@ -48,21 +48,21 @@ for ($i = 0; $i -lt $files.Count; $i++) {
     $target = Join-Path $InstallRoot $relative
     New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
     Copy-Item -LiteralPath $files[$i].FullName -Destination $target -Force
-    Write-Progress -Activity "科研工作 1.0 安装" -Status $relative -PercentComplete (10 + [int](80 * ($i + 1) / $files.Count))
+    Write-Progress -Activity "览籍智研安装" -Status $relative -PercentComplete (10 + [int](80 * ($i + 1) / $files.Count))
 }
 
-Write-Progress -Activity "科研工作 1.0 安装" -Status "创建桌面快捷方式" -PercentComplete 95
+Write-Progress -Activity "览籍智研安装" -Status "创建桌面快捷方式" -PercentComplete 95
 $exe = Join-Path $InstallRoot "ResearchWorkbench.exe"
 if (-not (Test-Path $exe)) { throw "复制没成功，没找到：$exe" }
-$lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) "科研工作 1.0.lnk"
+$lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) "览籍智研.lnk"
 $shell = New-Object -ComObject WScript.Shell
 $sc = $shell.CreateShortcut($lnk)
 $sc.TargetPath = $exe
 $sc.WorkingDirectory = $InstallRoot
 $sc.IconLocation = Join-Path $InstallRoot "build\icon.ico"
-$sc.Description = "科研工作 1.0"
+$sc.Description = "览籍智研"
 $sc.Save()
-Write-Progress -Activity "科研工作 1.0 安装" -Completed
+Write-Progress -Activity "览籍智研安装" -Completed
 
 Write-Host ""
 Write-Host "装好了：      $InstallRoot"

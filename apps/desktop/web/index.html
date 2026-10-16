@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>科研工作 1.0</title>
+<title>览籍智研</title>
 <script>
 /* 标题带上构建戳：启动器靠它认出「哪扇窗是这一版」（app 窗口的 --app 复用不可靠） */
-document.title = "科研工作 1.0 · v" + (new URLSearchParams(location.search).get("v") || "dev");
+document.title = "览籍智研 · v" + (new URLSearchParams(location.search).get("v") || "dev");
 </script>
 <style>
 /* 主题色由 JS 从「主色」推导（抄 zotero-lit-tool 的 deriveTheme），这里只留两档明暗底 */
@@ -1666,7 +1666,7 @@ function renderSidebar(){
   $("sidebar").className = "sidebar"+(sidebarCollapsed?" collapsed":"");
   $("sidebar").innerHTML = `
     <div class="brand"><div class="mark"><i></i><i></i><i></i></div>
-      <div class="lbl" style="min-width:0"><b>科研工作</b><small>Research workspace</small></div>
+      <div class="lbl" style="min-width:0"><b>览籍智研</b><small>Research workspace</small></div>
       <button class="collapse" title="${sidebarCollapsed?"展开侧栏":"折叠侧栏"}">${sidebarCollapsed?"›":"‹"}</button></div>
     <div class="profile-card" id="profileCard" title="点击编辑个人资料">
       <span class="profile-avatar" id="profileAvatar">🎓</span>
@@ -5236,7 +5236,7 @@ async function mdNarrow(){
 }
 function mdFail(e, what){
   // 前端已更新、服务端还是旧的（接口 404）时最容易撞上：把话说清楚，别静默失败
-  const hint = /not found|404/i.test(e?.message||"") ? "（服务端还是旧版本，重启一次「科研工作 1.0」）" : "";
+  const hint = /not found|404/i.test(e?.message||"") ? "（服务端还是旧版本，重启一次「览籍智研」）" : "";
   console.error("笔记操作失败:", what, e);
   alert(`${what}失败：${e.message}${hint}`);
 }
@@ -5452,6 +5452,8 @@ function zotBind(){
   const box = $("zoteroModal"); if(!box) return;
   box.querySelector(".modal-mask").onclick = zotClose;
   $("btnZotClose").onclick = zotClose;
+  // 页脚那个「关闭」按钮在 v1.2.0 的模态框重排里删掉了（只留标题栏 ✕ + 点遮罩关），
+  // 这里的绑定一并去掉 —— 它原来在顶层执行，取到 null 会抛错、把后面所有初始化全带没，整个界面起不来。
   $("zotCollection").onchange = ()=>zotLoad(true).catch(e=>mdFail(e,"读条目"));
   $("zotSearch").onclick = ()=>zotLoad(true).catch(e=>mdFail(e,"搜索"));
   $("zotQuery").onkeydown = (e)=>{ if(e.key === "Enter") zotLoad(true).catch(err=>mdFail(err,"搜索")); };
@@ -5549,7 +5551,7 @@ async function renderSchedules(m){
       <div class="sch-head"><div><p class="sch-eyebrow">RUNTIME SCHEDULE</p><h3>已配置任务</h3></div>
         <span class="pill">${schRows.length} 个任务</span></div>
       ${schRows.length? schRows.map(schCardHTML).join("") : `<div class="hint" style="margin-top:10px">还没有定时任务。创建每日摘要、文献检索或项目进度提醒，由本应用 Agent 在应用运行时执行。</div>`}
-      <div class="sch-note">🕒 <span>调度依赖应用进程；关闭「科研工作 1.0」期间不会后台执行。重新打开时错过的每日时间点最多补跑一次，其余等待下一个时间点（可随时暂停/启用）。</span></div>
+      <div class="sch-note">🕒 <span>调度依赖应用进程；关闭「览籍智研」期间不会后台执行。重新打开时错过的每日时间点最多补跑一次，其余等待下一个时间点（可随时暂停/启用）。</span></div>
     </div>
     <div class="card" style="margin-top:12px">
       <div class="sch-head"><div><p class="sch-eyebrow">RUN HISTORY</p><h3>最近运行</h3></div>

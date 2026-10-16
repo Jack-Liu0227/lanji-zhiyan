@@ -344,7 +344,7 @@ def extract_ai(db: ResearchDB, task_id: str, paper_id: str, base_url: str, api_k
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="科研工作 1.0 core")
+    parser = argparse.ArgumentParser(description="览籍智研 core")
     parser.add_argument("db")
     parser.add_argument("command", choices=["create-task", "ingest", "extract", "summary", "export", "report"])
     parser.add_argument("args", nargs="*")

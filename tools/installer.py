@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""科研工作 1.0 安装程序（单文件 exe）
+"""览籍智研安装程序（单文件 exe）
 
 用户双击即装：把打包进来的 ResearchWorkbench/ 复制到
     %LOCALAPPDATA%\\Programs\\ResearchWorkbench
@@ -10,7 +10,7 @@
         --onefile --console --name ResearchWorkbench-Setup --icon tools\\build\\icon.ico \
         --add-data "dist\\ResearchWorkbench;ResearchWorkbench" \
         --hidden-import win32com.client tools\installer.py
-生成 dist\\ResearchWorkbench-Setup.exe，改名成「科研工作1.0-安装程序.exe」发人即可。
+生成 dist\\ResearchWorkbench-Setup.exe，改名成「览籍智研-安装程序.exe」发人即可。
 """
 import os
 import shutil
@@ -19,7 +19,7 @@ import sys
 import time
 
 APP = "ResearchWorkbench"
-TITLE = "科研工作 1.0"
+TITLE = "览籍智研"
 
 
 def say(msg=""):

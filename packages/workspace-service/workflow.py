@@ -1,4 +1,4 @@
-"""科研工作 1.0 · 工作流引擎
+"""览籍智研 · 工作流引擎
 
 在 research_core.ResearchDB 之上补齐「创新点审查 → 论文搜索 → 下载精读 → 知识库笔记
 → 文章撰写 → 审查 → 格式转换」七步工作流，外加任务/日历体系、模型切换、主题色。
@@ -1425,7 +1425,7 @@ def make_project_tree(base: str | Path, task: dict[str, Any] | None = None) -> l
     (root / "README.md").write_text("\n".join([
         f"# {t.get('title') or root.name}",
         "",
-        "这个文件夹是「科研工作 1.0」的一个项目位置：程序按用途把文件分到下面六个子目录，",
+        "这个文件夹是「览籍智研」的一个项目位置：程序按用途把文件分到下面六个子目录，",
         "每个子目录里都有一份 README.md 说明该放什么。",
         "",
         "## 项目信息",
@@ -2269,7 +2269,7 @@ def idea_system(db: "WorkflowDB", task_id: str) -> str:
         skill_text("research", "research-topic-selection", "SKILL.md", cap=2000),
         skill_text("idea-evaluator", "SKILL.md", cap=4500),
     ) if x) or IDEA_FALLBACK
-    return f"""你是「科研工作 1.0」里这一步的创新点审查助手，用中文工作，站在博导（既严格又给建设性建议）的位置。
+    return f"""你是「览籍智研」里这一步的创新点审查助手，用中文工作，站在博导（既严格又给建设性建议）的位置。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做「创新点审查」这一件事；不下载文献、不精读、不撰写、不导出格式，用户要这些就说明去别的步骤。
@@ -2730,7 +2730,7 @@ def outline_system(db: "WorkflowDB", task_id: str) -> str:
     task = db.summary(task_id)["task"]
     cur = doc_read(db, task_id, "outline")
     body = cur["markdown"][:6000] or "（还没有，等你给第一版）"
-    return f"""你是「科研工作 1.0」里「确认大纲」这一步的框架 agent，用中文工作，站在合作者（懂科研、但听用户拍板）的位置。
+    return f"""你是「览籍智研」里「确认大纲」这一步的框架 agent，用中文工作，站在合作者（懂科研、但听用户拍板）的位置。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：把这份研究的**框架（大纲）**跟用户敲定。不做文献检索/下载/精读/撰写成稿/格式转换，用户要这些就说明去别的步骤。
@@ -2761,7 +2761,7 @@ def map_system(db: "WorkflowDB", task_id: str) -> str:
     cur = map_read(db, task_id)
     src = map_sources(db, task_id)
     skills = skill_text("research", "paper-reading-reports", "SKILL.md", cap=2500) or MAP_FALLBACK
-    return f"""你是「科研工作 1.0」里「梳理精读」这一步的**结构整理 agent**，用中文工作。
+    return f"""你是「览籍智研」里「梳理精读」这一步的**结构整理 agent**，用中文工作。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：**维护一张谱系图**（思维导图），把大纲的每个小标题和「支撑它的精读结论 / 实验数据」连起来。不做检索、下载、翻译、写作。
@@ -2821,7 +2821,7 @@ def write_system(db: "WorkflowDB", task_id: str) -> str:
         skill_text("academic-writing", "paper-spine", "SKILL.md", cap=4000),
         skill_text("paper-writer", "SKILL.md", cap=3500),
     ) if x) or WRITE_FALLBACK
-    return f"""你是「科研工作 1.0」里「论文撰写」这一步的写作 agent，用中文工作（用户要英文稿就写英文），站在一作+导师之间的位置。
+    return f"""你是「览籍智研」里「论文撰写」这一步的写作 agent，用中文工作（用户要英文稿就写英文），站在一作+导师之间的位置。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：**按已确认的框架把正文写出来/改好**。不做检索、下载、精读、格式转换。
@@ -2886,7 +2886,7 @@ def evidence_system(db: "WorkflowDB", task_id: str) -> str:
     """素材官（后台 agent）：只出素材简报，不写正文、不落盘、不登记台账。"""
     task = db.summary(task_id)["task"]
     out = doc_read(db, task_id, "outline")
-    return f"""你是「科研工作 1.0」里「文章撰写」这一步的**素材官**（后台 agent，用户看不到你的对话，只看到进度）。你在为一篇论文的正文准备**可用素材**。
+    return f"""你是「览籍智研」里「文章撰写」这一步的**素材官**（后台 agent，用户看不到你的对话，只看到进度）。你在为一篇论文的正文准备**可用素材**。
 
 硬规则：
 1. 你只管素材：不写正文、不调用 doc_write、不登记引用台账 —— 你的产出是一份简报，交给后面的写手。
@@ -2910,7 +2910,7 @@ def critic_system(db: "WorkflowDB", task_id: str, brief: str) -> str:
     out = doc_read(db, task_id, "outline")
     cur = doc_read(db, task_id, "write")
     cite = cite_sync(db, task_id)
-    return f"""你是「科研工作 1.0」里「文章撰写」这一步的**审查 agent**（后台 agent，用户看不到你的对话）。写手刚写完一版正文，你只挑**能在正文里直接改掉的硬伤**。
+    return f"""你是「览籍智研」里「文章撰写」这一步的**审查 agent**（后台 agent，用户看不到你的对话）。写手刚写完一版正文，你只挑**能在正文里直接改掉的硬伤**。
 
 硬规则：
 1. 逐节核对四件事：① 每个论断有没有素材/引用台账支撑；② 有没有**没出处的数字、文献、结论**（编造，最严重）；③ 框架里定的一节是否被漏写或写跑题；④ 术语、符号、单位、材料体系命名是否前后一致。
@@ -3052,7 +3052,7 @@ def review_system(db: "WorkflowDB", task_id: str) -> str:
         skill_text("manuscript-writing", "SKILL.md", cap=3000),
         skill_text("pre-submission-reviewer", "SKILL.md", cap=2500),
     ) if x) or REVIEW_FALLBACK
-    return f"""你是「科研工作 1.0」里「稿件审查」这一步的审查 agent，用中文工作，站在**博导/审稿人**的位置：既严格，也给建设性意见。
+    return f"""你是「览籍智研」里「稿件审查」这一步的审查 agent，用中文工作，站在**博导/审稿人**的位置：既严格，也给建设性意见。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：审这篇文章的正文并帮用户改。
@@ -3082,7 +3082,7 @@ def run_review(db: "WorkflowDB", task_id: str, text: str, emit: Any = None) -> d
     return run_agent(db, task_id, text, emit, max_steps=8, system=system, tools=doc_tools("review"), scope="review")
 
 
-AGENT_SYSTEM = """你是「科研工作 1.0」的研究 Agent，用中文工作，只通过工具动手，不编造数据。
+AGENT_SYSTEM = """你是「览籍智研」的研究 Agent，用中文工作，只通过工具动手，不编造数据。
 可用工具覆盖：创新点审查、论文搜索、OA 下载、逐页精读、知识库笔记、文章撰写、稿件审查、格式转换、日历、库内检索。
 规则：
 1. 先调 library_overview 或 knowledge_query 了解现状，再决定下一步；用户没说清楚目标时先问一句，不要瞎跑。

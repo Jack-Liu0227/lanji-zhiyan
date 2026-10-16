@@ -1,4 +1,4 @@
-/* ==== 开始卡片（科研工作 1.0） =================================================
+/* ==== 开始卡片（览籍智研） =================================================
    双击桌面快捷方式后先看到这张卡片，点「进入」才进主界面；卡片在的时候主界面
    已经在后面加载 —— 这段时间就是「后台拉起准备」。
    三个组件都由用户给的 React/TSX 源码手工转成原生 JS（本项目没有构建步骤）：
@@ -14,7 +14,7 @@
 "use strict";
 
 var CFG = {
-  title: "Personal Research Workspace",
+  title: "览籍智研",           // 只改内容：中文字标（原来是英文 "Personal Research Workspace"）
   go: "Enter",
   globe: {
     color: "#0047F8", density: 110, glyphSize: 102, speed: 100, hover: 100,
@@ -22,13 +22,16 @@ var CFG = {
     phrase: "everypointonthisballisapathbacktoanotherone"   // 陆地字符（原组件的原句，没动）
   },
   word: {
-    size: 62, weight: 800, spacing: "-0.02em",
+    // 中文标题「览籍智研」只 4 个字：按「和英文标题一样宽」要 223px，但那个尺寸的墨迹下沿会压到下面的
+    // Enter 按钮，所以取中间档 140 —— 4 字满宽约 520px（占卡片 ~47%），墨迹下沿离按钮上沿还有 ~57px。
+    // 想更大/更小只动这个数；字标的垂直位置是下面的 textY。
+    size: 140, weight: 800, spacing: "-0.02em",
     family: '"Inter","Segoe UI","Microsoft YaHei",system-ui,sans-serif',
     color: "#FFFFFF", shade: "#FFFFFF", accent: "#FFFFFF",
     reach: 290, speed: 50, damping: 60,
     fade: 0.7,     // 原组件默认
     blurK: 3.5,    // 原组件默认
-    textY: -0.219, // 字标占满整张卡片后，把字挪到卡片高度 71.9% 处（vUv.y 是自下往上，所以要负号）；只动位置不动效果
+    textY: -0.175, // 字标占满整张卡片后，把字挪到卡片高度 71.9% 处（vUv.y 是自下往上，所以要负号）；只动位置不动效果
     handles: { size: 109, spread: 27, labels: true }    // 原组件默认：三个手柄框 + 坐标标签（三角形互动）
   }
 };
