@@ -9,6 +9,7 @@
 document.title = "览籍智研 · v" + (new URLSearchParams(location.search).get("v") || "dev");
 </script>
 <link rel="stylesheet" href="/app.css">
+<style>#splash.ready{opacity:1;pointer-events:auto}</style>
 </head>
 <body>
 <!-- 开始卡片：动态入场（山水背景 + 浮动主角 + 书法字 + 交互进入按钮） -->
@@ -161,7 +162,6 @@ document.title = "览籍智研 · v" + (new URLSearchParams(location.search).get
 <script src="/vendor/marked/marked.umd.js"></script>
 <script src="/vendor/dompurify/purify.min.js"></script>
 <script src="/vendor/katex/katex.min.js"></script>
-<script>
 <script src="/app-core.js"></script>
 <script src="/chat-views.js"></script>
 <script src="/workflow-view.js"></script>

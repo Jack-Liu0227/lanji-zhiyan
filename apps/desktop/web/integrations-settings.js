@@ -314,14 +314,20 @@
       startRegistrationCountdown(session);
       scheduleRegistrationPoll(session, started.interval_ms || started.interval);
     });
-    field("fs-device-cancel").onclick = () => {
+    field("fs-device-cancel").onclick = event => action(event.target, async () => {
       const session = registrationSessions.get(assistantId);
-      if (session?.timer) clearTimeout(session.timer);
-      if (session?.countdownTimer) clearInterval(session.countdownTimer);
-      registrationSessions.delete(assistantId);
-      registrationStatus("已取消会话", "");
-      renderRegistrationSession(null);
-    };
+      if (!session) return;
+      if (session.timer) clearTimeout(session.timer);
+      if (session.countdownTimer) clearInterval(session.countdownTimer);
+      try {
+        await api("/api/feishu/registration/cancel", {assistant_id: assistantId, session_id: session.sessionId});
+      } finally {
+        session.status = "cancelled";
+        session.message = "已取消扫码会话";
+        registrationStatus("已取消扫码会话", "");
+        renderRegistrationSession(session);
+      }
+    });
     field("fs-save").onclick = event => action(event.target, async () => {
       await api("/api/feishu/config", {assistant_id: assistantId, app_id: field("fs-app").value.trim(), app_secret: field("fs-secret").value.trim(),
         redirect_uri: field("fs-redirect").value.trim(), scopes: field("fs-scopes").value.trim(), receive_id: field("fs-recipient").value.trim(),

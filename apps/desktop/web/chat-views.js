@@ -257,8 +257,7 @@ async function renderTeam(m){
   });
   const cfg = $("tcConfig");
   if(cfg) cfg.onclick = ()=>{
-    openTab("settings");
-    setSec = "teams";
+    window.__teamMode = "manage";
     render();
   };
   const st = $("tcStop");
@@ -915,11 +914,3 @@ function stEvent(ev){                                // SSE 过程中实时刷�
   else return;
   stPaint();
 }
-
-/* ---------------- 工作流 ---------------- */
-const STAGE={idea:"🔍 创新点审查",search:"📚 论文搜索",download:"⬇️ 下载精读",notes:"🌐 论文翻译",outline:"🗂 确认大纲",map:"🧩 梳理精读",write:"✍️ 文章撰写",review:"🧐 稿件审查",entrans:"🌍 中译英",convert:"🔄 格式转换"};
-const WF_ORDER=["idea","search","download","notes","outline","map","write","review","entrans","convert"];
-const PANELS = { idea: ideaPanelHTML, search: searchPanelHTML, download: downloadPanelHTML, notes: trPanelHTML,
-  map: mapPanelHTML, outline: (a)=>docPanelHTML("outline", a), write: (a)=>docPanelHTML("write", a), review: (a)=>docPanelHTML("review", a), convert: convPanelHTML, entrans: enPanelHTML };   // 有专门功能区的步骤；其余留白卡
-let wfStep=localStorage.getItem("rw-wf-step")||"idea";
-let wfMin=localStorage.getItem("rw-wf-min")==="1";

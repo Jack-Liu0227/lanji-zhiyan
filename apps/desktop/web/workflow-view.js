@@ -720,6 +720,24 @@ function enBind(){
   enLoad();
 }
 
+/* ---------------- 工作流 ---------------- */
+const STAGE={idea:"🔍 创新点审查",search:"📚 论文搜索",download:"⬇️ 下载精读",notes:"🌐 论文翻译",outline:"🗂 确认大纲",map:"🧩 梳理精读",write:"✍️ 文章撰写",review:"🧐 稿件审查",entrans:"🌍 中译英",convert:"🔄 格式转换"};
+const WF_ORDER=["idea","search","download","notes","outline","map","write","review","entrans","convert"];
+const PANELS = {
+  idea: (a) => typeof ideaPanelHTML === "function" ? ideaPanelHTML(a) : "",
+  search: (a) => typeof searchPanelHTML === "function" ? searchPanelHTML(a) : "",
+  download: (a) => typeof downloadPanelHTML === "function" ? downloadPanelHTML(a) : "",
+  notes: (a) => typeof trPanelHTML === "function" ? trPanelHTML(a) : "",
+  map: (a) => typeof mapPanelHTML === "function" ? mapPanelHTML(a) : "",
+  outline: (a) => typeof docPanelHTML === "function" ? docPanelHTML("outline", a) : "",
+  write: (a) => typeof docPanelHTML === "function" ? docPanelHTML("write", a) : "",
+  review: (a) => typeof docPanelHTML === "function" ? docPanelHTML("review", a) : "",
+  convert: (a) => typeof convPanelHTML === "function" ? convPanelHTML(a) : "",
+  entrans: (a) => typeof enPanelHTML === "function" ? enPanelHTML(a) : ""
+};   // 有专门功能区的步骤；其余留白卡
+let wfStep=localStorage.getItem("rw-wf-step")||"idea";
+let wfMin=localStorage.getItem("rw-wf-min")==="1";
+
 function renderWorkflow(m){
   m.style.padding = "";        // 清掉 Agent 页留下的 10px 内边距，让竖线的负边距对得上 .main 的 16px
   m.innerHTML = needTask() || `

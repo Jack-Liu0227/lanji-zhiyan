@@ -10,6 +10,7 @@ from typing import Any
 
 import fileguard
 import paths
+from research_core import now
 from workflow_prompts import _schema, DELEGATE_TOOL, skill_text
 
 DATA, PAPERS, NOTES, OUT = paths.DATA, paths.PAPERS, paths.NOTES, paths.OUT

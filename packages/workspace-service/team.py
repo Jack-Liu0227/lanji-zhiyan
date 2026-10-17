@@ -50,7 +50,7 @@ def ensure_leader(task_id: str) -> dict[str, Any]:
     with workflow.WorkflowDB(_db_path()) as db:
         rows = [m for m in db.team_members(task_id) if m["role"] == "leader"]
         if rows:
-            if rows[0]["name"] != LEADER_NAME:      # 旧库里还叫「全局 Leader」→ 顺手改成新称呼
+            if rows[0]["name"] == "全局 Leader":      # 旧库里还叫「全局 Leader」→ 顺手改成新称呼
                 return db.team_member_update(rows[0]["id"], name=LEADER_NAME)
             return rows[0]
         return db.team_member_add(task_id, LEADER_NAME, "leader", "", LEADER_BRIEF)

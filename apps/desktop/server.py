@@ -1564,9 +1564,16 @@ class Handler(BaseHTTPRequestHandler):
                         signaled = cond.wait(timeout=15.0)
                         if not signaled:
                             try:
-                                self.wfile.write(b": heartbeat\n\n")
+                                self.wfile.write(b": keep-alive\n\n")
                                 self.wfile.flush()
                             except OSError:
+                                if run and run.status == "running":
+                                    run.status = "suspended"
+                                    try:
+                                        with WorkflowDB(DB_PATH) as cdb:
+                                            cdb.update_background_job(run_id, status="suspended")
+                                    except Exception:
+                                        pass
                                 return
                     to_send = list(queue)
                     queue.clear()
@@ -1576,6 +1583,13 @@ class Handler(BaseHTTPRequestHandler):
                         self.wfile.write(f"id: {ev.get('event_id', '')}\ndata: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n".encode("utf-8"))
                         self.wfile.flush()
                     except OSError:
+                        if run and run.status == "running":
+                            run.status = "suspended"
+                            try:
+                                with WorkflowDB(DB_PATH) as cdb:
+                                    cdb.update_background_job(run_id, status="suspended")
+                            except Exception:
+                                pass
                         return
                     if ev.get("type") in ("done", "cancelled", "error"):
                         return
