@@ -106,14 +106,15 @@ def biggest_title(path: Path | str) -> str:
 
 
 def meta(path: Path | str) -> dict[str, str]:
-    """PDF 自带元数据里的标题/创建时间（取不到就给空串）。"""
+    """PDF 自带元数据里的标题/作者/创建时间（取不到就给空串）。"""
     try:
         with open(path, "rb") as fh:
             info = PdfReader(fh).metadata or {}
         return {"title": str(info.get("/Title") or "").strip(),
+                "author": str(info.get("/Author") or "").strip(),
                 "creation": str(info.get("/CreationDate") or "")}
     except Exception:
-        return {"title": "", "creation": ""}
+        return {"title": "", "author": "", "creation": ""}
 
 
 def _demo() -> None:

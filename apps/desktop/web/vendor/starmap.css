@@ -1,0 +1,232 @@
+/* 论文星图样式：类名与规则照搬参考实现；配色改成本项目的主题变量，深浅模式与主题色一起走 */
+.paper-network {
+  /* 关系线配色：深色模式用亮色，浅色模式压深，白底上才看得见 */
+  --rel-citation: #8eefff; --rel-biblio: #c4adff; --rel-co: #6ee7b7; --rel-semantic: #f69fcc; --rel-origin: #e8bc73;
+  position: relative; height: 100%; cursor: grab; touch-action: none; user-select: none; overflow: hidden;
+  background: radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--accent) 22%, #060b10) 0%,
+      color-mix(in srgb, var(--accent) 9%, #04080c) 58%, #03060a 100%);
+  border-radius: 12px;
+}
+:root[data-theme=light] .paper-network {
+  --rel-citation: #0e7c8f; --rel-biblio: #6a4bd4; --rel-co: #0d7f5c; --rel-semantic: #b23a80; --rel-origin: #a8721a;
+}
+.paper-network.dragging { cursor: grabbing; }
+.paper-network > svg { display: block; touch-action: none; }
+.paper-backdrop { fill: transparent; }
+
+/* 只在深色模式加一层暗角，浅色底加暗角会脏 */
+:root[data-theme=dark] .paper-network:after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(circle at 49% 42%, transparent 18%, #010208a8 100%);
+  box-shadow: inset 0 0 70px #000c;
+}
+
+.paper-network-heading {
+  position: absolute; left: 18px; top: 16px; z-index: 2; display: flex; align-items: center; gap: 10px;
+  padding: 9px 13px 9px 10px; border-radius: 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  box-shadow: var(--shadow); color: var(--fg); pointer-events: none;
+  backdrop-filter: blur(10px);
+}
+.paper-network-heading strong { display: block; font-size: 11px; letter-spacing: .12em; font-weight: 750; }
+.paper-network-heading small { display: block; margin-top: 2px; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.paper-network-beacon {
+  width: 11px; height: 11px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent), 0 0 14px color-mix(in srgb, var(--accent) 55%, transparent);
+  animation: paper-beacon 2.8s ease-in-out infinite;
+}
+@keyframes paper-beacon { 0%, 100% { opacity: .55; transform: scale(.86); } 50% { opacity: 1; transform: scale(1.06); } }
+
+.paper-node-nebula { transform-box: fill-box; transform-origin: center; animation: paper-node-spin 90s linear infinite; will-change: transform; }
+.paper-nebula-fringe { transform-box: view-box; animation: paper-node-spin 112s linear infinite reverse; }
+.paper-fringe-particle { animation: paper-cloud-particle-breathe 6s ease-in-out infinite; }
+@keyframes paper-node-spin { to { transform: rotate(360deg); } }
+@keyframes paper-cloud-particle-breathe { 0%, 100% { opacity: .07; } 50% { opacity: .32; } }
+.paper-network[data-node-motion=paused] .paper-node-nebula,
+.paper-network[data-node-motion=paused] .paper-fringe-particle,
+.paper-network[data-node-motion=paused] .paper-nebula-fringe { animation-play-state: paused; }
+
+.paper-topology-ring { fill: none; stroke: color-mix(in srgb, var(--accent) 60%, transparent); stroke-opacity: .16; stroke-width: .6; stroke-dasharray: 1 6; }
+
+.paper-network .paper-node-label text {
+  font-size: 10px; font-weight: 600; letter-spacing: .01em;
+  fill: var(--fg); stroke: color-mix(in srgb, var(--bg) 90%, transparent); stroke-width: 3px;
+  stroke-linejoin: round; paint-order: stroke;
+}
+.paper-network .paper-node-label text[data-label-state=selected] { fill: var(--accent); }
+.paper-label-leader { stroke: var(--muted); stroke-width: .45; opacity: .45; }
+.paper-graph-node { cursor: pointer; }
+.paper-graph-node.is-selected .paper-node-core { stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: none; }
+.paper-graph-node:focus { outline: none; }
+.paper-graph-node:focus .paper-node-core { stroke: var(--accent); stroke-width: 1.2; }
+
+.paper-edge { transition: opacity .18s ease; }
+.paper-edge-glow { filter: blur(1px); }
+.paper-edge.is-muted { opacity: .3; }
+
+.paper-relation-legend {
+  position: absolute; left: 14px; bottom: 13px; z-index: 2; display: flex; flex-wrap: wrap; gap: 5px 13px;
+  max-width: calc(100% - 235px); padding: 8px 10px; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 52%, transparent);
+  background: color-mix(in srgb, #ffffff 86%, var(--accent));
+  color: #0b1216;
+  color: #ffffff; font-size: 11px; pointer-events: none; backdrop-filter: blur(8px);
+  box-shadow: 0 6px 20px rgba(0,0,0,.45);
+}
+.paper-relation-legend span { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+
+.paper-network-hint { position: absolute; left: 14px; bottom: 52px; max-width: 48%; color: var(--fg); font-size: 11px; pointer-events: none; opacity: .82; }
+
+.paper-year-legend {
+  position: absolute; right: 16px; bottom: 12px; width: 220px; max-width: 42%; font-size: 11px;
+  color: #0b1216; pointer-events: none;
+  padding: 9px 11px; border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 85%, transparent);
+  background: color-mix(in srgb, #ffffff 86%, var(--accent));
+  color: #0b1216;
+  box-shadow: 0 8px 24px rgba(0,0,0,.5); backdrop-filter: blur(8px);
+}
+.paper-year-legend > span { display: block; margin-bottom: 6px; font-size: 12px; font-weight: 700; }
+.paper-year-legend small { font-size: 10.5px; color: #35424b; opacity: 1; }
+.paper-year-gradient { height: 8px; border-radius: 9px; box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 35%, transparent); }
+.paper-year-ticks { display: flex; justify-content: space-between; margin-top: 5px; font-size: 11px; font-variant-numeric: tabular-nums; }
+
+.paper-graph-zoom {
+  position: absolute; top: 16px; right: 14px; z-index: 3; display: flex; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  box-shadow: var(--shadow); backdrop-filter: blur(10px);
+}
+.paper-graph-zoom button {
+  width: 30px; height: 30px; display: grid; place-items: center; border: 0; background: none;
+  color: var(--fg); cursor: pointer; font-size: 14px; line-height: 1;
+}
+.paper-graph-zoom button:hover { color: var(--accent); }
+
+/* 边按关系类型着色（深/浅主题各一套值，见上面的 --rel-*） */
+.paper-edge[data-kind="citation"] .paper-edge-line,
+.paper-edge[data-kind="citation"] .paper-edge-glow { stroke: var(--rel-citation); }
+.paper-edge[data-kind="citation"] .paper-edge-arrow { fill: var(--rel-citation); }
+.paper-edge[data-kind="bibliographic_coupling"] .paper-edge-line,
+.paper-edge[data-kind="bibliographic_coupling"] .paper-edge-glow { stroke: var(--rel-biblio); }
+.paper-edge[data-kind="co_citation"] .paper-edge-line,
+.paper-edge[data-kind="co_citation"] .paper-edge-glow { stroke: var(--rel-co); }
+.paper-edge[data-kind="semantic_similarity"] .paper-edge-line,
+.paper-edge[data-kind="semantic_similarity"] .paper-edge-glow { stroke: var(--rel-semantic); }
+
+/* 浅色主题：星云在白底上要压深 + 投影，边加粗一点才看得见 */
+:root[data-theme=light] .paper-node-nebula { filter: drop-shadow(0 1px 3px rgba(16,32,52,.45)); }
+:root[data-theme=light] .paper-edge-line { stroke-width: 1.5; opacity: .9; }
+:root[data-theme=light] .paper-orbit-guides circle { stroke-opacity: .2; }
+:root[data-theme=light] .paper-network-heading small,
+:root[data-theme=light] .paper-year-legend span { color: var(--muted); }
+
+.paper-network .paper-edge-line { opacity: .85; }
+
+/* 点击高亮：选中节点 + 它的邻居 + 相连的引用线；其余压暗 */
+.paper-graph-node { transition: opacity .16s ease; }
+.paper-graph-node.is-dimmed { opacity: .26; }
+.paper-graph-node.is-neighbor .paper-node-core { stroke: color-mix(in srgb, var(--accent) 75%, transparent); stroke-width: 1.1; }
+.paper-graph-node.is-selected .paper-node-core {
+  stroke: var(--accent); stroke-width: 1.6; stroke-dasharray: none;
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 70%, transparent));
+}
+.paper-graph-node.is-selected .paper-node-label text { fill: var(--accent); }
+.paper-graph-node.is-neighbor .paper-node-label text { fill: #ffffff; }
+.paper-graph-node.is-selected .paper-node-nebula { transform: scale(1.06); }
+
+/* 浅色模式：这张图只按深色配色做过，直接给个居中提示，不展示残缺的星图 */
+:root[data-theme=light] .paper-network {
+  background: var(--panel2);
+  display: grid; place-items: center;
+}
+:root[data-theme=light] .paper-network > svg,
+:root[data-theme=light] .paper-network .paper-network-heading,
+:root[data-theme=light] .paper-network .paper-relation-legend,
+:root[data-theme=light] .paper-network .paper-year-legend,
+:root[data-theme=light] .paper-network .paper-graph-zoom,
+:root[data-theme=light] .paper-network .paper-network-hint { display: none; }
+:root[data-theme=light] .paper-network::before {
+  content: "请切换深色模式后浏览";
+  grid-area: 1 / 1; z-index: 2;
+  padding: 12px 18px; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  color: var(--fg); font-size: 13px; letter-spacing: .04em;
+}
+
+/* 箭头单独一层，画在节点之上 */
+.paper-arrow-layer { pointer-events: none; }
+.paper-arrow-layer .paper-edge-arrow[data-kind="citation"] { fill: var(--rel-citation); }
+.paper-arrow-layer .paper-edge-arrow[data-kind="bibliographic_coupling"] { fill: var(--rel-biblio); }
+.paper-arrow-layer .paper-edge-arrow[data-kind="co_citation"] { fill: var(--rel-co); }
+.paper-arrow-layer .paper-edge-arrow[data-kind="semantic_similarity"] { fill: var(--rel-semantic); }
+
+.paper-relation-legend svg { filter: brightness(.6) saturate(1.15); }
+
+/* 两张浅色提示卡：字与线样统一压深，保证卡内对比度（放在最后，覆盖上面的继承色） */
+.paper-relation-legend { color: #0b1216; }
+.paper-relation-legend span { color: #0b1216; }
+.paper-relation-legend svg line,
+.paper-relation-legend svg path { stroke: #0b5f57; }
+.paper-year-legend, .paper-year-legend span, .paper-year-legend small,
+.paper-year-legend .paper-year-ticks { color: #0b1216; }
+
+/* 边线：默认就要看得见；选中时相连的线加粗 + 发光，箭头同步 */
+.paper-network .paper-edge-line { stroke-width: 1.15; opacity: .88; }
+.paper-network .paper-edge.is-hot .paper-edge-line { stroke-width: 2.4; opacity: 1; }
+.paper-network .paper-edge.is-hot .paper-edge-glow { stroke-width: 5; opacity: .35; }
+.paper-network .paper-edge.is-muted { opacity: .10; }
+.paper-arrow-layer .paper-edge-arrow { opacity: .95; }
+.paper-arrow-layer .paper-edge-arrow.is-hot { opacity: 1; }
+.paper-network .paper-arrow-layer.is-focus .paper-edge-arrow:not(.is-hot) { opacity: .12; }
+
+/* 四角浮层置顶（原来夹在 SVG 后面的层序里，会被画布压住） */
+.paper-network > svg { position: relative; z-index: 1; }
+.paper-network-heading, .paper-relation-legend, .paper-year-legend, .paper-graph-zoom,
+.paper-network-hint { z-index: 20; }
+
+/* 左上角卡片也改浅色底深色字 */
+.paper-network-heading {
+  background: color-mix(in srgb, #ffffff 88%, var(--accent));
+  color: #0b1216;
+  border-color: color-mix(in srgb, var(--accent) 85%, transparent);
+}
+.paper-network-heading strong { color: #0b1216; }
+.paper-network-heading small { color: #3b4952; }
+
+/* 高亮线层：画在节点之上，避免被星云盖住（之前只剩箭头可见） */
+.paper-focus-layer { pointer-events: none; }
+.paper-focus-line { stroke-width: 2.6; stroke-linecap: round; opacity: 1; filter: drop-shadow(0 0 3px rgba(142,239,255,.55)); }
+.paper-focus-line.k-citation { stroke: var(--rel-citation); }
+.paper-focus-line.k-bibliographic_coupling { stroke: var(--rel-biblio); }
+.paper-focus-line.k-co_citation { stroke: var(--rel-co); }
+.paper-focus-line.k-semantic_similarity { stroke: var(--rel-semantic); }
+
+/* 默认淡，选中时才亮（不加粗，只提亮 + 微光） */
+.paper-network .paper-edge-line { opacity: .42; }
+.paper-arrow-layer .paper-edge-arrow { opacity: .42; }
+.paper-network .paper-edge.is-hot .paper-edge-line { stroke-width: 1.15; opacity: 1; }
+.paper-network .paper-edge.is-hot .paper-edge-glow { stroke-width: 3; opacity: .3; }
+.paper-focus-line { stroke-width: 1.15; }
+.paper-arrow-layer .paper-edge-arrow.is-hot { opacity: 1; }
+
+/* 三张卡片整体放大 1.2 倍（边距、字号、色条一起放大） */
+.paper-network-heading { padding: 11px 16px 11px 12px; gap: 12px; border-radius: 13px; left: 20px; top: 18px; }
+.paper-network-beacon { width: 13px; height: 13px; }
+.paper-network-heading strong { font-size: 13.2px; }
+.paper-network-heading small { font-size: 12px; margin-top: 2px; }
+.paper-relation-legend {
+  padding: 10px 12px; font-size: 12.6px; gap: 6px 16px; border-radius: 10px;
+  left: 16px; bottom: 16px; max-width: calc(100% - 300px);
+}
+.paper-relation-legend svg { width: 34px; height: 12px; flex: 0 0 34px; }
+.paper-network-hint { font-size: 13.2px; bottom: 62px; left: 16px; max-width: 50%; }
+.paper-year-legend { width: 264px; max-width: 42%; font-size: 13.2px; padding: 10px 12px; border-radius: 11px; right: 18px; bottom: 15px; }
+.paper-year-legend > span { font-size: 14.4px; margin-bottom: 7px; }
+.paper-year-gradient { height: 10px; border-radius: 11px; }
+.paper-year-ticks { font-size: 13.2px; margin-top: 6px; }
+.paper-year-legend small { font-size: 12px; }
+.paper-graph-zoom { top: 18px; right: 18px; border-radius: 12px; }
+.paper-graph-zoom button { width: 36px; height: 36px; font-size: 17px; }

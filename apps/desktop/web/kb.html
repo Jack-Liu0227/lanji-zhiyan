@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>知识星图</title>
+<link rel="stylesheet" href="/vendor/neural/neural.css">
+<link rel="stylesheet" href="/vendor/neural/kb.css">
+</head>
+<body>
+<div id="kb-root"></div>
+<script type="module">
+import {mount} from '/vendor/neural/scene.js';
+
+const q = new URLSearchParams(location.search);
+const root = document.getElementById('kb-root');
+
+// 星图整套配色是为深空画的：浅色底上星线、星云、标签全糊，所以只在深色模式下出图
+if ((q.get('theme') || 'dark') !== 'dark') {
+  document.documentElement.dataset.theme = 'light';
+  root.innerHTML = `<div class="kb-dark-only">
+      <div class="kb-dark-moon">🌙</div>
+      <h2>请在深色模式下查看知识星图</h2>
+      <p>星核、星云和星座线都是按深空配色逐帧画的，浅色底上会看不清。</p>
+      <button id="kbToDark">切换到深色模式</button>
+    </div>`;
+  document.getElementById('kbToDark').onclick = () => parent.postMessage({rw: 'theme', theme: 'dark'}, '*');
+} else {
+  const url = '/api/starmap' + (q.get('task') ? '?task=' + encodeURIComponent(q.get('task')) : '');
+  fetch(url).then(r => r.json()).then(api => {
+    if (!api || !api.task) {
+      root.innerHTML = '<p style="padding:40px;color:#8b9bb0">还没有项目 —— 先去「项目」页建一个，星图才有得画。</p>';
+      return;
+    }
+    window.__kb = mount(root, api, {focus: q.get('open') || ''});
+    // 告诉外层：这次画的是哪个项目、有哪些项目（外层用它渲染下拉）
+    parent.postMessage({rw: 'kb-ready', task: api.task, tasks: api.tasks || []}, '*');
+  }).catch(err => {
+    root.innerHTML = '<p style="padding:40px;color:#f87171">星图加载失败：' + err.message + '</p>';
+  });
+}
+
+// 外层换项目时不必重载整个页面
+window.addEventListener('message', e => {
+  const d = e.data || {};
+  if (d.rw !== 'kb-reload') return;
+  fetch('/api/starmap?task=' + encodeURIComponent(d.task || '')).then(r => r.json()).then(api => {
+    if (window.__kb) window.__kb();
+    root.innerHTML = '';
+    window.__kb = mount(root, api, {focus: d.open || ''});
+  });
+});
+</script>
+</body>
+</html>

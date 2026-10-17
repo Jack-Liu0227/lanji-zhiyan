@@ -35,6 +35,7 @@ for _p in ("database", "workspace-core", "workspace-service", "connectors", "ai-
 
 import fileguard                  # 文件安全：写前快照 / 打开白名单 / 审计
 import papertran                 # 论文翻译页：PDF 服务 / 元数据 / BabelDOC 任务
+import starmap                   # 知识星图：项目 → 文献/笔记/知识点/候选/工作流
 import rss                       # 情报日报：RSS 抓取/解析
 import vault                     # 知识库：Obsidian Vault 扫描 / 状态写回
 import workflow
@@ -451,6 +452,17 @@ def settings_meta() -> dict[str, Any]:
             "hermes_dir": str(sk), "mcp_cfg": str(cfg)}
 
 
+class Server(ThreadingHTTPServer):
+    """只把「客户端提前断开」这类连接错误咽掉：浏览器关页面/切走时会 reset 连接，
+    这是正常现象，但 socketserver 会把它当异常打在控制台上，淹掉真正的报错。"""
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -717,9 +729,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "账户不存在"}, 404)
                 return True
             folder = pick("folder", "INBOX")
-            if method == "GET" and m_msg.group(4) is not None:
+            if method == "GET" and m_msg.group(3) is not None:
                 try:
-                    att = M.get_attachment(acc, folder, m_msg.group(2), int(m_msg.group(4)))
+                    att = M.get_attachment(acc, folder, m_msg.group(2), int(m_msg.group(3)))
                 except Exception as exc:
                     self._json({"error": M.describe_mail_error(exc)}, 404)
                     return True
@@ -809,6 +821,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path in ("/", "/index.html"):
                 return self._send(200, (WEB / "index.html").read_bytes(), "text/html; charset=utf-8")
+            if path == "/kb.html":                                  # 知识星图整页（iframe 挂在「知识库」视图里）
+                return self._send(200, (WEB / "kb.html").read_bytes(), "text/html; charset=utf-8")
             if path.startswith("/vendor/"):
                 return self._static(path)
             if path in ("/agent-settings.js", "/capabilities.js", "/workflow-layout.js", "/integrations-settings.js"):
@@ -832,6 +846,14 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/win/state":
                 h = _win_hwnd()
                 return self._json({"zoomed": bool(h and _at_work_area(h))})
+            if path == "/api/starmap":
+                tid = (q.get("task") or [""])[0]
+                with WorkflowDB(DB_PATH) as db:
+                    return self._json(starmap.graph(db.db, tid))
+            if path == "/api/starmap/brief":            # 知识点简介：库里有回库里的，没有才调一次模型
+                term = (q.get("term") or [""])[0]
+                with WorkflowDB(DB_PATH) as db:
+                    return self._json(starmap.brief(db.db, term, db.active_model()))
             if path == "/api/litgraph":
                 tid = (q.get("task") or [""])[0]
                 with WorkflowDB(DB_PATH) as db:
@@ -868,6 +890,7 @@ class Handler(BaseHTTPRequestHandler):
                         "notes": [{k: n[k] for k in ("id", "title", "created_at")} for n in db.notes(tid)],
                         "papers": s["papers"], "evidence": s["evidence"],
                         "paper_list": db.papers_of(tid),
+                        "paper_graph": db.paper_graph(tid),
                         "evidence_list": [dict(r) for r in db.evidence(tid)],
                     })
             if path == "/api/note":
@@ -920,6 +943,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"path": str(p),
                                    "snapshots": [{"at": s.parent.name + " " + s.name, "bytes": s.stat().st_size}
                                                  for s in fileguard.snapshots(p)]})
+            if path == "/api/paper/open":                 # 星图/文献双击：用系统默认程序打开这篇论文的 PDF
+                with WorkflowDB(DB_PATH) as db:
+                    row = db.db.execute("SELECT source_path FROM papers WHERE id=?",
+                                        (q.get("id", [""])[0],)).fetchone()
+                p = Path(row["source_path"]) if row else None
+                if not p or not p.is_file():
+                    return self._json({"error": "找不到这篇论文的 PDF 文件（可能已移走）"}, 404)
+                return self._json(fileguard.open_document(p))
             if path == "/api/file":                       # 把项目里的文件发出去（PDF 给 iframe 预览用）
                 p = _safe_path(q.get("path", [""])[0])
                 if not p.is_file():
@@ -1647,7 +1678,7 @@ def main() -> int:
                 )
         import mail
         mail.encrypt_legacy()          # 老 mail.json 里的明文授权码 → DPAPI 密文（幂等，干净时是空转）
-        srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        srv = Server(("127.0.0.1", port), Handler)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         schedule.start()          # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
         team.start_worker()       # 团队派活队列（串行：一次跑一个成员）

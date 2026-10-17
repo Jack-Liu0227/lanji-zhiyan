@@ -136,6 +136,10 @@ CREATE TABLE IF NOT EXISTS providers (
   models TEXT NOT NULL DEFAULT '[]', source TEXT NOT NULL DEFAULT 'builtin',
   enabled INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS paper_meta (          -- 文献元数据：标题/作者/DOI/年份 + 解析出的参考文献（论文星图用）
+  paper_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', authors TEXT NOT NULL DEFAULT '',
+  doi TEXT NOT NULL DEFAULT '', year TEXT NOT NULL DEFAULT '', refs TEXT NOT NULL DEFAULT '{}'
+);
 """
 
 # 内置 Provider 目录：从科研工作台内嵌的 pi-ai SDK 里导出（40 家），不手抄
@@ -1152,8 +1156,20 @@ class WorkflowDB(ResearchDB):
         return [dict(r) for r in rows]
 
     def papers_of(self, task_id: str) -> list[dict[str, Any]]:
-        rows = self.db.execute("SELECT * FROM papers WHERE task_id=? ORDER BY created_at DESC", (task_id,))
+        """项目文献列表：带上标题/作者/DOI（paper_meta，缺的当场解析一次）。"""
+        import papergraph
+        papergraph.ensure_meta(self.db, task_id)
+        rows = self.db.execute(
+            "SELECT p.*, COALESCE(m.title,'') AS title, COALESCE(m.authors,'') AS authors,"
+            " COALESCE(m.doi,'') AS doi, COALESCE(m.year,'') AS year"
+            " FROM papers p LEFT JOIN paper_meta m ON m.paper_id=p.id"
+            " WHERE p.task_id=? ORDER BY p.created_at DESC", (task_id,))
         return [dict(r) for r in rows]
+
+    def paper_graph(self, task_id: str) -> dict[str, Any]:
+        """论文星图：库内论文之间的关系（直接引用 / 共享参考文献），不联网、不外扩。"""
+        import papergraph
+        return papergraph.graph(self.db, task_id)
 
     # ---------- Agent 对话记录 ----------
     def add_message(self, task_id: str, role: str, content: str, events: list | None = None,
