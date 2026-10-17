@@ -140,6 +140,10 @@ CREATE TABLE IF NOT EXISTS paper_meta (          -- 文献元数据：标题/作
   paper_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', authors TEXT NOT NULL DEFAULT '',
   doi TEXT NOT NULL DEFAULT '', year TEXT NOT NULL DEFAULT '', refs TEXT NOT NULL DEFAULT '{}'
 );
+CREATE TABLE IF NOT EXISTS paper_graph (         -- 论文星图的编译结果：点「生成」才算一次，平时只读这份
+  task_id TEXT PRIMARY KEY, json TEXT NOT NULL DEFAULT '{}',
+  built_at TEXT NOT NULL, took_ms INTEGER NOT NULL DEFAULT 0
+);
 """
 
 # 内置 Provider 目录：从科研工作台内嵌的 pi-ai SDK 里导出（40 家），不手抄
@@ -894,7 +898,7 @@ class WorkflowDB(ResearchDB):
         files = [r["source_path"] for r in self.db.execute("SELECT source_path FROM papers WHERE task_id=?", (task_id,))]
         self.db.execute("DELETE FROM paper_pages WHERE paper_id IN (SELECT id FROM papers WHERE task_id=?)", (task_id,))
         self.db.execute("DELETE FROM evidence WHERE paper_id IN (SELECT id FROM papers WHERE task_id=?)", (task_id,))
-        for table in ("papers", "artifacts", "runs", "calendar_events", "notes", "steps", "search_cache", "chat"):
+        for table in ("papers", "artifacts", "runs", "calendar_events", "notes", "steps", "search_cache", "chat", "paper_graph"):
             self.db.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
         self.db.execute("DELETE FROM research_tasks WHERE id=?", (task_id,))
         self.db.commit()
@@ -1124,6 +1128,24 @@ class WorkflowDB(ResearchDB):
         self.db.commit()
         return saved
 
+    def cache_result(self, task_id: str, it: dict[str, Any]) -> str:
+        """一条结果写进 search_cache 并返回 id；已存在（同 DOI/同标题）就返回旧 id，队列才能复用。"""
+        title = (it.get("title") or "").strip()
+        if not title:
+            raise ValueError("这条没有标题，跳过")
+        row = self.db.execute(
+            "SELECT id FROM search_cache WHERE task_id=? AND source=? AND (doi=? AND doi!='' OR title=?)",
+            (task_id, it.get("source", ""), it.get("doi", ""), title),
+        ).fetchone()
+        if row:
+            return row["id"]
+        rid = uuid.uuid4().hex
+        self.db.execute("INSERT INTO search_cache VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                        (rid, task_id, it.get("source", ""), title, it.get("authors", ""), it.get("year", ""),
+                         it.get("doi", ""), it.get("url", ""), it.get("pdf_url", ""), it.get("abstract", ""), now()))
+        self.db.commit()
+        return rid
+
     def result(self, rid: str) -> dict[str, Any]:
         row = self.db.execute("SELECT * FROM search_cache WHERE id=?", (rid,)).fetchone()
         if not row:
@@ -1167,9 +1189,31 @@ class WorkflowDB(ResearchDB):
         return [dict(r) for r in rows]
 
     def paper_graph(self, task_id: str) -> dict[str, Any]:
-        """论文星图：库内论文之间的关系（直接引用 / 共享参考文献），不联网、不外扩。"""
+        """论文星图（读缓存）：只在用户点「生成」时算一次（build_paper_graph），平时返回上次结果。
+        没生成过 → 空图 + built_at 空，前端据此显示空态和「生成星图」按钮。"""
+        row = self.db.execute("SELECT json, built_at, took_ms FROM paper_graph WHERE task_id=?", (task_id,)).fetchone()
+        if not row:
+            return {"nodes": [], "edges": [], "stats": {}, "built_at": "", "took_ms": 0}
+        try:
+            g = json.loads(row["json"] or "{}")
+        except ValueError:
+            g = {}
+        g["built_at"] = row["built_at"]
+        g["took_ms"] = row["took_ms"]
+        return g
+
+    def build_paper_graph(self, task_id: str) -> dict[str, Any]:
+        """编译一次星图并落库。扫库内 PDF 全文算引用关系，几秒到几十秒，所以不给自动跑。"""
         import papergraph
-        return papergraph.graph(self.db, task_id)
+        t0 = time.time()
+        g = papergraph.graph(self.db, task_id)
+        took = int((time.time() - t0) * 1000)
+        built = now()
+        self.db.execute("INSERT OR REPLACE INTO paper_graph (task_id,json,built_at,took_ms) VALUES (?,?,?,?)",
+                        (task_id, json.dumps(g, ensure_ascii=False), built, took))
+        self.db.commit()
+        g["built_at"], g["took_ms"] = built, took
+        return g
 
     # ---------- Agent 对话记录 ----------
     def add_message(self, task_id: str, role: str, content: str, events: list | None = None,
@@ -1714,6 +1758,51 @@ def stage_download_selected(db: WorkflowDB, task_id: str, result_ids: list[str])
             manual += 1
     db.log_step(task_id, "download", "done", f"勾选 {len(ids)} 条：自动下载 {done} 篇，待手动 {manual} 篇")
     return {"selected": len(ids), "downloaded": done, "manual": manual, "items": db.queue(task_id)}
+
+
+def stage_zotero_import(db: WorkflowDB, task_id: str, collection: str = "",
+                        keys: list[str] | None = None) -> dict[str, Any]:
+    """Zotero 分类（或点选的几条）→ 直接进「下载精读」队列。
+
+    题录用 Zotero 的（零错误、不花 LLM），PDF 用本机附件直读，不检索、不联网下载、不复制文件。
+    Zotero 里没 PDF 附件的条目照样进队列，标成「待手动」，不假装成功。
+    """
+    import zotero                                     # 只走本机 Local API；没启动会抛中文原因
+    keys = [k for k in (keys or []) if k]
+    if keys:
+        rows = [zotero.item(k) for k in keys]
+    else:
+        rows, start = [], 0
+        while True:
+            page = zotero.items(collection=collection, start=start, limit=zotero.MAX_LIMIT)
+            rows += [r for r in page["items"] if r["type"] not in ("attachment", "note", "annotation")]
+            start += page["returned"]
+            if not page["hasMore"] or not page["returned"]:
+                break
+    done = manual = 0
+    for it in rows:
+        rid = db.cache_result(task_id, {
+            "source": "zotero", "title": it["title"], "authors": ", ".join(it["creators"]),
+            "year": it["year"], "doi": it["doi"],
+            "url": it["url"] or (f"https://doi.org/{it['doi']}" if it["doi"] else ""),
+            "pdf_url": "", "abstract": it["abstract"],
+        })
+        path = zotero.pdf_path(it["key"])
+        if not path:
+            db.set_queue(task_id, rid, "manual", "", "Zotero 里这条没有 PDF 附件")
+            manual += 1
+            continue
+        try:
+            db.ingest_pdf(task_id, path)
+        except Exception as exc:                      # 加密/损坏/不是真 PDF → 交给人工
+            db.set_queue(task_id, rid, "manual", "", f"Zotero 附件读不了：{exc}")
+            manual += 1
+            continue
+        db.set_queue(task_id, rid, "downloaded", path, "")
+        done += 1
+    db.log_step(task_id, "download", "done",
+                f"Zotero 导入 {len(rows)} 条：入库 {done} 篇，无附件 {manual} 条")
+    return {"total": len(rows), "downloaded": done, "manual": manual, "items": db.queue(task_id)}
 
 
 def is_paper_pdf(path: Any) -> bool:

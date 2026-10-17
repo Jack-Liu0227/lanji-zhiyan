@@ -30,6 +30,19 @@ class WorkflowTest(unittest.TestCase):
         self.db.close()
         self.td.cleanup()
 
+    def test_paper_graph_is_cached_until_built(self) -> None:
+        """论文星图是编译产物：没点「生成」就是空图；点过才有图，并带上 built_at / took_ms。"""
+        tid = self.db.create_task("星图项目", "问题", "体系", "")
+        g = self.db.paper_graph(tid)
+        self.assertEqual(g["nodes"], [])
+        self.assertEqual(g["built_at"], "")                 # 未生成 → 前端显示空态 + 生成按钮
+        built = self.db.build_paper_graph(tid)
+        self.assertTrue(built["built_at"])
+        again = self.db.paper_graph(tid)
+        self.assertEqual(len(again["nodes"]), len(built["nodes"]))   # 第二次读的是缓存，不重算
+        self.assertEqual(again["built_at"], built["built_at"])
+        self.assertIn("took_ms", again)
+
     def test_rss_fixed_sources_dedupe_and_filters(self) -> None:
         """情报日报：来源固定 5 个（seed 幂等）、网址校验、按 link 去重、三条件筛选。"""
         import rss as rss_mod

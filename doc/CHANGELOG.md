@@ -2,8 +2,19 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
-## 2026-10-17 · 项目空间收敛 + 全局 Leader 更名智研管家
+## 2026-10-17 · 论文星图改成「点一下才生成」
 
+`paper_graph` 以前挂在 `GET /api/task` 里**每次打开项目都现算**（58 篇要重解析 PDF、1–2 秒，越攒越慢）。改成编译产物：用户点「生成星图」才跑一次，结果落库，平时只读缓存。
+
+- `workflow.py`：新增表 `paper_graph(task_id, json, built_at, took_ms)`；`paper_graph()` 改为**只读缓存**（没生成过返回空图 + `built_at` 空），新增 `build_paper_graph()` 现算并 `INSERT OR REPLACE`。删除项目时连带清掉（`delete_task` 的表清单里加了 `paper_graph`）。
+- `server.py`：新增 `POST /api/task/papergraph/build`；`GET /api/task` 的 `paper_graph` 现在来自缓存。
+- `index.html`：论文星图 tab 顶部加工具栏——左「论文星图 + 已生成/未生成 + 时间·篇数·关系数·耗时」，右上主按钮「生成星图」，已生成后降级成 ghost「重新生成」，点击后按钮转圈并显示已等秒数；未生成且库里有文献时显示虚框空态，说明「扫库内 N 篇 PDF 全文算引用关系，不会自动跑」。
+- 耗时按实际显示（不足 1 秒显示 ms），不写死估计值。
+- 测试：`test_paper_graph_is_cached_until_built`（未生成=空图 / 生成后带 built_at / 再读是缓存）。
+
+实测（临时库跑真实数据）：58 篇冷启动构建 1.4s，热缓存 33ms。
+
+## 2026-10-17 · 项目空间收敛 + 全局 Leader 更名智研管家
 分支 `chore/dead-code`，提交 `6f46007`（项目空间）+ 本次提交（更名）。合并后 PR 一次讲清两条。
 
 ### 1. 项目空间去掉「团队」「日程」

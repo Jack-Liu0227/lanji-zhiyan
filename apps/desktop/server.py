@@ -57,7 +57,7 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       run_map, map_read, map_write, map_sources,
                       cite_read, cite_add, cite_sync, conv_files, conv_run, conv_compile, conv_open,
                       en_state, en_run, CONV_FORMATS, _safe_path,
-                      stage_download_selected, test_provider,
+                      stage_download_selected, stage_zotero_import, test_provider,
                       deepread_kick, deepread_state, deepread_stop)
 
 HERE = Path(__file__).resolve().parent
@@ -848,7 +848,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/starmap":
                 tid = (q.get("task") or [""])[0]
                 with WorkflowDB(DB_PATH) as db:
-                    return self._json(starmap.graph(db.db, tid))
+                    # 不带 task = 第一级（知识库 → 项目）；带 task = 该项目的五簇分支
+                    return self._json(starmap.graph(db.db, tid) if tid else starmap.overview(db.db))
             if path == "/api/starmap/brief":            # 知识点简介：库里有回库里的，没有才调一次模型
                 term = (q.get("term") or [""])[0]
                 with WorkflowDB(DB_PATH) as db:
@@ -1386,6 +1387,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"task_id": tid, "base_dir": base, "dirs": made})
                 if path == "/api/task/delete":
                     return self._json(db.delete_task(data.get("id", "")))
+                if path == "/api/task/papergraph/build":          # 论文星图：点「生成」才编译一次，结果落库
+                    return self._json(db.build_paper_graph(data.get("id", "")))
                 if path == "/api/chat/create":
                     return self._json({"chat": db.chat(db.create_chat(data.get("title", "")))})
                 if path == "/api/chat/delete":
@@ -1477,6 +1480,9 @@ class Handler(BaseHTTPRequestHandler):
                         if ids:
                             return self._json(stage_download_selected(db, tid, list(ids)))
                         return self._json(ACTION["download"](db, tid, data.get("result_id", "")))
+                    if stage == "zotero":                       # Zotero 分类 → 直接进下载队列（题录用 Zotero 的、PDF 用本机附件、不联网）
+                        return self._json(stage_zotero_import(db, tid, data.get("collection", ""),
+                                                              data.get("keys") or []))
                     if stage == "deepread":                     # 一键精读：扔后台跑，立刻返回（前端轮询进度、可停）
                         return self._json(deepread_kick(str(DB_PATH), tid))
                     if stage == "queue":                        # 下载精读面板的实时数据
