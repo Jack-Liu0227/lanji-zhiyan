@@ -2412,7 +2412,7 @@ function renderAgent(m){
         </div>
         <div class="atts" id="atts"></div>
         <div class="composer" id="composer">
-          <textarea id="ask" rows="1" placeholder="发消息给智研管家…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <textarea id="ask" rows="1" placeholder="发消息给${esc(boundA?boundA.name:"智研管家")}…（Enter 发送，Shift+Enter 换行）"></textarea>
           <div class="at-tools">
             <div class="at-tools-l">
               <div class="plus-wrap">
