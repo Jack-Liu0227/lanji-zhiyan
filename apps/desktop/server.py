@@ -49,6 +49,7 @@ import feishu
 import zotero_sync
 import agent_integrations
 import reproduction_routes
+import v130_routes
 from run_manager import RunManager
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
@@ -512,13 +513,13 @@ class Handler(BaseHTTPRequestHandler):
         prefixes = (
             "/api/agent-settings", "/api/capabilities", "/api/workflow/layouts", "/api/feishu/", "/api/zotero/web/",
             "/api/projects", "/api/papers/", "/api/chats", "/api/assistants", "/api/teams/", "/api/runs/",
-            "/api/mcp/", "/api/audit/",
+            "/api/mcp/", "/api/audit/", "/api/easyscholar/", "/api/zotero/mcp/", "/api/todos", "/api/space/",
         )
         if not path.startswith(prefixes):
             return False
         try:
             with WorkflowDB(DB_PATH) as db:
-                for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync, reproduction_routes):
+                for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync, reproduction_routes, v130_routes):
                     result = extension.route(method, path, body, query, db)
                     if result is not None:
                         # These explicit user actions may reveal credentials; never put them in general state.

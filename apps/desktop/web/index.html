@@ -129,6 +129,36 @@ details.mods>summary::before{content:"▸";display:inline-block;transition:trans
 details.mods[open]>summary::before{transform:rotate(90deg)}
 details.mods>summary:hover{color:var(--fg)}
 details.mods>summary b{color:var(--fg);font-weight:600}
+
+/* ==== easyScholar 分区与开关卡片全局样式 ==== */
+.switch-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
+.sc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}
+.sc-title-group{display:flex;gap:12px;align-items:center}
+.sc-icon{font-size:24px;display:grid;place-items:center;width:40px;height:40px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);flex:none}
+.es-badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:6px;font-size:11.5px;font-weight:600;line-height:1.4;margin:2px 4px 2px 0}
+.es-badge.sci{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);border:1px solid var(--accent)}
+.es-badge.top{background:#f59e0b26;color:#d97706;border:1px solid #d97706}
+.es-badge.warn{background:#ef444422;color:#ef4444;border:1px solid #ef4444;font-weight:700}
+.es-badge.jcr{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok);border:1px solid var(--ok)}
+.es-badge.if{background:var(--panel2);color:var(--fg);border:1px solid var(--line)}
+.es-badge.ccf{background:#8b5cf622;color:#8b5cf6;border:1px solid #8b5cf6}
+.es-badge.domestic{background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
+
+/* 项目空间待办与笔记预览布局 */
+.sp-todo-row{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;transition:all .15s}
+.sp-todo-row:hover{background:color-mix(in srgb,var(--accent) 8%,var(--panel2))}
+.sp-todo-st{cursor:pointer;user-select:none;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:6px}
+.sp-todo-st.TODO{background:var(--panel);color:var(--muted);border:1px solid var(--line)}
+.sp-todo-st.IN_PROGRESS{background:color-mix(in srgb,var(--accent) 20%,transparent);color:var(--accent);border:1px solid var(--accent)}
+.sp-todo-st.DONE{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok);border:1px solid var(--ok);text-decoration:none}
+.sp-todo-pri{font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px}
+.sp-todo-pri.P1{color:#ef4444;background:#ef44441a;border:1px solid #ef444466}
+.sp-todo-pri.P2{color:#f59e0b;background:#f59e0b1a;border:1px solid #f59e0b66}
+.sp-todo-pri.P3{color:var(--muted);background:var(--panel);border:1px solid var(--line)}
+.sp-note-item{display:flex;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);cursor:pointer;transition:background .15s}
+.sp-note-item:hover{background:color-mix(in srgb,var(--accent) 10%,var(--panel2))}
+.sp-note-item.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 16%,var(--panel2))}
+
 /* ==== Agent 页（结构/版式照科研工作台 features/agent：对话历史 | 对话主线）==== */
 .agent{flex:1;min-width:0;height:100%;min-height:0;display:grid;grid-template-columns:236px minmax(0,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)}
 .eyebrow{margin:0;color:var(--accent);font-size:9px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
@@ -1760,14 +1790,14 @@ const NAV = [
     {id:"space",label:"项目空间",ico:"🧭"}]},
   {g:"solo",items:[
     {id:"library",label:"知识库",ico:"📚"},
-    {id:"workflow",label:"工作流",ico:"🔀"},
+    {id:"workflow",label:"科研平台",ico:"🔬"},
     {id:"schedules",label:"定时任务",ico:"⏰"},
     {id:"notes",label:"笔记",ico:"📝"},
     {id:"intel",label:"情报日报",ico:"📡"}]},
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {assistants:"专家",team:"团队",agent:"智研管家",calendar:"日历",tasks:"项目",workflow:"工作流",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
+const TITLES = {assistants:"专家",team:"团队",agent:"智研管家",calendar:"日历",tasks:"项目",workflow:"科研平台",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 
 function openTab(r, title){
@@ -5912,10 +5942,14 @@ async function renderSchedules(m){
 }
 const schTaskName = (id)=> (S.tasks||[]).find(t=>t.id===id)?.title || "";
 
-/* ---------------- 项目空间（页头 + tab + 概览四卡 + 快照；
-     只聚合本应用真有的数据，「任务/矩阵/资源关系/知识库」四个 tab 没有对应物 → 不做空壳） ---------------- */
+/* ---------------- 项目空间（页头 + 搜索 + 待办 + 文献/easyScholar + 星图 + 笔记选择与预览 + 概览四卡） ---------------- */
 let spTab = "overview", spId = null;
-const SP_TABS = [["overview","概览"],["papers","文献"],["stars","论文星图"],["notes","笔记"]];
+const SP_TABS = [["overview","概览"],["todos","待办任务"],["papers","文献"],["stars","论文星图"],["notes","笔记"]];
+let spActiveNoteId = null;
+let spSelectedNoteIds = new Set();
+let spTodoFilter = "ALL";
+const esBadgeCache = new Map();
+
 function spProg(d){
   const stages = (S.stages||[]).map(s=>s.key);
   const map = d.stage_map || {};
@@ -5924,17 +5958,54 @@ function spProg(d){
   return { total, done, pct: Math.round(done*100/total) };
 }
 function spWhen(iso){ return iso ? fmtDate(iso) : "—"; }
+
 function spBodyHTML(d){
   const t = d.task||{}, sum = d.summary||{}, p = spProg(d);
+
+  // ---------- 1. 待办任务 ----------
+  if(spTab === "todos"){
+    return `<div class="card" style="margin-top:12px">
+      <div class="sch-head">
+        <div><p class="inst-label">PROJECT TASK BOARD</p><h3>${esc(t.title||"项目")} 的待办任务</h3></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn ghost" id="spTodoImportWf" title="将当前项目未完成的工作流阶段一键导入为待办任务">⚡ 一键导入工作流步骤</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin:14px 0 10px;align-items:center;flex-wrap:wrap">
+        <input class="control" id="spTodoTitle" placeholder="添加新任务描述…" style="flex:1;min-width:200px">
+        <select class="control" id="spTodoPriority" style="width:120px">
+          <option value="P1">高优先级 (P1)</option>
+          <option value="P2" selected>中优先级 (P2)</option>
+          <option value="P3">低优先级 (P3)</option>
+        </select>
+        <button class="btn" id="spTodoAdd">＋ 添加任务</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:12px">
+        <button class="btn ghost ${spTodoFilter==='ALL'?'on':''}" data-sp-todo-flt="ALL">全部</button>
+        <button class="btn ghost ${spTodoFilter==='TODO'?'on':''}" data-sp-todo-flt="TODO">待处理</button>
+        <button class="btn ghost ${spTodoFilter==='IN_PROGRESS'?'on':''}" data-sp-todo-flt="IN_PROGRESS">进行中</button>
+        <button class="btn ghost ${spTodoFilter==='DONE'?'on':''}" data-sp-todo-flt="DONE">已完成</button>
+      </div>
+      <div id="spTodoList" style="display:flex;flex-direction:column;gap:8px;min-height:80px">
+        <div class="hint">正在加载待办任务…</div>
+      </div>
+    </div>`;
+  }
+
+  // ---------- 2. 文献与 easyScholar 期刊分区 ----------
   if(spTab === "papers"){
     const rows = d.paper_list||[];
     return `<div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">PAPERS / PROJECT</p><h3>${esc(t.title||"")} 的文献</h3></div>
       <span class="pill">${rows.length} 条</span><button class="btn ghost" id="spToLib">去知识库 →</button></div>
-      ${rows.length ? rows.map(r=>`<div class="sp-row"><span class="sp-ic">📄</span><div class="sp-main">
+      ${rows.length ? rows.map((r, idx)=>`<div class="sp-row"><span class="sp-ic">📄</span><div class="sp-main">
         <div class="sp-nm">${esc(r.title||r.filename||"未命名")}</div>
-        <div class="sp-meta">${esc(r.authors||"作者未识别")}${r.doi?` · <span class="sp-doi">DOI ${esc(r.doi)}</span>`:" · DOI 未识别"}${r.year?` · ${esc(r.year)}`:""}${r.pages?` · ${String(r.pages).split(",").length} 页`:""}</div></div></div>`).join("")
+        <div class="sp-meta">${esc(r.authors||"作者未识别")}${r.doi?` · <span class="sp-doi">DOI ${esc(r.doi)}</span>`:" · DOI 未识别"}${r.year?` · ${esc(r.year)}`:""}${r.pages?` · ${String(r.pages).split(",").length} 页`:""}</div>
+        <div class="es-badges" id="es-paper-${idx}" data-journal="${esc(r.journal || r.title || '')}" style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap"></div>
+      </div></div>`).join("")
       : `<div class="hint" style="margin-top:10px">这个项目还没有入库文献。到「知识库」或工作流的检索步加进来。</div>`}</div>`;
   }
+
+  // ---------- 3. 论文星图 ----------
   if(spTab === "stars"){
     const g = d.paper_graph||{}, nodes = g.nodes||[], total = (d.paper_list||[]).length;
     const built = g.built_at ? spWhen(g.built_at) : "";
@@ -5950,7 +6021,54 @@ function spBodyHTML(d){
             <span>${total ? `这一步要扫库内 ${total} 篇 PDF 全文算引用关系，不会自动跑` : "先到「文献」或工作流的检索步把这个项目的文献加进来"}</span>
             ${total ? `<span class="hint">点右上角「生成星图」，算完自动刷新</span>` : ""}</div>`}</div>`;
   }
-  if(spTab === "notes") return `<div id="spNotes" class="sp-kb-host"></div>`;   // 知识库整块搬进来（不含 PDF 版块）
+
+  // ---------- 4. 笔记（左侧选择列表 + 右侧 Markdown 实时预览） ----------
+  if(spTab === "notes"){
+    return `<div class="sp-notes-layout" style="display:grid;grid-template-columns:350px 1fr;gap:14px;margin-top:12px;min-height:560px;align-items:start">
+      <div class="card" style="margin:0;display:flex;flex-direction:column;height:100%;max-height:760px">
+        <div class="sch-head" style="margin-bottom:8px">
+          <div><p class="inst-label">PROJECT NOTES</p><h3 style="margin:0">项目笔记</h3></div>
+          <span class="pill" id="spNotesCount">0 篇</span>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <input class="control" id="spNoteSearchInp" placeholder="筛选项目笔记…" style="flex:1">
+          <button class="btn ghost" id="spNoteNewBtn" title="新建项目笔记" style="padding:4px 10px;font-size:12px">＋ 新建</button>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);padding:4px 0 8px;border-bottom:1px solid var(--line)">
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
+            <input type="checkbox" id="spNoteCheckAll"> <span>全选</span>
+          </label>
+          <span id="spNoteSelectedCount">已选 0 项</span>
+          <button class="btn ghost" id="spNoteBatchExport" style="padding:2px 8px;font-size:11px" disabled>批量导出 MD</button>
+        </div>
+        <div id="spNotesList" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-top:8px">
+          <div class="hint">正在加载项目笔记…</div>
+        </div>
+      </div>
+      <div class="card" id="spNotePreviewCard" style="margin:0;min-height:560px;max-height:760px;display:flex;flex-direction:column;overflow:hidden">
+        <div id="spNotePreviewEmpty" style="margin:auto;text-align:center;color:var(--muted);padding:40px">
+          <div style="font-size:36px;margin-bottom:12px">📝</div>
+          <h4 style="margin:0 0 6px">请选择一篇笔记进行预览</h4>
+          <p class="hint">左侧勾选或点击笔记条目，即可在此处实时渲染 Markdown、公式与图表。</p>
+        </div>
+        <div id="spNotePreviewBody" style="display:none;flex-direction:column;height:100%;overflow:hidden">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:10px;border-bottom:1px solid var(--line);margin-bottom:12px">
+            <div>
+              <h3 id="spPvTitle" style="margin:0 0 4px">未命名笔记</h3>
+              <div class="hint" id="spPvMeta">—</div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn ghost" id="spPvCopyBtn" style="font-size:12px;padding:4px 10px">复制原文</button>
+              <button class="btn" id="spPvOpenBtn" style="font-size:12px;padding:4px 10px">去笔记页编辑 ↗</button>
+            </div>
+          </div>
+          <div id="spPvContent" style="flex:1;overflow-y:auto;line-height:1.7;padding-right:8px;font-size:14px"></div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ---------- 5. 概览 ----------
   const stages = (S.stages||[]).map(s=>({key:s.key, label:s.label, st:(d.stage_map||{})[s.key]||""}));
   const recent = (d.steps||[]).slice(0,6);
   return `
@@ -5962,7 +6080,7 @@ function spBodyHTML(d){
       <div class="card sp-kpi sp-kpi-text"><p class="inst-label">QUESTION</p><strong>${esc(t.question||"未填研究问题")}</strong></div></div>
     <div class="sp-grid2" style="margin-top:12px">
       <div class="card"><div class="sch-head"><div><p class="inst-label">WORKFLOW SNAPSHOT</p><h3>工作流快照</h3></div>
-        <button class="btn ghost" id="spToFlow">去工作流 →</button></div>
+        <button class="btn ghost" id="spToFlow">去科研台 →</button></div>
         ${stages.length ? stages.map(s=>`<div class="sp-row"><span class="sp-dot ${s.st==="done"?"on":(s.st?"run":"")}"></span>
           <div class="sp-main"><div class="sp-nm">${esc(s.label)}</div>
           <div class="sp-meta">${s.st==="done"?"已完成":(s.st?"已记录 · "+esc(s.st):"未开始")}</div></div></div>`).join("")
@@ -6000,11 +6118,259 @@ function spBind(d){
     try{ await api("/api/task/delete", {id: curTask}); }catch(e){ return alert("删除失败："+e.message); }
     curTask = null; localStorage.removeItem("rw-task"); await refreshState(false); openTab("tasks");
   };
+
+  // ---------- 待办任务流转 ----------
+  if(spTab === "todos"){
+    const listEl = $("spTodoList");
+    async function loadTodos(){
+      if(!listEl) return;
+      try{
+        const res = await api(`/api/todos?task_id=${encodeURIComponent(curTask)}`);
+        const todos = (res.todos || []).filter(t => spTodoFilter === "ALL" || t.status === spTodoFilter);
+        if(!todos.length){
+          listEl.innerHTML = `<div class="hint" style="padding:16px 0">${spTodoFilter==='ALL'?'暂无待办任务。点击上方输入框快速添加，或点击「一键导入工作流步骤」。':'该分类下暂无任务。'}</div>`;
+          return;
+        }
+        listEl.innerHTML = todos.map(t => `
+          <div class="sp-todo-row">
+            <span class="sp-todo-st ${esc(t.status)}" data-todo-id="${esc(t.id)}" title="点击切换状态：待处理 → 进行中 → 已完成">
+              ${t.status === 'DONE' ? '✓ 已完成' : t.status === 'IN_PROGRESS' ? '⏳ 进行中' : '○ 待处理'}
+            </span>
+            <span class="sp-todo-pri ${esc(t.priority)}">${esc(t.priority)}</span>
+            ${t.stage ? `<span class="pill" style="font-size:11px">[${esc(t.stage)}]</span>` : ''}
+            <div style="flex:1;min-width:0">
+              <span style="font-size:13.5px;${t.status==='DONE'?'text-decoration:line-through;color:var(--muted)':''}">${esc(t.title)}</span>
+              ${t.due_date ? `<span class="hint" style="margin-left:8px;font-size:11px">截止：${esc(t.due_date)}</span>` : ''}
+            </div>
+            <button class="btn ghost" data-todo-del="${esc(t.id)}" title="删除此任务" style="padding:2px 7px;font-size:12px;color:var(--muted)">🗑</button>
+          </div>
+        `).join("");
+
+        listEl.querySelectorAll("[data-todo-id]").forEach(el => {
+          el.onclick = async () => {
+            await api("/api/todos/toggle", { id: el.dataset.todoId });
+            await loadTodos();
+          };
+        });
+        listEl.querySelectorAll("[data-todo-del]").forEach(btn => {
+          btn.onclick = async () => {
+            if(!confirm("确定删除该任务吗？")) return;
+            await api("/api/todos/delete", { id: btn.dataset.todoDel });
+            await loadTodos();
+          };
+        });
+      }catch(e){
+        if(listEl) listEl.innerHTML = `<div class="msg error">读取任务失败：${esc(e.message)}</div>`;
+      }
+    }
+    loadTodos();
+
+    const addBtn = $("spTodoAdd"), titleInp = $("spTodoTitle"), priSel = $("spTodoPriority");
+    if(addBtn && titleInp){
+      addBtn.onclick = async () => {
+        const title = titleInp.value.trim();
+        if(!title) return;
+        addBtn.disabled = true;
+        try{
+          await api("/api/todos/add", { task_id: curTask, title, priority: priSel ? priSel.value : "P2" });
+          titleInp.value = "";
+          await loadTodos();
+        }catch(e){ alert("添加任务失败：" + e.message); }
+        finally{ addBtn.disabled = false; }
+      };
+      titleInp.onkeydown = (e) => { if(e.key === "Enter") addBtn.click(); };
+    }
+
+    const impWfBtn = $("spTodoImportWf");
+    if(impWfBtn){
+      impWfBtn.onclick = async () => {
+        impWfBtn.disabled = true;
+        try{
+          const res = await api("/api/todos/import_workflow", { task_id: curTask });
+          toast(`已根据工作流阶段同步创建 ${res.created} 条待办任务`, "success");
+          await loadTodos();
+        }catch(e){ alert("导入失败：" + e.message); }
+        finally{ impWfBtn.disabled = false; }
+      };
+    }
+
+    document.querySelectorAll("[data-sp-todo-flt]").forEach(b => {
+      b.onclick = () => {
+        spTodoFilter = b.dataset.spTodoFlt;
+        document.querySelectorAll("[data-sp-todo-flt]").forEach(x => x.classList.remove("on"));
+        b.classList.add("on");
+        loadTodos();
+      };
+    });
+  }
+
+  // ---------- easyScholar 期刊等级标签（文献页） ----------
+  if(spTab === "papers"){
+    const badgeContainers = document.querySelectorAll(".es-badges[data-journal]");
+    badgeContainers.forEach(async el => {
+      const jname = el.dataset.journal;
+      if(!jname) return;
+      if(esBadgeCache.has(jname)){
+        const cached = esBadgeCache.get(jname);
+        if(cached.length) el.innerHTML = cached.map(b => `<span class="es-badge ${b.type}">${esc(b.label)}</span>`).join("");
+        return;
+      }
+      try{
+        const res = await api("/api/easyscholar/rank?journal=" + encodeURIComponent(jname));
+        if(res && res.ok && res.badges){
+          esBadgeCache.set(jname, res.badges);
+          if(res.badges.length){
+            el.innerHTML = res.badges.map(b => `<span class="es-badge ${b.type}">${esc(b.label)}</span>`).join("");
+          }
+        }
+      }catch(_){}
+    });
+  }
+
+  // ---------- 笔记列表与 Markdown 实时预览 ----------
+  if(spTab === "notes"){
+    const nList = $("spNotesList"), nCount = $("spNotesCount"), selCount = $("spNoteSelectedCount");
+    const checkAll = $("spNoteCheckAll"), batchExp = $("spNoteBatchExport"), newBtn = $("spNoteNewBtn");
+    const pvEmpty = $("spNotePreviewEmpty"), pvBody = $("spNotePreviewBody");
+    const pvTitle = $("spPvTitle"), pvMeta = $("spPvMeta"), pvContent = $("spPvContent");
+    const pvOpen = $("spPvOpenBtn"), pvCopy = $("spPvCopyBtn");
+
+    let allNotes = [];
+    async function loadNotes(){
+      if(!nList) return;
+      try{
+        const res = await api(`/api/space/notes?task_id=${encodeURIComponent(curTask)}`);
+        allNotes = res.notes || [];
+        renderNoteRows();
+        if(spActiveNoteId){
+          showNotePreview(spActiveNoteId);
+        } else if(allNotes.length){
+          showNotePreview(allNotes[0].id);
+        }
+      }catch(e){
+        nList.innerHTML = `<div class="msg error">加载笔记失败：${esc(e.message)}</div>`;
+      }
+    }
+
+    function renderNoteRows(){
+      if(!nList) return;
+      const q = ($("spNoteSearchInp")?.value || "").trim().toLowerCase();
+      const filtered = allNotes.filter(n => !q || (n.title||"").toLowerCase().includes(q) || (n.snippet||"").toLowerCase().includes(q));
+      if(nCount) nCount.textContent = `${allNotes.length} 篇`;
+      if(selCount) selCount.textContent = `已选 ${spSelectedNoteIds.size} 项`;
+      if(batchExp) batchExp.disabled = spSelectedNoteIds.size === 0;
+
+      if(!filtered.length){
+        nList.innerHTML = `<div class="hint" style="padding:16px 0">${q ? '未检索到符合条件的笔记' : '当前项目暂无笔记。点击右上「＋ 新建」开始写作。'}</div>`;
+        return;
+      }
+
+      nList.innerHTML = filtered.map(n => `
+        <div class="sp-note-item ${n.id === spActiveNoteId ? 'active' : ''}" data-note-pick="${esc(n.id)}">
+          <input type="checkbox" data-note-chk="${esc(n.id)}" ${spSelectedNoteIds.has(n.id) ? 'checked' : ''} style="margin-top:2px;cursor:pointer">
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(n.title || "未命名笔记")}</div>
+            <div class="hint" style="font-size:11px;margin:2px 0 3px">${esc(n.updated_at || "")} · ${n.word_count || 0} 字</div>
+            <div class="hint" style="font-size:11.5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(n.snippet || "")}</div>
+          </div>
+        </div>
+      `).join("");
+
+      nList.querySelectorAll("[data-note-pick]").forEach(item => {
+        item.onclick = (e) => {
+          if(e.target.type === "checkbox") return;
+          showNotePreview(item.dataset.notePick);
+        };
+      });
+
+      nList.querySelectorAll("[data-note-chk]").forEach(chk => {
+        chk.onchange = () => {
+          const nid = chk.dataset.noteChk;
+          if(chk.checked) spSelectedNoteIds.add(nid);
+          else spSelectedNoteIds.delete(nid);
+          if(selCount) selCount.textContent = `已选 ${spSelectedNoteIds.size} 项`;
+          if(batchExp) batchExp.disabled = spSelectedNoteIds.size === 0;
+          if(checkAll) checkAll.checked = spSelectedNoteIds.size === allNotes.length && allNotes.length > 0;
+        };
+      });
+    }
+
+    async function showNotePreview(noteId){
+      spActiveNoteId = noteId;
+      document.querySelectorAll(".sp-note-item").forEach(el => {
+        el.classList.toggle("active", el.dataset.notePick === noteId);
+      });
+      if(!pvBody || !pvEmpty) return;
+      pvEmpty.style.display = "none";
+      pvBody.style.display = "flex";
+      pvContent.innerHTML = `<div class="hint">正在解析并渲染 Markdown 内容…</div>`;
+      try{
+        const res = await api(`/api/space/note?id=${encodeURIComponent(noteId)}`);
+        const note = res.note || {};
+        if(pvTitle) pvTitle.textContent = note.title || "未命名笔记";
+        if(pvMeta) pvMeta.textContent = `更新时间：${note.updated_at || "—"} · 字数：${note.word_count || 0} 字`;
+        if(pvContent) pvContent.innerHTML = renderMarkdown(note.content || "（笔记内容为空）");
+        if(pvOpen) pvOpen.onclick = () => {
+          mdActiveId = note.id;
+          openTab("notes");
+        };
+        if(pvCopy) pvCopy.onclick = () => {
+          navigator.clipboard.writeText(note.content || "");
+          toast("笔记 Markdown 原文已复制到剪贴板", "success");
+        };
+      }catch(err){
+        pvContent.innerHTML = `<div class="msg error">读取笔记详情失败：${esc(err.message)}</div>`;
+      }
+    }
+
+    if(checkAll){
+      checkAll.onchange = () => {
+        if(checkAll.checked) allNotes.forEach(n => spSelectedNoteIds.add(n.id));
+        else spSelectedNoteIds.clear();
+        renderNoteRows();
+      };
+    }
+
+    if(newBtn){
+      newBtn.onclick = () => {
+        openTab("notes");
+        const btnNew = $("btnMdNew");
+        if(btnNew) btnNew.click();
+      };
+    }
+
+    if(batchExp){
+      batchExp.onclick = async () => {
+        const selected = allNotes.filter(n => spSelectedNoteIds.has(n.id));
+        if(!selected.length) return;
+        let mdBundle = "";
+        for(const n of selected){
+          try{
+            const res = await api(`/api/space/note?id=${encodeURIComponent(n.id)}`);
+            mdBundle += `# ${res.note.title || "未命名笔记"}\n> 更新时间：${res.note.updated_at}\n\n${res.note.content || ""}\n\n---\n\n`;
+          }catch(_){}
+        }
+        const blob = new Blob([mdBundle], {type: "text/markdown;charset=utf-8"});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = `${(d.task||{}).title || "项目"}_已选笔记_${selected.length}篇.md`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast(`已成功打包导出 ${selected.length} 篇笔记`, "success");
+      };
+    }
+
+    const sInp = $("spNoteSearchInp");
+    if(sInp) sInp.oninput = () => renderNoteRows();
+
+    loadNotes();
+  }
 }
+
 async function renderSpace(m){
   m.style.padding = "";
   if(!curTask){ m.innerHTML = needTask(); return; }
-  if(spId !== curTask){ spId = curTask; spTab = "overview"; }
+  if(spId !== curTask){ spId = curTask; spTab = "overview"; spActiveNoteId = null; spSelectedNoteIds.clear(); }
   m.innerHTML = `<div class="muted">正在读取项目…</div>`;
   let d;
   try{ d = await api("/api/task?id=" + encodeURIComponent(curTask)); }
@@ -6024,26 +6390,101 @@ async function renderSpace(m){
       <div class="sp-hd2">
         <p class="hint">项目级聚合只读取已关联的本地数据；写操作回到各领域的 Command 和安全通道。归档可恢复，外部文件不会被删除。</p>
         <select id="spPick" class="control" style="max-width:200px" title="选择项目空间">${opts}</select>
-      </div></div>
+      </div>
+      <div class="sp-search-bar" style="margin-top:12px;position:relative">
+        <div style="position:relative;display:flex;gap:8px;align-items:center">
+          <input id="spSearchInput" class="control" placeholder="🔍 全局搜索当前项目的文献、笔记、证据、待办任务…" style="flex:1;padding-left:32px">
+          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:0.6;pointer-events:none">🔍</span>
+          <button class="btn ghost" id="spSearchClear" style="display:none;padding:5px 10px;font-size:12px">清除</button>
+        </div>
+        <div id="spSearchResults" class="card" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:90;max-height:460px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,0.18);border:1px solid var(--accent);background:var(--panel)"></div>
+      </div>
+    </div>
     <div class="sp-tabs" id="spTabs">${SP_TABS.map(([k,l])=>`<button class="sp-tab ${k===spTab?"on":""}" data-sp-tab="${k}">${l}</button>`).join("")}</div>
     <div id="spBody"></div>`;
+
   $("spPick").onchange = (e)=>{ curTask = e.target.value; localStorage.setItem("rw-task", curTask); spId = null; render(); };
   $("spFlow").onclick = ()=>openTab("workflow");
   const sl = $("spLeader"); if(sl) sl.onclick = ()=>openTab("agent");
   m.querySelectorAll("[data-sp-tab]").forEach(b=>b.onclick=()=>{ spTab = b.dataset.spTab; render(); });
   $("spBody").innerHTML = spBodyHTML(d);
   spBind(d);
+
+  // 全局搜索交互
+  const sInp = $("spSearchInput"), sClear = $("spSearchClear"), sRes = $("spSearchResults");
+  let sTimer = null;
+  if(sInp){
+    sInp.oninput = () => {
+      const q = sInp.value.trim();
+      if(sClear) sClear.style.display = q ? "block" : "none";
+      if(!q){ if(sRes){ sRes.style.display = "none"; sRes.innerHTML = ""; } return; }
+      clearTimeout(sTimer);
+      sTimer = setTimeout(async () => {
+        try {
+          const res = await api(`/api/space/search?task_id=${encodeURIComponent(curTask)}&q=${encodeURIComponent(q)}`);
+          if(!sRes) return;
+          sRes.style.display = "block";
+          if(!res.total){
+            sRes.innerHTML = `<div class="hint" style="padding:12px 6px">未检索到与「${esc(q)}」相关的文献、笔记或任务。</div>`;
+            return;
+          }
+          let h = `<div style="display:flex;justify-content:space-between;align-items:center;padding:0 0 8px;border-bottom:1px solid var(--line);margin-bottom:8px">
+            <span class="inst-label" style="margin:0">SEARCH RESULTS · ${res.total} 条命中</span>
+            <span class="hint">按 Esc 或点击外部关闭</span></div>`;
+          if(res.results.todos && res.results.todos.length){
+            h += `<div style="margin-bottom:10px"><div style="font-weight:600;font-size:12px;color:var(--muted);margin-bottom:4px">待办任务 (${res.results.todos.length})</div>`;
+            h += res.results.todos.map(t => `<div class="sp-row" style="cursor:pointer" data-go-tab="todos"><span class="sp-ic">${t.status==='DONE'?'✅':'⏳'}</span><div class="sp-main"><div class="sp-nm">${esc(t.title)}</div><div class="sp-meta">${esc(t.status)} · ${esc(t.priority)} · ${esc(t.due_date||'无截止期')}</div></div></div>`).join("");
+            h += `</div>`;
+          }
+          if(res.results.papers && res.results.papers.length){
+            h += `<div style="margin-bottom:10px"><div style="font-weight:600;font-size:12px;color:var(--muted);margin-bottom:4px">文献 (${res.results.papers.length})</div>`;
+            h += res.results.papers.map(p => `<div class="sp-row" style="cursor:pointer" data-go-tab="papers"><span class="sp-ic">📄</span><div class="sp-main"><div class="sp-nm">${esc(p.title||p.filename||'未命名')}</div><div class="sp-meta">${esc(p.authors||'')} · DOI: ${esc(p.doi||'—')} · ${esc(p.year||'')}</div></div></div>`).join("");
+            h += `</div>`;
+          }
+          if(res.results.notes && res.results.notes.length){
+            h += `<div style="margin-bottom:10px"><div style="font-weight:600;font-size:12px;color:var(--muted);margin-bottom:4px">笔记 (${res.results.notes.length})</div>`;
+            h += res.results.notes.map(n => `<div class="sp-row" style="cursor:pointer" data-go-note="${esc(n.id)}"><span class="sp-ic">📝</span><div class="sp-main"><div class="sp-nm">${esc(n.title||'未命名笔记')}</div><div class="sp-meta">${esc(n.updated_at||'')} · ${n.word_count||0} 字 · ${esc(n.snippet||'')}</div></div></div>`).join("");
+            h += `</div>`;
+          }
+          if(res.results.evidence && res.results.evidence.length){
+            h += `<div><div style="font-weight:600;font-size:12px;color:var(--muted);margin-bottom:4px">证据 (${res.results.evidence.length})</div>`;
+            h += res.results.evidence.map(e => `<div class="sp-row"><span class="sp-ic">🔬</span><div class="sp-main"><div class="sp-nm">${esc(e.claim||'证据记录')}</div><div class="sp-meta">${esc(e.quote||'')}</div></div></div>`).join("");
+            h += `</div>`;
+          }
+          sRes.innerHTML = h;
+          sRes.querySelectorAll("[data-go-tab]").forEach(el => {
+            el.onclick = () => { spTab = el.dataset.goTab; sRes.style.display = "none"; render(); };
+          });
+          sRes.querySelectorAll("[data-go-note]").forEach(el => {
+            el.onclick = () => { spTab = "notes"; spActiveNoteId = el.dataset.goNote; sRes.style.display = "none"; render(); };
+          });
+        } catch(err) {
+          if(sRes){ sRes.style.display = "block"; sRes.innerHTML = `<div class="msg error">检索异常：${esc(err.message)}</div>`; }
+        }
+      }, 250);
+    };
+  }
+  if(sClear){
+    sClear.onclick = () => {
+      sInp.value = ""; sClear.style.display = "none";
+      if(sRes){ sRes.style.display = "none"; sRes.innerHTML = ""; }
+    };
+  }
+  document.addEventListener("click", (evt) => {
+    if(sRes && !sRes.contains(evt.target) && evt.target !== sInp){
+      sRes.style.display = "none";
+    }
+  });
+
   if(spTab === "stars"){
     const host = $("spStars");
     const g = d.paper_graph || { nodes: [], edges: [], stats: {} };
     if(host && window.StarMap){
-      host.__api = api; host.__toast = toast;      // 星图里双击打开 PDF 用
+      host.__api = api; host.__toast = toast;
       StarMap.mount(host, g);
     }
     else if(host) host.innerHTML = `<div class="hint">星图脚本没加载上（/vendor/starmap.js）。</div>`;
   }
-  if(spTab === "notes") renderLibrary($("spNotes"), {embed: true, project: curTask})
-    .catch(e => { $("spNotes").innerHTML = `<div class="hint">知识库加载失败：${esc(e.message)}</div>`; });
 }
 
 async function renderNotes(m){

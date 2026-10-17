@@ -7,11 +7,45 @@
   // never display or poll another assistant's QR/session.
   const registrationSessions = new Map();
   const style = document.createElement("style");
-  style.textContent = `.integration-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.integration-grid .field{display:grid;gap:6px}.integration-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin:14px 0}.integration-result{white-space:pre-wrap;overflow-wrap:anywhere;max-height:380px;overflow:auto}.integration-docs{display:flex;gap:16px;flex-wrap:wrap;margin:12px 0}.integration-json{min-height:190px;width:100%;font-family:Consolas,monospace}.integration-error{color:var(--err);white-space:pre-wrap}.integration-status{padding:12px;border:1px solid var(--line);border-radius:9px;margin:12px 0}.feishu-registration{margin:14px 0;padding:14px;border:1px solid var(--line);border-radius:10px;background:color-mix(in srgb,var(--panel) 88%,var(--accent) 12%)}.feishu-registration-grid{display:grid;grid-template-columns:minmax(150px,220px) 1fr;gap:14px;align-items:start}.feishu-qr{min-height:170px;display:grid;place-items:center;padding:10px;border:1px dashed var(--line);border-radius:8px;background:var(--panel);text-align:center}.feishu-qr img,.feishu-qr canvas{display:block;max-width:100%;width:220px;height:220px;object-fit:contain;background:#fff}.feishu-qr a{overflow-wrap:anywhere}.feishu-countdown{font-variant-numeric:tabular-nums;font-weight:600}@media(max-width:760px){.integration-grid{grid-template-columns:1fr}.feishu-registration-grid{grid-template-columns:1fr}.feishu-qr img,.feishu-qr canvas{width:190px;height:190px}}`;
+  style.textContent = `
+    .integration-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+    .integration-grid .field{display:grid;gap:6px}
+    .integration-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin:14px 0}
+    .integration-result{white-space:pre-wrap;overflow-wrap:anywhere;max-height:380px;overflow:auto}
+    .integration-docs{display:flex;gap:16px;flex-wrap:wrap;margin:12px 0}
+    .integration-json{min-height:190px;width:100%;font-family:Consolas,monospace}
+    .integration-error{color:var(--err);white-space:pre-wrap}
+    .integration-status{padding:12px;border:1px solid var(--line);border-radius:9px;margin:12px 0}
+    .feishu-registration{margin:14px 0;padding:14px;border:1px solid var(--line);border-radius:10px;background:color-mix(in srgb,var(--panel) 88%,var(--accent) 12%)}
+    .feishu-registration-grid{display:grid;grid-template-columns:minmax(150px,220px) 1fr;gap:14px;align-items:start}
+    .feishu-qr{min-height:170px;display:grid;place-items:center;padding:10px;border:1px dashed var(--line);border-radius:8px;background:var(--panel);text-align:center}
+    .feishu-qr img,.feishu-qr canvas{display:block;max-width:100%;width:220px;height:220px;object-fit:contain;background:#fff}
+    .feishu-qr a{overflow-wrap:anywhere}
+    .feishu-countdown{font-variant-numeric:tabular-nums;font-weight:600}
+    .sc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}
+    .sc-title-group{display:flex;gap:12px;align-items:center}
+    .sc-icon{font-size:24px;display:grid;place-items:center;width:40px;height:40px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);flex:none}
+    .es-badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:6px;font-size:11.5px;font-weight:600;line-height:1.4;margin:2px 4px 2px 0}
+    .es-badge.sci{background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);border:1px solid var(--accent)}
+    .es-badge.top{background:#f59e0b26;color:#d97706;border:1px solid #d97706}
+    .es-badge.warn{background:#ef444422;color:#ef4444;border:1px solid #ef4444;font-weight:700}
+    .es-badge.jcr{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok);border:1px solid var(--ok)}
+    .es-badge.if{background:var(--panel2);color:var(--fg);border:1px solid var(--line)}
+    .es-badge.ccf{background:#8b5cf622;color:#8b5cf6;border:1px solid #8b5cf6}
+    .es-badge.domestic{background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
+    @media(max-width:760px){
+      .integration-grid{grid-template-columns:1fr}
+      .feishu-registration-grid{grid-template-columns:1fr}
+      .feishu-qr img,.feishu-qr canvas{width:190px;height:190px}
+      .sc-head{flex-direction:column;align-items:stretch}
+    }
+  `;
   document.head.appendChild(style);
-  for (const item of [["feishu", "↗", "飞书机器人"], ["zotero", "Z", "Zotero 写入与同步"]]) {
+
+  for (const item of [["easyscholar", "🎓", "easyScholar 分区"], ["zotero", "Z", "Zotero 写入与同步"], ["feishu", "↗", "飞书机器人"]]) {
     if (!SET_SECS.some(section => section[0] === item[0])) SET_SECS.push(item);
   }
+
   function host() { return document.getElementById("integration-settings"); }
   function field(id) { return document.getElementById(id); }
   function error(message) { const box = field("integration-error"); if (box) box.textContent = String(message?.message || message || ""); }
@@ -26,6 +60,118 @@
   function optionRows(rows, selected, label) {
     return rows.map(row => `<option value="${e(row.id)}" ${row.id === selected ? "selected" : ""}>${e(row[label])}</option>`).join("");
   }
+
+  // ==================== easyScholar 设置 ====================
+  async function loadEasyScholar() {
+    const ticket = ++generation;
+    const cfg = await api("/api/easyscholar/config");
+    if (ticket !== generation || setSec !== "easyscholar" || !host()) return;
+
+    host().innerHTML = `
+      <div class="card">
+        <div class="sc-head">
+          <div class="sc-title-group">
+            <span class="sc-icon">🎓</span>
+            <div>
+              <p class="inst-label" style="margin:0 0 2px">JOURNAL TIERS & PARTITIONS</p>
+              <h3 style="margin:0">easyScholar 期刊等级与 SCI 分区</h3>
+              <p class="hint" style="margin:4px 0 0">免密查询期刊分区（中科院升级版大类/小类/Top/预警、JCR 分区与影响因子、CCF 等级、国内核心）。</p>
+            </div>
+          </div>
+          <button class="as-toggle ${cfg.enabled ? "on" : "off"}" id="es-toggle" type="button">
+            <span class="as-knob"></span><span class="as-toggle-txt">${cfg.enabled ? "已启用" : "已停用"}</span>
+          </button>
+        </div>
+
+        <div class="integration-status">
+          接口地址：<code>https://www.easyscholar.cc/open/getPublicationRank</code> · 状态：<b id="es-st-txt">${cfg.enabled ? "已启用" : "已停用"}</b> · 密钥：<b>${cfg.key_present ? "已配置" : "未填写"}</b> · 本地缓存：<b>SQLite (30天)</b> · 频率保护：<b>最高2次/秒</b>
+        </div>
+
+        <div class="integration-grid">
+          <label class="field" style="grid-column: 1 / -1">
+            <span>easyScholar 密钥 (SecretKey)${cfg.key_present ? "（已保存，留空保持原值）" : ""}</span>
+            <div style="display:flex;gap:8px">
+              <input class="control" type="password" id="es-key" placeholder="在 easyScholar 控制台复制 SecretKey" style="flex:1" autocomplete="new-password">
+              <button class="btn ghost" type="button" id="es-key-eye" title="切换明文显示">👁</button>
+            </div>
+            <span class="hint">密钥使用 Windows DPAPI (securestore) 本机加密落盘，前端不返回明文。</span>
+          </label>
+        </div>
+
+        <div class="integration-actions">
+          <button class="btn" id="es-save">保存配置</button>
+          <button class="btn ghost" id="es-test">测试连接与鉴权</button>
+          <a class="btn ghost" href="https://www.easyscholar.cc/console/user/open" target="_blank" rel="noopener noreferrer">获取 SecretKey ↗</a>
+        </div>
+
+        <hr style="margin:16px 0;border:none;border-top:1px solid var(--line)">
+
+        <h4 style="margin:0 0 8px">🧪 期刊等级速查验证</h4>
+        <div class="integration-actions" style="margin:0 0 10px">
+          <input class="control" id="es-probe-input" value="Nature" placeholder="输入期刊全称或标准缩写" style="max-width:320px">
+          <button class="btn ghost" id="es-probe-btn">查询分区等级</button>
+        </div>
+        <div id="es-probe-badges" style="display:flex;gap:6px;flex-wrap:wrap;min-height:30px;align-items:center">
+          <span class="hint">点击「查询分区等级」查看该期刊的分区标签。</span>
+        </div>
+
+        <div id="integration-error" class="integration-error"></div>
+        <div id="integration-result" class="integration-result"></div>
+      </div>
+    `;
+
+    let isEnabled = !!cfg.enabled;
+    field("es-toggle").onclick = () => {
+      isEnabled = !isEnabled;
+      field("es-toggle").className = `as-toggle ${isEnabled ? "on" : "off"}`;
+      field("es-toggle").querySelector(".as-toggle-txt").textContent = isEnabled ? "已启用" : "已停用";
+      field("es-st-txt").textContent = isEnabled ? "已启用" : "已停用";
+    };
+
+    field("es-key-eye").onclick = () => {
+      const inp = field("es-key");
+      inp.type = inp.type === "password" ? "text" : "password";
+    };
+
+    field("es-save").onclick = event => action(event.target, async () => {
+      const keyVal = field("es-key").value.trim();
+      const res = await api("/api/easyscholar/config", {enabled: isEnabled, secret_key: keyVal});
+      if (res.ok) {
+        field("integration-result").textContent = "配置已成功保存！密钥已加密存储。";
+        await loadEasyScholar();
+      }
+    });
+
+    field("es-test").onclick = event => action(event.target, async () => {
+      const keyVal = field("es-key").value.trim();
+      field("integration-result").textContent = "正在发起 easyScholar 鉴权探针…";
+      const res = await api("/api/easyscholar/test", {secret_key: keyVal});
+      if (res.ok) {
+        field("integration-result").textContent = `${res.msg}（耗时 ${res.cost_ms}ms）\n示例期刊 Nature 命中标签：${(res.sample_badges || []).join(" · ")}`;
+      } else {
+        throw new Error(res.msg || "鉴权失败");
+      }
+    });
+
+    field("es-probe-btn").onclick = event => action(event.target, async () => {
+      const jname = field("es-probe-input").value.trim();
+      if (!jname) return;
+      field("es-probe-badges").innerHTML = `<span class="hint">正在查询…</span>`;
+      const res = await api("/api/easyscholar/rank?journal=" + encodeURIComponent(jname));
+      if (!res.ok) {
+        field("es-probe-badges").innerHTML = `<span class="integration-error">${e(res.msg || "查询失败")}</span>`;
+        return;
+      }
+      const badges = res.badges || [];
+      if (!badges.length) {
+        field("es-probe-badges").innerHTML = `<span class="hint">未找到该期刊的分区信息。</span>`;
+        return;
+      }
+      field("es-probe-badges").innerHTML = badges.map(b => `<span class="es-badge ${b.type}">${e(b.label)}</span>`).join("");
+    });
+  }
+
+  // ==================== 飞书设置 ====================
   function registrationMarkup(cfg) {
     const session = registrationSessions.get(assistantId);
     const region = session?.region || cfg.registration_region || cfg.region || "feishu";
@@ -98,25 +244,14 @@
   }
   async function pollRegistration(session) {
     if (!session || registrationSessions.get(session.assistantId) !== session || session.status !== "pending") return;
-    // A session is deliberately ignored while another assistant is selected. It can
-    // resume when that assistant is selected again without exposing its QR/session.
-    if (assistantId !== session.assistantId || setSec !== "feishu") return;
     try {
-      const result = await api("/api/feishu/registration/poll", {assistant_id: session.assistantId, session_id: session.sessionId});
-      if (registrationSessions.get(session.assistantId) !== session || assistantId !== session.assistantId || setSec !== "feishu") return;
+      const result = await api(`/api/feishu/registration/poll?session_id=${encodeURIComponent(session.sessionId)}`);
       const status = String(result.status || "pending").toLowerCase();
-      if (["pending", "authorization_pending", "slow_down"].includes(status)) {
-        const returnedInterval = Number(result.interval || 0);
-        if (returnedInterval > 0) session.intervalMs = Math.max(1000, returnedInterval < 100 ? returnedInterval * 1000 : returnedInterval);
-        else if (status === "slow_down") session.intervalMs = Math.max(1000, (session.intervalMs || 5000) + 5000);
-        if (result.region) session.region = result.region;
-        if (result.expires_in) session.expiresAt = Date.now() + Number(result.expires_in) * 1000;
-        registrationStatus(status === "slow_down" ? "请稍候，飞书要求降低轮询频率…" : "等待手机确认授权…", "pending");
-        if (result.immediate) {
-          session.timer = setTimeout(() => { session.timer = null; pollRegistration(session); }, 0);
-        } else scheduleRegistrationPoll(session, session.intervalMs);
-      } else if (["success", "authorized", "complete"].includes(status)) {
-        session.status = "success"; session.openId = result.open_id || result.user_info?.open_id || "";
+      if (status === "pending") {
+        registrationStatus(result.message || "等待手机确认授权…", "pending");
+        scheduleRegistrationPoll(session, result.interval_ms || result.interval || session.intervalMs);
+      } else if (status === "success") {
+        session.status = "success"; session.openId = result.open_id || "";
         session.message = "绑定成功"; if (session.timer) clearTimeout(session.timer);
         if (session.countdownTimer) clearInterval(session.countdownTimer);
         renderRegistrationSession(session);
@@ -134,11 +269,7 @@
       renderRegistrationSession(session);
     }
   }
-  function startRegistrationPolling(session) {
-    if (!session || session.status !== "pending" || !session.sessionId) return;
-    renderRegistrationSession(session); startRegistrationCountdown(session);
-    if (!session.timer) scheduleRegistrationPoll(session, session.intervalMs || 5000);
-  }
+
   async function loadFeishu() {
     const ticket = ++generation;
     if (!assistantId && S.assistants.length) assistantId = S.assistants[0].id;
@@ -178,28 +309,27 @@
         qrDataUri: started.qr_svg || started.qr_data_uri || started.qr_image || "",
         verificationUriComplete: started.verification_uri_complete || started.verificationUriComplete || "", intervalMs: Math.max(1000, Number(started.interval || 5) * (Number(started.interval || 0) < 100 ? 1000 : 1)),
         expiresAt: Date.now() + Math.max(1, Number(started.expires_in || 600)) * 1000, status: String(started.status || "pending").toLowerCase()};
-      if (!session.sessionId) throw new Error("服务器未返回授权会话，请重试");
-      registrationSessions.set(assistantId, session); renderRegistrationSession(session); startRegistrationPolling(session);
-      const resultBox = field("integration-result"); if (resultBox) resultBox.textContent = "已生成扫码会话，请用手机飞书扫描二维码并确认授权。";
+      registrationSessions.set(assistantId, session);
+      renderRegistrationSession(session);
+      startRegistrationCountdown(session);
+      scheduleRegistrationPoll(session, started.interval_ms || started.interval);
     });
-    field("fs-device-cancel").onclick = event => action(event.target, async () => {
-      const session = registrationSessions.get(assistantId); if (!session) return;
-      if (session.timer) clearTimeout(session.timer); if (session.countdownTimer) clearInterval(session.countdownTimer);
-      try { await api("/api/feishu/registration/cancel", {assistant_id: assistantId, session_id: session.sessionId}); } finally {
-        session.status = "cancelled"; session.message = "已取消扫码会话"; renderRegistrationSession(session);
-      }
-    });
-    const existingRegistration = registrationSessions.get(assistantId);
-    if (existingRegistration?.status === "pending") startRegistrationPolling(existingRegistration);
+    field("fs-device-cancel").onclick = () => {
+      const session = registrationSessions.get(assistantId);
+      if (session?.timer) clearTimeout(session.timer);
+      if (session?.countdownTimer) clearInterval(session.countdownTimer);
+      registrationSessions.delete(assistantId);
+      registrationStatus("已取消会话", "");
+      renderRegistrationSession(null);
+    };
     field("fs-save").onclick = event => action(event.target, async () => {
-      await api("/api/feishu/config", {assistant_id: assistantId, app_id: field("fs-app").value.trim(), app_secret: field("fs-secret").value,
+      await api("/api/feishu/config", {assistant_id: assistantId, app_id: field("fs-app").value.trim(), app_secret: field("fs-secret").value.trim(),
         redirect_uri: field("fs-redirect").value.trim(), scopes: field("fs-scopes").value.trim(), receive_id: field("fs-recipient").value.trim(),
-        receive_id_type: field("fs-type").value, webhook: field("fs-webhook").value.trim(), signing_secret: field("fs-sign").value,
-        clear_webhook: field("fs-clear-webhook").checked, enabled: field("fs-enabled").checked});
-      await loadFeishu(); field("integration-result").textContent = "配置已保存；实际连接及发信请使用测试按钮验证。";
+        receive_id_type: field("fs-type").value, webhook_url: field("fs-clear-webhook").checked ? "" : field("fs-webhook").value.trim(),
+        sign_secret: field("fs-sign").value.trim(), enabled: field("fs-enabled").checked, clear_webhook: field("fs-clear-webhook").checked});
+      await loadFeishu(); field("integration-result").textContent = "配置已保存。";
     });
     field("fs-auth").onclick = event => action(event.target, async () => {
-      // Open synchronously so browsers do not block a window after awaiting the API.
       const popup = window.open("about:blank", "_blank");
       if (popup) popup.opener = null;
       try {
@@ -219,27 +349,63 @@
       field("integration-result").textContent = "发送成功：" + (sent.message_id || sent.mode || "已确认");
     });
   }
+
+  // ==================== Zotero 设置 (含 MCP) ====================
   async function loadZotero() {
     const ticket = ++generation;
     if (!projectId || !S.tasks.some(t => t.id === projectId)) projectId = curTask || S.tasks[0]?.id || "";
-    const result = await api("/api/zotero/web/config?task_id=" + encodeURIComponent(projectId));
+    const [result, mcpRes] = await Promise.all([
+      api("/api/zotero/web/config?task_id=" + encodeURIComponent(projectId)),
+      api("/api/zotero/mcp/status").catch(() => ({registered: false, enabled: false}))
+    ]);
     if (ticket !== generation || setSec !== "zotero" || !host()) return;
     const cfg = result.config || {}, bound = result.binding || {};
     preview = null;
-    host().innerHTML = `<div class="card"><p class="inst-label">LIBRARY CONSISTENCY</p><h3>Zotero 写入与项目同步</h3><p class="hint">本机 Local API 保持只读；写入使用 Zotero 官方 Web API，不碰 zotero.sqlite。每个项目绑定一个 Collection，以条目 Key、版本和本地内容摘要跟踪变化。同步需要先预览，再明确确认。</p>
-      ${docs({"创建 API Key / 获取 User ID": result.docs.key, "官方写入 API": result.docs.api, "同步与版本冲突说明": result.docs.sync})}
-      <div class="integration-grid"><label class="field"><span>Library 类型</span><select class="control" id="zs-type"><option value="users" ${cfg.library_type !== "groups" ? "selected" : ""}>个人用户</option><option value="groups" ${cfg.library_type === "groups" ? "selected" : ""}>群组</option></select></label>
-      <label class="field"><span>User ID / Group ID（数字）</span><input class="control" id="zs-id" value="${e(cfg.library_id)}"></label>
-      <label class="field"><span>API Key${cfg.api_key_present ? "（已保存，留空保留）" : ""}</span><input class="control" id="zs-key" type="password" autocomplete="new-password"></label>
-      <div class="hint">请只授予需要的 Library 读写权限。群组写入还受成员角色控制；桌面 Zotero 开启自动同步后会取得云端变更。</div></div>
-      <div class="integration-actions"><button class="btn" id="zs-save">保存 Web API 配置</button></div><hr>
-      <label class="field"><span>项目</span><select class="control" id="zs-project">${optionRows(S.tasks || [], projectId, "title")}</select></label>
-      <div class="integration-status">当前绑定：${bound.collection ? `<code>${e(bound.library)} / ${e(bound.collection)}</code>` : "未绑定"}${bound.last_sync ? ` · 最近同步 ${e(new Date(Number(bound.last_sync) * 1000).toLocaleString())}` : ""}</div>
-      <div class="integration-actions"><button class="btn ghost" id="zs-load">拉取全部 Collections</button><select class="control" id="zs-collection"><option value="${e(bound.collection)}">${e(bound.collection || "先拉取集合或创建项目同名集合")}</option></select><button class="btn ghost" id="zs-bind">绑定已有集合</button><button class="btn ghost" id="zs-create">创建项目同名集合并绑定</button></div>
-      <div class="integration-actions"><select class="control" id="zs-mode"><option value="merge">双向合并元数据</option><option value="pull">拉取 Zotero 到项目</option><option value="push">推送项目到 Zotero</option></select><button class="btn" id="zs-preview">预览同步</button><button class="btn ghost" id="zs-apply" disabled>确认执行预览</button></div>
-      <p class="hint">同步范围：项目文献检索元数据与集合成员。不删除任一端条目，不上传 PDF，不自动重命名集合。两端同时修改、远端删除或移出集合会阻止执行并显示冲突；不会静默覆盖。</p>
-      <details><summary>高级：预览 / 写入单个 Zotero 条目 JSON</summary><p class="hint">现有条目修改必须提供 key 和 version；字段依照 Zotero 官方条目格式。点击写入将再次确认。</p><textarea class="control integration-json" id="zs-item">${e(JSON.stringify({itemType: "journalArticle", title: "", creators: [], tags: [], collections: bound.collection ? [bound.collection] : []}, null, 2))}</textarea><div class="integration-actions"><button class="btn ghost" id="zs-item-preview">格式校验 / 预览</button><button class="btn ghost" id="zs-item-write">确认写入条目</button></div></details>
-      <div id="integration-error" class="integration-error"></div><pre id="integration-result" class="integration-result"></pre></div>`;
+    host().innerHTML = `
+      <div class="card switch-card" style="margin-bottom:14px">
+        <div class="sc-head">
+          <div class="sc-title-group">
+            <span class="sc-icon">⚡</span>
+            <div>
+              <p class="inst-label" style="margin:0 0 2px">MCP PROTOCOL / AGENT CAPABILITY</p>
+              <h3 style="margin:0">Zotero stdio MCP 服务</h3>
+              <p class="hint" style="margin:4px 0 0">为 Agent 注入 6 项能力：状态检测、本地题录模糊检索、详情读取、PDF绝对物理路径直读、Web API文献写入与笔记挂载。</p>
+            </div>
+          </div>
+          <span class="pill ${mcpRes.enabled ? "ok" : ""}" id="zm-pill">${mcpRes.enabled ? "MCP 运行中" : "未启用"}</span>
+        </div>
+        <div class="integration-actions" style="margin-top:12px">
+          <button class="btn" id="zm-enable">${mcpRes.registered ? "重新激活 / 注册 MCP" : "一键注册并启用 Zotero MCP"}</button>
+          <button class="btn ghost" id="zm-open-mcp">去 MCP 矩阵查看权限 →</button>
+        </div>
+        <div class="hint" style="margin-top:8px">包含工具：<code>zotero_status</code> · <code>zotero_search</code> · <code>zotero_item</code> · <code>zotero_pdf</code> · <code>zotero_create_item</code> · <code>zotero_create_note</code></div>
+      </div>
+
+      <div class="card"><p class="inst-label">LIBRARY CONSISTENCY</p><h3>Zotero 写入与项目同步</h3><p class="hint">本机 Local API 保持只读；写入使用 Zotero 官方 Web API，不碰 zotero.sqlite。每个项目绑定一个 Collection，以条目 Key、版本和本地内容摘要跟踪变化。同步需要先预览，再明确确认。</p>
+        ${docs({"创建 API Key / 获取 User ID": result.docs.key, "官方写入 API": result.docs.api, "同步与版本冲突说明": result.docs.sync})}
+        <div class="integration-grid"><label class="field"><span>Library 类型</span><select class="control" id="zs-type"><option value="users" ${cfg.library_type !== "groups" ? "selected" : ""}>个人用户</option><option value="groups" ${cfg.library_type === "groups" ? "selected" : ""}>群组</option></select></label>
+        <label class="field"><span>User ID / Group ID（数字）</span><input class="control" id="zs-id" value="${e(cfg.library_id)}"></label>
+        <label class="field"><span>API Key${cfg.api_key_present ? "（已保存，留空保留）" : ""}</span><input class="control" id="zs-key" type="password" autocomplete="new-password"></label>
+        <div class="hint">请只授予需要的 Library 读写权限。群组写入还受成员角色控制；桌面 Zotero 开启自动同步后会取得云端变更。</div></div>
+        <div class="integration-actions"><button class="btn" id="zs-save">保存 Web API 配置</button></div><hr>
+        <label class="field"><span>项目</span><select class="control" id="zs-project">${optionRows(S.tasks || [], projectId, "title")}</select></label>
+        <div class="integration-status">当前绑定：${bound.collection ? `<code>${e(bound.library)} / ${e(bound.collection)}</code>` : "未绑定"}${bound.last_sync ? ` · 最近同步 ${e(new Date(Number(bound.last_sync) * 1000).toLocaleString())}` : ""}</div>
+        <div class="integration-actions"><button class="btn ghost" id="zs-load">拉取全部 Collections</button><select class="control" id="zs-collection"><option value="${e(bound.collection)}">${e(bound.collection || "先拉取集合或创建项目同名集合")}</option></select><button class="btn ghost" id="zs-bind">绑定已有集合</button><button class="btn ghost" id="zs-create">创建项目同名集合并绑定</button></div>
+        <div class="integration-actions"><select class="control" id="zs-mode"><option value="merge">双向合并元数据</option><option value="pull">拉取 Zotero 到项目</option><option value="push">推送项目到 Zotero</option></select><button class="btn" id="zs-preview">预览同步</button><button class="btn ghost" id="zs-apply" disabled>确认执行预览</button></div>
+        <p class="hint">同步范围：项目文献检索元数据与集合成员。不删除任一端条目，不上传 PDF，不自动重命名集合。两端同时修改、远端删除或移出集合会阻止执行并显示冲突；不会静默覆盖。</p>
+        <details><summary>高级：预览 / 写入单个 Zotero 条目 JSON</summary><p class="hint">现有条目修改必须提供 key 和 version；字段依照 Zotero 官方条目格式。点击写入将再次确认。</p><textarea class="control integration-json" id="zs-item">${e(JSON.stringify({itemType: "journalArticle", title: "", creators: [], tags: [], collections: bound.collection ? [bound.collection] : []}, null, 2))}</textarea><div class="integration-actions"><button class="btn ghost" id="zs-item-preview">格式校验 / 预览</button><button class="btn ghost" id="zs-item-write">确认写入条目</button></div></details>
+        <div id="integration-error" class="integration-error"></div><pre id="integration-result" class="integration-result"></pre></div>`;
+
+    field("zm-enable").onclick = event => action(event.target, async () => {
+      const res = await api("/api/zotero/mcp/enable", {});
+      if (res.ok) {
+        field("integration-result").textContent = "Zotero MCP 服务已成功注册并启用！\nAgent 现可在对话中调用 Zotero 读写工具。";
+        await loadZotero();
+      }
+    });
+
+    field("zm-open-mcp").onclick = () => { setSec = "mcp"; render(); };
+
     field("zs-project").onchange = async event => { projectId = event.target.value; await loadZotero(); };
     field("zs-save").onclick = event => action(event.target, async () => {
       await api("/api/zotero/web/config", {library_type: field("zs-type").value, library_id: field("zs-id").value.trim(), api_key: field("zs-key").value.trim()});
@@ -280,14 +446,16 @@
       field("integration-result").textContent = JSON.stringify(result, null, 2);
     });
   }
+
   const originalPanel = setPanel;
   setPanel = function () {
-    if (["feishu", "zotero"].includes(setSec)) return `<div id="integration-settings"><div class="card">正在读取本机配置…</div></div>`;
+    if (["easyscholar", "feishu", "zotero"].includes(setSec)) return `<div id="integration-settings"><div class="card">正在读取本机配置…</div></div>`;
     return originalPanel();
   };
   const originalSettings = renderSettings;
   renderSettings = function (container) {
     originalSettings(container);
+    if (setSec === "easyscholar") loadEasyScholar().catch(error);
     if (setSec === "feishu") loadFeishu().catch(error);
     if (setSec === "zotero") loadZotero().catch(error);
   };

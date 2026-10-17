@@ -201,9 +201,47 @@ def _unprotect(value: str) -> dict:
     return json.loads(securestore.unprotect(value))
 
 
+def default_mcp_config() -> dict:
+    import sys
+    zotero_script = str(Path(__file__).resolve().parents[1] / "connectors" / "zotero_mcp.py")
+    return {
+        "mcpServers": {
+            "zotero": {
+                "command": sys.executable or "python",
+                "args": [zotero_script],
+                "cwd": ".",
+                "transport": "stdio",
+                "enabled": True,
+                "description": "Zotero 本地题录检索、PDF直读与Web API写入"
+            }
+        }
+    }
+
+
+def ensure_zotero_mcp(db) -> dict:
+    cfg = _config(db)
+    servers = cfg.setdefault("mcpServers", {})
+    import sys
+    zotero_script = str(Path(__file__).resolve().parents[1] / "connectors" / "zotero_mcp.py")
+    servers["zotero"] = {
+        "command": sys.executable or "python",
+        "args": [zotero_script],
+        "cwd": ".",
+        "transport": "stdio",
+        "enabled": True,
+        "description": "Zotero 本地题录检索、PDF直读与Web API写入"
+    }
+    save_mcp(db, cfg)
+    return {"ok": True, "server": servers["zotero"]}
+
+
 def _config(db) -> dict:
     row = _ensure(db).execute("SELECT protected FROM capability_mcp_config WHERE id=1").fetchone()
-    return _unprotect(row[0]) if row else {"mcpServers": {}}
+    if row:
+        return _unprotect(row[0])
+    initial = default_mcp_config()
+    _conn(db).execute("INSERT OR REPLACE INTO capability_mcp_config(id,protected) VALUES(1,?)", (_protect(initial),))
+    return initial
 
 
 def _redact(value: Any, key: str = "") -> Any:

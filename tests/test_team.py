@@ -19,11 +19,28 @@ import unittest
 # ---------------- 来自 test_team.py ----------------
 os.environ["RESEARCH_WORKBENCH_DB"] = str(pathlib.Path(tempfile.gettempdir()) / "team_test.sqlite3")
 _p = pathlib.Path(os.environ["RESEARCH_WORKBENCH_DB"])
-if _p.exists():
-    _p.unlink()
-
 import team                      # noqa: E402
 import workflow                  # noqa: E402
+
+def _safe_clean(path: pathlib.Path) -> None:
+    import gc
+    gc.collect()
+    if path.exists():
+        try:
+            path.unlink()
+        except PermissionError:
+            try:
+                with workflow.WorkflowDB(path) as db:
+                    for tbl in ("team_members", "team_tasks", "team_events", "teams", "team_sessions", "research_tasks", "models", "assistants", "chats", "messages"):
+                        try:
+                            db.db.execute(f"DELETE FROM {tbl}")
+                        except Exception:
+                            pass
+                    db.db.commit()
+            except Exception:
+                pass
+
+_safe_clean(_p)
 
 team.DB_PATH = _p
 
@@ -31,8 +48,7 @@ team.DB_PATH = _p
 class TeamTest(unittest.TestCase):
     def setUp(self) -> None:
         team.DB_PATH = _p          # 每个用例都把团队库指回自己的（多模块一起跑时别串）
-        if _p.exists():
-            _p.unlink()                       # 每个用例一个干净库：队列是全库轮询的，不隔离会互相串
+        _safe_clean(_p)
         with workflow.WorkflowDB(_p) as db:
             self.tid = db.create_task("测试项目", "问题", "体系", "")
             db.add_model("假模型", "http://127.0.0.1:1/v1", "fake", "sk", activate=True)
@@ -139,8 +155,7 @@ team.DB_PATH = _p
 
 class TeamsTest(unittest.TestCase):
     def setUp(self) -> None:
-        if _p.exists():
-            _p.unlink()
+        _safe_clean(_p)
         team.DB_PATH = _p
         with workflow.WorkflowDB(_p) as db:
             self.db = db
@@ -290,8 +305,7 @@ team.DB_PATH = _p
 class TeamChatTest(unittest.TestCase):
     def setUp(self) -> None:
         team.DB_PATH = _p
-        if _p.exists():
-            _p.unlink()
+        _safe_clean(_p)
         with workflow.WorkflowDB(_p) as db:
             self.scope = db.create_chat("团队群")
         team.ensure_leader(self.scope)

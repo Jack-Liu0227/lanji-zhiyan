@@ -24,10 +24,11 @@ class MigrationsTest(unittest.TestCase):
         self.assertIn("001_core_schema", applied)
         self.assertIn("002_workflow_schema", applied)
         self.assertIn("003_reliability_tables", applied)
+        self.assertIn("004_v130_features", applied)
 
         rows = self.conn.execute("SELECT version, checksum FROM schema_migrations ORDER BY version").fetchall()
         versions = [r[0] for r in rows]
-        self.assertEqual(versions, ["001_core_schema", "002_workflow_schema", "003_reliability_tables"])
+        self.assertEqual(versions, ["001_core_schema", "002_workflow_schema", "003_reliability_tables", "004_v130_features"])
 
         tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         self.assertIn("research_tasks", tables)
@@ -36,6 +37,9 @@ class MigrationsTest(unittest.TestCase):
         self.assertIn("task_attempts", tables)
         self.assertIn("run_events", tables)
         self.assertIn("audit_events", tables)
+        self.assertIn("easyscholar_cache", tables)
+        self.assertIn("project_todos", tables)
+        self.assertIn("integration_settings", tables)
 
     def test_run_migrations_is_idempotent(self):
         applied1 = migrations.run_migrations(self.conn, db_path=self.db_path)
