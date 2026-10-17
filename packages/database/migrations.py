@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import shutil
 import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 try:                                    # 程序根只有一处来源；导入早期也能兜底
     from paths import app_dir

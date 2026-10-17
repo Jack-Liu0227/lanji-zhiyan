@@ -15,7 +15,6 @@ import email.policy
 import email.utils
 import imaplib
 import json
-import os
 import re
 import smtplib
 import socket
