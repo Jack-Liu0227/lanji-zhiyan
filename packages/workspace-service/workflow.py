@@ -1295,6 +1295,12 @@ class ModelInvoker:
             return cls._handler(profile, messages, tools=tools, temperature=temperature, timeout=timeout, max_tokens=max_tokens)
         return None
 
+    @classmethod
+    def call(cls, profile: dict[str, Any], messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None, **kwargs) -> dict[str, Any]:
+        if cls._handler is not None:
+            return cls._handler(profile, messages, tools=tools, **kwargs)
+        return chat_raw(profile, messages, tools=tools, **kwargs)
+
 
 def chat_raw(profile: dict[str, Any], messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None,
              temperature: float = 0.2, timeout: int = 180, max_tokens: int = 4096) -> dict[str, Any]:

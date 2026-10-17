@@ -31,8 +31,8 @@ CREATE TABLE IF NOT EXISTS background_jobs (
   progress REAL NOT NULL DEFAULT 0,
   last_event_id INTEGER NOT NULL DEFAULT 0,
   checkpoint TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);

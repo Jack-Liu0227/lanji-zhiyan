@@ -238,6 +238,94 @@ class V130FeaturesTest(unittest.TestCase):
         self.assertIn("JCR Q1", labels)
         self.assertIn("IF 50.5", labels)
 
+    def test_managed_connection_and_transaction_context(self):
+        import research_core
+        # 1. ManagedConnection commits on successful block
+        mc = research_core.ManagedConnection(self.db_path)
+        with mc.transaction() as conn:
+            conn.execute("INSERT OR REPLACE INTO background_jobs (id, task_id, status, created_at, updated_at) VALUES ('job-t1', 't1', 'running', datetime('now'), datetime('now'))")
+
+        row = self.conn.execute("SELECT status FROM background_jobs WHERE id='job-t1'").fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["status"], "running")
+
+        # 2. ManagedConnection rolls back on exception
+        with self.assertRaises(ZeroDivisionError):
+            with mc.transaction() as conn:
+                conn.execute("UPDATE background_jobs SET status='done' WHERE id='job-t1'")
+                _ = 1 / 0
+
+        row2 = self.conn.execute("SELECT status FROM background_jobs WHERE id='job-t1'").fetchone()
+        self.assertEqual(row2["status"], "running")
+
+        # 3. ResearchDB.transaction context
+        db = research_core.ResearchDB(self.db_path)
+        with db.transaction():
+            db.db.execute("UPDATE background_jobs SET status='completed' WHERE id='job-t1'")
+        db.close()
+
+        row3 = self.conn.execute("SELECT status FROM background_jobs WHERE id='job-t1'").fetchone()
+        self.assertEqual(row3["status"], "completed")
+
+    def test_model_invoker_facade_and_custom_handler(self):
+        import workflow
+        # 1. Test registration of custom handler
+        called_args = []
+        def mock_handler(profile, messages, tools=None, **kwargs):
+            called_args.append((profile, messages, tools, kwargs))
+            return {"content": "mocked response", "tool_calls": []}
+
+        workflow.ModelInvoker.register(mock_handler)
+        res = workflow.ModelInvoker.call({"model": "test-m"}, [{"role": "user", "content": "hi"}], temperature=0.7)
+        self.assertEqual(res["content"], "mocked response")
+        self.assertEqual(len(called_args), 1)
+        self.assertEqual(called_args[0][0]["model"], "test-m")
+        self.assertEqual(called_args[0][3]["temperature"], 0.7)
+
+        # 2. Test unregister
+        workflow.ModelInvoker.unregister()
+        self.assertIsNone(workflow.ModelInvoker._handler)
+
+    def test_background_jobs_persistence_and_run_manager(self):
+        import research_core
+        import run_manager
+
+        db = research_core.ResearchDB(self.db_path)
+        # 1. Create background job
+        job = db.create_background_job("bg-123", task_id="proj-1", status="running", progress=0.1, last_event_id=5)
+        self.assertEqual(job["id"], "bg-123")
+        self.assertEqual(job["status"], "running")
+        self.assertEqual(job["last_event_id"], 5)
+
+        # 2. Update background job
+        updated = db.update_background_job("bg-123", status="suspended", progress=0.5, last_event_id=10)
+        self.assertEqual(updated["status"], "suspended")
+        self.assertEqual(updated["progress"], 0.5)
+        self.assertEqual(updated["last_event_id"], 10)
+
+        # 3. Test RunManager create and emit synchronization
+        rm = run_manager.RunManager.get_instance()
+        run = rm.create_run(task_id="proj-1", idempotency_key="idemp-bg-test", db=db)
+        self.assertTrue(run.run_id)
+
+        # Verify job was created in db
+        bg_job = db.get_background_job(run.run_id)
+        self.assertIsNotNone(bg_job)
+        self.assertEqual(bg_job["status"], "running")
+
+        # Emit an event and verify last_event_id updated
+        ev_rec = run.emit({"type": "info", "message": "processing step 1"}, db=db)
+        self.assertEqual(ev_rec["event_id"], 1)
+        bg_after_emit = db.get_background_job(run.run_id)
+        self.assertEqual(bg_after_emit["last_event_id"], 1)
+
+        # Emit completion and verify job updated to done
+        run.emit({"type": "done", "content": "finished"}, db=db)
+        bg_done = db.get_background_job(run.run_id)
+        self.assertEqual(bg_done["status"], "done")
+        self.assertEqual(bg_done["progress"], 1.0)
+        db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

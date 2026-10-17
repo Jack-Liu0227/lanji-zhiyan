@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS background_jobs (
   id TEXT PRIMARY KEY, task_id TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'running', progress REAL NOT NULL DEFAULT 0,
   last_event_id INTEGER NOT NULL DEFAULT 0, checkpoint TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status);
 """
