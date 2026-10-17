@@ -50,7 +50,7 @@ class TestDelegate(unittest.TestCase):
                     self._live += 1
                     self.max_live = max(self.max_live, self._live)
                 import time
-                time.sleep(0.05)                                          # 让并行的另一个子 agent 挤进来
+                time.sleep(0.15)                                          # 让并行的另一个子 agent 挤进来
                 with self._lock:
                     self._live -= 1
                 task_text = str(messages[-1].get("content") or "")

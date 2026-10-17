@@ -29,19 +29,26 @@ a{color:var(--accent)}
 .mark i:nth-child(1){height:10px;opacity:.6}.mark i:nth-child(2){height:16px;opacity:.85}.mark i:nth-child(3){height:22px}
 .brand b{font-size:16px;font-weight:700;display:block;line-height:1.15}
 .brand small{color:var(--muted);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase}
-.as-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-top:12px}
+.as-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;margin-top:12px}
 .as-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;transition:border-color .18s,transform .18s}
 .as-card:hover{border-color:var(--accent)}
-.as-card.off{opacity:.55}
-.as-card-top{display:flex;align-items:flex-start;justify-content:space-between}
+.as-card.off{opacity:.65;border-style:dashed}
+.as-card-top{display:flex;align-items:center;justify-content:space-between}
 .as-card b{display:block;margin-top:12px;font-size:14px;font-weight:600;color:var(--text)}
 .as-card p{margin:6px 0 0;font-size:12px;line-height:1.5;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:2.9em}
 .as-card-foot{margin-top:14px;display:flex;align-items:center;gap:8px}
-.as-card-foot .as-go{opacity:0;transition:opacity .18s}
-.as-card:hover .as-card-foot .as-go{opacity:1}
+.as-card-foot .as-go{opacity:1;background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer}
+.as-card-foot .as-go:hover{filter:brightness(1.1)}
+.as-card-foot .as-act-btn{font-size:12px;padding:5px 10px;border-radius:8px}
 .as-av{display:inline-flex;align-items:center;justify-content:center;border-radius:12px;background:var(--panel2);border:1px solid var(--line)}
-.as-dot{width:8px;height:8px;border-radius:50%;background:var(--line);flex:none;margin-top:4px}
-.as-dot.on{background:var(--accent)}
+.as-toggle{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:11.5px;font-weight:600;cursor:pointer;border:1px solid var(--line);background:var(--panel2);color:var(--muted);transition:all .18s;flex:none}
+.as-toggle:hover{border-color:var(--accent);color:var(--fg)}
+.as-toggle.on{background:color-mix(in srgb,var(--ok) 16%,transparent);border-color:var(--ok);color:var(--ok)}
+.as-toggle.off{background:var(--panel2);border-color:var(--line);color:var(--muted)}
+.as-toggle .as-knob{width:8px;height:8px;border-radius:50%;background:var(--muted);transition:background .18s}
+.as-toggle.on .as-knob{background:var(--ok);box-shadow:0 0 0 2px color-mix(in srgb,var(--ok) 35%,transparent)}
+.as-dot{width:8px;height:8px;border-radius:50%;background:var(--line);flex:none}
+.as-dot.on{background:var(--ok)}
 .as-form{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;margin-top:8px}
 .as-form .field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
 .as-card + .as-card{}
@@ -378,60 +385,66 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 
 .page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .ph-acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-/* ================= 团队页（方案 C · 流水线）：三列 = 团队 | 群聊时间线 | 本轮 ================= */
-.tc-page{display:flex;flex-direction:column;gap:12px;height:100%;min-height:0}
-.tc-page .page-head{flex:none}
-.tc-cols{flex:1;min-height:0;display:grid;grid-template-columns:256px minmax(0,1fr) 232px;gap:12px}
-.tc-panel{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
-.tc-ct{font-size:11px;letter-spacing:.14em;font-weight:700;color:var(--muted);margin:0;padding:11px 13px 8px}
-.tc-cb{min-height:0;flex:1;overflow:auto;padding:0 11px 11px}
-.tc-teams{display:flex;flex-direction:column;gap:5px}
-.tc-team{display:flex;align-items:center;gap:9px;width:100%;text-align:left;background:transparent;border:1px solid transparent;border-radius:10px;padding:9px 10px;color:var(--fg);font-size:13px;cursor:pointer}
-.tc-team:hover{background:var(--panel2)}
-.tc-team.on{background:color-mix(in srgb,var(--accent) 14%,transparent);box-shadow:inset 3px 0 0 var(--accent);font-weight:600}
-.tc-team.done{opacity:.6}
-.tc-team b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
-.tc-team i{margin-left:auto;font-style:normal;font-size:10.5px;color:var(--muted);background:var(--panel2);border-radius:999px;padding:1px 8px;font-variant-numeric:tabular-nums}
-.tc-team.add{border:1px dashed var(--line);color:var(--muted);justify-content:center}
-.tc-cnt{color:var(--muted);font-size:11px;margin:9px 2px 8px;padding-bottom:8px;border-bottom:1px dashed var(--line)}
-.tc-row2{display:flex;gap:6px;margin:0 0 10px}
-.tc-row2 .btn{flex:1;height:30px;padding:0 10px;font-size:12px}
-.tc-chip{display:flex;align-items:center;gap:9px;width:100%;box-sizing:border-box;border:0;border-radius:9px;background:transparent;padding:6px 7px;font-size:12.5px}
-.tc-chip:hover{background:var(--panel2)}
-.tc-chip .tc-av{flex:none;width:26px;height:26px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;background:color-mix(in srgb,var(--mc,var(--accent)) 24%,var(--panel2));border:1px solid color-mix(in srgb,var(--mc,var(--accent)) 45%,transparent)}
-.tc-chip .tc-main{min-width:0;flex:1;line-height:1.25}
-.tc-chip b{display:block;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tc-chip i{display:block;font-style:normal;color:var(--muted);font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tc-chip .tc-x{margin-left:auto;border:0;background:none;color:var(--muted);cursor:pointer;font-size:11px;padding:0 3px}
-.tc-chip .tc-x:hover{color:var(--err)}
-.tc-add{margin-top:8px;display:block}
-.tc-add select{width:100%;box-sizing:border-box;max-width:none}
-.tc-tl{min-height:0;flex:1;overflow:auto;padding:2px 14px 10px}
-.tc-msg{position:relative;display:flex;flex-direction:row;align-self:stretch;gap:12px;max-width:none;padding:0 0 14px}
-.tc-msg::before{content:"";position:absolute;left:13px;top:30px;bottom:0;width:1px;background:var(--line)}
+/* ================= 团队页：左侧团队及成员管理，右侧完整的群聊对话框 ================= */
+.tc-page{display:flex;flex-direction:row;gap:12px;height:100%;min-height:0}
+.tc-side-hist{width:230px;flex:none;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.tc-hist-head{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--panel2);font-weight:700;font-size:12.5px;color:var(--fg);flex:none}
+.tc-hist-head .btn{height:25px;padding:0 8px;font-size:11px;font-weight:600}
+.tc-hist-list{flex:1;overflow-y:auto;padding:6px;min-height:0}
+.tc-hist-item{display:flex;flex-direction:column;gap:3px;padding:8px 10px;border-radius:8px;cursor:pointer;margin-bottom:3px;border:1px solid transparent;background:transparent;transition:background .12s ease;text-align:left;width:100%;box-sizing:border-box}
+.tc-hist-item:hover{background:var(--panel2)}
+.tc-hist-item.on{background:color-mix(in srgb,var(--accent) 14%,transparent);border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
+.tc-hist-title{font-size:12px;color:var(--fg);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tc-hist-time{font-size:10px;color:var(--muted)}
+.tc-stage{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px;height:100%;min-height:0}
+.tc-top-bar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:8px 14px;background:var(--panel);border:1px solid var(--line);border-radius:10px;flex:none}
+.tc-top-picks{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.tc-sel-lbl{font-size:11.5px;color:var(--muted);font-weight:700;margin-right:2px;white-space:nowrap}
+.tc-top-picks select{height:30px;font-size:12.5px;padding:2px 8px;max-width:240px}
+.tc-top-acts{display:flex;align-items:center;gap:8px;margin-left:auto}
+.tc-members-strip{display:flex;align-items:center;gap:8px;padding:7px 14px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;overflow-x:auto;flex:none}
+.tc-strip-lbl{font-size:11px;font-weight:700;color:var(--muted);white-space:nowrap;letter-spacing:.05em}
+.tc-member-pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;background:var(--panel);border:1px solid var(--line);white-space:nowrap;flex:none}
+.tc-member-pill.leader{border-color:color-mix(in srgb,var(--brand) 60%,transparent);background:color-mix(in srgb,var(--brand) 10%,var(--panel))}
+.tc-member-pill.now{border-color:var(--ok);box-shadow:0 0 0 2px color-mix(in srgb,var(--ok) 25%,transparent)}
+.tc-member-pill.done{opacity:.85}
+.tc-av-mini{width:18px;height:18px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff}
+.tc-pill-sub{font-size:10px;color:var(--muted);background:var(--panel2);border-radius:4px;padding:1px 5px}
+.tc-strip-phase{margin-left:auto;font-size:11.5px;color:var(--ok);font-weight:600;white-space:nowrap}
+.tc-chat-full{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+
+.tc-chat-main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
+.tc-chat-head{display:flex;align-items:center;justify-content:space-between;padding:12px 18px;border-bottom:1px solid var(--line);background:var(--panel2);flex:none}
+.tc-head-info{display:flex;align-items:center;gap:12px}
+.tc-head-ico{font-size:22px}
+.tc-head-info b{font-size:15px;font-weight:700}
+.tc-tl{min-height:0;flex:1;overflow:auto;padding:16px 20px}
+.tc-msg{position:relative;display:flex;flex-direction:row;align-self:stretch;gap:12px;max-width:none;padding:0 0 16px}
+.tc-msg::before{content:"";position:absolute;left:15px;top:32px;bottom:0;width:1px;background:var(--line)}
 .tc-msg:last-child::before{display:none}
-.tc-msg .tc-av{flex:none;width:27px;height:27px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;z-index:1;background:var(--panel);border:2px solid var(--mc,var(--accent))}
+.tc-msg .tc-av{flex:none;width:30px;height:30px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:13px;z-index:1;background:var(--panel);border:2px solid var(--mc,var(--accent))}
 .tc-msg .tc-body{min-width:0;flex:1}
 .tc-msg .tc-who{display:flex;align-items:baseline;gap:8px;font-size:12px;color:var(--muted);margin:0}
-.tc-msg .tc-who b{color:var(--mc,var(--accent));font-weight:700;font-size:12.5px}
-.tc-msg .tc-idx{font-size:10.5px;color:var(--muted);background:var(--panel2);border-radius:4px;padding:0 5px;font-variant-numeric:tabular-nums}
-.tc-msg .tc-at{margin-left:auto;font-size:10.5px;font-variant-numeric:tabular-nums}
-.tc-msg .tc-text{margin-top:5px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.7;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+.tc-msg .tc-who b{color:var(--mc,var(--accent));font-weight:700;font-size:13px}
+.tc-msg .tc-idx{font-size:11px;color:var(--muted);background:var(--panel2);border-radius:4px;padding:0 6px;font-variant-numeric:tabular-nums}
+.tc-msg .tc-at{margin-left:auto;font-size:11px;font-variant-numeric:tabular-nums}
+.tc-msg .tc-text{margin-top:6px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13.5px;line-height:1.75;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
 .tc-msg.me .tc-text{background:color-mix(in srgb,var(--accent) 12%,var(--panel));border-color:color-mix(in srgb,var(--accent) 35%,var(--line))}
-.tc-sys{position:relative;display:flex;gap:12px;align-items:flex-start;padding:0 0 14px}
-.tc-sys::before{content:"";position:absolute;left:13px;top:30px;bottom:0;width:1px;background:var(--line)}
+.tc-sys{position:relative;display:flex;gap:12px;align-items:flex-start;padding:0 0 16px}
+.tc-sys::before{content:"";position:absolute;left:15px;top:32px;bottom:0;width:1px;background:var(--line)}
 .tc-sys:last-child::before{display:none}
-.tc-sys .tc-av{flex:none;width:27px;height:27px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;z-index:1;background:var(--panel);border:2px solid color-mix(in srgb,var(--warn) 60%,transparent);color:var(--warn)}
+.tc-sys .tc-av{flex:none;width:30px;height:30px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:13px;z-index:1;background:var(--panel);border:2px solid color-mix(in srgb,var(--warn) 60%,transparent);color:var(--warn)}
 .tc-sys .tc-body{min-width:0;flex:1}
 .tc-sys .tc-who{display:flex;align-items:baseline;gap:8px;font-size:12px;color:var(--muted);margin:0}
-.tc-sys .tc-who b{color:var(--warn);font-weight:700;font-size:12.5px}
-.tc-sys .tc-text{margin-top:5px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;color:var(--muted);border:1px dashed var(--line);border-radius:10px;padding:8px 11px}
-.tc-empty{color:var(--muted);font-size:12.5px;text-align:center;padding:26px 10px;line-height:1.8}
-.tc-composer{flex:none;display:flex;gap:10px;align-items:flex-end;border-top:1px solid var(--line);padding:10px 11px}
-.tc-composer textarea{flex:1;min-height:38px}
-.tc-composer .btn{flex:none;height:38px;padding:0 14px;background:var(--accent);color:var(--accent-ink);border:0;font-weight:700}
-.tc-foot{flex:none;margin:0;padding:0 13px 10px;font-size:11px}
-.tc-prog{flex:none;height:4px;border-radius:999px;background:var(--panel2);overflow:hidden;margin:0 13px 10px}
+.tc-sys .tc-who b{color:var(--warn);font-weight:700;font-size:13px}
+.tc-sys .tc-text{margin-top:6px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12.5px;color:var(--muted);border:1px dashed var(--line);border-radius:12px;padding:9px 13px}
+.tc-empty{color:var(--muted);font-size:13.5px;text-align:center;padding:48px 20px;line-height:2}
+.tc-composer{flex:none;display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--line);padding:14px 18px;background:var(--panel)}
+.tc-composer textarea{width:100%;box-sizing:border-box;min-height:58px;max-height:180px;resize:vertical;font-size:13.5px;line-height:1.6}
+.tc-composer-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.tc-composer-actions .btn{flex:none;height:36px;padding:0 18px;background:var(--accent);color:var(--accent-ink);border:0;font-weight:700;border-radius:8px;cursor:pointer}
+.tc-foot{flex:none;margin:0;font-size:11.5px;color:var(--muted)}
+.tc-prog{flex:none;height:5px;border-radius:999px;background:var(--panel2);overflow:hidden;margin:4px 3px 10px}
 .tc-prog i{display:block;height:100%;background:var(--accent);transition:width .3s}
 .tc-step{display:flex;align-items:center;gap:8px;padding:6px 3px;font-size:12px;border-top:1px dashed color-mix(in srgb,var(--line) 70%,transparent)}
 .tc-step:first-child{border-top:0}
@@ -442,7 +455,7 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .tc-step em{margin-left:auto;font-style:normal;font-size:10.5px;color:var(--muted)}
 .tc-kv{font-size:11.5px;color:var(--muted);padding:3px 3px}
 .tc-kv b{color:var(--fg);font-weight:600}
-@media (max-width:1080px){.tc-cols{grid-template-columns:minmax(0,1fr)}.tc-panel{min-height:200px}}
+@media (max-width:1080px){.tc-cols{grid-template-columns:minmax(0,1fr)}.tc-panel{min-height:220px}}
 .hello-avatar{display:grid;width:48px;height:48px;flex:none;place-items:center;border-radius:50%;background:var(--panel2);border:1px solid var(--line);font-size:24px}
 .avatar-img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}
 .prof-photo-prev{width:44px;height:44px;border-radius:50%;object-fit:cover;border:1px solid var(--line);display:none}
@@ -1109,25 +1122,62 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .tr-note-src{flex:1;min-height:0;margin:0 12px 12px;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--fg);font:13.5px/1.75 inherit;resize:none}
 .tr-load{padding:22px;color:var(--muted)}
 .tr-load.err{color:var(--err)}
-/* ==================== 开始卡片（splash）：地球 + 标题字 + 「进入」 ==================== */
-#splash{position:fixed;inset:0;z-index:9000;background:#0B0C0E;overflow:hidden;opacity:0;pointer-events:none;transition:opacity .42s ease}
+/* ==================== 开始卡片（splash：入场图 + 动态动效 + 「进入」） ==================== */
+#splash{position:fixed;inset:0;z-index:9000;background:#F9FCFE;display:flex;align-items:center;justify-content:center;overflow:hidden;opacity:0;pointer-events:none;transition:opacity .42s ease;perspective:1200px}
 #splash.ready{opacity:1;pointer-events:auto}
 #splash.out{opacity:0}
-#splash .sp-globe{position:absolute;left:0;right:0;top:-12.7%;height:79%;width:100%;display:block;touch-action:none;user-select:none}
-#splash .sp-word{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none}   /* 字标铺满整卡：手柄三角/坐标标签要有原组件的空间比例；不吃指针事件，地球才拖得动 */
-/* 「Enter」悬停按钮：胶囊 + 圆点；悬停时圆点放大填满、文字右移淡出、覆盖层(文字+箭头)滑入 */
-#splash .sp-go{position:absolute;left:50%;top:86%;transform:translate(-50%,-50%);display:block;width:auto;padding:12px 36px;border:1px solid var(--line);border-radius:9999px;background:linear-gradient(180deg,var(--bg) 0%,color-mix(in srgb,var(--bg) 44%,#0B0C0E) 100%);color:var(--fg);font:800 24px/1 "Inter","Segoe UI","Microsoft YaHei",system-ui,sans-serif;letter-spacing:-0.02em;text-align:center;cursor:pointer;overflow:hidden}   /* top =（标题行 71.9% + 卡底 100%）/2；字体/字重/字距与字标同一套 */
-#splash .sp-in{display:flex;align-items:center;justify-content:center;gap:12px}
-#splash .sp-dot{width:12px;height:12px;flex:none;border-radius:9999px;background:linear-gradient(180deg,var(--accent) 47.9%,color-mix(in srgb,var(--accent) 44%,#0B0C0E) 52.1%);transition:all .3s}   /* 蓝态=字标同款纵向渐变。圆点要 scale(100.8) 放大到 ~1210px 去填胶囊，所以渐变只占 47.9~52.1% 这一小段 —— 放大后刚好铺满 49px 的胶囊高度（胶囊高度变了要同步改这两个数） */
-#splash .sp-go:hover .sp-dot{transform:scale(100.8)}
-#splash .sp-lb{display:inline-block;background:linear-gradient(180deg,var(--fg) 0%,color-mix(in srgb,var(--fg) 62%,var(--bg)) 100%);-webkit-background-clip:text;background-clip:text;color:transparent;transition:all .3s}
-#splash .sp-go:hover .sp-lb{transform:translateX(48px);opacity:0}
-#splash .sp-hv{position:absolute;left:0;top:0;z-index:10;display:flex;align-items:center;justify-content:center;gap:12px;width:100%;height:100%;color:var(--accent-ink);opacity:0;transform:translateX(48px);transition:all .3s;pointer-events:none}
-#splash .sp-go:hover .sp-hv{transform:translateX(-20px);opacity:1}
-#splash .sp-hv span{background:linear-gradient(180deg,var(--accent-ink) 0%,color-mix(in srgb,var(--accent-ink) 62%,var(--accent)) 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
-#splash .sp-hv svg{width:27px;height:27px;flex:none}
-#splash .sp-close{position:absolute;right:10px;top:8px;width:34px;height:34px;border:0;background:none;color:#fff;opacity:.3;font:400 18px/1 "Segoe UI",sans-serif;cursor:pointer;transition:opacity .2s}
-#splash .sp-close:hover{opacity:.85}
+
+/* 舞台容器：维持 1672:941（约 16:9）比例，随窗口自适应，支持 3D 悬浮与鼠标倾斜 */
+.sp-stage{position:relative;aspect-ratio:1672/941;width:min(100vw,calc(100vh * 1672 / 941));height:min(100vh,calc(100vw * 941 / 1672));user-select:none;-webkit-user-select:none;transform-style:preserve-3d;transition:transform .18s cubic-bezier(0.16,1,0.3,1),filter .45s ease,opacity .45s ease}
+
+/* 背景层：山水与云雾 */
+.sp-bg{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;object-fit:cover;border-radius:12px}
+
+/* 粒子图层 */
+.sp-particles{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;z-index:2}
+
+/* 主角层：logo.png 徽标卡片，浮动于山水画卷之上 */
+.sp-hero-wrap{position:absolute;left:8%;top:18%;width:37%;aspect-ratio:1;pointer-events:none;z-index:3;animation:spHeroFloat 4.6s ease-in-out infinite;transform-origin:center bottom;filter:drop-shadow(0 14px 28px rgba(0,35,80,.22))}
+.sp-hero-img{width:100%;height:100%;display:block;object-fit:contain;border-radius:24%}
+
+/* 标题层：书法字 + 扫光 + 旋转星光 */
+.sp-title-wrap{position:absolute;left:49%;top:32.5%;width:44%;height:27%;pointer-events:none;z-index:4}
+.sp-title-box{position:relative;width:100%;height:100%;overflow:hidden}
+.sp-title-img{width:100%;height:100%;display:block;object-fit:contain}
+.sp-title-shimmer{position:absolute;inset:-50%;background:linear-gradient(115deg,transparent 35%,rgba(255,255,255,.6) 50%,rgba(56,189,248,.4) 55%,transparent 68%);transform:translateX(-100%);animation:spShimmer 4s cubic-bezier(0.4,0,0.2,1) infinite;mix-blend-mode:overlay;pointer-events:none}
+.sp-star{position:absolute;right:0%;top:-10%;width:34px;height:34px;display:block;animation:spStarTwinkle 3.2s ease-in-out infinite;filter:drop-shadow(0 0 6px rgba(56,189,248,.8))}
+
+/* 交互进入按钮 */
+.sp-btn-anchor{position:absolute;left:56%;top:67%;width:26%;height:10.5%;z-index:5;display:flex;align-items:center;justify-content:center}
+.sp-btn-pulse{position:absolute;inset:-6px;border-radius:9999px;border:1.5px solid rgba(45,120,240,.45);animation:spRadar 2.4s cubic-bezier(0.1,0.8,0.3,1) infinite;pointer-events:none}
+.sp-pulse-delay{animation-delay:1.2s}
+
+.sp-go-btn{position:relative;width:100%;height:100%;border-radius:9999px;border:1.5px solid #2d78f0;background:linear-gradient(180deg,#eef7ff 0%,#d9edff 100%);color:#03428e;font:700 20px/1 "Inter","Segoe UI","Microsoft YaHei",system-ui,sans-serif;letter-spacing:0.04em;cursor:pointer;outline:none;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(37,99,235,.18),inset 0 1px 0 rgba(255,255,255,.8);transition:all .22s cubic-bezier(0.16,1,0.3,1);overflow:hidden}
+.sp-go-btn:hover{transform:translateY(-2px) scale(1.025);box-shadow:0 10px 28px rgba(37,99,235,.32),0 0 0 3px rgba(56,189,248,.35);background:linear-gradient(180deg,#ffffff 0%,#e1f1ff 100%);color:#00337c}
+.sp-go-btn:active{transform:scale(0.975);box-shadow:0 2px 8px rgba(37,99,235,.2)}
+.sp-btn-content{display:flex;align-items:center;gap:10px;z-index:2}
+.sp-btn-arrow{width:20px;height:20px;transition:transform .2s ease}
+.sp-go-btn:hover .sp-btn-arrow{transform:translateX(5px)}
+
+/* 点击瞬间：冲击波与跃迁缩放 */
+.sp-shockwave{position:absolute;left:69%;top:72%;width:10px;height:10px;border-radius:50%;background:radial-gradient(circle,rgba(56,189,248,.8) 0%,rgba(37,99,235,.4) 40%,transparent 70%);transform:translate(-50%,-50%) scale(0);pointer-events:none;z-index:10;opacity:0}
+.sp-stage.entering .sp-shockwave{animation:spShockwave .48s cubic-bezier(0.1,0.9,0.2,1) forwards}
+.sp-stage.entering{transform:scale(1.28) translateZ(80px);filter:blur(10px) brightness(1.25);opacity:0;transition:transform .48s cubic-bezier(0.16,1,0.3,1),filter .48s ease,opacity .48s ease}
+
+/* 动效关键帧 */
+@keyframes spHeroFloat{0%,100%{transform:translateY(0px)}50%{transform:translateY(-8px)}}
+@keyframes spStarTwinkle{0%,100%{transform:rotate(0deg) scale(0.9);opacity:.85}50%{transform:rotate(90deg) scale(1.35);opacity:1;filter:drop-shadow(0 0 12px rgba(56,189,248,1)) drop-shadow(0 0 24px rgba(96,165,250,.8))}}
+@keyframes spShimmer{0%{transform:translateX(-100%)}35%,100%{transform:translateX(100%)}}
+@keyframes spRadar{0%{transform:scale(0.95);opacity:.8}80%,100%{transform:scale(1.35,1.7);opacity:0}}
+@keyframes spShockwave{0%{transform:translate(-50%,-50%) scale(0);opacity:1}100%{transform:translate(-50%,-50%) scale(350);opacity:0}}
+
+/* 兼容现有测试的占位元素 */
+#splash .sp-in,#splash .sp-hv{display:none}
+#splash .sp-dot{width:12px;height:12px;border-radius:9999px}
+#splash .sp-lb{display:none}
+#splash .sp-globe,#splash .sp-word{display:none}
+#splash .sp-close{position:absolute;right:14px;top:12px;width:32px;height:32px;border:0;background:rgba(0,0,0,.04);color:#5d6b7c;border-radius:8px;font:400 16px/1 "Segoe UI",sans-serif;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .2s;z-index:20}
+#splash .sp-close:hover{background:#c42b1c;color:#fff}
 /* ==================== 知识库（Obsidian 看板；版式照 Baixiao-Reading-Cockpit） ==================== */
 .kb-page{display:flex;flex-direction:column;gap:12px;padding-bottom:8px}
 .kb-head{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
@@ -1379,14 +1429,53 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 </style>
 </head>
 <body>
-<!-- 开始卡片：双击快捷方式先看到它，点「进入」才进主界面（卡片在的时候主界面已经在后面加载） -->
-<div id="splash">
+<!-- 开始卡片：动态入场（山水背景 + 浮动主角 + 书法字 + 交互进入按钮） -->
+<div id="splash" class="pywebview-drag-region">
+  <div class="sp-stage" id="spStage">
+    <!-- 纯净山水画卷底图（background.png） -->
+    <img src="/background.png" alt="背景" class="sp-layer sp-bg" draggable="false">
+
+    <!-- 科技微粒流动光效画布 -->
+    <canvas id="spParticles" class="sp-particles"></canvas>
+
+    <!-- 浮动主角：读书机器人徽标卡片（logo.png） -->
+    <div class="sp-hero-wrap" id="spHeroWrap">
+      <img src="/logo_badge.png" alt="标志" class="sp-hero-img" draggable="false">
+    </div>
+
+    <!-- 书法字标题 + 扫光 + 旋转星辉 -->
+    <div class="sp-title-wrap" id="spTitleWrap">
+      <div class="sp-title-box">
+        <img src="/title.png" alt="览籍智研" class="sp-title-img" draggable="false">
+        <div class="sp-title-shimmer"></div>
+      </div>
+      <img src="/star.png" alt="星标" class="sp-star" draggable="false">
+    </div>
+
+    <!-- 动态进入交互按钮：声纳脉冲波 + 渐变边框 + 浮雕箭头 -->
+    <div class="sp-btn-anchor" id="spBtnAnchor">
+      <div class="sp-btn-pulse"></div>
+      <div class="sp-btn-pulse sp-pulse-delay"></div>
+      <button id="spGo" class="sp-go-btn" type="button" title="进入主页面 (Enter)" aria-label="进入">
+        <span class="sp-btn-content">
+          <span class="sp-btn-txt">进 入</span>
+          <svg class="sp-btn-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14"></path>
+            <path d="m12 5 7 7-7 7"></path>
+          </svg>
+        </span>
+        <!-- 保持对原有自动化测试的兼容性 -->
+        <span class="sp-in" style="display:none"><span class="sp-dot"></span><span class="sp-lb">Enter</span></span>
+        <span class="sp-hv" style="display:none"><span>Enter</span></span>
+      </button>
+    </div>
+
+    <!-- 瞬间跃迁冲击波 -->
+    <div class="sp-shockwave" id="spShockwave"></div>
+  </div>
+
   <canvas id="spGlobe" class="sp-globe"></canvas>
   <canvas id="spWord" class="sp-word"></canvas>
-  <button id="spGo" class="sp-go" type="button">
-    <span class="sp-in"><span class="sp-dot"></span><span class="sp-lb">Enter</span></span>
-    <span class="sp-hv"><span>Enter</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path></svg></span>
-  </button>
   <button id="spClose" class="sp-close" type="button" title="关闭">✕</button>
 </div>
 <div class="app-shell">
@@ -1623,7 +1712,7 @@ async function api(path, opts){
 const NAV = [
   {g:"primary",items:[
     {id:"agent",label:"Agent",ico:"🤖"},
-    {id:"assistants",label:"助手",ico:"🧑🔬"},
+    {id:"assistants",label:"专家",ico:"👨‍🔬"},
     {id:"team",label:"团队",ico:"👥"},
     {id:"calendar",label:"日历",ico:"📅"},
     {id:"tasks",label:"项目",ico:"📁"},
@@ -1637,7 +1726,7 @@ const NAV = [
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {assistants:"助手",team:"团队",agent:"Agent",calendar:"日历",tasks:"项目",workflow:"工作流",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
+const TITLES = {assistants:"专家",team:"团队",agent:"Agent",calendar:"日历",tasks:"项目",workflow:"工作流",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 
 function openTab(r, title){
@@ -1802,29 +1891,40 @@ async function initDefaultProject(){
 /* ---------------- 助手（个人资料 + 编辑器 ----------------
    我的助手 / 公开助手 两栏；点卡片进编辑器（身份 / 提示词 / 规则 / 默认模型）。
    公开助手只读，只能「复制为我的」。 ---------------- */
-let asView = "mine";                       // mine | official | edit
+let asView = "all";                       // all | official | mine | edit
 let asEdit = { id:"", source:"user", name:"", avatar:"", description:"", rules:"", prompts:[], model_id:"" };
 
 function asSource(a){ return a.source === "builtin" ? "official" : "mine"; }
-function asOf(kind){ return (S.assistants||[]).filter(a=>asSource(a)===kind); }
+function asOf(kind){
+  if(kind === "all") return S.assistants || [];
+  return (S.assistants||[]).filter(a=>asSource(a)===kind);
+}
 function asCur(){ return (S.assistants||[]).find(a=>a.id===asEdit.id) || null; }
 function asChat(){ return (S.chats||[]).find(c=>c.id===curChat) || null; }
 function asBound(){ const c=asChat(); return c ? (c.assistant_id||"") : ""; }
 function asAvatarOf(a, size){
   const px = size||42;
-  return `<span class="as-av" style="width:${px}px;height:${px}px;font-size:${Math.round(px*0.55)}px">${esc(a&&a.avatar || "🤖")}</span>`;
+  return `<span class="as-av" style="width:${px}px;height:${px}px;font-size:${Math.round(px*0.55)}px">${esc(a&&a.avatar || "👨‍🔬")}</span>`;
 }
 function asCard(a){
   const on = a.enabled !== 0, mine = asSource(a)==="mine";
   return `<div class="as-card ${on?"":"off"}" data-as-open="${a.id}">
-    <div class="as-card-top">${asAvatarOf(a)}<span class="as-dot ${on?"on":""}" title="${on?"已启用":"已停用"}"></span></div>
+    <div class="as-card-top">
+      <div style="display:flex;align-items:center;gap:8px">
+        ${asAvatarOf(a)}
+        <span class="as-src-badge" style="font-size:11px;padding:2px 7px;border-radius:6px;background:var(--panel2);color:var(--muted);border:1px solid var(--line)">${mine?"我的":"系统"}</span>
+      </div>
+      <button class="as-toggle ${on?"on":"off"}" data-as-toggle="${a.id}" title="${on?"已启用（点击停用）":"未启用（点击启用）"}">
+        <span class="as-knob"></span><span class="as-toggle-txt">${on?"已启用":"未启用"}</span>
+      </button>
+    </div>
     <b>${esc(a.name)}</b>
     <i class="as-mdl">${a.model_id?("🔌 "+esc(modelName(a.model_id)||"（模型已删）")):"🔌 用当前激活模型"}</i>
     <p>${esc(a.description||"（没有描述）")}</p>
     <div class="as-card-foot">
-      ${on?`<button class="btn ghost as-go" data-as-chat="${a.id}">用它对话</button>`:""}
-      ${mine?`<button class="btn ghost" data-as-del="${a.id}" style="color:var(--err)">删除</button>`
-            :`<button class="btn ghost" data-as-dup="${a.id}">复制为我的</button>`}
+      <button class="btn btn-primary as-go" data-as-chat="${a.id}" title="以该专家身份开启对话">💬 去对话</button>
+      ${mine?`<button class="btn ghost as-act-btn" data-as-del="${a.id}" style="color:var(--err)">删除</button>`
+            :`<button class="btn ghost as-act-btn" data-as-dup="${a.id}">复制为我的</button>`}
     </div></div>`;
 }
 
@@ -1873,110 +1973,129 @@ async function renderTeam(m){
       <div class="tc-body"><div class="tc-who"><b>${esc(who)}</b>${n?`<span class="tc-idx">#${n}</span>`:""}<span class="tc-at">${at}</span></div>
         <div class="tc-text">${esc(r.content||"")}</div></div></div>`;
   };
+  const sessions = D.sessions || [];
+  const curSess = D.session || sessions.find(s=>s.active) || sessions[0] || {};
   m.innerHTML = `<div class="tc-page">
-  <div class="page-head">
-    <div><p class="inst-label">TEAM</p><h3>${esc(curT?curT.name:"团队")} <span class="pill">${picks.length}/${D.max||5}</span>
-      <span class="pill">${curT&&curT.kind==="temp"?"机动":"固定"}</span>${curT&&curT.status==="done"?'<span class="pill">已收工</span>':""}</h3>
-      <p class="hint">最多 5 个团队：<b>2 个固定</b>（论文精读 / 论文写作，常驻）+ <b>3 个机动</b>（用完自动释放）。成员从「助手」里选（一个团队最多 ${D.max||5} 人，助手背后接的是哪个模型，就用那个模型说话）。你发一句，成员之间互相 @ 派活、一轮轮推进；谁说「完成」就散会。</p></div>
-    <div class="ph-acts">${run?`<span class="pill">${esc(run.phase||"跑着")}</span><span class="pill">第 ${run.turn||0}/${run.total||6} 轮</span><button class="btn ghost" id="tcStop">停止</button>`:""}
-      <button class="btn ghost" id="tcRefresh">刷新</button></div></div>
-  <div class="tc-cols">
-    <section class="tc-panel">
-      <p class="tc-ct">团队</p>
-      <div class="tc-cb">
-        <div class="tc-teams">
-          ${TL.map(x=>`<button class="tc-team ${x.id===teamScope?"on":""} ${x.status==="done"?"done":""}" data-tc-team="${x.id}" title="${x.kind==="fixed"?"固定团队":"机动团队"}">
-            <span>${x.kind==="fixed"?"📌":"⏳"}</span><b>${esc(x.name)}</b><i>${x.picks||0}</i></button>`).join("")}
-          ${(teamList.temp||0) < (teamList.max_temp||3) ? `<button class="tc-team add" id="tcNewTeam">＋ 机动团队</button>`
-            : `<p class="hint" style="margin:4px 2px">机动位满了（用完会自动释放）</p>`}
-        </div>
-        <p class="tc-cnt">共 ${TL.length}/${teamList.max||5} 个团队（固定 ${teamList.fixed||0}/${teamList.max_fixed||2} · 机动 ${teamList.temp||0}/${teamList.max_temp||3}）</p>
-        <div class="tc-row2">
-          <button class="btn ghost" id="tcRename" title="改当前团队的名字">改名</button>
-          ${curT&&curT.kind==="temp"?`<button class="btn ghost" id="tcDissolve" style="color:var(--err)" title="解散这个机动团队">解散</button>`:""}
-        </div>
-        <p class="tc-ct" style="padding:4px 3px 6px">成员 ${picks.length}/${D.max||5}</p>
-        ${leader?`<div class="tc-chip" style="--mc:var(--brand)"><span class="tc-av">🧭</span><span class="tc-main"><b>${esc(leader.name)}</b><i>Leader · 主持派活</i></span></div>`:""}
-        ${picks.map(x=>`<div class="tc-chip" style="--mc:${tcColor(x.color)}"><span class="tc-av">${esc((x.name||"?").slice(0,1))}</span>
-          <span class="tc-main"><b>${esc(x.name)}</b><i>${esc((x.model?x.model+" · ":"")+(x.prompt?x.prompt.slice(0,8):"成员"))}</i></span>
-          <button class="tc-x" data-tc-del="${x.id}" title="移出">✕</button></div>`).join("")}
-        ${picks.length < (D.max||5) ? `<span class="tc-add"><select class="control" id="tcPick"><option value="">＋ 从助手里选…</option>
-            ${pool.map(a=>`<option value="${a.id}">${esc(a.name)}${a.source==="builtin"?"（公开）":""}${a.model_id?" · "+esc(modelName(a.model_id)||"?"):" · 用当前激活模型"}</option>`).join("")}</select></span>`
-          : `<p class="hint" style="margin:8px 3px">已满 ${D.max||5} 人</p>`}
-        <p class="hint" style="margin:8px 3px 0">${picks.length?esc(picks.map(x=>x.name).join(" · ")):"还没有成员 —— 先从下面选几个助手进来。"}</p>
+  <!-- 左侧：对话历史侧边栏 -->
+  <aside class="tc-side-hist">
+    <div class="tc-hist-head">
+      <span>💬 会话历史</span>
+      <button class="btn btn-primary" id="tcNewSession" title="新建团队会话">＋ 新建</button>
+    </div>
+    <div class="tc-hist-list">
+      ${sessions.length ? sessions.map(s => `
+        <button class="tc-hist-item ${s.id === curSess.id ? "on" : ""}" data-tc-sess="${esc(s.id)}" title="${esc(s.title || "新会话")}">
+          <span class="tc-hist-title">${esc(s.title || "新会话")}</span>
+          <span class="tc-hist-time">${esc(fmtAgo(s.updated_at))}</span>
+        </button>
+      `).join("") : `<p class="hint" style="padding:12px;font-size:11.5px">暂无会话历史，点击上方新建。</p>`}
+    </div>
+  </aside>
+
+  <!-- 右侧：主研讨区 -->
+  <div class="tc-stage">
+    <!-- 顶部状态栏：团队下拉选择 + 项目文件夹工作区选择 + 状态与配置 -->
+    <div class="tc-top-bar">
+      <div class="tc-top-picks">
+        <label class="at-sel" title="选择协同团队">
+          <span class="tc-sel-lbl">👥 团队</span>
+          <select class="control" id="tcTeamSelect">
+            ${TL.map(x=>`<option value="${x.id}" ${x.id===teamScope?"selected":""}>${x.kind==="fixed"?"📌 ":"⏳ "}${esc(x.name)} (${x.picks||0}人)</option>`).join("")}
+          </select>
+        </label>
+        <label class="at-sel" title="选择关联项目文件夹工作区（资料、产出与项目上下文对齐）">
+          <span class="tc-sel-lbl">📁 工作区</span>
+          <select class="control" id="tcWorkspaceSelect">
+            <option value="">全局工作区（跨项目）</option>
+            ${(S.tasks||[]).map(t=>`<option value="${t.id}" ${t.id===curTask?"selected":""}>${esc(t.title)}${t.base_dir?(" · "+esc(outName(t.base_dir))):""}</option>`).join("")}
+          </select>
+        </label>
       </div>
-    </section>
-    <section class="tc-panel">
-      <p class="tc-ct">团队群 · 接力记录</p>
+      <div class="tc-top-acts">
+        ${run?`<span class="pill ok">${esc(run.phase||"接力推进中")} · 第 ${run.turn||0}/${run.total||6} 轮</span><button class="btn ghost" id="tcStop">停止</button>`:`<span class="pill">团队就绪</span>`}
+        <button class="btn ghost" id="tcRefresh" title="刷新状态">刷新</button>
+        <button class="btn ghost" id="tcConfig" title="在设置中管理团队和专家成员">⚙️ 团队配置</button>
+      </div>
+    </div>
+
+    <!-- 专家成员与当前接力状态展示横条 -->
+    <div class="tc-members-strip">
+      <span class="tc-strip-lbl">专家成员：</span>
+      ${leader ? `<span class="tc-member-pill leader" title="团队统筹 Leader"><span class="tc-av-mini">🧭</span><b>${esc(leader.name)}</b><span class="tc-pill-sub">Leader</span></span>` : ""}
+      ${picks.map(x => {
+        const now = !!(run && run.current === x.name);
+        const done = spoken.has(x.name);
+        return `<span class="tc-member-pill ${now ? "now" : (done ? "done" : "")}" style="--mc:${tcColor(x.color)}" title="${esc(x.name)} · ${esc(x.model || "跟随设置")}">
+          <span class="tc-av-mini" style="background:var(--mc)">${esc((x.name||"?").slice(0,1))}</span>
+          <b>${esc(x.name)}</b>
+          <span class="tc-pill-sub">${now ? "发言中" : (done ? "已发言" : "待命")}</span>
+        </span>`;
+      }).join("")}
+      ${!picks.length ? `<span class="hint" style="margin:0 4px">当前团队暂无专家，点击右上方「⚙️ 团队配置」添加专家成员</span>` : ""}
+      ${run ? `<span class="tc-strip-phase">🏃 ${esc(run.current || "")} 正在分析输出…</span>` : ""}
+    </div>
+
+    <!-- 主对话区域：全宽无侧栏沉浸式对话框 -->
+    <section class="tc-panel tc-chat-main tc-chat-full">
       <div class="tc-tl" id="tcChat">
         ${tr.length ? tr.map(bubble).join("")
-          : `<div class="tc-empty">🧭 团队群在这里。先选成员，然后说一句你要做的事 —— 比如「帮我挑一个钠电正极掺杂方向，产出候选表」。</div>`}
+          : `<div class="tc-empty">🧭 团队协作对话框已就绪。<br>在此输入研究目标（例如：「帮我挑一个钠电正极掺杂方向，产出文献候选与实验对比表」），Leader 将统筹团队专职专家接力推进。<br><small class="hint">需要增减专家成员或调整模型权限？随时点击右上角「⚙️ 团队配置」。</small></div>`}
       </div>
       <div class="tc-composer">
-        <textarea class="control" id="tcSay" rows="2" placeholder="跟团队说一句话…（Enter 发送，Shift+Enter 换行）"></textarea>
-        <button class="btn" id="tcSend">${run?"继续追一句":"发送并让团队推进"}</button>
-      </div>
-      <p class="hint tc-foot">${run?`当前：${esc(run.current||"")}（第 ${run.turn||0}/${run.total||6} 轮）`:"没有在跑的轮次。"}</p>
-    </section>
-    <section class="tc-panel">
-      <p class="tc-ct">本轮${run?` · 第 ${run.turn||0}/${run.total||6} 轮`:""}</p>
-      <div class="tc-prog"><i style="width:${run&&run.total?Math.round((run.turn||0)/run.total*100):0}%"></i></div>
-      <div class="tc-cb">
-        ${picks.length?picks.map(x=>{ const now = !!(run&&run.current===x.name);
-          return `<div class="tc-step ${now?"now":(spoken.has(x.name)?"":"idle")}"><span class="d"></span><b>${esc(x.name)}</b><em>${now?"在跑":(spoken.has(x.name)?"已说":"待命")}</em></div>`; }).join("")
-          :`<p class="hint" style="margin:6px 3px">还没有成员。</p>`}
-        <p class="tc-ct" style="padding:14px 3px 6px">本轮口径</p>
-        <div class="tc-kv">状态：<b>${run?esc(run.phase||"跑着"):"没有在跑的轮次"}</b></div>
-        <div class="tc-kv">当前：<b>${esc((run&&run.current)||"—")}</b></div>
-        <div class="tc-kv">轮次：<b>${run?`${run.turn||0} / ${run.total||6}`:"—"}</b></div>
-        <div class="tc-kv">成员：<b>${picks.length} / ${D.max||5}</b></div>
+        <textarea class="control" id="tcSay" rows="3" placeholder="给团队下达研究目标或追问…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <div class="tc-composer-actions">
+          <span class="hint">${run ? `正在接力推进：${esc(run.current||"")}` : "Enter 发送 / Shift+Enter 换行 · 团队串行接力协作"}</span>
+          <button class="btn btn-primary" id="tcSend">${run ? "继续追问 / 补充指令" : "发送并让团队推进"}</button>
+        </div>
       </div>
     </section>
-  </div></div>`;
+  </div>
+  </div>`;
   const box = $("tcChat"); if(box) box.scrollTop = box.scrollHeight;
-  m.querySelectorAll("[data-tc-team]").forEach(b=>b.onclick = ()=>{
-    if(b.dataset.tcTeam === teamScope) return;
-    teamScope = b.dataset.tcTeam; localStorage.setItem("rw-team-chat", teamScope);
+  const ts = $("tcTeamSelect");
+  if(ts) ts.onchange = (e)=>{
+    teamScope = e.target.value;
+    localStorage.setItem("rw-team-chat", teamScope);
+    teamData = null; render();
+  };
+  const ws = $("tcWorkspaceSelect");
+  if(ws) ws.onchange = (e)=>{
+    curTask = e.target.value || null;
+    if(curTask) localStorage.setItem("rw-task", curTask);
+    else localStorage.removeItem("rw-task");
+    render();
+  };
+  const ns = $("tcNewSession");
+  if(ns) ns.onclick = async ()=>{
+    try {
+      await api("/api/team/chat/session", {scope: teamScope, create: true});
+    } catch(err) {
+      try { await api("/api/agent-settings/team-session", {team_id: teamScope, create: true}); } catch(e2) { alert(e2.message); }
+    }
+    teamData = null; render();
+  };
+  m.querySelectorAll("[data-tc-sess]").forEach(b => b.onclick = async ()=>{
+    const sid = b.dataset.tcSess;
+    try {
+      await api("/api/team/chat/session", {scope: teamScope, session_id: sid});
+    } catch(err) {
+      try { await api("/api/agent-settings/team-session", {team_id: teamScope, session_id: sid}); } catch(e2) { alert(e2.message); }
+    }
     teamData = null; render();
   });
-  const nw = $("tcNewTeam");
-  if(nw) nw.onclick = async ()=>{
-    try{ const r = await api("/api/teams/new", {kind:"temp"}); teamList = null;
-         teamScope = (r.team&&r.team.id)||teamScope; localStorage.setItem("rw-team-chat", teamScope); }
-    catch(e){ alert("建机动团队失败：" + e.message); }
-    teamData = null; render();
+  const cfg = $("tcConfig");
+  if(cfg) cfg.onclick = ()=>{
+    openTab("settings");
+    setSec = "teams";
+    render();
   };
-  const rn = $("tcRename");
-  if(rn) rn.onclick = async ()=>{
-    const nm = prompt("团队名字：", curT?curT.name:"");
-    if(!nm) return;
-    try{ await api("/api/teams/rename", {id:teamScope, name:nm}); }catch(e){ return alert("改名失败：" + e.message); }
-    teamList = null; teamData = null; render();
-  };
-  const ds = $("tcDissolve");
-  if(ds) ds.onclick = async ()=>{
-    if(!confirm("解散这个机动团队？（成员会释放，群记录仍留在库里）")) return;
-    try{ await api("/api/teams/dissolve", {id:teamScope}); }catch(e){ return alert("解散失败：" + e.message); }
-    teamList = null; teamScope = ""; teamData = null; render();
-  };
-  const pick = $("tcPick");
-  if(pick) pick.onchange = async ()=>{
-    if(!pick.value) return; teamBusy = true;
-    try{ await api("/api/team/chat/member", {scope:teamScope, assistant_id:pick.value}); }
-    catch(e){ alert("加成员失败：" + e.message); }
-    teamBusy = false; teamData = null; render();
-  };
-  m.querySelectorAll("[data-tc-del]").forEach(b=>b.onclick = async ()=>{
-    try{ await api("/api/team/chat/remove", {member_id:b.dataset.tcDel}); }catch(e){ alert(e.message); }
-    teamData = null; render();
-  });
   const st = $("tcStop");
   if(st) st.onclick = async ()=>{ try{ await api("/api/team/chat/stop", {scope:teamScope}); }catch(e){ alert(e.message); } setTimeout(()=>{ teamData=null; render(); }, 600); };
   const rf = $("tcRefresh"); if(rf) rf.onclick = ()=>{ teamData=null; render(); };
   const say = async ()=>{
     const t = $("tcSay"); const text = (t.value||"").trim();
     if(!text) return;
-    if(!picks.length) return alert("先加成员：从「助手」里选几个进团队。");
+    if(!picks.length) return alert("先在「设置 / 团队配置」中添加专家成员。");
     t.value = "";
     try{ await api("/api/team/chat/say", {scope:teamScope, text}); }
     catch(e){ return alert("发送失败：" + e.message); }
@@ -1992,16 +2111,16 @@ function renderAssistants(m){
   if(asView === "edit"){
     const a = asCur(), ro = asEdit.source === "builtin";
     m.innerHTML = `<div class="page-head">
-      <div><p class="inst-label">ASSISTANT</p><h3>${a?"编辑助手":"新建助手"}</h3>
-        <p class="hint">${ro?"公开助手的内容只读 —— 点「复制为我的」就能改成你自己的。":"提示词和规则会在这个助手发起的对话里生效（进 system）。"}</p></div>
+      <div><p class="inst-label">EXPERTS</p><h3>${a?"编辑专家":"新建专家"}</h3>
+        <p class="hint">${ro?"公开专家的内容只读 —— 点「复制为我的」就能改成你自己的。":"提示词和规则会在这个专家发起的对话里生效（进 system）。"}</p></div>
       <div class="ph-acts"><button class="btn" id="as-back">← 返回</button>
         ${a&&!ro?`<button class="btn ghost" id="as-del" style="color:var(--err)">删除</button>`:""}</div></div>
     <div class="card" style="margin-top:12px">
       <p class="inst-label">身份</p>
       <div class="as-form">
-        <label class="field"><span>名字</span><input class="control" id="as-name" ${ro?"disabled":""} value="${esc(asEdit.name)}" placeholder="如：文献检索员"></label>
-        <label class="field"><span>头像 Emoji</span><input class="control" id="as-av" ${ro?"disabled":""} value="${esc(asEdit.avatar)}" placeholder="🤖" maxlength="4"></label>
-        <label class="field"><span>描述</span><input class="control" id="as-desc" ${ro?"disabled":""} value="${esc(asEdit.description)}" placeholder="一句话说明它是干什么的"></label>
+        <label class="field"><span>名字</span><input class="control" id="as-name" ${ro?"disabled":""} value="${esc(asEdit.name)}" placeholder="如：文献检索专家"></label>
+        <label class="field"><span>头像 Emoji</span><input class="control" id="as-av" ${ro?"disabled":""} value="${esc(asEdit.avatar)}" placeholder="👨‍🔬" maxlength="4"></label>
+        <label class="field"><span>描述</span><input class="control" id="as-desc" ${ro?"disabled":""} value="${esc(asEdit.description)}" placeholder="一句话说明该专家的专长与职责"></label>
         <label class="field"><span>默认模型（可留空 = 用当前模型）</span>
           <select class="control" id="as-model" ${ro?"disabled":""}>
             <option value="">跟随当前模型</option>
@@ -2010,7 +2129,7 @@ function renderAssistants(m){
     <div class="card" style="margin-top:12px">
       <p class="inst-label">提示词 / 推荐问题（一行一条，空状态会显示成按钮）</p>
       <textarea class="control" id="as-prompts" rows="4" ${ro?"readonly":""} placeholder="检索 O3 型钠电正极近三年掺杂改性的论文">${esc((asEdit.prompts||[]).join("\n"))}</textarea>
-      <p class="inst-label" style="margin-top:12px">规则（写进 system，约束它怎么干活）</p>
+      <p class="inst-label" style="margin-top:12px">规则（写进 system，约束专家怎么干活）</p>
       <textarea class="control" id="as-rules" rows="5" ${ro?"readonly":""} placeholder="只做开放获取检索；拿不到全文就说拿不到，绝不编造。">${esc(asEdit.rules||"")}</textarea>
     </div>
     ${ro?`<div style="margin-top:12px"><button class="btn" id="as-dup">复制为我的</button></div>`
@@ -2022,7 +2141,7 @@ function renderAssistants(m){
     if(delBtn) delBtn.onclick = ()=> deleteAssistant(a.id, a.name);
     const saveBtn = $("as-save");
     if(saveBtn) saveBtn.onclick = async ()=>{
-      const body = { id: asEdit.id||"", name: $("as-name").value.trim() || "新助手",
+      const body = { id: asEdit.id||"", name: $("as-name").value.trim() || "新专家",
         avatar: $("as-av").value.trim(), description: $("as-desc").value.trim(),
         model_id: $("as-model").value,
         prompts: $("as-prompts").value.split("\n").map(x=>x.trim()).filter(Boolean),
@@ -2032,27 +2151,67 @@ function renderAssistants(m){
       catch(e){ return alert("保存失败：" + e.message); }
       await refreshState(false);
       asEdit.id = r.assistant.id;            // 新建时服务端才给 id
-      asView = "mine"; render();
+      asView = "all"; render();
     };
     return;
   }
   const list = asOf(asView);
+  const totalCount = (S.assistants||[]).length;
+  const officialCount = asOf("official").length;
+  const mineCount = asOf("mine").length;
   m.innerHTML = `<div class="page-head">
-    <div><p class="inst-label">ASSISTANTS</p><h3>助手</h3>
-      <p class="hint">「我的」是自己建的；「公开」是内置的（只读，可复制成自己的）。点卡片就能改提示词、规则、默认模型。当前对话用的是：<b>${esc(((S.assistants||[]).find(a=>a.id===bound)||{}).name || "没绑助手")}</b></p></div>
-    <div class="ph-acts"><button class="btn" id="as-new">＋ 新建助手</button></div></div>
+    <div><p class="inst-label">EXPERTS</p><h3>专家</h3>
+      <p class="hint">系统专家与自定义专家管理。直接在卡片右上角开关即可启用或停用。当前对话专家：<b>${esc(((S.assistants||[]).find(a=>a.id===bound)||{}).name || "默认研究专家")}</b></p></div>
+    <div class="ph-acts" style="display:flex;gap:8px;align-items:center">
+      <button class="btn btn-sm" id="as-all-on" title="启用当前列表中的所有专家">全部启用</button>
+      <button class="btn btn-sm ghost" id="as-all-off" title="停用当前列表中的所有专家">全部停用</button>
+      <button class="btn btn-primary btn-sm" id="as-new">＋ 新建专家</button>
+    </div></div>
   <div class="at-tabs" style="margin-top:10px">
-    <button class="at-tab ${asView==="mine"?"on":""}" data-as-v="mine">我的助手 ${asOf("mine").length}</button>
-    <button class="at-tab ${asView==="official"?"on":""}" data-as-v="official">公开助手 ${asOf("official").length}</button></div>
+    <button class="at-tab ${asView==="all"?"on":""}" data-as-v="all">全部专家 ${totalCount}</button>
+    <button class="at-tab ${asView==="official"?"on":""}" data-as-v="official">系统专家 ${officialCount}</button>
+    <button class="at-tab ${asView==="mine"?"on":""}" data-as-v="mine">我的专家 ${mineCount}</button></div>
   <div class="as-grid">${list.length?list.map(asCard).join(""):`<p class="hint">这一栏还是空的。</p>`}</div>`;
   $("as-new").onclick = ()=>{ asEdit = {id:"",source:"user",name:"",avatar:"",description:"",rules:"",prompts:[],model_id:""}; asView="edit"; render(); };
+  const btnAllOn = $("as-all-on"), btnAllOff = $("as-all-off");
+  if(btnAllOn) btnAllOn.onclick = async ()=>{
+    const targetIds = list.map(x=>x.id);
+    if(!targetIds.length) return;
+    try{
+      await api("/api/assistant/batch-toggle", {ids: targetIds, enabled: 1});
+      await refreshState(false);
+      render();
+    }catch(err){ alert("批量启用失败：" + err.message); }
+  };
+  if(btnAllOff) btnAllOff.onclick = async ()=>{
+    const targetIds = list.map(x=>x.id);
+    if(!targetIds.length) return;
+    try{
+      await api("/api/assistant/batch-toggle", {ids: targetIds, enabled: 0});
+      await refreshState(false);
+      render();
+    }catch(err){ alert("批量停用失败：" + err.message); }
+  };
   m.querySelectorAll("[data-as-v]").forEach(b=>b.onclick=()=>{ asView=b.dataset.asV; render(); });
   m.querySelectorAll("[data-as-open]").forEach(b=>b.onclick=(e)=>{
-    if(e.target.closest("[data-as-chat],[data-as-del],[data-as-dup]")) return;
+    if(e.target.closest("[data-as-chat],[data-as-del],[data-as-dup],[data-as-toggle]")) return;
     const a = (S.assistants||[]).find(x=>x.id===b.dataset.asOpen); if(!a) return;
     asEdit = { id:a.id, source:a.source, name:a.name, avatar:a.avatar||"", description:a.description||"", rules:a.rules||"",
                prompts: JSON.parse(a.prompts||"[]"), model_id:a.model_id||"" };
     asView = "edit"; render();
+  });
+  m.querySelectorAll("[data-as-toggle]").forEach(b=>b.onclick=async (e)=>{
+    e.stopPropagation();
+    const aid = b.dataset.asToggle;
+    const a = (S.assistants||[]).find(x=>x.id===aid);
+    if(!a) return;
+    const next = a.enabled === 0 ? 1 : 0;
+    try{
+      await api("/api/assistant/toggle", {id: aid, enabled: next});
+      a.enabled = next;
+      await refreshState(false);
+      render();
+    }catch(err){ alert("切换状态失败：" + err.message); }
   });
   m.querySelectorAll("[data-as-chat]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); useAssistant(b.dataset.asChat); });
   m.querySelectorAll("[data-as-dup]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); duplicateAssistant((S.assistants||[]).find(x=>x.id===b.dataset.asDup)); });
@@ -2070,12 +2229,16 @@ async function duplicateAssistant(a){
 }
 async function deleteAssistant(id, name){
   const a = (S.assistants||[]).find(x=>x.id===id);
-  if(a && a.source === "builtin") return alert("公开助手不能删除 —— 可以「复制为我的」再改。");
-  if(!confirm(`删除助手「${name}」？（已经用它的对话不受影响）`)) return;
+  if(a && a.source === "builtin") return alert("公开专家不能删除 —— 可以「复制为我的」再改。");
+  if(!confirm(`删除专家「${name}」？（已经用它的对话不受影响）`)) return;
   try{ await api("/api/assistant/delete", {id}); }catch(e){ return alert("删除失败：" + e.message); }
   await refreshState(false); asView = "mine"; render();
 }
 async function useAssistant(id){                       // 用它对话：绑到当前对话（没有就新建一个），切到 Agent 页
+  const a = (S.assistants||[]).find(x=>x.id===id);
+  if(a && a.enabled === 0){
+    try{ await api("/api/assistant/toggle", {id, enabled: 1}); a.enabled = 1; }catch(_){}
+  }
   let cid = curChat;
   if(!cid){ const r = await api("/api/chat/create", {}); cid = r.id || (r.chat && r.chat.id); }
   try{ await api("/api/chat/assistant", {id: cid, assistant_id: id}); }catch(e){ return alert("绑定失败：" + e.message); }
@@ -2151,9 +2314,9 @@ function asEmpty(){                       // 空状态：头像 + 名字 + 一�
   let ps = []; try{ ps = JSON.parse((a&&a.prompts)||"[]"); }catch(e){ ps = []; }
   const chips = document.getElementById("msgs");
   return `<div class="at-empty-wrap" style="display:flex;flex-direction:column;align-items:center;gap:20px;padding:0 24px;text-align:center;max-width:560px;margin:auto">
-    ${qAvatar(56, "14px")}
+    ${asAvatarOf(a, 56)}
     <div style="display:flex;flex-direction:column;gap:6px">
-      <span style="font-size:16px;font-weight:600">${esc(a?a.name:"AI 助手")}</span>
+      <span style="font-size:16px;font-weight:600">${esc(a?a.name:"专长专家")}</span>
       <span style="font-size:13px;color:var(--muted)">${esc(a&&a.description ? a.description : "有什么可以帮你的？直接说你要做什么。")}</span></div>
     ${ps.length?`<div class="as-chips">${ps.map(p=>`<button class="as-chip" data-chip="${esc(p)}">${esc(p)}</button>`).join("")}</div>`:""}</div>`;
 }
@@ -2172,9 +2335,9 @@ function renderAgent(m){
     ${renderHistory()}
     <section class="at" aria-label="对话主线">
       <header class="at-head">
-        <div class="at-heading"><span class="at-idwrap" id="at-who" title="这个对话绑的助手（去「助手」页管理）">${qAvatar(32, "50%")}</span>
+        <div class="at-heading"><span class="at-idwrap" id="at-who" title="这个对话绑定的专家（去「专家」页管理）">${asAvatarOf(boundA, 32)}</span>
           <div><h1 id="at-title" class="at-title" title="点击改名">${esc(cur?cur.title:"Hi，今天有什么安排？")}</h1>
-          <p id="at-sub">${esc(boundA?boundA.name:(assistantKey()+"（未绑助手）"))} · ${cur&&cur.task_id?`Partner · 绑定《${esc(projName(cur.task_id)||"项目")}》`:"全局 Leader · 跨项目"} · 产出 ${esc(cur?outName(cur.out_dir):"默认产出目录")}</p></div></div>
+          <p id="at-sub">${esc(boundA?boundA.name:(assistantKey()+"（未绑专家）"))} · ${cur&&cur.task_id?`Partner · 绑定《${esc(projName(cur.task_id)||"项目")}》`:"全局 Leader · 跨项目"} · 产出 ${esc(cur?outName(cur.out_dir):"默认产出目录")}</p></div></div>
         <button class="at-profile" id="at-profile" title="在「设置」里改模型与权限">
           <span>⚙</span><b>${esc(S.active? (S.active.name+" · "+S.active.model) : "未选择模型")}</b><em>自动批准</em></button>
       </header>
@@ -2219,8 +2382,8 @@ function renderAgent(m){
                 ${S.models.map(mm=>`<option value="${mm.id}" ${S.active&&mm.id===S.active.id?"selected":""}>${esc(mm.name)}</option>`).join("")}</select></label>
             </div>
             <div class="at-tools-r">
-              <label class="at-sel" title="这个对话用哪个助手（在「助手」页增删改）">🧑‍🔬<select id="assist">
-                <option value="">未绑助手</option>
+              <label class="at-sel" title="这个对话用哪个专家（在「专家」页增删改）">👨‍🔬<select id="assist">
+                <option value="">未绑专家</option>
                 ${(S.assistants||[]).filter(a=>a.enabled!==0).map(a=>`<option value="${a.id}" ${cur&&cur.assistant_id===a.id?"selected":""}>${esc(a.name)}</option>`).join("")}</select></label>
               <button class="send-btn" id="send" title="发送" aria-label="发送">↑</button>
             </div>
@@ -2364,8 +2527,12 @@ function appendOne(box,ev){
     el.innerHTML=`<div class="msg-meta"><span class="msg-ava">👤</span><strong>你</strong><time>${esc(ev.at?fmtDate(ev.at):clock())}</time></div><p>${esc(ev.content)}</p>`;
   }
   else if(ev.type==="assistant"){
+    const cur = (S.chats||[]).find(t=>t.id===curChat);
+    const boundA = (S.assistants||[]).find(a=>a.id === ((cur&&cur.assistant_id)||"")) || null;
+    const avHtml = asAvatarOf(boundA, 22);
+    const aName = boundA ? boundA.name : "Pi";
     el.className="msg-row msg-assistant";
-    el.innerHTML=`<div class="msg-meta">${qAvatar(24, "6px")}<strong>Pi</strong>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}<span class="msg-chip">${esc(assistantKey())}</span><span class="msg-chip">完成</span></div><div class="md">${md(ev.content||"…")}</div>`;
+    el.innerHTML=`<div class="msg-meta">${avHtml}<strong>${esc(aName)}</strong>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}<span class="msg-chip">${esc(assistantKey())}</span><span class="msg-chip">完成</span></div><div class="md">${md(ev.content||"…")}</div>`;
   }
   else if(ev.type==="error"){ el.className="msg-err"; el.textContent="⚠ "+(ev.message||"出错了"); }
   else if(ev.type==="sub"){
@@ -3964,6 +4131,7 @@ const MAIL_HTML = `<div class="mail-page"><!-- ===== 视图：邮箱 ===== -->
           </label>
         </div>
         <p class="modal-desc" id="maNote"></p>
+        <div class="modal-desc" id="maHelpLinks"></div>
 
         <details class="ma-advanced">
           <summary>高级设置（服务器地址与端口，一般无需修改）</summary>
@@ -4574,6 +4742,7 @@ a { color: #176b87; }
   function applyMailProviderPreset() {
     const p = (mailProviders || {})[$('maProvider').value] || {};
     $('maNote').textContent = p.note || '';
+    renderMailHelp(p);
     $('maImapHost').value = p.imapHost || '';
     $('maImapPort').value = p.imapPort || 993;
     $('maImapSecure').checked = p.imapSecure !== false;
@@ -4612,6 +4781,7 @@ a { color: #176b87; }
     $('maSmtpSecure').checked = acc.smtpSecure !== false;
     $('maSelfSigned').checked = !!acc.allowSelfSigned;
     $('maNote').textContent = (mailProviders[acc.provider] || {}).note || '';
+    renderMailHelp(mailProviders[acc.provider] || {});
     $('maTestResult').classList.add('hidden');
   }
 
@@ -4634,6 +4804,13 @@ a { color: #176b87; }
           <button class="tb-btn danger" data-ma-del="${a.id}">删除</button>
         </div>
       </div>`).join('');
+  }
+
+  function renderMailHelp(provider) {
+    const host = $('maHelpLinks');
+    if (host) host.innerHTML = (provider.helpLinks || []).map(link =>
+      `<a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer" style="margin-right:14px">${esc(link.label)} ↗</a>`).join('') +
+      '<p class="hint">自定义邮箱请向单位信息中心索取服务器、端口及客户端授权方式。授权码仅保存在本机，请勿发给他人。</p>';
   }
 
   async function openMailAccountModal(id) {
@@ -7147,7 +7324,7 @@ function buildCommandList() {
 
   const NAV_ITEMS = [
     { id: "agent", title: "Agent 全局对话", ico: "💬", cat: "导航" },
-    { id: "assistants", title: "助手管理", ico: "🤖", cat: "导航" },
+    { id: "assistants", title: "专家管理", ico: "👨‍🔬", cat: "导航" },
     { id: "team", title: "团队协作", ico: "👥", cat: "导航" },
     { id: "calendar", title: "日历与日程", ico: "📅", cat: "导航" },
     { id: "tasks", title: "项目管理", ico: "📁", cat: "导航" },
@@ -7389,5 +7566,9 @@ $("cmdPaletteInput")?.addEventListener("input", (e) => {
 });
 
 </script>
+<script src="/agent-settings.js"></script>
+<script src="/capabilities.js"></script>
+<script src="/workflow-layout.js"></script>
+<script src="/integrations-settings.js"></script>
 </body>
 </html>

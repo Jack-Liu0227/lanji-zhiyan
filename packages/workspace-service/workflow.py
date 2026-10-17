@@ -111,7 +111,7 @@ WIRE_LABEL = {
     "openai-codex-responses": "OpenAI Codex Responses",
     "pi-messages": "Pi Messages",
 }
-USABLE_WIRES = {"openai-completions"}
+USABLE_WIRES = {"openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"}
 CUSTOM_WIRES = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"]
 # 「订阅 / OAuth 登录」时给用户打开的授权页；设备码流需要各家的 client_id，
 # 这里不假装能自动授权（ponytail: 真有 client_id 时再把 RFC 8628 轮询加进来）
@@ -255,6 +255,18 @@ class WorkflowDB(ResearchDB):
               trigger TEXT NOT NULL DEFAULT 'scheduler', status TEXT NOT NULL DEFAULT 'running',
               started_at TEXT NOT NULL, ended_at TEXT NOT NULL DEFAULT '', output_path TEXT NOT NULL DEFAULT '',
               summary TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '')""")
+        cols_sch = {r["name"] for r in self.db.execute("PRAGMA table_info(schedules)")}
+        if "last_run_at" not in cols_sch:
+            self.db.execute("ALTER TABLE schedules ADD COLUMN last_run_at TEXT NOT NULL DEFAULT ''")
+        if "next_run_at" not in cols_sch:
+            self.db.execute("ALTER TABLE schedules ADD COLUMN next_run_at TEXT NOT NULL DEFAULT ''")
+        cols_runs = {r["name"] for r in self.db.execute("PRAGMA table_info(schedule_runs)")}
+        if "name" not in cols_runs:
+            self.db.execute("ALTER TABLE schedule_runs ADD COLUMN name TEXT NOT NULL DEFAULT ''")
+        if "trigger" not in cols_runs:
+            self.db.execute("ALTER TABLE schedule_runs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'scheduler'")
+        if "reason" not in cols_runs:
+            self.db.execute("ALTER TABLE schedule_runs ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
         self.assistant_seed(BUILTIN_ASSISTANTS)      # 公开助手（内置）：只补缺，不覆盖改过的
         _recent = self.db.execute("SELECT id FROM research_tasks ORDER BY updated_at DESC LIMIT 1").fetchone()
         self.schedule_seed(BUILTIN_SCHEDULES, _recent["id"] if _recent else "")   # 内置定时任务：只补缺（没有项目就先留空，等用户绑）
@@ -269,6 +281,8 @@ class WorkflowDB(ResearchDB):
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(chat)")}
         if "sender" not in cols:                       # 老库补列：团队群里这条是谁说的
             self.db.execute("ALTER TABLE chat ADD COLUMN sender TEXT NOT NULL DEFAULT ''")
+        import agent_settings
+        agent_settings.migrate(self)
         self.db.commit()
         for folder in (PAPERS, NOTES, OUT):
             folder.mkdir(parents=True, exist_ok=True)
@@ -558,7 +572,11 @@ class WorkflowDB(ResearchDB):
         return dict(self.db.execute("SELECT * FROM team_members WHERE id=?", (row[0],)).fetchone())
 
     def team_member_update(self, mid: str, **fields: Any) -> dict[str, Any]:
-        allow = {k: v for k, v in fields.items() if k in ("name", "step", "prompt", "status", "note")}
+        import agent_settings
+        allow = {k: v for k, v in fields.items() if k in ("name", "step", "prompt", "status", "note", "assistant_id", "model_id", "reasoning", "permission") and v is not None}
+        agent_settings.validate_runtime_fields(self, allow)
+        if allow.get("assistant_id"):
+            self.require_assistant(allow["assistant_id"])
         if allow:
             allow["updated_at"] = now()
             sets = ", ".join("%s=?" % k for k in allow)
@@ -610,6 +628,8 @@ class WorkflowDB(ResearchDB):
         tid = uuid.uuid4().hex
         self.db.execute("INSERT INTO teams (id,name,kind,status,created_at,updated_at) VALUES (?,?,?,?,?,?)",
                         (tid, (name or "新团队").strip(), kind, "idle", now(), now()))
+        self.db.execute("INSERT OR IGNORE INTO chats (id,title,out_dir,created_at,updated_at) VALUES (?,?,?,?,?)",
+                        (tid, (name or "新团队").strip(), "", now(), now()))
         self.db.commit()
         return self.team(tid) or {}
 
@@ -642,15 +662,30 @@ class WorkflowDB(ResearchDB):
         rows = self.db.execute("SELECT * FROM assistants ORDER BY source='builtin', sort_order, created_at").fetchall()
         return [dict(r) for r in rows]
 
+    def selectable_assistants(self) -> list[dict[str, Any]]:
+        return [a for a in self.assistants() if a["source"] == "user" or a["enabled"]]
+
+    def require_assistant(self, aid: str) -> dict[str, Any]:
+        a = self.assistant(aid)
+        if not a:
+            raise ValueError("助手不存在")
+        if a["source"] != "user" and not a["enabled"]:
+            raise ValueError("这个公开助手尚未启用，请先在助手设置中启用")
+        return a
+
     def assistant(self, aid: str) -> dict[str, Any] | None:
         row = self.db.execute("SELECT * FROM assistants WHERE id=?", (aid,)).fetchone()
         return dict(row) if row else None
 
     def assistant_save(self, aid: str, **f: Any) -> dict[str, Any]:
-        allow = {k: v for k, v in f.items() if k in ("name", "avatar", "description", "rules", "prompts", "model_id") and v is not None}
+        import agent_settings
+        allow = {k: v for k, v in f.items() if k in ("name", "avatar", "description", "rules", "prompts", "model_id", "enabled", "reasoning", "permission") and v is not None}
+        agent_settings.validate_runtime_fields(self, allow)
+        if "enabled" in allow:
+            allow["enabled"] = int(bool(allow["enabled"]))
+        if isinstance(allow.get("prompts"), list):
+            allow["prompts"] = json.dumps(allow["prompts"], ensure_ascii=False)
         cur = self.assistant(aid)
-        if cur and cur["source"] == "builtin":
-            raise ValueError("公开助手是只读的 —— 请「复制为我的」再改。")
         if cur:
             if allow:
                 allow["updated_at"] = now()
@@ -658,9 +693,24 @@ class WorkflowDB(ResearchDB):
         else:
             row = (aid, "user", allow.get("name") or "新助手", allow.get("avatar", ""), allow.get("description", ""),
                    allow.get("rules", ""), allow.get("prompts", "[]"), allow.get("model_id", ""), 1, 99, now(), now())
-            self.db.execute("INSERT INTO assistants VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row)
+            self.db.execute("INSERT INTO assistants (id,source,name,avatar,description,rules,prompts,model_id,enabled,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row)
+            extra = {k: allow[k] for k in ("enabled", "reasoning", "permission") if k in allow}
+            if extra:
+                self.db.execute("UPDATE assistants SET %s WHERE id=?" % ", ".join("%s=?" % k for k in extra), (*extra.values(), aid))
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM assistants WHERE id=?", (aid,)).fetchone())
+
+    def assistants_batch_toggle(self, ids: list[str] | None = None, enabled: int = 1) -> int:
+        target = 1 if enabled else 0
+        if ids is not None:
+            if not ids:
+                return 0
+            placeholders = ",".join("?" for _ in ids)
+            self.db.execute(f"UPDATE assistants SET enabled=?, updated_at=? WHERE id IN ({placeholders})", (target, now(), *ids))
+        else:
+            self.db.execute("UPDATE assistants SET enabled=?, updated_at=?", (target, now()))
+        self.db.commit()
+        return self.db.total_changes
 
     def assistant_delete(self, aid: str) -> None:
         cur = self.assistant(aid)
@@ -679,7 +729,7 @@ class WorkflowDB(ResearchDB):
         n = 0
         for b in builtins:
             if not self.assistant(b["id"]):
-                self.db.execute("INSERT INTO assistants VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                self.db.execute("INSERT INTO assistants (id,source,name,avatar,description,rules,prompts,model_id,enabled,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                                 (b["id"], "builtin", b["name"], b.get("avatar", ""), b.get("description", ""),
                                  b.get("rules", ""), json.dumps(b.get("prompts", []), ensure_ascii=False),
                                  "", 1, b.get("sort_order", 0), now(), now()))
@@ -688,6 +738,8 @@ class WorkflowDB(ResearchDB):
         return n
 
     def set_chat_assistant(self, cid: str, aid: str) -> None:
+        if aid:
+            self.require_assistant(aid)
         self.db.execute("UPDATE chats SET assistant_id=?, updated_at=? WHERE id=?", (aid, now(), cid))
         self.db.commit()
 
@@ -835,7 +887,7 @@ class WorkflowDB(ResearchDB):
         if not name.strip() or not base_url.strip() or not model.strip():
             raise ValueError("模型档案需要 名称/接口地址/模型名")
         mid = uuid.uuid4().hex
-        self.db.execute("INSERT INTO model_profiles VALUES (?,?,?,?,?,?,?)", (mid, name.strip(), base_url.strip().rstrip("/"), api_key.strip(), model.strip(), 0, now()))
+        self.db.execute("INSERT INTO model_profiles (id,name,base_url,api_key,model,is_active,created_at) VALUES (?,?,?,?,?,?,?)", (mid, name.strip(), base_url.strip().rstrip("/"), api_key.strip(), model.strip(), 0, now()))
         self.db.commit()
         if activate or not self.active_model():
             self.set_active(mid)
@@ -925,6 +977,8 @@ class WorkflowDB(ResearchDB):
         self.db.execute("UPDATE providers SET api_key=?, enabled=? WHERE id=?",
                         (api_key.strip(), 1 if api_key.strip() else 0, pid))
         self.db.commit()
+        import agent_settings
+        agent_settings.sync_provider_models(self, pid)
         return self.provider(pid)
 
     def delete_provider(self, pid: str) -> None:
@@ -934,6 +988,7 @@ class WorkflowDB(ResearchDB):
             self.db.execute("DELETE FROM providers WHERE id=?", (pid,))
         else:
             self.db.execute("UPDATE providers SET api_key='', models='[]', enabled=0 WHERE id=?", (pid,))
+        self.db.execute("DELETE FROM model_profiles WHERE provider_id=?", (pid,))
         self.db.commit()
 
     def adopt_model(self, pid: str, model: str, on: bool = True) -> dict[str, Any]:
@@ -949,6 +1004,8 @@ class WorkflowDB(ResearchDB):
         self.db.execute("UPDATE providers SET models=?, enabled=? WHERE id=?",
                         (json.dumps(names, ensure_ascii=False), 1 if (names or p["api_key"]) else 0, pid))
         self.db.commit()
+        import agent_settings
+        agent_settings.sync_provider_models(self, pid)
         if on and not self.active_model():          # 还没有默认模型 → 这次采用的就当默认，省得 Agent 说「没配模型」
             try:
                 self.set_default(pid, model)
@@ -961,22 +1018,14 @@ class WorkflowDB(ResearchDB):
         p = self.provider(pid)
         if not model.strip():
             raise ValueError("先采用一个模型，再设为默认")
-        if not p["api_key"]:
-            raise ValueError("这个 Provider 还没保存 Key")
         if p["api"] not in USABLE_WIRES:
-            raise ValueError(f"本机调用只实现了 OpenAI Chat Completions；「{WIRE_LABEL.get(p['api'], p['api'])}」"
-                             "这条协议还没接，设成默认会调用失败")
-        self.db.execute("UPDATE model_profiles SET is_active=0")
-        row = self.db.execute("SELECT id FROM model_profiles WHERE base_url=? AND model=?",
-                              (p["base_url"], model)).fetchone()
-        if row:
-            self.db.execute("UPDATE model_profiles SET is_active=1, api_key=?, name=? WHERE id=?",
-                            (p["api_key"], p["name"], row["id"]))
-        else:
-            self.db.execute("INSERT INTO model_profiles VALUES (?,?,?,?,?,1,?)",
-                            (uuid.uuid4().hex, p["name"], p["base_url"], p["api_key"], model, now()))
-        self.db.commit()
-        return self.active_model()
+            raise ValueError(f"暂不支持运行协议：{WIRE_LABEL.get(p['api'], p['api'])}")
+        if model not in p["models"]:
+            self.adopt_model(pid, model)
+        import agent_settings
+        agent_settings.sync_provider_models(self, pid)
+        row = self.db.execute("SELECT id FROM model_profiles WHERE provider_id=? AND model=?", (pid, model)).fetchone()
+        return self.set_active(row["id"])
 
     def provider_default(self) -> dict[str, Any] | None:
         m = self.active_model()
@@ -1113,8 +1162,18 @@ def chat_raw(profile: dict[str, Any], messages: list[dict[str, Any]], tools: lis
     """返回 assistant message 原始结构（含 tool_calls），供 agent 循环使用。"""
     if not profile:
         raise RuntimeError("尚未配置模型：到「模型」页添加一个 OpenAI 兼容接口并设为当前模型。")
+    try:
+        import runtime
+        return runtime.call(profile, messages, tools=tools, temperature=temperature, timeout=timeout, max_tokens=max_tokens)
+    except (ImportError, ModuleNotFoundError):
+        pass
     guards.scrub(messages, note=f"→ {profile.get('model') or '?'}")   # 出站闸门：个人信息/密钥就地打码，再发出去
+    if profile.get("api", "openai-completions") != "openai-completions":
+        from agent_protocols import complete
+        return complete(profile, messages, tools, temperature, timeout, max_tokens)
     payload = {"model": profile["model"], "temperature": temperature, "max_tokens": max_tokens, "messages": messages}
+    if profile.get("reasoning", "auto") != "auto":
+        payload["reasoning_effort"] = profile["reasoning"]
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
@@ -2235,10 +2294,20 @@ IDEA_TOOLS = [
 
 # 博导 skill：直接读本机技能目录里的 skill 正文（找不到就用内置精简版）
 SKILL_ROOTS = [Path(os.environ["RW_SKILL_DIR"])] if os.environ.get("RW_SKILL_DIR") else []
-SKILL_ROOTS.append(Path.home() / "AppData" / "Local" / "hermes" / "skills")
+SKILL_ROOTS.append(Path.home() / ".agents" / "skills")
 
 
-def skill_text(*rel: str, cap: int = 7000) -> str:
+def skill_text(*rel: str, cap: int = 7000, db=None, task_id: str = "") -> str:
+    if db is not None:
+        import capabilities
+        project_dir = (db.summary(task_id).get("task") or {}).get("base_dir", "")
+        name = rel[-2] if len(rel) > 1 else ""
+        item = next((x for x in capabilities.list_skills(project_dir) if x["id"] == name), None)
+        if item:
+            if not capabilities.enabled(db, db.assistant_of_chat(task_id), "skill", item["id"]):
+                return ""
+            return Path(item["path"]).read_text(encoding="utf-8-sig")[:cap]
+        return ""
     for root in SKILL_ROOTS:
         p = root.joinpath(*rel)
         if not p.is_file():
@@ -2258,16 +2327,15 @@ Strong Accept（≥2 个维度 8+ 且无致命缺陷）/ Accept with Revisions�
 READ_FALLBACK = "你是文献精读助手。用中文输出：每页 2-4 条要点，每条后标注 (p.页码)。只依据原文，找不到就写「本页未见相关内容」。禁止编造数字。"
 
 # 精读用的 system：本机若有 paper-reading-reports skill 就把它的规范并进来（和博导 skill 同一套做法）
-_read_skill = skill_text("research", "paper-reading-reports", "SKILL.md", cap=3000)
-READ_SYSTEM = READ_FALLBACK + (f"\n\n【本机 skill：论文精读规范，按它的格式产出】\n{_read_skill}" if _read_skill else "")
+READ_SYSTEM = READ_FALLBACK
 
 
 def idea_system(db: "WorkflowDB", task_id: str) -> str:
     """创新点审查专用 system：限定工具 + 博导 skill 框架 + 项目记忆。"""
     task = db.summary(task_id)["task"]
     skills = "\n\n".join(x for x in (
-        skill_text("research", "research-topic-selection", "SKILL.md", cap=2000),
-        skill_text("idea-evaluator", "SKILL.md", cap=4500),
+        skill_text("research", "research-topic-selection", "SKILL.md", cap=2000, db=db, task_id=task_id),
+        skill_text("idea-evaluator", "SKILL.md", cap=4500, db=db, task_id=task_id),
     ) if x) or IDEA_FALLBACK
     return f"""你是「览籍智研」里这一步的创新点审查助手，用中文工作，站在博导（既严格又给建设性建议）的位置。
 
@@ -2760,7 +2828,7 @@ def map_system(db: "WorkflowDB", task_id: str) -> str:
     out = doc_read(db, task_id, "outline")
     cur = map_read(db, task_id)
     src = map_sources(db, task_id)
-    skills = skill_text("research", "paper-reading-reports", "SKILL.md", cap=2500) or MAP_FALLBACK
+    skills = skill_text("research", "paper-reading-reports", "SKILL.md", cap=2500, db=db, task_id=task_id) or MAP_FALLBACK
     return f"""你是「览籍智研」里「梳理精读」这一步的**结构整理 agent**，用中文工作。
 
 硬规则：
@@ -2818,8 +2886,8 @@ def write_system(db: "WorkflowDB", task_id: str) -> str:
     cur = doc_read(db, task_id, "write")
     cite = cite_sync(db, task_id)                    # 每次进这一步都按当前正文重算台账状态
     skills = "\n\n".join(x for x in (
-        skill_text("academic-writing", "paper-spine", "SKILL.md", cap=4000),
-        skill_text("paper-writer", "SKILL.md", cap=3500),
+        skill_text("academic-writing", "paper-spine", "SKILL.md", cap=4000, db=db, task_id=task_id),
+        skill_text("paper-writer", "SKILL.md", cap=3500, db=db, task_id=task_id),
     ) if x) or WRITE_FALLBACK
     return f"""你是「览籍智研」里「论文撰写」这一步的写作 agent，用中文工作（用户要英文稿就写英文），站在一作+导师之间的位置。
 
@@ -3047,10 +3115,10 @@ def review_system(db: "WorkflowDB", task_id: str) -> str:
     task = db.summary(task_id)["task"]
     cur = doc_read(db, task_id, "write")
     skills = "\n\n".join(x for x in (
-        skill_text("research", "research-topic-selection", "SKILL.md", cap=1800),
-        skill_text("idea-evaluator", "SKILL.md", cap=3500),
-        skill_text("manuscript-writing", "SKILL.md", cap=3000),
-        skill_text("pre-submission-reviewer", "SKILL.md", cap=2500),
+        skill_text("research", "research-topic-selection", "SKILL.md", cap=1800, db=db, task_id=task_id),
+        skill_text("idea-evaluator", "SKILL.md", cap=3500, db=db, task_id=task_id),
+        skill_text("manuscript-writing", "SKILL.md", cap=3000, db=db, task_id=task_id),
+        skill_text("pre-submission-reviewer", "SKILL.md", cap=2500, db=db, task_id=task_id),
     ) if x) or REVIEW_FALLBACK
     return f"""你是「览籍智研」里「稿件审查」这一步的审查 agent，用中文工作，站在**博导/审稿人**的位置：既严格，也给建设性意见。
 
@@ -3293,9 +3361,12 @@ def agent_profile(db: "WorkflowDB", task_id: str) -> dict[str, Any] | None:
         return db.active_model()
     aid = (row["assistant_id"] if row else "") or ""
     if aid:
-        a = db.assistant(aid)
+        a = db.require_assistant(aid)
         if a and a.get("model_id"):
-            m = db.model(a["model_id"])
+            try:
+                m = db.model(a["model_id"])
+            except KeyError:
+                raise ValueError("助手绑定的模型已移除，请重新选择模型") from None
             if m and m.get("base_url") and m.get("model"):
                 return m
     return db.active_model()
@@ -3304,14 +3375,26 @@ def agent_profile(db: "WorkflowDB", task_id: str) -> dict[str, Any] | None:
 def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_steps: int = 6,
               system: str | None = None, tools: list[dict[str, Any]] | None = None,
               extra_context: str = "", scope: str = "", publish: bool = True,
-              profile: dict[str, Any] | None = None) -> dict[str, Any]:
+              profile: dict[str, Any] | None = None, assistant_id: str = "",
+              member: dict[str, Any] | None = None) -> dict[str, Any]:
     """工具调用循环。emit(event) 每产生一条事件调用一次（SSE 用）。
     system/tools 不传就是通用 Agent（AGENT_SYSTEM + 全量工具）；创新点审查/确认大纲那两步会传受限工具 + 记忆块。
     scope 决定这轮对话和哪一步共用历史（'' = 创新点审查/通用，'outline' = 确认大纲）。
     publish=False = 后台子 agent（文章撰写流水线内部用）：不写对话历史、不落 assistant 回复、不发 done，
     工具调用与文本照旧流给前台看进度 —— 由调用方统一收尾。"""
     say = emit or (lambda _e: None)
-    profile = profile or agent_profile(db, task_id)
+    import agent_settings
+    import capabilities
+    import agent_integrations
+    cfg = agent_settings.runtime_config(db, task_id, assistant_id or (profile or {}).get("assistant_id", ""), member)
+    if profile is None:
+        profile = db.model(cfg["model_id"]) if cfg["model_id"] else agent_profile(db, task_id)
+    profile = dict(profile or {})
+    for key in ("reasoning", "permission"):
+        profile.setdefault(key, cfg[key])
+    permission = profile.get("permission", "auto")
+    aid = cfg["assistant_id"]
+    profile["assistant_id"] = aid
     if publish:
         db.add_message(task_id, "user", text, scope=scope)
         say({"type": "user", "content": text})
@@ -3349,9 +3432,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                "跨项目的事让用户回首页 Agent（全局 Leader）做。\n"
                f"当前项目：{task['title']}\n研究问题：{task['question']}\n"
                f"关键词 / 材料体系：{task['material_system']}\n项目 ID：{task_id}\n产出目录：{db.out_dir(task_id)}")
-    if chat_row:                      # 这个对话绑的助手（我的/公开）→ 它的规则进 system
+    if aid:                           # Also applies to each team's selected assistant.
         try:
-            asst = db.assistant(chat_row["assistant_id"] or "")
+            asst = db.require_assistant(aid)
         except Exception:
             asst = None
         if asst:
@@ -3359,8 +3442,27 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 asst["name"], "公开内置" if asst["source"] == "builtin" else "我的助手", asst["rules"] or "（没写规则）")
     if extra_context:
         ctx += "\n\n" + extra_context
+    project_dir = str((db.summary(bound or task_id).get("task") or {}).get("base_dir") or "")
+    ctx += "\n\n" + capabilities.skill_context(db, aid, project_dir)
+    ctx += "\n\n权限模式：%s。%s" % (permission, {
+        "auto": "由你根据用户目标决定操作范围；外发邮件、消息和远程写入仍需明确确认。",
+        "read_only": "只允许只读工具，禁止写入文件、数据库、邮件或外部服务。",
+        "workspace_write": "可以修改工作区内容；外发邮件、消息和远程写入需要明确确认。",
+        "full_access": "危险：用户授予完全访问权限，可使用所有已启用工具和外部写入，不再要求逐次确认；谨慎处理不可逆操作。",
+    }[permission])
     history = [{"role": m["role"], "content": m["content"]} for m in db.messages(task_id, scope or "idea")[:-1]][-12:]
-    tool_specs = TOOL_SPECS if tools is None else tools
+    tool_specs = list(TOOL_SPECS if tools is None else tools)
+    if tools is None:
+        tool_specs += agent_integrations.tool_specs()
+        tool_specs += capabilities.capability_tool_specs(db, aid, project_dir)
+    elif any(t.get("function", {}).get("name") == "skill_read" for t in capabilities.capability_tool_specs(db, aid, project_dir)):
+        tool_specs += [t for t in capabilities.capability_tool_specs(db, aid, project_dir) if t.get("function", {}).get("name") == "skill_read"]
+    tool_specs = capabilities.filter_tools(db, aid, tool_specs, project_dir)
+    if permission == "read_only":
+        tool_specs = [t for t in tool_specs if t.get("function", {}).get("name") in agent_settings.READ_TOOLS]
+    tool_specs = list({t["function"]["name"]: t for t in tool_specs}.values())
+    allowed_names = {t.get("function", {}).get("name") for t in tool_specs}
+    integration_names = {t.get("function", {}).get("name") for t in agent_integrations.tool_specs()}
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system or AGENT_SYSTEM},
         {"role": "system", "content": ctx},
@@ -3388,7 +3490,10 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             final = msg.get("content") or "（模型没有返回内容）"
             messages.append({"role": "assistant", "content": final})
             break
-        messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
+        assistant_message = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
+        if msg.get("_protocol"):
+            assistant_message["_protocol"] = msg["_protocol"]
+        messages.append(assistant_message)
         for call in calls:
             fn = (call.get("function") or {})
             name = fn.get("name") or "?"
@@ -3398,13 +3503,28 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 args = {}
             ev = {"type": "tool_call", "name": name, "args": args, "id": call.get("id")}
             say(ev); events.append(ev)
+            t_tool_start = time.monotonic()
             try:
-                result = _tool_impl(name, db, ctx_id, args, scope, emit=emit, profile=profile)
+                if name not in allowed_names:
+                    raise PermissionError("当前助手未获准使用此工具：" + name)
+                if name in integration_names:
+                    result = agent_integrations.invoke(name, db, ctx_id, args, assistant_id=aid, permission=permission)
+                elif name == "skill_read" or name.startswith("mcp_"):
+                    result = capabilities.invoke_tool(db, aid, name, args, project_dir)
+                else:
+                    result = _tool_impl(name, db, ctx_id, args, scope, emit=emit, profile=profile)
                 if isinstance(result, dict) and result.get("sub_events"):
                     events.extend(result["sub_events"])      # 子 agent 的事件并进本轮 → 回放可还原
                 ok, brief = True, _brief(name, result)
             except Exception as exc:
                 result, ok, brief = {"error": f"{type(exc).__name__}: {exc}"}, False, f"失败：{exc}"
+            duration_ms = int((time.monotonic() - t_tool_start) * 1000)
+            try:
+                inp_hash = hashlib.sha256(json.dumps(args, sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()[:16]
+                db.record_audit_event(actor=aid or "user", assistant_id=aid, tool=name, project_id=ctx_id,
+                                      input_hash=inp_hash, outcome="ok" if ok else "error", duration_ms=duration_ms)
+            except Exception:
+                pass
             path = result.get("path") if isinstance(result, dict) else None
             ev2 = {"type": "tool_result", "name": name, "ok": ok, "summary": brief,
                    "path": path or "", "id": call.get("id")}

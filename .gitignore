@@ -1,5 +1,7 @@
 # 运行时数据：模型 API key、下载的 PDF、笔记、上传物都在 data/ 里 —— 绝不上传
 data/
+*.db
+*.sqlite3
 
 # 构建产物
 dist/
@@ -19,3 +21,6 @@ venv/
 
 # 他放头像素材的源图夹（只在本地，成品是 web/vendor/img/av*.png）
 q/
+
+# 诊断与设计临时文档（仅保留 doc/ 目录）
+docs/

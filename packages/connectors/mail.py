@@ -65,6 +65,30 @@ MAIL_PROVIDERS: dict[str, dict[str, Any]] = {
                "note": "请向学校 / 单位信息中心索取 IMAP 与 SMTP 服务器地址及端口。"},
 }
 
+# Official account/help pages are returned alongside the presets, not embedded credentials.
+_HELP_LINKS = {
+    "163": [("开启 IMAP/SMTP 与获取授权码", "https://mail.163.com/")],
+    "126": [("开启 IMAP/SMTP 与获取授权码", "https://mail.126.com/")],
+    "yeah": [("开启 IMAP/SMTP 与获取授权码", "https://mail.yeah.net/")],
+    "qq": [("账户设置与授权码", "https://wx.mail.qq.com/"), ("QQ 邮箱官方帮助", "https://service.mail.qq.com/")],
+    "exmail": [("企业邮账户与客户端专用密码", "https://exmail.qq.com/")],
+    "gmail": [("获取应用专用密码", "https://myaccount.google.com/apppasswords"),
+              ("开启两步验证", "https://myaccount.google.com/signinoptions/two-step-verification"),
+              ("官方应用密码说明", "https://support.google.com/accounts/answer/185833?hl=zh-Hans")],
+    "outlook": [("Outlook 同步邮件设置", "https://outlook.live.com/mail/0/options/mail/accounts"),
+                ("微软账户安全设置", "https://account.microsoft.com/security"),
+                ("OAuth 与 POP/IMAP 说明", "https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth")],
+    "sina": [("新浪邮箱服务设置", "https://mail.sina.com.cn/")],
+    "aliyun": [("阿里邮箱账户设置", "https://mail.aliyun.com/"), ("阿里邮箱官方帮助", "https://help.aliyun.com/product/35468.html")],
+    "custom": [("IMAP 协议与服务参数说明", "https://www.rfc-editor.org/rfc/rfc9051.html")],
+}
+for _provider_id, _links in _HELP_LINKS.items():
+    MAIL_PROVIDERS[_provider_id]["helpLinks"] = [{"label": label, "url": url} for label, url in _links]
+MAIL_PROVIDERS["outlook"]["note"] = (
+    "微软个人 Outlook/Hotmail 已停用基本密码认证；仅有应用密码也可能无法登录。"
+    "当前连接器使用 IMAP/SMTP 密码认证，不伪装支持 OAuth。若服务端要求 OAuth，需使用支持 OAuth 的客户端或其他账户。"
+    "组织账户是否支持需由管理员确认 SMTP AUTH/IMAP 策略。")
+
 
 def get_provider(key: str | None) -> dict[str, Any]:
     return MAIL_PROVIDERS.get(str(key or ""), MAIL_PROVIDERS["custom"])
@@ -648,7 +672,8 @@ def send_mail(acc: dict[str, Any], to: str = "", cc: str = "", subject: str = ""
         try:
             server.starttls(context=_ssl_context(acc))
         except smtplib.SMTPException:
-            pass
+            server.quit()
+            raise ValueError("SMTP 服务器不支持 STARTTLS，已拒绝明文发送凭据；请检查端口或改用 SSL")
     try:
         server.login(str(acc.get("email")), str(acc.get("password")))
         server.send_message(msg, from_addr=str(acc.get("email")), to_addrs=recipients)

@@ -18,12 +18,15 @@ a = Analysis(
     binaries=[],
     datas=[
         (os.path.join(_ROOT, 'apps', 'desktop', 'web'), 'web'),
+        (os.path.join(_ROOT, 'tools', 'home'), 'tools/home'),
         (os.path.join(_ROOT, 'tools', 'build', 'icon.ico'), 'build'),
         (os.path.join(_ROOT, 'packages', 'contracts', 'providers_catalog.json'), 'packages/contracts'),
     ],
     hiddenimports=['pdfplumber', 'pypdf', 'cryptography', 'PIL', 'pypdfium2', 'webview',
                    'research_core', 'workflow', 'team', 'schedule', 'papertran', 'zotero', 'vault',
-                   'mail', 'rss', 'integrations', 'guards', 'pdfio'],
+                   'mail', 'rss', 'integrations', 'guards', 'pdfio', 'agent_settings', 'agent_protocols',
+                   'capabilities', 'workflow_layout', 'folder_picker', 'agent_integrations',
+                   'feishu', 'zotero_sync', 'service_settings', 'tkinter', 'tkinter.filedialog'],
     # 说明：pdfminer.six / pdfplumber 里有条件导入（cryptography 处理加密 PDF、PIL/pypdfium2 渲染），
     # 静态分析看不到，必须显式列出；PyMuPDF(AGPL) 已弃用，见 pdfio.py。
    # cryptography: pdfminer.six 里是条件导入，静态分析看不到   # PyMuPDF(AGPL) 已弃用，见 pdfio.py / requirements.txt

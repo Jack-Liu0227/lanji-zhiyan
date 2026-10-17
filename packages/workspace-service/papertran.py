@@ -153,9 +153,28 @@ def _read_state(out_dir: Path, paper_id: str) -> dict[str, Any]:
         return {}
 
 
-def status(paper_id: str) -> dict[str, Any]:
+def status(paper_id: str, out_dir: Path | None = None) -> dict[str, Any]:
     with _LOCK:
-        return dict(JOBS.get(paper_id) or {"state": "idle"})
+        job = JOBS.get(paper_id)
+        if job:
+            return dict(job)
+    cand_dirs = [out_dir] if out_dir else [Path("data/out/translations"), Path("data/uploads"), Path("data/out")]
+    for d in cand_dirs:
+        if d and d.is_dir():
+            st = _read_state(d, paper_id)
+            if st:
+                done = bool(st.get("done"))
+                pages_done = int(st.get("pages_done") or 0)
+                total = int(st.get("total") or 0)
+                if done:
+                    return {"state": "done", "pct": 100, "msg": "已有译文（断点缓存）",
+                            "pages_done": total, "total_pages": total}
+                if pages_done > 0:
+                    pct = int(pages_done * 100 / max(1, total)) if total else 0
+                    return {"state": "interrupted", "pct": pct,
+                            "msg": f"任务可断点恢复（第 1-{pages_done} 页已完成）",
+                            "pages_done": pages_done, "total_pages": total}
+    return {"state": "idle"}
 
 
 def _env() -> dict[str, str]:
@@ -272,34 +291,45 @@ def _spawn(paper_id: str, cmd: list[str], env: dict[str, str], fh: Any, a: int, 
                             creationflags=_CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP)
     phase, done, tot = "", 0, 0
     last = [time.monotonic()]
+    stop_event = threading.Event()
 
     def _watch() -> None:                  # 卡死看门狗：读循环会阻塞在 readline 上，只能另起线程盯
-        while proc.poll() is None:
+        while not stop_event.wait(0.2):
+            if proc.poll() is not None:
+                return
             if time.monotonic() - last[0] > STALL_SECONDS:
-                fh.write(f"!!! 超过 {STALL_SECONDS}s 没有任何输出，判定卡死并终止\n")
-                fh.flush()
+                with _LOG_LOCK:
+                    fh.write(f"!!! 超过 {STALL_SECONDS}s 没有任何输出，判定卡死并终止\n")
+                    fh.flush()
                 proc.kill()
                 return
-            time.sleep(5)
 
-    threading.Thread(target=_watch, daemon=True).start()
-    for line in proc.stdout or []:
-        last[0] = time.monotonic()
-        with _LOG_LOCK:
-            fh.write(line)
-            fh.flush()
-        ph = _phase(line)
-        if ph:
-            phase = ph
-        if "translate" in line.lower() or "-----" in line or "━" in line:
-            for cand in _PROG.finditer(line):        # 只认 "已完成/总数"（时间戳 0:00:10/0:00:06 会被 done>total 挡掉）
-                x, y = int(cand.group(1)), int(cand.group(2))
-                if 0 < x <= y:
-                    done, tot = x, y
-                    break
-        msg = f"第 {a}-{b} 页 · {phase or '准备中'}" + (f" {done}/{tot}" if tot else "")
-        with _LOCK:
-            JOBS[paper_id] = {**JOBS.get(paper_id, {}), "state": "running", "msg": msg}
+    watch_thread = threading.Thread(target=_watch, daemon=True)
+    watch_thread.start()
+    try:
+        if proc.stdout:
+            for line in proc.stdout:
+                last[0] = time.monotonic()
+                with _LOG_LOCK:
+                    fh.write(line)
+                    fh.flush()
+                ph = _phase(line)
+                if ph:
+                    phase = ph
+                if "translate" in line.lower() or "-----" in line or "━" in line:
+                    for cand in _PROG.finditer(line):        # 只认 "已完成/总数"（时间戳 0:00:10/0:00:06 会被 done>total 挡掉）
+                        x, y = int(cand.group(1)), int(cand.group(2))
+                        if 0 < x <= y:
+                            done, tot = x, y
+                            break
+                msg = f"第 {a}-{b} 页 · {phase or '准备中'}" + (f" {done}/{tot}" if tot else "")
+                with _LOCK:
+                    JOBS[paper_id] = {**JOBS.get(paper_id, {}), "state": "running", "msg": msg}
+    finally:
+        stop_event.set()
+        watch_thread.join(timeout=2)
+        if proc.stdout:
+            proc.stdout.close()
     return proc.wait()
 
 

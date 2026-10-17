@@ -180,7 +180,7 @@ def _run_one(row: dict[str, Any]) -> None:
     try:
         with workflow.WorkflowDB(_db_path()) as db:
             out = workflow.run_agent(db, t_id, row["prompt"], emit=emit, publish=False,
-                                     extra_context=extra, max_steps=8)
+                                     extra_context=extra, max_steps=8, assistant_id=mem.get("assistant_id", ""), member=mem)
         text = (out.get("reply") or "\n".join(outs) or "").strip()
         with workflow.WorkflowDB(_db_path()) as db:
             folder = db.pdir(t_id, "其余") / "团队"
@@ -275,7 +275,7 @@ if __name__ == "__main__":       # 手跑自检：python team.py
 
 # ============================ v2：成员=助手 + 团队内 AI 聊天平台 ============================
 
-MAX_PICKS = 5            # 一个团队最多选 5 个助手（Leader 是常驻主持，不占名额）
+MAX_PICKS = 1000000      # Selection is not truncated; the UI shows the complete assistant roster.
 # 身份色：0 号固定给 Leader，其余走低饱和 slate 系
 MEMBER_COLORS = ["var(--brand)", "#5c9ea4", "#b58a5e", "#8f7fb5", "#7fa06a", "#b57f92"]
 STOP_WORDS = ("完成", "全部完成", "已全部完成", "DONE", "收工")
@@ -300,21 +300,26 @@ def add_assistant(scope: str, assistant_id: str) -> dict[str, Any]:
         asst = db.assistant(assistant_id)
         if not asst:
             raise ValueError("没有这个助手 —— 先去「助手」页建一个")
-        cur = [m for m in db.team_members(scope) if m["role"] == "member"]
+        asst = db.require_assistant(assistant_id)
+        cur = db.team_members(scope)
         if any(m["assistant_id"] == assistant_id for m in cur):
             raise ValueError("「%s」已经在团队里了" % asst["name"])
-        if len(cur) >= MAX_PICKS:
-            raise ValueError("一个团队最多 %d 个助手（现在 %d 个），先移掉一个再加" % (MAX_PICKS, len(cur)))
         return db.team_member_add(scope, asst["name"], "member", "", asst["rules"] or "",
-                                  assistant_id=assistant_id, color=1 + len(cur))
+                                  assistant_id=assistant_id, color=1 + len([m for m in cur if m["role"] == "member"]))
 
 
-def transcript(scope: str, limit: int = 200) -> list[dict[str, Any]]:
+def _history_scope(db, scope):
+    import agent_settings
+    return "team:" + agent_settings.session(db, scope)["id"]
+
+
+def transcript(scope: str, limit: int | None = None) -> list[dict[str, Any]]:
     """团队群里的对话（谁说的都记在 sender 上）。"""
     with workflow.WorkflowDB(_db_path()) as db:
-        return [{"role": m["role"], "content": m["content"],
+        rows = [{"role": m["role"], "content": m["content"],
                  "sender": m.get("sender") or ("你" if m["role"] == "user" else "成员"),
-                 "at": m["created_at"]} for m in db.messages(scope, TEAM_SCOPE)][-limit:]
+                 "at": m["created_at"]} for m in db.messages(scope, _history_scope(db, scope))]
+        return rows[-limit:] if limit else rows
 
 
 def say(scope: str, text: str, start: bool = True) -> dict[str, Any]:
@@ -323,7 +328,10 @@ def say(scope: str, text: str, start: bool = True) -> dict[str, Any]:
     if not text:
         raise ValueError("要说点什么")
     with workflow.WorkflowDB(_db_path()) as db:
-        db.add_message(scope, "user", text, scope=TEAM_SCOPE, sender="你")
+        history_scope = _history_scope(db, scope)
+        db.add_message(scope, "user", text, scope=history_scope, sender="你")
+        db.db.execute("UPDATE team_sessions SET title=CASE WHEN title='新会话' THEN ? ELSE title END, updated_at=? WHERE team_id=? AND active=1", (text[:40], _now(), scope))
+        db.db.commit()
     started = kick(scope) if start else False
     return {"ok": True, "started": started, "running": scope in TEAM_RUNS}
 
@@ -370,55 +378,58 @@ def _round(scope: str, turns: int) -> None:
     import workflow as _wf
     try:
         with workflow.WorkflowDB(_db_path()) as db:
-            ms = [m for m in db.team_members(scope) if m["role"] == "member"]
+            history_scope = _history_scope(db, scope)
+            ms = [m for m in db.team_members(scope) if m["role"] == "member" or m.get("assistant_id") or m.get("model_id")
+                  or m["name"] != LEADER_NAME or m["prompt"] != LEADER_BRIEF]
             names = [m["name"] for m in ms]
             by_name = {m["name"]: m for m in ms}
             if not names:
                 db.add_message(scope, "assistant", "团队里还没有人 —— 先从左边的助手里选几个。",
-                               scope=TEAM_SCOPE, sender="系统")
+                               scope=history_scope, sender="系统")
                 return
             last = None
             for t in range(1, turns + 1):
                 st = TEAM_RUNS.get(scope) or {}
                 if st.get("stop"):
-                    db.add_message(scope, "assistant", "（已停止）", scope=TEAM_SCOPE, sender="系统")
+                    db.add_message(scope, "assistant", "（已停止）", scope=history_scope, sender="系统")
                     return
-                hist = [dict(m) for m in db.messages(scope, TEAM_SCOPE)][-12:]
+                hist = [dict(m) for m in db.messages(scope, history_scope)][-12:]
                 tail = "\n".join((h.get("content") or "") for h in hist[-2:])
                 speaker = next_speaker(tail, names, last)
                 if not speaker:
                     db.add_message(scope, "assistant", "团队：这件事告一段落（收到收工信号）。",
-                                   scope=TEAM_SCOPE, sender="系统")
+                                   scope=history_scope, sender="系统")
                     return
                 m = by_name[speaker]
                 _set(scope, turn=t, current=speaker, phase="%s 正在做（第 %d/%d 轮）" % (speaker, t, turns))
                 prof = None                                  # 这个成员背后接的模型（= 它那个助手绑的模型）
-                if m.get("assistant_id"):
-                    _a = db.assistant(m["assistant_id"]) or {}
-                    if _a.get("model_id"):
-                        prof = db.model(_a["model_id"]) or None
                 extra = (
-                    "【团队协作】你现在的身份是团队成员「%s」（不是全局 Leader）：%s\n"
+                    "【团队协作】你现在的身份是%s「%s」（不是首页全局助手）：%s\n"
                     "团队名单：%s\n"
                     "干活规则：只做你这份；结论要能核查（引用来源/数字）；"
                     "要交给谁，就在回复开头写 @那个人的名字；整件事真做完了就回复「完成」并且不要再 @人。\n"
-                    "最近的团队记录：\n%s" % (speaker, m["prompt"] or "（没写职责）", "、".join(names),
+                    "最近的团队记录：\n%s" % ("团队 Leader，负责协调与决策" if m["role"] == "leader" else "团队成员", speaker, m["prompt"] or "（没写职责）", "、".join(names),
                                             "\n".join("%s：%s" % (h.get("sender") or h.get("role"), (h.get("content") or "")[:240])
                                                         for h in hist)))
                 try:
+                    import agent_settings
+                    config = agent_settings.runtime_config(db, scope, m.get("assistant_id", ""), m)
+                    if config.get("model_id"):
+                        prof = db.model(config["model_id"])
                     out = _wf.run_agent(db, scope, "继续推进（你是 %s）" % speaker, extra_context=extra,
-                                        scope=TEAM_SCOPE, publish=False, profile=prof)
+                                        scope=history_scope, publish=False, profile=prof,
+                                        assistant_id=m.get("assistant_id", ""), member=m)
                     body = (out.get("reply") or "").strip() or "（这一轮没说话）"
                 except Exception as exc:                       # 一个成员失败不该掀翻整个团队，但也别空转
                     db.add_message(scope, "assistant", "（%s 这一轮失败：%s）" % (speaker, exc),
-                                   scope=TEAM_SCOPE, sender=speaker)
+                                   scope=history_scope, sender=speaker)
                     db.add_message(scope, "assistant", "团队：%s 这一轮出错了，先停在这里 —— 修好再继续。"
-                                   % speaker, scope=TEAM_SCOPE, sender="系统")
+                                   % speaker, scope=history_scope, sender="系统")
                     return
-                db.add_message(scope, "assistant", body, scope=TEAM_SCOPE, sender=speaker)
+                db.add_message(scope, "assistant", body, scope=history_scope, sender=speaker)
                 last = speaker
                 if next_speaker(body, names, last) is None:
-                    db.add_message(scope, "assistant", "团队：都齐了，收工。", scope=TEAM_SCOPE, sender="系统")
+                    db.add_message(scope, "assistant", "团队：都齐了，收工。", scope=history_scope, sender="系统")
                     return
             _set(scope, phase="轮次用完（%d 轮）" % turns)
     finally:
@@ -428,16 +439,20 @@ def _round(scope: str, turns: int) -> None:
 
 
 def chat_state(scope: str) -> dict[str, Any]:
-    """团队页要的一切：这个团队 + 成员（带色 + 各自模型）+ 群记录 + 正在跑的状态 + 上限。"""
+    """团队页要的一切：这个团队 + 成员（带色 + 各自模型）+ 群记录 + 正在跑的状态 + 会话历史 + 上限。"""
     ensure_leader(scope)
     with workflow.WorkflowDB(_db_path()) as db:
+        import agent_settings
+        cur_session = agent_settings.session(db, scope)
+        sessions = [dict(r) for r in db.db.execute("SELECT * FROM team_sessions WHERE team_id=? ORDER BY updated_at DESC", (scope,))]
         ms = members(scope)
         for m in ms:
             m["model"] = _member_model(db, m)
         t_rec = db.team(scope)
     return {"team": t_rec, "members": ms, "max": MAX_PICKS, "palette": MEMBER_COLORS,
             "transcript": transcript(scope), "running": TEAM_RUNS.get(scope),
-            "colors": {m["id"]: color_of(m) for m in ms}}
+            "colors": {m["id"]: color_of(m) for m in ms},
+            "session": cur_session, "sessions": sessions}
 
 
 # ==================== v3：多团队（2 固定 + 3 机动）+ 成员各用自己的模型 ====================
@@ -578,11 +593,14 @@ def release(tid: str) -> None:
 def _member_model(db, m: dict[str, Any]) -> str:
     """这个成员背后接的是哪个模型（助手绑的那个）。"""
     aid = m.get("assistant_id") or ""
-    if not aid:
+    if not aid and not m.get("model_id"):
         return ""
     a = db.assistant(aid) or {}
     mid = a.get("model_id") or ""
-    if not mid:
+    if not mid and not m.get("model_id"):
         return ""
-    prof = db.model(mid) or {}
+    try:
+        prof = db.model(m.get("model_id") or mid) or {}
+    except KeyError:
+        return "模型已移除，请重新配置"
     return prof.get("name") or ""
