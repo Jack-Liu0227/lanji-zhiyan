@@ -3410,7 +3410,7 @@ BUILTIN_ASSISTANTS = [
      "prompts": ["按框架定这章的大纲", "每节分别要什么证据", "还缺哪些数据才能写"]},]
 
 def _global_brief(db: "WorkflowDB") -> str:
-    """全局 Leader 的简报：有哪些项目、各自走到哪、库里有多少东西。
+    """智研管家 的简报：有哪些项目、各自走到哪、库里有多少东西。
     首页 Agent 以前完全不知道项目存在（ctx 只说「没有绑定任何项目」）—— 这就是 Leader 缺的视野。"""
     lines: list[str] = []
     for t in db.tasks():
@@ -3496,8 +3496,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             ctx += "\n\n" + db.memory_block(bound)     # 项目的长期/短期记忆
         except Exception:
             pass
-    elif chat_row:  # 首页 Agent = 全局 Leader：不绑项目，但有全局视野
-        ctx = ("你是这个软件的 **全局 Leader**（首页 Agent，不属于任何单个项目）：可以跨项目工作 —— 查任意项目、"
+    elif chat_row:  # 首页 Agent = 智研管家：不绑项目，但有全局视野
+        ctx = ("你是这个软件的 **智研管家**（首页 Agent，不属于任何单个项目）：可以跨项目工作 —— 查任意项目、"
                "任意文献/笔记/日程，也能新建项目、加日程、检索下载精读文献、写笔记。\n"
                "项目工作流里跑的是 **绑定单个项目的 Partner Agent**；要在某个项目内部推进，就按「哪个项目、要什么产出」把话说清，"
                "或建议用户进那个项目的「项目空间 / 工作流」。\n"
@@ -3506,7 +3506,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                f"这是通用对话「{task['title']}」，产出目录：{db.out_dir(task_id)}" + _global_brief(db))
     else:
         ctx = (f"你是《{task['title']}》项目的 **Partner Agent**：绑定单个项目，只在这个项目范围内工作；"
-               "跨项目的事让用户回首页 Agent（全局 Leader）做。\n"
+               "跨项目的事让用户回首页 Agent（智研管家）做。\n"
                f"当前项目：{task['title']}\n研究问题：{task['question']}\n"
                f"关键词 / 材料体系：{task['material_system']}\n项目 ID：{task_id}\n产出目录：{db.out_dir(task_id)}")
     if aid:                           # Also applies to each team's selected assistant.

@@ -2363,7 +2363,7 @@ function renderAgent(m){
       <header class="at-head">
         <div class="at-heading"><span class="at-idwrap" id="at-who" title="这个对话绑定的专家（去「专家」页管理）">${asAvatarOf(boundA, 32)}</span>
           <div><h1 id="at-title" class="at-title" title="点击改名">${esc(cur?cur.title:"Hi，今天有什么安排？")}</h1>
-          <p id="at-sub">${esc(boundA?boundA.name:(assistantKey()+"（未绑专家）"))} · ${cur&&cur.task_id?`Partner · 绑定《${esc(projName(cur.task_id)||"项目")}》`:"全局 Leader · 跨项目"} · 产出 ${esc(cur?outName(cur.out_dir):"默认产出目录")}</p></div></div>
+          <p id="at-sub">${esc(boundA?boundA.name:(assistantKey()+"（未绑专家）"))} · ${cur&&cur.task_id?`Partner · 绑定《${esc(projName(cur.task_id)||"项目")}》`:"智研管家 · 跨项目"} · 产出 ${esc(cur?outName(cur.out_dir):"默认产出目录")}</p></div></div>
         <button class="at-profile" id="at-profile" title="在「设置」里改模型与权限">
           <span>⚙</span><b>${esc(S.active? (S.active.name+" · "+S.active.model) : "未选择模型")}</b><em>自动批准</em></button>
       </header>
@@ -2755,7 +2755,7 @@ function loadAgentMeta(){                            // 从已存的对话里回
   if(room){                                            // 首次提问后标题会变，顺手同步抬头
     const h=$("at-title"), s=$("at-sub");
     if(h) h.textContent = room.title;
-    if(s) s.textContent = `${assistantKey()} · ${room.task_id?`Partner · 绑定《${projName(room.task_id)||"项目"}》`:"全局 Leader · 跨项目"} · 产出 ${outName(room.out_dir)}`;
+    if(s) s.textContent = `${assistantKey()} · ${room.task_id?`Partner · 绑定《${projName(room.task_id)||"项目"}》`:"智研管家 · 跨项目"} · 产出 ${outName(room.out_dir)}`;
   }
   stPaint();
 }
@@ -3504,9 +3504,9 @@ function renderWorkflow(m){
   m.innerHTML = needTask() || `
     <div class="wf-head">
       <span class="pill ok" title="绑定单个项目的专用 agent">Partner Agent</span>
-      <span class="hint">绑定《${esc((S.tasks||[]).find(t=>t.id===curTask)?.title||"当前项目")}》· 只在这个项目范围内工作；跨项目的事回首页 Agent（全局 Leader）</span>
+      <span class="hint">绑定《${esc((S.tasks||[]).find(t=>t.id===curTask)?.title||"当前项目")}》· 只在这个项目范围内工作；跨项目的事回首页 Agent（智研管家）</span>
       <span style="flex:1"></span>
-      <button class="btn ghost" id="wfToLeader">回首页 Leader →</button></div>
+      <button class="btn ghost" id="wfToLeader">回首页智研管家 →</button></div>
     <div class="wf-page${wfMin?" min":""}">
       <div class="wf-rail"><button class="wf-collapse" id="wf-collapse" title="${wfMin?"展开步骤条":"折叠步骤条"}">${wfMin?"›":"‹"}</button>${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}" title="${STAGE[s]}"><span class="wf-ico">${STAGE[s].split(" ")[0]}</span><span class="wf-lbl">${STAGE[s].slice(STAGE[s].indexOf(" ")+1)}</span></button>`).join("")}</div>
       <div class="wf-body">${WF_ORDER.map(s=> PANELS[s] ? PANELS[s](s===wfStep)

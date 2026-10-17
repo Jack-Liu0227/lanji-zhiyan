@@ -27,8 +27,8 @@ RUNNING: set[str] = set()    # 正在跑的任务行 id（防重入）
 _lock = threading.Lock()
 
 STEPS = ["idea", "search", "download", "notes", "write", "review", "convert"]   # 可绑的工作流步骤
-LEADER_NAME = "全局 Leader"
-LEADER_BRIEF = "你好，我是 Leader，负责理解你的目标并协调团队。描述你想做的事，我来安排。"
+LEADER_NAME = "智研管家"
+LEADER_BRIEF = "你好，我是智研管家，负责理解你的目标并协调团队。描述你想做的事，我来安排。"
 
 
 def _db_path():
@@ -50,6 +50,8 @@ def ensure_leader(task_id: str) -> dict[str, Any]:
     with workflow.WorkflowDB(_db_path()) as db:
         rows = [m for m in db.team_members(task_id) if m["role"] == "leader"]
         if rows:
+            if rows[0]["name"] != LEADER_NAME:      # 旧库里还叫「全局 Leader」→ 顺手改成新称呼
+                return db.team_member_update(rows[0]["id"], name=LEADER_NAME)
             return rows[0]
         return db.team_member_add(task_id, LEADER_NAME, "leader", "", LEADER_BRIEF)
 

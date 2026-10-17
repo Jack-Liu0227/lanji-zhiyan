@@ -45,6 +45,14 @@ class TeamTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             team.remove_member(ms[0]["id"])                                  # 既定规则：Leader 不可移除
 
+    def test_leader_old_name_migrated(self) -> None:
+        """旧库里 leader 还叫「全局 Leader」→ 再读一次就该变成「智研管家」（改名迁移）。"""
+        leader = team.members(self.tid)[0]
+        with workflow.WorkflowDB(_p) as db:
+            db.team_member_update(leader["id"], name="全局 Leader")
+        self.assertEqual(team.members(self.tid)[0]["name"], "智研管家")
+        self.assertEqual(len(team.members(self.tid)), 1)                      # 不是又插一个
+
     def test_assign_requires_existing_member(self) -> None:
         with self.assertRaises(ValueError):
             team.assign(self.tid, "查无此人", "干活")

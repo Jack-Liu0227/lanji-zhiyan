@@ -185,7 +185,7 @@ class WorkflowTest(unittest.TestCase):
 
 
     def test_agent_roles_leader_vs_partner(self) -> None:
-        """分档：首页通用对话 = 全局 Leader（带全局简报，能看到所有项目）；
+        """分档：首页通用对话 = 智研管家（带全局简报，能看到所有项目）；
         项目对话 = 绑定该项目的 Partner Agent。锁住这两句口径，别以后被改回去。"""
         self.db.add_model("假模型3", "http://127.0.0.1:1/v1", "fake3", "sk", activate=True)
         proj = self.db.create_task("钠电掺杂", "选一种金属掺杂", "NFM", "")
@@ -208,7 +208,7 @@ class WorkflowTest(unittest.TestCase):
             workflow.chat_raw = old
         self.assertIn("Partner Agent", partner)
         self.assertIn("钠电掺杂", partner)
-        self.assertIn("全局 Leader", leader)
+        self.assertIn("智研管家", leader)
         self.assertIn("全局简报", leader)
         self.assertIn("钠电掺杂", leader)                 # Leader 要能看到项目名
         self.assertIn("全局简报", brief)
@@ -413,7 +413,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("Partner Agent", bound_ctx)
         self.assertIn("绑项目测试", bound_ctx)
         self.assertIn("项目长期记忆", bound_ctx)                        # 绑了才注入项目记忆
-        self.assertIn("全局 Leader", free_ctx)
+        self.assertIn("智研管家", free_ctx)
         self.assertIn("全局简报", free_ctx)
         self.assertNotIn("你是《", free_ctx)          # Leader 文案本身会提到 Partner Agent，用开头的「你是《项目》」判定
         self.assertEqual(ids[0], proj)                                  # 绑着 → 工具作用域 = 项目
