@@ -26,6 +26,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 DEFAULT_BASE = os.environ.get("ZOTERO_LOCAL_API", "http://127.0.0.1:23119")
@@ -240,6 +241,49 @@ def items(base: str | None = None, collection: str = "", q: str = "",
     rows = [normalize(row) for row in raw]
     return {"items": rows, "start": start, "returned": len(rows), "total": total,
             "hasMore": (start + len(rows)) < total if total is not None else len(rows) >= limit}
+
+
+def item(key: str, base: str | None = None) -> dict[str, Any]:
+    """按 item key 取一条，返回 normalize 后的结构。"""
+    root = _base(base)
+    key = str(key or "").strip()
+    if not key:
+        raise ZoteroError("缺少条目 key。")
+    _, _, body = _get(_api_url(root, f"/users/0/items/{urllib.parse.quote(key)}"))
+    raw = body.get("data") and body or ((body or [{}])[0] if isinstance(body, list) else body)
+    if not isinstance(raw, dict) or not raw:
+        raise ZoteroError("Zotero 里没找到条目 %s。" % key)
+    return normalize(raw)
+
+
+def storage_dir() -> Path:
+    """Zotero 附件目录；数据目录不在默认位置时用 ZOTERO_DATA 指过去。"""
+    return Path(os.environ.get("ZOTERO_DATA") or (Path.home() / "Zotero")) / "storage"
+
+
+def pdf_path(key: str, base: str | None = None) -> str:
+    """条目第一个 PDF 附件在本机的绝对路径。
+
+    本机 API 不返回附件的 path 字段，只能按附件自己的 key 去 storage/<key>/ 里取。
+    找不到就返回空串，调用方据此走「待手动下载」。
+    """
+    root = _base(base)
+    key = str(key or "").strip()
+    if not key:
+        return ""
+    try:
+        _, _, body = _get(_api_url(root, f"/users/0/items/{urllib.parse.quote(key)}/children"))
+    except ZoteroError:
+        return ""
+    for row in (body if isinstance(body, list) else []):
+        data = row.get("data") or {}
+        if data.get("itemType") != "attachment" or "pdf" not in str(data.get("contentType") or "").lower():
+            continue
+        folder = storage_dir() / str(row.get("key") or data.get("key") or "")
+        hits = sorted(folder.glob("*.pdf")) if folder.is_dir() else []
+        if hits:
+            return str(hits[0])
+    return ""
 
 
 def note_for(base: str | None = None, key: str = "") -> dict[str, str]:

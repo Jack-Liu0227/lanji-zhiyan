@@ -160,6 +160,7 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .ah-item-wrap.on .ah-item{padding-left:7px}
 .ah-av{width:30px;height:30px;flex:none;display:grid;place-items:center;border-radius:8px;overflow:hidden}
 .ah-av img{width:100%;height:100%;object-fit:cover;display:block}
+.ah-av-emoji{background:var(--panel2);border:1px solid var(--line);font-size:17px;line-height:1;color:var(--fg)}
 .ah-copy{display:grid;min-width:0;flex:1;gap:3px}
 .ah-copy strong{overflow:hidden;color:inherit;font-size:13px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
 .ah-copy span{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;color:var(--muted);font-size:11.5px;text-overflow:ellipsis;white-space:nowrap}
@@ -223,21 +224,26 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .st-log .none{color:var(--muted)}
 .st-log .dir{color:var(--accent)}
 .at-outbtn{max-width:min(46vw,420px);overflow:hidden}
-.at-outbtn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.at-outbtn span{max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .at-live{display:inline-flex;align-items:center;gap:6px;margin-left:auto}
 .at-live.on{color:var(--ok)}
 
 .composer{position:relative;margin-top:12px;border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
 .composer.drop-on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .composer textarea{width:100%;min-height:24px;max-height:200px;resize:none;overflow-y:hidden;border:0;border-radius:0;background:transparent;padding:13px 15px 6px;font-size:14px;line-height:1.6;outline:none}
-.at-tools{display:flex;min-height:48px;align-items:center;justify-content:space-between;gap:12px;padding:0 12px 9px}
-.at-tools-l,.at-tools-r{display:flex;min-width:0;align-items:center;gap:5px}
+.at-tools{display:flex;min-height:48px;align-items:center;justify-content:space-between;gap:10px;padding:0 12px 9px}
+.at-tools-l{display:flex;min-width:0;align-items:center;gap:3px;overflow-x:auto;scrollbar-width:none}
+.at-tools-l::-webkit-scrollbar{display:none}
+.at-tools-r{display:flex;flex:none;align-items:center;gap:4px}
+.ag-row{display:inline-flex;flex:none;align-items:center;gap:4px}
 .plus-wrap{position:relative;flex:none}
-.icon-btn{display:grid;width:32px;height:32px;cursor:pointer;place-items:center;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:17px;font-weight:700}
-.icon-btn:hover{background:var(--panel2);color:var(--fg)}
-.at-sel{display:inline-flex;min-width:0;height:32px;align-items:center;gap:5px;border-radius:8px;padding:0 7px;color:var(--muted)}
-.at-sel:hover{background:var(--panel2);color:var(--fg)}
-.at-sel select,.at-sel input{max-width:160px;cursor:pointer;appearance:none;border:0;background:transparent;padding:0;color:inherit;font-size:12px;outline:none}
+.icon-btn{display:grid;width:30px;height:30px;cursor:pointer;place-items:center;border:1px solid var(--line);border-radius:999px;background:var(--panel2);color:var(--muted);font-size:16px;font-weight:700}
+.icon-btn:hover{border-color:var(--accent);color:var(--fg)}
+.at-sel{display:inline-flex;flex:none;min-width:0;height:30px;align-items:center;gap:5px;border:1px solid var(--line);border-radius:999px;padding:0 7px;background:var(--panel2);color:var(--fg);white-space:nowrap;font-size:12px}
+.at-sel .k{color:var(--muted);font-size:11px}
+.at-sel:has(select)::after{content:"▾";color:var(--muted);font-size:10px;margin-left:-2px}
+.at-sel:hover{border-color:var(--accent);color:var(--fg)}
+.at-sel select,.at-sel input{max-width:90px;cursor:pointer;appearance:none;border:0;background:transparent;padding:0;color:inherit;font-size:12px;outline:none}
 .at-sel input{cursor:text;width:96px}
 .send-btn{display:grid;width:34px;height:34px;flex:none;cursor:pointer;place-items:center;border:0;border-radius:999px;background:var(--accent);color:var(--accent-ink);font-size:16px;font-weight:700}
 .send-btn:hover{filter:brightness(1.08)}
@@ -329,20 +335,35 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .sp-tab:hover{color:var(--fg)}
 .sp-tab.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
 .sp-kb-host{margin-top:12px}
-.sp-meta-pill{border:1px solid var(--line);border-radius:999px;padding:1px 9px;font-size:11px;color:var(--muted)}
+.sp-hd1{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 10px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.sp-hd1 h3{margin:0;font-size:16px;font-weight:700;letter-spacing:-.01em}
+.sp-step{font-size:12.5px;color:var(--muted)}
+.sp-step b{color:var(--accent);font-weight:600;margin-left:5px}
+.sp-when{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.sp-gap{flex:1}
+.sp-hd2{display:flex;align-items:center;gap:10px}
+.sp-hd2 .hint{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 .kb-head.kb-embed{padding-bottom:10px;border-bottom:1px solid var(--line)}
 
 .kb-scope{display:inline-flex;gap:4px;margin-left:6px}
 
 .kb-scope .btn.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
-.sp-grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.sp-grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .sp-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media (max-width:1180px){.sp-grid4{grid-template-columns:repeat(2,minmax(0,1fr))}.sp-grid2{grid-template-columns:1fr}}
+@media (max-width:1180px){.sp-grid3{grid-template-columns:repeat(2,minmax(0,1fr))}.sp-grid2{grid-template-columns:1fr}}
 .sp-kpi strong{display:block;font-size:26px;font-weight:700;letter-spacing:-.01em;margin:2px 0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sp-kpi-note{color:var(--muted);font-size:12px;margin:0;line-height:1.5}
+.sp-kpi-text strong{font-size:13.5px;font-weight:600;line-height:1.5;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .sp-bar{height:6px;border-radius:999px;background:var(--panel2);margin-top:8px;overflow:hidden}
 .sp-bar>div{height:100%;background:var(--accent);border-radius:999px}
+.sp-stbar{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.sp-sttl{font-size:13.5px;font-weight:600}
+.sp-smeta{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.sp-empty{height:clamp(320px,52vh,560px);border:1px dashed var(--line);border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center;color:var(--muted);font-size:13px;padding:0 24px}
+.sp-empty b{color:var(--fg);font-size:14px;font-weight:600}
+.spin{width:12px;height:12px;border-radius:50%;border:2px solid color-mix(in srgb,var(--accent) 30%,transparent);border-top-color:var(--accent);display:inline-block;animation:spins .8s linear infinite}
+@keyframes spins{to{transform:rotate(360deg)}}
 .sp-row{display:flex;gap:10px;align-items:flex-start;border-top:1px solid var(--line);padding:9px 0}
 .sp-row:first-of-type{border-top:0}
 .sp-ic{width:22px;flex:none;text-align:center;color:var(--muted);font-size:13px}
@@ -1539,6 +1560,7 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
         <select id="zotCollection" class="control" style="max-width:260px"></select>
         <input id="zotQuery" class="control" placeholder="搜索标题 / 作者 / 标签" style="max-width:260px">
         <button class="btn ghost" id="zotSearch">搜索</button>
+        <button class="btn btn-primary" id="zotToProject" title="把当前分类的题录 + 本机 PDF 直接放进这个项目的「下载精读」队列：不联网、不下载、不复制文件">导入项目队列</button>
         <span class="hint" id="zotCount"></span>
       </div>
       <div id="zotList" class="md-note-list" style="max-height:44vh;overflow:auto"></div>
@@ -1598,8 +1620,8 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 <script>
 "use strict";
 /* ============================== 状态 ============================== */
-const S = { tasks:[], chats:[], models:[], active:null, events:[], tools:[], chat:[], chatEvents:[], loaded:false };
-let tabs = [{id:"agent",route:"agent",title:"Agent"}];
+const S = { tasks:[], chats:[], models:[], active:null, events:[], stages:[], tools:[], chat:[], chatEvents:[], loaded:false };
+let tabs = [{id:"agent",route:"agent",title:"智研管家"}];
 let activeTab = tabs[0].id;
 let curTask = localStorage.getItem("rw-task") || null;
 let tDir = "";                                   // 新建项目时选的「项目位置」，选完即用，不持久化
@@ -1730,7 +1752,7 @@ async function api(path, opts){
 /* ============================== 路由 ============================== */
 const NAV = [
   {g:"primary",items:[
-    {id:"agent",label:"Agent",ico:"🤖"},
+    {id:"agent",label:"智研管家",ico:"🤖"},
     {id:"assistants",label:"专家",ico:"👨‍🔬"},
     {id:"team",label:"团队",ico:"👥"},
     {id:"calendar",label:"日历",ico:"📅"},
@@ -1745,7 +1767,7 @@ const NAV = [
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {assistants:"专家",team:"团队",agent:"Agent",calendar:"日历",tasks:"项目",workflow:"工作流",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
+const TITLES = {assistants:"专家",team:"团队",agent:"智研管家",calendar:"日历",tasks:"项目",workflow:"工作流",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 
 function openTab(r, title){
@@ -1757,7 +1779,7 @@ function openTab(r, title){
 function closeTab(id){
   const i = tabs.findIndex(t=>t.id===id); if(i<0) return;
   tabs.splice(i,1);
-  if(!tabs.length) tabs=[{id:"agent",route:"agent",title:"Agent"}];
+  if(!tabs.length) tabs=[{id:"agent",route:"agent",title:"智研管家"}];
   if(activeTab===id) activeTab = tabs[Math.max(0,i-1)].id;
   render();
 }
@@ -1768,7 +1790,7 @@ let sidebarCollapsed = localStorage.getItem("rw-sidebar") === "true";
 
 function renderSidebar(){
   const v = route();
-  const item = (it,cls="")=>`<button class="nav-item ${v===it.id?"active":""} ${cls}" data-nav="${it.id}" title="${it.label}"><span class="nav-ico">${it.ico}</span><span class="lbl">${it.label}</span>${it.id==="mail"?`<span class="nav-badge hidden" id="navMailBadge">0</span>`:""}</button>`;
+  const item = (it,cls="")=>`<button class="nav-item ${v===it.id?"active":""} ${cls}" data-nav="${it.id}" title="${it.label}"><span class="nav-ico">${it.id==="agent"?`<img src="${Q_AV}" alt="" style="width:18px;height:18px;object-fit:contain;display:block;margin:0 auto">`:it.ico}</span><span class="lbl">${it.label}</span>${it.id==="mail"?`<span class="nav-badge hidden" id="navMailBadge">0</span>`:""}</button>`;
   const researchActive = NAV[1].items.some(i=>i.id===v);
   const open = navResearchOpen || researchActive;
   $("sidebar").className = "sidebar"+(sidebarCollapsed?" collapsed":"");
@@ -1921,9 +1943,26 @@ function asOf(kind){
 function asCur(){ return (S.assistants||[]).find(a=>a.id===asEdit.id) || null; }
 function asChat(){ return (S.chats||[]).find(c=>c.id===curChat) || null; }
 function asBound(){ const c=asChat(); return c ? (c.assistant_id||"") : ""; }
+const Q_AV = "/vendor/img/agent-q.png";                                        // 智研管家主形象（Q 版小人，透明底）
+const AH_AV = Array.from({length: 7}, (_, i)=>`/vendor/img/av${i + 1}.png`);   // 管家姿势池（q/ 里那 7 张，对话列表/消息轮流用）
+let poseN = 0;                                                                  // 姿势轮换游标，每渲染一次对话归零
 function asAvatarOf(a, size){
   const px = size||42;
   return `<span class="as-av" style="width:${px}px;height:${px}px;font-size:${Math.round(px*0.55)}px">${esc(a&&a.avatar || "👨‍🔬")}</span>`;
+}
+/* 一个对话的脸：绑了专家 = 专家头像；没绑 = 智研管家（主形象 / rotate 时轮流换姿势） */
+function faceOf(a, px, rotate){
+  if(a) return asAvatarOf(a, px);
+  const src = rotate ? AH_AV[(poseN++) % AH_AV.length] : Q_AV;
+  return `<span class="as-av" style="width:${px}px;height:${px}px"><img src="${src}" alt="智研管家"
+    style="width:100%;height:100%;object-fit:contain" loading="lazy"></span>`;
+}
+/* 对话抬头副标题：管家=全局；专家=项目内（没绑项目给提示）。renderAgent 和 loadAgentMeta 共用一份，别再各写一遍 */
+function atSubHTML(room){
+  const a = (S.assistants||[]).find(x=>x.id===((room&&room.assistant_id)||"")) || null;
+  const out = `产出 ${esc(room?outName(room.out_dir):"默认产出目录")}`;
+  if(!a) return `智研管家 · 全局（不限项目）· ${out}`;
+  return `${esc(a.name)} · ${room&&room.task_id ? `Partner · 绑定《${esc(projName(room.task_id)||"项目")}》` : "专家按项目工作 · 当前未绑项目"} · ${out}`;
 }
 function asCard(a){
   const on = a.enabled !== 0, mine = asSource(a)==="mine";
@@ -2301,7 +2340,9 @@ function renderHistory(){
   const all = (S.chats||[]).slice();
   const groups = historyGroups(all);
   const byBorn = [...all].sort((a, b)=> String(a.created_at || "").localeCompare(String(b.created_at || "")));
-  const av = (t)=>{                                          // 头像按「创建顺序」轮流取，不跟着更新时间跳
+  const av = (t)=>{                                          // 绑了专家 → 专家头像；没绑 → 管家姿势按创建顺序轮流
+    const a = (S.assistants||[]).find(x=>x.id === (t.assistant_id||""));
+    if(a) return `<span class="ah-av ah-av-emoji" title="${esc(a.name)}">${esc(a.avatar||"👨‍🔬")}</span>`;
     const i = Math.max(0, byBorn.findIndex(c=>c.id === t.id));
     return `<span class="ah-av"><img src="${AH_AV[i % AH_AV.length]}" alt="" loading="lazy"
       onerror="this.src='${Q_AV}'"></span>`;                 // 文件缺了就退回主形象
@@ -2325,17 +2366,16 @@ function renderHistory(){
     <div class="ah-foot">🕒 一个对话一份记忆 · 输出目录各自独立</div></aside>`;
 }
 
-const Q_AV = "/vendor/img/agent-q.png";
-const AH_AV = Array.from({length: 7}, (_, i)=>`/vendor/img/av${i + 1}.png`);   // 对话列表头像池（q/ 里那 7 张）     // 对话区的 agent 形象（Q 版小人，透明底，512²）
-function asEmpty(){                       // 空状态：头像 + 名字 + 一行说明 + 推荐问题
+function asEmpty(){                       // 空状态：没绑专家 = 智研管家 Q 版小人居中；绑了 = 专家头像
   const a = (S.assistants||[]).find(x=>x.id === (((S.chats||[]).find(c=>c.id===curChat)||{}).assistant_id||"")) || null;
   let ps = []; try{ ps = JSON.parse((a&&a.prompts)||"[]"); }catch(e){ ps = []; }
   const chips = document.getElementById("msgs");
+  const face = faceOf(a, 72);          // 没绑专家也是 72px 的同一块方框，不再放大
   return `<div class="at-empty-wrap" style="display:flex;flex-direction:column;align-items:center;gap:20px;padding:0 24px;text-align:center;max-width:560px;margin:auto">
-    ${asAvatarOf(a, 56)}
+    ${face}
     <div style="display:flex;flex-direction:column;gap:6px">
-      <span style="font-size:16px;font-weight:600">${esc(a?a.name:"专长专家")}</span>
-      <span style="font-size:13px;color:var(--muted)">${esc(a&&a.description ? a.description : "有什么可以帮你的？直接说你要做什么。")}</span></div>
+      <span style="font-size:16px;font-weight:600">${esc(a?a.name:"智研管家")}</span>
+      <span style="font-size:13px;color:var(--muted)">${esc(a&&a.description ? a.description : "全局工作台助手 · 不限项目，帮你查资料、排日程、改论文、把活派给专家。直接说你要做什么。")}</span></div>
     ${ps.length?`<div class="as-chips">${ps.map(p=>`<button class="as-chip" data-chip="${esc(p)}">${esc(p)}</button>`).join("")}</div>`:""}</div>`;
 }
 function bindChips(){
@@ -2353,9 +2393,9 @@ function renderAgent(m){
     ${renderHistory()}
     <section class="at" aria-label="对话主线">
       <header class="at-head">
-        <div class="at-heading"><span class="at-idwrap" id="at-who" title="这个对话绑定的专家（去「专家」页管理）">${asAvatarOf(boundA, 32)}</span>
+        <div class="at-heading"><span class="at-idwrap" id="at-who" title="这个对话绑定的专家（去「专家」页管理）">${faceOf(boundA, 32)}</span>
           <div><h1 id="at-title" class="at-title" title="点击改名">${esc(cur?cur.title:"Hi，今天有什么安排？")}</h1>
-          <p id="at-sub">${esc(boundA?boundA.name:(assistantKey()+"（未绑专家）"))} · ${cur&&cur.task_id?`Partner · 绑定《${esc(projName(cur.task_id)||"项目")}》`:"全局 Leader · 跨项目"} · 产出 ${esc(cur?outName(cur.out_dir):"默认产出目录")}</p></div></div>
+          <p id="at-sub">${atSubHTML(cur)}</p></div></div>
         <button class="at-profile" id="at-profile" title="在「设置」里改模型与权限">
           <span>⚙</span><b>${esc(S.active? (S.active.name+" · "+S.active.model) : "未选择模型")}</b><em>自动批准</em></button>
       </header>
@@ -2375,7 +2415,7 @@ function renderAgent(m){
         </div>
         <div class="atts" id="atts"></div>
         <div class="composer" id="composer">
-          <textarea id="ask" rows="1" placeholder="发送消息到工作台 Agent…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <textarea id="ask" rows="1" placeholder="发消息给${esc(boundA?boundA.name:"智研管家")}…（Enter 发送，Shift+Enter 换行）"></textarea>
           <div class="at-tools">
             <div class="at-tools-l">
               <div class="plus-wrap">
@@ -2400,8 +2440,8 @@ function renderAgent(m){
                 ${S.models.map(mm=>`<option value="${mm.id}" ${S.active&&mm.id===S.active.id?"selected":""}>${esc(mm.name)}</option>`).join("")}</select></label>
             </div>
             <div class="at-tools-r">
-              <label class="at-sel" title="这个对话用哪个专家（在「专家」页增删改）">👨‍🔬<select id="assist">
-                <option value="">未绑专家</option>
+              <label class="at-sel" title="这个对话用哪个专家（在「专家」页增删改）">${boundA?esc(boundA.avatar||"👨‍🔬"):`<img src="${Q_AV}" alt="" width="16" height="16" style="object-fit:contain;vertical-align:-3px">`}<select id="assist">
+                <option value="">智研管家（全局）</option>
                 ${(S.assistants||[]).filter(a=>a.enabled!==0).map(a=>`<option value="${a.id}" ${cur&&cur.assistant_id===a.id?"selected":""}>${esc(a.name)}</option>`).join("")}</select></label>
               <button class="send-btn" id="send" title="发送" aria-label="发送">↑</button>
             </div>
@@ -2507,6 +2547,7 @@ async function loadChat(){
     const tb = document.querySelector('[data-v="trajectory"]');
     if(tb) tb.textContent = `轨迹 ${S.chatEvents.length}`;
     const box=$("msgs"); if(!box) return;
+    poseN = 0;                                              // 每进一次对话，管家姿势从头轮
     if(agentView==="trajectory"){ renderTrajectory(box); }
     else if(!S.chat.length){
       box.innerHTML = asEmpty(); bindChips();
@@ -2547,8 +2588,8 @@ function appendOne(box,ev){
   else if(ev.type==="assistant"){
     const cur = (S.chats||[]).find(t=>t.id===curChat);
     const boundA = (S.assistants||[]).find(a=>a.id === ((cur&&cur.assistant_id)||"")) || null;
-    const avHtml = asAvatarOf(boundA, 22);
-    const aName = boundA ? boundA.name : "Pi";
+    const avHtml = faceOf(boundA, 22, true);
+    const aName = boundA ? boundA.name : "智研管家";
     el.className="msg-row msg-assistant";
     el.innerHTML=`<div class="msg-meta">${avHtml}<strong>${esc(aName)}</strong>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}<span class="msg-chip">${esc(assistantKey())}</span><span class="msg-chip">完成</span></div><div class="md">${md(ev.content||"…")}</div>`;
   }
@@ -2747,7 +2788,7 @@ function loadAgentMeta(){                            // 从已存的对话里回
   if(room){                                            // 首次提问后标题会变，顺手同步抬头
     const h=$("at-title"), s=$("at-sub");
     if(h) h.textContent = room.title;
-    if(s) s.textContent = `${assistantKey()} · ${room.task_id?`Partner · 绑定《${projName(room.task_id)||"项目"}》`:"全局 Leader · 跨项目"} · 产出 ${outName(room.out_dir)}`;
+    if(s) s.innerHTML = atSubHTML(room);
   }
   stPaint();
 }
@@ -3496,9 +3537,9 @@ function renderWorkflow(m){
   m.innerHTML = needTask() || `
     <div class="wf-head">
       <span class="pill ok" title="绑定单个项目的专用 agent">Partner Agent</span>
-      <span class="hint">绑定《${esc((S.tasks||[]).find(t=>t.id===curTask)?.title||"当前项目")}》· 只在这个项目范围内工作；跨项目的事回首页 Agent（全局 Leader）</span>
+      <span class="hint">绑定《${esc((S.tasks||[]).find(t=>t.id===curTask)?.title||"当前项目")}》· 只在这个项目范围内工作；跨项目的事回首页 Agent（智研管家）</span>
       <span style="flex:1"></span>
-      <button class="btn ghost" id="wfToLeader">回首页 Leader →</button></div>
+      <button class="btn ghost" id="wfToLeader">回首页智研管家 →</button></div>
     <div class="wf-page${wfMin?" min":""}">
       <div class="wf-rail"><button class="wf-collapse" id="wf-collapse" title="${wfMin?"展开步骤条":"折叠步骤条"}">${wfMin?"›":"‹"}</button>${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}" title="${STAGE[s]}"><span class="wf-ico">${STAGE[s].split(" ")[0]}</span><span class="wf-lbl">${STAGE[s].slice(STAGE[s].indexOf(" ")+1)}</span></button>`).join("")}</div>
       <div class="wf-body">${WF_ORDER.map(s=> PANELS[s] ? PANELS[s](s===wfStep)
@@ -5107,25 +5148,17 @@ a { color: #176b87; }
     startMailNotify();
   }
 
-/* ---------------- 知识星图（项目 = 星核，五簇 = 文献/笔记/知识点/检索候选/工作流） ----------------
+/* ---------------- 知识星图（知识库 → 项目 → 五簇分支 → 条目） ----------------
    整页是独立文档 kb.html：星图的样式与类名自成一套，塞进这个单页会跟现有样式打架。
-   这里只负责挂 iframe、切项目、以及接收星图发来的「打开某条」请求。 */
-let kbTask = localStorage.getItem("rw-kb-task") || "";
+   层级全部在星图内部选（项目是第一级），这里只负责挂 iframe、接收「打开某条」请求。 */
 function renderStar(m){
-  const tid = kbTask || curTask || "";
   m.innerHTML = `<div class="sm-wrap">
       <div class="sm-bar">
       <b>知识星图</b>
-      <span class="hint">点星团展开 → 点条目看分析 → Esc 逐层退回</span>
-      <label class="sm-pick">项目 <select id="kbTaskSel">${(S.tasks||[]).map(t=>`<option value="${t.id}" ${t.id===tid?"selected":""}>${esc(t.title)}</option>`).join("")}</select></label>
+      <span class="hint">点项目进分支 → 点星团看条目 → 点条目看分析，Esc 逐层退回</span>
     </div>
-    <iframe id="kbFrame" class="sm-frame" src="/kb.html?task=${encodeURIComponent(tid)}&theme=${document.documentElement.dataset.theme||"dark"}" title="知识星图"></iframe>
+    <iframe id="kbFrame" class="sm-frame" src="/kb.html?theme=${document.documentElement.dataset.theme||"dark"}" title="知识星图"></iframe>
   </div>`;
-  const frame = $("kbFrame");
-  $("kbTaskSel").onchange = e => {
-    kbTask = e.target.value; localStorage.setItem("rw-kb-task", kbTask);
-    try{ frame.contentWindow.postMessage({rw:"kb-reload", task:kbTask}, "*"); }catch(_){ frame.src = "/kb.html?task="+encodeURIComponent(kbTask); }
-  };
 }
 
 // 星图里点「在应用里打开」：论文开 PDF，笔记跳到笔记页（其他类型不猜，留在星图里看分析）
@@ -5716,6 +5749,17 @@ function zotBind(){
   $("zotCollection").onchange = ()=>zotLoad(true).catch(e=>mdFail(e,"读条目"));
   $("zotSearch").onclick = ()=>zotLoad(true).catch(e=>mdFail(e,"搜索"));
   $("zotQuery").onkeydown = (e)=>{ if(e.key === "Enter") zotLoad(true).catch(err=>mdFail(err,"搜索")); };
+  $("zotToProject").onclick = async ()=>{                 // 分类 → 本项目队列：题录+本机PDF，不联网不下载
+    if(!curTask) return alert("先在上面选一个项目，再导入");
+    const btn = $("zotToProject"); btn.disabled = true;
+    $("zotStatus").textContent = "正在从 Zotero 导入…";
+    try{
+      const d = await api("/api/workflow/zotero", {task_id: curTask, collection: $("zotCollection").value});
+      $("zotStatus").textContent = `导入 ${d.total} 条：入库 ${d.downloaded} 篇，无 PDF 附件 ${d.manual} 条（都在「下载精读」里）。`;
+      if(typeof dlRefresh === "function") dlRefresh().catch(()=>{});
+    }catch(e){ $("zotStatus").textContent = "导入失败：" + e.message; }
+    finally{ btn.disabled = false; }
+  };
   $("zotList").onclick = (e)=>{
     if(e.target.closest("#zotMore")) return;               // 「加载更多」自己有 onclick
     const row = e.target.closest("[data-zot-key]");
@@ -5870,17 +5914,16 @@ const schTaskName = (id)=> (S.tasks||[]).find(t=>t.id===id)?.title || "";
 
 /* ---------------- 项目空间（页头 + tab + 概览四卡 + 快照；
      只聚合本应用真有的数据，「任务/矩阵/资源关系/知识库」四个 tab 没有对应物 → 不做空壳） ---------------- */
-let spTab = "overview", spId = null, spTeam = null, spOpen = null;
-const SP_TABS = [["overview","概览"],["team","团队"],["papers","文献"],["stars","论文星图"],["notes","笔记"],["calendar","日程"]];
+let spTab = "overview", spId = null;
+const SP_TABS = [["overview","概览"],["papers","文献"],["stars","论文星图"],["notes","笔记"]];
 function spProg(d){
   const stages = (S.stages||[]).map(s=>s.key);
   const map = d.stage_map || {};
-  const total = stages.length || 7;
+  const total = stages.length || 10;
   const done = stages.filter(k=>map[k] === "done").length;
   return { total, done, pct: Math.round(done*100/total) };
 }
 function spWhen(iso){ return iso ? fmtDate(iso) : "—"; }
-function spMonthEvents(){ const ev=(S.events||[]); return ev.filter(e=>!e.task_id || e.task_id===curTask); }
 function spBodyHTML(d){
   const t = d.task||{}, sum = d.summary||{}, p = spProg(d);
   if(spTab === "papers"){
@@ -5893,85 +5936,30 @@ function spBodyHTML(d){
       : `<div class="hint" style="margin-top:10px">这个项目还没有入库文献。到「知识库」或工作流的检索步加进来。</div>`}</div>`;
   }
   if(spTab === "stars"){
-    const g = d.paper_graph||{nodes:[],edges:[],stats:{}};
-    return `<div class="card" style="margin-top:12px;padding:0;border:0;background:transparent">
-      <div id="spStars" style="height:clamp(420px,70vh,760px)"></div>
-      ${(g.nodes||[]).length? "" : `<div class="hint" style="margin-top:10px">这个项目还没有入库文献，星图上没有星。</div>`}</div>`;
+    const g = d.paper_graph||{}, nodes = g.nodes||[], total = (d.paper_list||[]).length;
+    const built = g.built_at ? spWhen(g.built_at) : "";
+    const meta = built ? `${built} · ${nodes.length} 篇 · ${(g.edges||[]).length} 条关系 · 用 ${g.took_ms < 1000 ? (g.took_ms||0) + "ms" : ((g.took_ms||0)/1000).toFixed(1) + "s"}`
+                       : (total ? `扫库内 ${total} 篇 PDF 全文算引用关系，不会自动跑` : "这个项目还没有入库文献");
+    const btn = built ? `<button class="btn ghost" id="spStarGen">重新生成</button>` : `<button class="btn" id="spStarGen">生成星图</button>`;
+    return `<div class="card" style="margin-top:12px">
+      <div class="sp-stbar"><span class="sp-sttl">论文星图</span><span class="pill${built?" ok":""}">${built?"已生成":"未生成"}</span>
+        <span class="sp-smeta">${esc(meta)}</span><span style="flex:1"></span>
+        ${total || built ? btn : ""}</div>
+      ${nodes.length ? `<div id="spStars" style="height:clamp(420px,70vh,760px)"></div>`
+        : `<div class="sp-empty"><b>还没有生成星图</b>
+            <span>${total ? `这一步要扫库内 ${total} 篇 PDF 全文算引用关系，不会自动跑` : "先到「文献」或工作流的检索步把这个项目的文献加进来"}</span>
+            ${total ? `<span class="hint">点右上角「生成星图」，算完自动刷新</span>` : ""}</div>`}</div>`;
   }
   if(spTab === "notes") return `<div id="spNotes" class="sp-kb-host"></div>`;   // 知识库整块搬进来（不含 PDF 版块）
-  if(spTab === "calendar"){
-    const rows = spMonthEvents();
-    return `<div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">CALENDAR / PROJECT</p><h3>项目日程</h3></div>
-      <span class="pill">${rows.length} 条</span><button class="btn ghost" id="spToCal">去日历 →</button></div>
-      ${rows.length ? rows.map(e=>`<div class="sp-row"><span class="sp-ic">📅</span><div class="sp-main">
-        <div class="sp-nm">${esc(e.title||"")}</div><div class="sp-meta">${esc(e.date||"")}${e.time?" "+esc(e.time):""}${e.done?" · 已完成":""}</div></div></div>`).join("")
-      : `<div class="hint" style="margin-top:10px">本月没有该项目的事件。</div>`}</div>`;
-  }
-  if(spTab === "team"){
-    const D = spTeam || {};
-    if(D.error) return `<div class="card" style="margin-top:12px"><div class="msg error">读取团队失败：${esc(D.error)}</div></div>`;
-    const ms = D.members||[], tasks = D.tasks||[], c = D.counts||{};
-    const leader = ms.find(m=>m.role==="leader") || {};
-    const others = ms.filter(m=>m.role!=="leader");
-    const stepOpts = (D.steps||[]).map(s=>`<option value="${s}">${esc(s)}</option>`).join("");
-    const st = (s)=>`<span class="pill ${s==="done"||s==="running"?"ok":(s==="failed"?"":(s==="queued"?"warn":""))}" ${s==="failed"?'style="color:var(--err)"':""}>${esc(s||"idle")}</span>`;
-    const icon = (t)=>({running:"⏳",done:"✅",failed:"⚠",canceled:"⊘",blocked:"⛔"}[t]||"•");
-    return `
-      <div class="card" style="margin-top:12px">
-        <div class="sch-head"><div><p class="inst-label">TEAM / LEADER</p><h3>团队</h3></div>
-          <span class="pill">${ms.length} 人</span><span class="pill ok">Leader 不可移除</span></div>
-        <div class="sp-row" style="align-items:flex-start"><span class="sp-ic">🧭</span>
-          <div class="sp-main"><div class="sp-nm">${esc(leader.name||"全局 Leader")} <span class="pill ok">Leader</span></div>
-            <div class="sp-meta">${esc(D.leader_brief||"")}</div></div></div>
-        ${others.length?others.map(m=>`<div class="sp-row"><span class="sp-ic">🤝</span>
-          <div class="sp-main"><div class="sp-nm">${esc(m.name)} ${m.step?`<span class="pill">${esc(m.step)}</span>`:""} ${st(m.status)}</div>
-            <div class="sp-meta">${esc(m.prompt||"（没写职责说明）")}${m.note?" · "+esc(m.note):""}</div></div>
-          <div class="sp-acts"><button class="btn ghost" data-tm-assign="${m.id}">派活</button>
-            <button class="btn ghost" data-tm-rename="${m.id}">改名</button>
-            <button class="btn ghost" data-tm-del="${m.id}" style="color:var(--err)">移除</button></div></div>`).join("")
-        :`<div class="hint" style="margin-top:8px">还没有 Partner 成员。加一个，或直接让 Leader 帮你安排。</div>`}
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
-          <input class="control" id="tmName" placeholder="新成员名字，如：检索员" style="max-width:200px">
-          <select class="control" id="tmStep" style="max-width:200px"><option value="">不绑工作流步骤</option>${stepOpts}</select>
-          <button class="btn ghost" id="tmAdd">＋ 加成员</button>
-          <input class="control" id="tmPrompt" placeholder="它的职责说明（可选）：如「只做开放获取检索，产出候选表」" style="flex:1;min-width:220px">
-        </div></div>
-      <div class="card" style="margin-top:12px">
-        <div class="sch-head"><div><p class="inst-label">ASSIGN / PARTNER AGENT</p><h3>派活</h3></div>
-          <button class="btn ghost" id="tmTellLeader">没有合适的？让 Leader 安排 →</button></div>
-        <div style="display:grid;grid-template-columns:200px 1fr auto;gap:8px;align-items:start;margin-top:8px">
-          <select class="control" id="tmAssignee">${others.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join("")||`<option value="">（先加成员）</option>`}</select>
-          <textarea class="control" id="tmTask" rows="2" placeholder="要它干什么？写清要什么产出，例：检索 O3 型钠电正极近三年掺杂改性论文，产出候选表（标题/年份/DOI）"></textarea>
-          <button class="btn" id="tmDo">派活</button></div></div>
-      <div class="card" style="margin-top:12px">
-        <div class="sch-head"><div><p class="inst-label">RUN BOARD</p><h3>运行看板</h3></div>
-          <span class="hint">排队 ${c.queued||0} · 运行 ${c.running||0} · 完成 ${c.done||0} · 失败 ${c.failed||0} · 取消 ${c.canceled||0}</span>
-          <span style="flex:1"></span><button class="btn ghost" id="tmRefresh">刷新</button></div>
-        <div class="hint" style="margin-top:6px">${esc(D.serial_note||"")}</div>
-        ${tasks.length?tasks.map(t=>`<div class="sp-row" style="flex-wrap:wrap">
-          <span class="sp-ic">${icon(t.status)}</span>
-          <div class="sp-main"><div class="sp-nm">${esc(t.title||"")} ${st(t.status)}</div>
-            <div class="sp-meta">给「${esc(t.member_name)}」· ${esc(t.trigger)} · ${esc(spWhen(t.created_at))}${t.started_at?" → "+esc(spWhen(t.ended_at||"…")):""}${t.output_path?" · 产物 "+esc(outName(t.output_path)):""}${t.reason?" · "+esc(t.reason):""}</div></div>
-          <div class="sp-acts"><button class="btn ghost" data-tm-open="${t.id}">${spOpen===t.id?"收起":"详情"}</button>
-            ${t.status==="queued"?`<button class="btn ghost" data-tm-cancel="${t.id}">取消</button>`:""}
-            ${(t.status==="failed"||t.status==="canceled")?`<button class="btn ghost" data-tm-retry="${t.id}">重试</button>`:""}</div>
-          ${spOpen===t.id?`<div class="tm-ev">${(t.events||[]).map(e=>`<div><span class="tm-ev-k">${esc(e.kind)}</span><span class="tm-ev-t">${esc(spWhen(e.created_at).slice(11))}</span>${esc(e.text)}</div>`).join("")||`<div class="hint">没有事件</div>`}</div>`:""}
-        </div>`).join("")
-        :`<div class="hint" style="margin-top:10px">还没有派过活。上面派一个，或让 Leader 安排。</div>`}
-      </div>`;
-  }
   const stages = (S.stages||[]).map(s=>({key:s.key, label:s.label, st:(d.stage_map||{})[s.key]||""}));
   const recent = (d.steps||[]).slice(0,6);
   return `
-    <div class="sp-grid4" style="margin-top:12px">
-      <div class="card sp-kpi"><p class="inst-label">PROJECT / STATUS</p><strong>${esc(t.stage_now||"未开始")}</strong>
-        <p class="sp-kpi-note">${esc((t.question||"未填研究问题").slice(0,90))}</p></div>
+    <div class="sp-grid3" style="margin-top:12px">
       <div class="card sp-kpi"><p class="inst-label">PROGRESS</p><strong>${p.pct}%</strong>
         <p class="sp-kpi-note">${p.done}/${p.total} 步完成</p><div class="sp-bar"><div style="width:${p.pct}%"></div></div></div>
       <div class="card sp-kpi"><p class="inst-label">RESEARCH</p><strong>${sum.papers||0}</strong>
         <p class="sp-kpi-note">项目文献 · 证据 ${sum.evidence||0} 条</p></div>
-      <div class="card sp-kpi"><p class="inst-label">NEXT WINDOW</p><strong>${spMonthEvents().length}</strong>
-        <p class="sp-kpi-note">本月日程</p></div></div>
+      <div class="card sp-kpi sp-kpi-text"><p class="inst-label">QUESTION</p><strong>${esc(t.question||"未填研究问题")}</strong></div></div>
     <div class="sp-grid2" style="margin-top:12px">
       <div class="card"><div class="sch-head"><div><p class="inst-label">WORKFLOW SNAPSHOT</p><h3>工作流快照</h3></div>
         <button class="btn ghost" id="spToFlow">去工作流 →</button></div>
@@ -5994,51 +5982,17 @@ function spBodyHTML(d){
         </div></div>`).join(""):`<div class="hint" style="margin-top:10px">还没有步骤记录。</div>`}</div>`;
 }
 function spBind(d){
-  const tmApi = async (path, body, what)=>{
-    try{ await api(path, body); }catch(e){ alert((what||"操作")+"失败："+e.message); return false; }
-    spTeam = null; render(); return true;
-  };
-  const g = (id)=>$(id);
-  if(g("tmAdd")) g("tmAdd").onclick = ()=>{
-    const name=(g("tmName").value||"").trim(); if(!name) return alert("先写个名字");
-    tmApi("/api/team/member/add", {id:curTask, name, step:g("tmStep").value, prompt:(g("tmPrompt").value||"").trim()}, "加成员");
-  };
-  if(g("tmDo")) g("tmDo").onclick = ()=>{
-    const member=g("tmAssignee").value, prompt=(g("tmTask").value||"").trim();
-    if(!member) return alert("先加一个成员"); if(!prompt) return alert("要派什么活？");
-    tmApi("/api/team/assign", {id:curTask, member, prompt, manual:true}, "派活");
-  };
-  if(g("tmRefresh")) g("tmRefresh").onclick = ()=>{ spTeam=null; render(); };
-  if(g("tmTellLeader")) g("tmTellLeader").onclick = ()=>{
-    const title=(spData&&spData.task&&spData.task.title)||"这个项目";
-    openTab("agent");
-    setTimeout(()=>{ const t=$("ask"); if(t){ t.value=`帮我给《${title}》的团队加一个擅长 ___ 的成员`; t.focus(); } }, 80);
-  };
-  document.querySelectorAll("[data-tm-assign]").forEach(b=>b.onclick=()=>{
-    const a=g("tmAssignee"); if(a) a.value=b.dataset.tmAssign;
-    const t=g("tmTask"); if(t){ t.scrollIntoView({block:"center",behavior:"smooth"}); t.focus(); }
-  });
-  document.querySelectorAll("[data-tm-rename]").forEach(b=>b.onclick=()=>{
-    const cur=((spTeam&&spTeam.members)||[]).find(m=>m.id===b.dataset.tmRename)||{};
-    const name=window.prompt("新名字：", cur.name||""); if(!name) return;
-    tmApi("/api/team/member/update", {member_id:b.dataset.tmRename, name}, "改名");
-  });
-  document.querySelectorAll("[data-tm-del]").forEach(b=>b.onclick=()=>{
-    if(!window.confirm("移除这个成员？（已派给它的任务会留在看板里）")) return;
-    tmApi("/api/team/member/remove", {member_id:b.dataset.tmDel}, "移除成员");
-  });
-  document.querySelectorAll("[data-tm-open]").forEach(b=>b.onclick=()=>{
-    spOpen = spOpen===b.dataset.tmOpen ? null : b.dataset.tmOpen; render();
-  });
-  document.querySelectorAll("[data-tm-cancel]").forEach(b=>b.onclick=()=>tmApi("/api/team/task/cancel", {row_id:b.dataset.tmCancel}, "取消"));
-  document.querySelectorAll("[data-tm-retry]").forEach(b=>b.onclick=()=>tmApi("/api/team/task/retry", {row_id:b.dataset.tmRetry}, "重试"));
-  const live = ((spTeam&&spTeam.counts)||{});
-  if((live.queued||0)+(live.running||0) > 0){          // 有活在看板上就自己刷，别让人手点
-    clearTimeout(window.__tmTick);
-    window.__tmTick = setTimeout(()=>{ if(route()==="space" && spTab==="team"){ spTeam=null; render(); } }, 3000);
-  }
   const go = (id, route)=>{ const b=$(id); if(b) b.onclick = ()=>openTab(route); };
-  go("spToFlow","workflow"); go("spToCal","calendar"); go("spToLib","library");
+  go("spToFlow","workflow"); go("spToLib","library");
+  const sg = $("spStarGen");                 // 论文星图是编译产物：点一下才算，算完落库
+  if(sg) sg.onclick = async ()=>{
+    const t0 = Date.now();
+    sg.disabled = true; sg.innerHTML = `<span class="spin"></span>生成中 0s`;
+    const tick = setInterval(()=>{ sg.innerHTML = `<span class="spin"></span>生成中 ${Math.round((Date.now()-t0)/1000)}s`; }, 500);
+    try{ await api("/api/task/papergraph/build", {id: curTask}); }
+    catch(e){ alert("生成失败：" + e.message); }
+    finally{ clearInterval(tick); render(); }
+  };
   const del = $("spDel");
   if(del) del.onclick = async ()=>{
     const t = d.task||{};
@@ -6050,27 +6004,28 @@ function spBind(d){
 async function renderSpace(m){
   m.style.padding = "";
   if(!curTask){ m.innerHTML = needTask(); return; }
-  if(spId !== curTask){ spId = curTask; spTab = "overview"; spTeam = null; spOpen = null; }
+  if(spId !== curTask){ spId = curTask; spTab = "overview"; }
   m.innerHTML = `<div class="muted">正在读取项目…</div>`;
-  if(spTab === "team" && !spTeam){
-    try{ spTeam = await api("/api/team?id=" + encodeURIComponent(curTask)); }
-    catch(e){ spTeam = { error: e.message }; }
-  }
   let d;
   try{ d = await api("/api/task?id=" + encodeURIComponent(curTask)); }
   catch(e){ m.innerHTML = `<div class="msg error">读取项目失败：${esc(e.message)}</div>`; return; }
   const t = d.task||{};
   const opts = (S.tasks||[]).map(x=>`<option value="${x.id}" ${x.id===curTask?"selected":""}>${esc(x.title)}</option>`).join("");
   m.innerHTML = `
-    <div class="card"><div class="sch-head">
-      <div><p class="inst-label">WORKSPACE / PROJECT</p><h3>${esc(t.title||"项目空间")} <span class="pill ok" title="绑定该项目的专用 agent">Partner Agent</span></h3>
-        <p>项目级聚合只读取已关联的本地数据；写操作回到各领域的 Command 和安全通道。归档可恢复，外部文件不会被删除。</p></div>
-      <select id="spPick" class="control" style="max-width:200px" title="选择项目空间">${opts}</select>
-      <button class="btn" id="spFlow">进入工作流 →</button>
-      <button class="btn ghost" id="spLeader">问全局 Leader →</button></div></div>
+    <div class="card">
+      <div class="sp-hd1">
+        <h3>${esc(t.title||"项目空间")} <span class="pill ok" title="绑定该项目的专用 agent">Partner Agent</span></h3>
+        <span class="sp-step">阶段<b>${esc(t.stage_now||"未开始")}</b></span>
+        <span class="sp-when">更新 ${esc(spWhen(t.updated_at))}</span>
+        <span class="sp-gap"></span>
+        <button class="btn" id="spFlow">进入科研台 →</button>
+        <button class="btn ghost" id="spLeader">问智研管家 →</button>
+      </div>
+      <div class="sp-hd2">
+        <p class="hint">项目级聚合只读取已关联的本地数据；写操作回到各领域的 Command 和安全通道。归档可恢复，外部文件不会被删除。</p>
+        <select id="spPick" class="control" style="max-width:200px" title="选择项目空间">${opts}</select>
+      </div></div>
     <div class="sp-tabs" id="spTabs">${SP_TABS.map(([k,l])=>`<button class="sp-tab ${k===spTab?"on":""}" data-sp-tab="${k}">${l}</button>`).join("")}</div>
-    <div class="card" style="margin-top:12px"><div class="hint" style="display:flex;gap:14px;flex-wrap:wrap">
-      <span>项目 ID：${esc(curTask)}</span><span class="sp-meta-pill">阶段：${esc(t.stage_now||"未开始")}</span><span>更新：${esc(spWhen(t.updated_at))}</span></div></div>
     <div id="spBody"></div>`;
   $("spPick").onchange = (e)=>{ curTask = e.target.value; localStorage.setItem("rw-task", curTask); spId = null; render(); };
   $("spFlow").onclick = ()=>openTab("workflow");
@@ -6434,7 +6389,7 @@ function md(t){
 /* ---------------- 启动 ---------------- */
 async function refreshState(rerender=true){
   const st = await api("/api/state");
-  S.tasks=st.tasks; S.chats=st.chats||[]; S.assistants=st.assistants||[]; S.models=st.models; S.active=st.active; S.events=st.events;
+  S.tasks=st.tasks; S.chats=st.chats||[]; S.assistants=st.assistants||[]; S.models=st.models; S.active=st.active; S.events=st.events; S.stages=st.stages||[];
   { const pv = await api("/api/providers"); S.providers=pv.providers; S.wires=pv.wires; S.default=pv.default; }
   if(!S.tools.length) S.tools = (await api("/api/tools")).tools;
   S.loaded=true;

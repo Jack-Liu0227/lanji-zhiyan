@@ -94,7 +94,7 @@ class AssistantTest(unittest.TestCase):
         self.assertIn("【当前助手】", system)
         self.assertIn("文献检索员", system)
         self.assertIn("开放获取", system)          # 规则正文
-        self.assertIn("全局 Leader", system)      # 原有 Leader 口径没被挤掉
+        self.assertIn("智研管家", system)      # 原有 Leader 口径没被挤掉
 
     def test_06_unbound_chat_has_no_assistant_block(self):
         cid = self.db.create_chat("没绑助手")

@@ -30,6 +30,33 @@ class WorkflowTest(unittest.TestCase):
         self.db.close()
         self.td.cleanup()
 
+    def test_project_tree_has_dated_chat_dir_and_final_artifacts(self) -> None:
+        """项目位置里「对话」按日期分夹、「最终产物」装交付件；老的「最终成品」空壳自动改名。"""
+        from datetime import datetime
+        base = Path(self.td.name) / "proj"
+        (base / "最终成品").mkdir(parents=True)
+        tree = workflow.make_project_tree(base)
+        self.assertIn("对话", tree)
+        self.assertIn("最终产物", tree)
+        self.assertTrue((base / "对话" / datetime.now().strftime("%Y-%m-%d")).is_dir())
+        self.assertFalse((base / "最终成品").exists())          # 不留旧名两份
+        self.db.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?", (str(base), self.task))
+        self.assertEqual(self.db.pdir(self.task, "最终产物"), base / "最终产物")
+        self.assertEqual(self.db.pdir(self.task, "对话"), base / "对话")
+
+    def test_paper_graph_is_cached_until_built(self) -> None:
+        """论文星图是编译产物：没点「生成」就是空图；点过才有图，并带上 built_at / took_ms。"""
+        tid = self.db.create_task("星图项目", "问题", "体系", "")
+        g = self.db.paper_graph(tid)
+        self.assertEqual(g["nodes"], [])
+        self.assertEqual(g["built_at"], "")                 # 未生成 → 前端显示空态 + 生成按钮
+        built = self.db.build_paper_graph(tid)
+        self.assertTrue(built["built_at"])
+        again = self.db.paper_graph(tid)
+        self.assertEqual(len(again["nodes"]), len(built["nodes"]))   # 第二次读的是缓存，不重算
+        self.assertEqual(again["built_at"], built["built_at"])
+        self.assertIn("took_ms", again)
+
     def test_rss_fixed_sources_dedupe_and_filters(self) -> None:
         """情报日报：来源固定 5 个（seed 幂等）、网址校验、按 link 去重、三条件筛选。"""
         import rss as rss_mod
@@ -185,7 +212,7 @@ class WorkflowTest(unittest.TestCase):
 
 
     def test_agent_roles_leader_vs_partner(self) -> None:
-        """分档：首页通用对话 = 全局 Leader（带全局简报，能看到所有项目）；
+        """分档：首页通用对话 = 智研管家（带全局简报，能看到所有项目）；
         项目对话 = 绑定该项目的 Partner Agent。锁住这两句口径，别以后被改回去。"""
         self.db.add_model("假模型3", "http://127.0.0.1:1/v1", "fake3", "sk", activate=True)
         proj = self.db.create_task("钠电掺杂", "选一种金属掺杂", "NFM", "")
@@ -208,7 +235,7 @@ class WorkflowTest(unittest.TestCase):
             workflow.chat_raw = old
         self.assertIn("Partner Agent", partner)
         self.assertIn("钠电掺杂", partner)
-        self.assertIn("全局 Leader", leader)
+        self.assertIn("智研管家", leader)
         self.assertIn("全局简报", leader)
         self.assertIn("钠电掺杂", leader)                 # Leader 要能看到项目名
         self.assertIn("全局简报", brief)
@@ -413,7 +440,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("Partner Agent", bound_ctx)
         self.assertIn("绑项目测试", bound_ctx)
         self.assertIn("项目长期记忆", bound_ctx)                        # 绑了才注入项目记忆
-        self.assertIn("全局 Leader", free_ctx)
+        self.assertIn("智研管家", free_ctx)
         self.assertIn("全局简报", free_ctx)
         self.assertNotIn("你是《", free_ctx)          # Leader 文案本身会提到 Partner Agent，用开头的「你是《项目》」判定
         self.assertEqual(ids[0], proj)                                  # 绑着 → 工具作用域 = 项目

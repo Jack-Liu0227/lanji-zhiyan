@@ -26,30 +26,19 @@ if ((q.get('theme') || 'dark') !== 'dark') {
     </div>`;
   document.getElementById('kbToDark').onclick = () => parent.postMessage({rw: 'theme', theme: 'dark'}, '*');
 } else {
-  const url = '/api/starmap' + (q.get('task') ? '?task=' + encodeURIComponent(q.get('task')) : '');
-  fetch(url).then(r => r.json()).then(api => {
-    if (!api || !api.task) {
+  // 不带 task：第一级是项目（知识库 → 项目 → 分支）；带 task：深链直达该项目的分支层
+  const tid = q.get('task') || '';
+  fetch('/api/starmap' + (tid ? '?task=' + encodeURIComponent(tid) : '')).then(r => r.json()).then(api => {
+    const empty = !api || (api.level === 'projects' ? !(api.projects || []).length : !api.task);
+    if (empty) {
       root.innerHTML = '<p style="padding:40px;color:#8b9bb0">还没有项目 —— 先去「项目」页建一个，星图才有得画。</p>';
       return;
     }
     window.__kb = mount(root, api, {focus: q.get('open') || ''});
-    // 告诉外层：这次画的是哪个项目、有哪些项目（外层用它渲染下拉）
-    parent.postMessage({rw: 'kb-ready', task: api.task, tasks: api.tasks || []}, '*');
   }).catch(err => {
     root.innerHTML = '<p style="padding:40px;color:#f87171">星图加载失败：' + err.message + '</p>';
   });
 }
-
-// 外层换项目时不必重载整个页面
-window.addEventListener('message', e => {
-  const d = e.data || {};
-  if (d.rw !== 'kb-reload') return;
-  fetch('/api/starmap?task=' + encodeURIComponent(d.task || '')).then(r => r.json()).then(api => {
-    if (window.__kb) window.__kb();
-    root.innerHTML = '';
-    window.__kb = mount(root, api, {focus: d.open || ''});
-  });
-});
 </script>
 </body>
 </html>
