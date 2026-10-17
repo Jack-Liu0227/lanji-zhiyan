@@ -5,9 +5,7 @@ assistant never launches an executable supplied by a configuration document.
 """
 from __future__ import annotations
 
-import base64
 import copy
-import ctypes
 import hashlib
 import importlib
 import json
@@ -27,7 +25,6 @@ import urllib.request
 MASK = "********"
 MAX_SKILL_BYTES = 1024 * 1024
 _SECRET = re.compile(r"key|token|secret|password|authorization|credential", re.I)
-_REGISTERED_TOOLS: dict[str, dict] = {}
 
 
 def _conn(db):
@@ -44,10 +41,6 @@ def _ensure(db):
     ):
         conn.execute(sql)
     return conn
-
-
-def _row(row) -> dict:
-    return dict(row) if row is not None else {}
 
 
 def _assistants(db) -> list[dict]:
@@ -122,15 +115,8 @@ def _skill(item_id: str, project_dir: str) -> dict:
     return item
 
 
-def register_tools(tools: list[dict]) -> None:
-    for tool in tools:
-        fn = tool.get("function", tool)
-        if fn.get("name"):
-            _REGISTERED_TOOLS[fn["name"]] = copy.deepcopy(tool)
-
-
 def _builtin_specs() -> list[dict]:
-    tools = dict(_REGISTERED_TOOLS)
+    tools: dict[str, dict] = {}
     for module_name in ("workflow", "agent_integrations"):
         try:
             module = importlib.import_module(module_name)
@@ -582,10 +568,6 @@ def capability_tool_specs(db, assistant_id: str, project_dir: str = "") -> list[
                       "description": "Read the full instructions of an enabled skill listed in the system context.",
                       "parameters": {"type": "object", "properties": {"skill_id": {"type": "string"}}, "required": ["skill_id"]}}})
     return filter_tools(db, assistant_id, specs, project_dir)
-
-
-def is_capability_tool(name: str) -> bool:
-    return name == "skill_read" or name.startswith("mcp_")
 
 
 def invoke_mcp_tool(db, assistant_id: str, name: str, args: dict, project_dir: str = "") -> Any:

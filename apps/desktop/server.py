@@ -14,7 +14,6 @@ import os
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import traceback
@@ -962,12 +961,6 @@ class Handler(BaseHTTPRequestHandler):
                          ".html": "text/html; charset=utf-8"}.get(ext, "application/octet-stream")
                 extra = {"Content-Disposition": f'inline; filename="{p.name}"'} if (ext == ".pdf" or q.get("inline")) else None
                 return self._send(200, p.read_bytes(), ctype, extra)
-            if path == "/api/outline/state":              # 旧路径（确认大纲）
-                with WorkflowDB(DB_PATH) as db:
-                    tid = q["id"][0]
-                    return self._json({"out": str(db.out_dir(tid)), "long": db.memory(tid, "long"),
-                                       "messages": db.messages(tid, "outline"),
-                                       **outline_read(db, tid)})
             if path == "/api/idea/memory":
                 with WorkflowDB(DB_PATH) as db:
                     tid = q["id"][0]
@@ -1374,13 +1367,6 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json(doc_write(db, (data.get("task_id") or "").strip(),
                                                     data.get("step") or "outline",
                                                     data.get("markdown", "")))
-                if path == "/api/outline/seed":           # 旧路径
-                    tid = (data.get("task_id") or "").strip()
-                    with WorkflowDB(DB_PATH) as db:
-                        cur = outline_read(db, tid)
-                        if not cur["exists"]:
-                            cur = outline_write(db, tid, OUTLINE_TEMPLATE)
-                        return self._json(cur)
                 if path == "/api/outline/save":           # 手动改框架（左边直接编辑时用）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(outline_write(db, (data.get("task_id") or "").strip(),

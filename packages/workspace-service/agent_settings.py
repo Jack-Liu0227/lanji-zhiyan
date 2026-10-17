@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import securestore              # 凭据加密（DPAPI），model_profiles 里也只存密文
 import uuid
-from typing import Any
 from urllib.parse import urlsplit
 
 REASONING = ("auto", "none", "minimal", "low", "medium", "high", "xhigh")

@@ -2327,7 +2327,6 @@ function renderHistory(){
 
 const Q_AV = "/vendor/img/agent-q.png";
 const AH_AV = Array.from({length: 7}, (_, i)=>`/vendor/img/av${i + 1}.png`);   // 对话列表头像池（q/ 里那 7 张）     // 对话区的 agent 形象（Q 版小人，透明底，512²）
-const qAvatar = (px, r)=>`<span class="as-av q-av" style="width:${px}px;height:${px}px;${r?`border-radius:${r};`:""}"><img src="${Q_AV}" alt=""></span>`;
 function asEmpty(){                       // 空状态：头像 + 名字 + 一行说明 + 推荐问题
   const a = (S.assistants||[]).find(x=>x.id === (((S.chats||[]).find(c=>c.id===curChat)||{}).assistant_id||"")) || null;
   let ps = []; try{ ps = JSON.parse((a&&a.prompts)||"[]"); }catch(e){ ps = []; }

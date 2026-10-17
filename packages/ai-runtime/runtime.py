@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 import random
-import re
 import socket
 import sys
 import time
@@ -13,7 +12,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Generator
+from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[2]
 for _p in ("database", "workspace-core", "workspace-service", "connectors"):

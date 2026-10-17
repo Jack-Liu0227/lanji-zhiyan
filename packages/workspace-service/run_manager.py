@@ -1,7 +1,6 @@
 """Run manager for tracking background/interactive agent runs, SSE replay, and cancellation."""
 from __future__ import annotations
 
-import json
 import threading
 import time
 import uuid
