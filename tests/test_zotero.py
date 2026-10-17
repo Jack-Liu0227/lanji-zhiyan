@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import tempfile
 import unittest
 
 import zotero
@@ -123,6 +124,86 @@ class TestTransport(unittest.TestCase):
     def test_note_for_needs_key(self):
         with self.assertRaises(zotero.ZoteroError):
             zotero.note_for(key="  ")
+
+
+class TestPdfPath(unittest.TestCase):
+    """附件在本机的定位：本机 API 不给 path，只能按附件 key 进 storage/<key>/ 找。"""
+
+    def _run(self, children, tmp):
+        from pathlib import Path
+        root = Path(tmp) / "storage"
+        original = (zotero._get, zotero.storage_dir)
+        zotero._get = lambda url, timeout=0: (200, {}, children)
+        zotero.storage_dir = lambda: root
+        try:
+            return zotero.pdf_path("ABCD1234"), root
+        finally:
+            zotero._get, zotero.storage_dir = original
+
+    def test_picks_pdf_attachment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            from pathlib import Path
+            root = Path(tmp) / "storage"
+            for key in ("ATT00001", "ATT00002"):
+                (root / key).mkdir(parents=True)
+                (root / key / "f.pdf").write_bytes(b"%PDF-1.4")
+            children = [{"key": "ATT00001", "data": {"itemType": "attachment", "contentType": "text/html"}},
+                        {"key": "ATT00002", "data": {"itemType": "attachment", "contentType": "application/pdf"}}]
+            path, root = self._run(children, tmp)
+            self.assertEqual(path, str(root / "ATT00002" / "f.pdf"))
+
+    def test_no_pdf_attachment(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            children = [{"key": "ATT00001", "data": {"itemType": "attachment", "contentType": "text/html"}},
+                        {"key": "ATT00009", "data": {"itemType": "attachment", "contentType": "application/pdf"}}]
+            path, _ = self._run(children, tmp)          # 目录里没有文件 → 不能假装找到
+            self.assertEqual(path, "")
+
+
+class TestZoteroImport(unittest.TestCase):
+    """分类 → 下载队列：有 PDF 的进「已入库」，没有的标「待手动」，笔记/附件条目不算论文。"""
+
+    def test_routes_pdf_and_manual(self):
+        import workflow
+
+        seen = {"cache": [], "queue": [], "ingest": []}
+
+        class FakeDB:
+            def cache_result(self, task_id, it):
+                seen["cache"].append(it)
+                return "r%d" % len(seen["cache"])
+
+            def set_queue(self, task_id, rid, status, path="", error=""):
+                seen["queue"].append((rid, status, error))
+
+            def ingest_pdf(self, task_id, path):
+                seen["ingest"].append(path)
+                return {"id": "p1"}
+
+            def log_step(self, *a):
+                pass
+
+            def queue(self, task_id):
+                return []
+
+        paper = {"key": "K1", "type": "journalArticle", "title": "Cu 掺杂", "creators": ["Zuo Yuting"],
+                 "year": "2024", "doi": "10.1/x", "url": "", "abstract": "摘要"}
+        note = {"key": "K2", "type": "note", "title": "笔记", "creators": [], "year": "",
+                "doi": "", "url": "", "abstract": ""}
+        original = (zotero.items, zotero.pdf_path)
+        zotero.items = lambda **kw: {"items": [paper, note], "returned": 2, "hasMore": False, "total": 2}
+        zotero.pdf_path = lambda key, base=None: "C:/z/K1.pdf" if key == "K1" else ""
+        try:
+            out = workflow.stage_zotero_import(FakeDB(), "t1")
+        finally:
+            zotero.items, zotero.pdf_path = original
+
+        self.assertEqual(out["total"], 1)                    # 笔记条目被排除
+        self.assertEqual(out["downloaded"], 1)
+        self.assertEqual(seen["ingest"], ["C:/z/K1.pdf"])
+        self.assertEqual(seen["queue"], [("r1", "downloaded", "")])
+        self.assertEqual(seen["cache"][0]["source"], "zotero")
+        self.assertEqual(seen["cache"][0]["url"], "https://doi.org/10.1/x")
 
 
 if __name__ == "__main__":
