@@ -2,6 +2,23 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 待发 PR（chore/dead-code → main）
+
+本轮三项改动，一次 PR 讲清：
+
+| 提交 | 内容 | 详见 |
+|---|---|---|
+| `6f46007` | 项目空间去掉团队/日程 tab；元信息窄卡删除；阶段 + 最晚修改时间并入页头卡（视觉方案 A）；KPI 四卡改三卡；补 `S.stages` 修「工作流快照空 / 进度按 7 步算」 | 本文「项目空间收敛」 |
+| `6da59f9` | 全局 Leader 全链路更名智研管家（UI / prompt / 团队 leader 名 + 旧名自愈） | 同上第 4 节 |
+| `fd2bcae` | 论文星图改按需编译（右上生成键、结果落库、未生成空态、删除项目连带清缓存） | 本文「论文星图」 |
+| 本条 | 记录整理 | — |
+
+**注意**
+
+- `chore/dead-code` 比 `main` 多 5 条：除上面三条，还有 `b98a266`（Zotero 接 MCP）和 `3bd3e37`（其改动记录）。要么一个 PR 全带，要么先拆成两个 PR，别混着审。
+- `fd2bcae` 的 `server.py` 顺带带入了两处当时未提交的改动（`stage_zotero_import` 的 import、`/api/starmap` 空 `task` 走 `overview`），属于 Zotero/星图那条线；功能一致，只是提交归属混了，看 blame 时知道一下。
+- 工作区还有别人未提交的改动（`kb.html` / `vendor/neural/scene.js` / `starmap.py` / `agent-settings.js` 等），本轮没动、也没提交。
+
 ## 2026-10-17 · Zotero 接成 MCP（读+写）+ 分类一键进下载队列
 
 论文信息不再靠「自己抽」：题录/摘要/PDF 直接从本机 Zotero 取，省掉检索+下载+元数据猜测；正文证据抽取（`extract_ai`）不变，Zotero 给不了页码级逐字引文。
