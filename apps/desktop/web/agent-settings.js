@@ -282,7 +282,7 @@
   renderAgent = function(container) {
     originalRenderAgent(container);
     const pick = el("assist"), chat = (S.chats || []).find(c => c.id === curChat);
-    if (pick) pick.innerHTML = `<option value="">未绑助手</option>${(S.assistants || []).filter(eligible).map(a => `<option value="${h(a.id)}" ${chat?.assistant_id === a.id ? "selected" : ""}>${h(a.name)}</option>`).join("")}`;
+    if (pick) pick.innerHTML = `<option value="">智研管家（全局）</option>${(S.assistants || []).filter(eligible).map(a => `<option value="${h(a.id)}" ${chat?.assistant_id === a.id ? "selected" : ""}>${h(a.name)}</option>`).join("")}`;
     const model = el("modpick");
     if (model && chat) {
       const bound = S.assistants.find(a => a.id === chat.assistant_id);

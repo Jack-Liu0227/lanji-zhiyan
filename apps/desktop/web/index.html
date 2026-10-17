@@ -1616,7 +1616,7 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 "use strict";
 /* ============================== 状态 ============================== */
 const S = { tasks:[], chats:[], models:[], active:null, events:[], stages:[], tools:[], chat:[], chatEvents:[], loaded:false };
-let tabs = [{id:"agent",route:"agent",title:"Agent"}];
+let tabs = [{id:"agent",route:"agent",title:"智研管家"}];
 let activeTab = tabs[0].id;
 let curTask = localStorage.getItem("rw-task") || null;
 let tDir = "";                                   // 新建项目时选的「项目位置」，选完即用，不持久化
@@ -1774,7 +1774,7 @@ function openTab(r, title){
 function closeTab(id){
   const i = tabs.findIndex(t=>t.id===id); if(i<0) return;
   tabs.splice(i,1);
-  if(!tabs.length) tabs=[{id:"agent",route:"agent",title:"Agent"}];
+  if(!tabs.length) tabs=[{id:"agent",route:"agent",title:"智研管家"}];
   if(activeTab===id) activeTab = tabs[Math.max(0,i-1)].id;
   render();
 }
@@ -1951,6 +1951,13 @@ function faceOf(a, px, rotate){
   const src = rotate ? AH_AV[(poseN++) % AH_AV.length] : Q_AV;
   return `<span class="as-av" style="width:${px}px;height:${px}px"><img src="${src}" alt="智研管家"
     style="width:100%;height:100%;object-fit:contain" loading="lazy"></span>`;
+}
+/* 对话抬头副标题：管家=全局；专家=项目内（没绑项目给提示）。renderAgent 和 loadAgentMeta 共用一份，别再各写一遍 */
+function atSubHTML(room){
+  const a = (S.assistants||[]).find(x=>x.id===((room&&room.assistant_id)||"")) || null;
+  const out = `产出 ${esc(room?outName(room.out_dir):"默认产出目录")}`;
+  if(!a) return `智研管家 · 全局（不限项目）· ${out}`;
+  return `${esc(a.name)} · ${room&&room.task_id ? `Partner · 绑定《${esc(projName(room.task_id)||"项目")}》` : "专家按项目工作 · 当前未绑项目"} · ${out}`;
 }
 function asCard(a){
   const on = a.enabled !== 0, mine = asSource(a)==="mine";
@@ -2385,9 +2392,7 @@ function renderAgent(m){
       <header class="at-head">
         <div class="at-heading"><span class="at-idwrap" id="at-who" title="这个对话绑定的专家（去「专家」页管理）">${faceOf(boundA, 32)}</span>
           <div><h1 id="at-title" class="at-title" title="点击改名">${esc(cur?cur.title:"Hi，今天有什么安排？")}</h1>
-          <p id="at-sub">${boundA
-            ? `${esc(boundA.name)} · ${cur&&cur.task_id?`Partner · 绑定《${esc(projName(cur.task_id)||"项目")}》`:"⚠ 专家只做项目内的活，请在上方「工作区」选一个项目"} · 产出 ${esc(cur?outName(cur.out_dir):"默认产出目录")}`
-            : `智研管家 · 全局（不限项目）· 产出 ${esc(cur?outName(cur.out_dir):"默认产出目录")}`}</p></div></div>
+          <p id="at-sub">${atSubHTML(cur)}</p></div></div>
         <button class="at-profile" id="at-profile" title="在「设置」里改模型与权限">
           <span>⚙</span><b>${esc(S.active? (S.active.name+" · "+S.active.model) : "未选择模型")}</b><em>自动批准</em></button>
       </header>
@@ -2780,7 +2785,7 @@ function loadAgentMeta(){                            // 从已存的对话里回
   if(room){                                            // 首次提问后标题会变，顺手同步抬头
     const h=$("at-title"), s=$("at-sub");
     if(h) h.textContent = room.title;
-    if(s) s.textContent = `${assistantKey()} · ${room.task_id?`Partner · 绑定《${projName(room.task_id)||"项目"}》`:"智研管家 · 跨项目"} · 产出 ${outName(room.out_dir)}`;
+    if(s) s.innerHTML = atSubHTML(room);
   }
   stPaint();
 }
