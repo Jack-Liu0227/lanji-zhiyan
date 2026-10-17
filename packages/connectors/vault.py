@@ -163,6 +163,8 @@ def scan(value: str) -> dict:
             "completed": date_key(fm.get("完成阅读")),
             "statusUpdated": date_key(fm.get("状态更新时间")),
             "modified": int(st.st_mtime),
+            "project": str(fm.get("项目") or fm.get("project") or "").strip('"'),   # 绑定的项目（frontmatter「项目: 项目名」）
+
             "tags": _tags(fm, body),
             "words": len(re.sub(r"\s+", "", body)),
         })
@@ -222,6 +224,17 @@ def set_status(value: str, rel: str, field: str, status: str) -> dict:
         updates["完成阅读"] = _today()
     return {"ok": True, "path": rel, "field": field, "value": status,
             "changed": write_frontmatter(p, updates)}
+
+
+def set_project(value: str, rel: str, project: str) -> dict:
+    """把笔记绑到项目：只写 frontmatter 的「项目」一行，正文和别的键不动。project 传空=解绑。"""
+    root = vault_root(value)
+    p = note_path(root, rel)
+    if not p.is_file():
+        raise VaultError("笔记不存在：" + rel)
+    project = (project or "").strip()[:120]
+    return {"ok": True, "path": rel, "project": project,
+            "changed": write_frontmatter(p, {"项目": project})}
 
 
 def open_in_obsidian(value: str, rel: str = "") -> dict:

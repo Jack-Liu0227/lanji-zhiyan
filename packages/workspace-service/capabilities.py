@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import queue
 import re
+import securestore              # DPAPI 凭据保护（见 workspace-core/securestore.py）
 import shutil
 import subprocess
 import threading
@@ -205,45 +206,13 @@ def skill_context(db, assistant_id: str, project_dir: str = "") -> str:
             "\n".join(f"- {item['id']}: {item['description']}" for item in items))
 
 
-class _Blob(ctypes.Structure):
-    _fields_ = [("size", ctypes.c_ulong), ("data", ctypes.POINTER(ctypes.c_ubyte))]
-
-
-def _dpapi(data: bytes, decrypt: bool = False) -> bytes:
-    source_buffer = ctypes.create_string_buffer(data)
-    source = _Blob(len(data), ctypes.cast(source_buffer, ctypes.POINTER(ctypes.c_ubyte)))
-    target = _Blob()
-    crypt = ctypes.WinDLL("crypt32", use_last_error=True)
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.LocalFree.argtypes = [ctypes.c_void_p]
-    kernel.LocalFree.restype = ctypes.c_void_p
-    fn = crypt.CryptUnprotectData if decrypt else crypt.CryptProtectData
-    if not fn(ctypes.byref(source), None, None, None, None, 1, ctypes.byref(target)):
-        raise OSError(ctypes.get_last_error(), "Windows credential protection failed")
-    try:
-        return ctypes.string_at(target.data, target.size)
-    finally:
-        kernel.LocalFree(ctypes.cast(target.data, ctypes.c_void_p))
-
-
 def _protect(data: dict) -> str:
-    raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
-    if os.name == "nt":
-        return "dpapi:" + base64.b64encode(_dpapi(raw)).decode("ascii")
-    # Non-Windows portability: explicitly report file-permission-only protection.
-    return "local:" + base64.b64encode(raw).decode("ascii")
+    """MCP 配置整体加密（DPAPI 那套实现搬到 securestore，这里只留格式约定）。"""
+    return securestore.protect(json.dumps(data, ensure_ascii=False))
 
 
 def _unprotect(value: str) -> dict:
-    prefix, payload = value.split(":", 1)
-    raw = base64.b64decode(payload)
-    if prefix == "dpapi":
-        if os.name != "nt":
-            raise ValueError("MCP credentials belong to the Windows user that saved them")
-        raw = _dpapi(raw, decrypt=True)
-    elif prefix != "local":
-        raise ValueError("Unknown MCP configuration protection format")
-    return json.loads(raw.decode("utf-8"))
+    return json.loads(securestore.unprotect(value))
 
 
 def _config(db) -> dict:
@@ -343,7 +312,7 @@ def save_mcp(db, data: Any) -> dict:
 
 
 def storage_security() -> str:
-    return "windows-dpapi-current-user" if os.name == "nt" else "local-database-file-permissions-only"
+    return securestore.security()
 
 
 def _rpc_error(payload: dict) -> Any:

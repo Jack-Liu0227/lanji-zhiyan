@@ -10,7 +10,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parents[2]
+try:                                    # 程序根只有一处来源；导入早期也能兜底
+    from paths import app_dir
+
+    ROOT = app_dir()
+except ImportError:
+    ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MIGRATIONS_DIR = ROOT / "migrations"
 
 

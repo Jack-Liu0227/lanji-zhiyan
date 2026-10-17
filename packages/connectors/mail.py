@@ -25,12 +25,15 @@ import time
 import uuid
 from email.message import EmailMessage
 from pathlib import Path
+import securestore              # 授权码加密（DPAPI，见 workspace-core/securestore.py）
 from typing import Any
 
+import paths          # 唯一路径来源
+
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[1] if (HERE.parents[1] / "packages").is_dir() else HERE
-DATA_DIR = Path(os.environ.get("RESEARCH_WORKBENCH_DATA", ROOT / "data"))
-MAIL_FILE = DATA_DIR / "mail.json"
+ROOT = paths.APP
+DATA_DIR = paths.DATA
+MAIL_FILE = paths.MAIL_FILE          # user/mail.json —— 含加密授权码，放凭据目录
 
 # ---------- 常见邮箱服务商预设（与 lit MAIL_PROVIDERS 逐字一致） ----------
 MAIL_PROVIDERS: dict[str, dict[str, Any]] = {
@@ -115,9 +118,16 @@ def _write_json(obj: dict[str, Any]) -> None:
 
 
 def list_mail_accounts() -> list[dict[str, Any]]:
+    """读账户；password 出库即解密（老文件里的明文也照样能读）。"""
     data = _read_json()
     items = data.get("accounts") if isinstance(data, dict) else None
-    return [a for a in (items or []) if isinstance(a, dict) and a.get("id")]
+    out = []
+    for a in (items or []):
+        if isinstance(a, dict) and a.get("id"):
+            if a.get("password"):
+                a = {**a, "password": securestore.unprotect(a["password"])}
+            out.append(a)
+    return out
 
 
 def get_mail_account(account_id: str) -> dict[str, Any] | None:
@@ -125,12 +135,28 @@ def get_mail_account(account_id: str) -> dict[str, Any] | None:
 
 
 def upsert_mail_account(acc: dict[str, Any]) -> dict[str, Any]:
+    """写入账户；授权码落盘前加密（DPAPI），返回值仍是明文给调用方用。"""
     data = _read_json()
     items = [a for a in (data.get("accounts") or []) if isinstance(a, dict)]
-    items = [a for a in items if a.get("id") != acc["id"]] + [acc]
+    stored = {**acc, "password": securestore.protect(acc.get("password") or "")}
+    items = [a for a in items if a.get("id") != acc["id"]] + [stored]
     data["accounts"] = items
     _write_json(data)
     return acc
+
+
+def encrypt_legacy() -> int:
+    """把老 mail.json 里的明文授权码升格成密文（幂等：已加密的不动）。"""
+    data = _read_json()
+    items = data.get("accounts") if isinstance(data, dict) else None
+    changed = 0
+    for a in (items or []):
+        if isinstance(a, dict) and a.get("password") and not securestore.is_protected(a["password"]):
+            a["password"] = securestore.protect(a["password"])
+            changed += 1
+    if changed:
+        _write_json(data)
+    return changed
 
 
 def delete_mail_account(account_id: str) -> None:

@@ -11,7 +11,7 @@
         中文会把脚本解析崩，而且报错行号是假的（现象：复制、建快捷方式都执行了，最后一条才炸）。
 #>
 param(
-    [string]$InstallRoot = "$env:LOCALAPPDATA\Programs\ResearchWorkbench",
+    [string]$InstallRoot = "$env:LOCALAPPDATA\ResearchWorkbench\app",
     [string]$Source = ""
 )
 $ErrorActionPreference = "Stop"
@@ -40,6 +40,10 @@ if (-not (Test-Path (Join-Path $Source "ResearchWorkbench.exe"))) {
 # 覆盖安装前先关掉旧进程，否则文件被占用
 Get-Process ResearchWorkbench -ErrorAction SilentlyContinue | Stop-Process -Force
 
+$HomeRoot = Split-Path -Parent $InstallRoot
+foreach ($sub in @('data', 'user', 'executors\agents', 'executors\skills', 'executors\tools')) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $HomeRoot $sub) | Out-Null
+}
 Write-Progress -Activity "览籍智研安装" -Status "复制到 $InstallRoot" -PercentComplete 10
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 $files = Get-ChildItem -Path $Source -Recurse -File

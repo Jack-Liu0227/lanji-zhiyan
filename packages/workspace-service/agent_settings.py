@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import securestore              # 凭据加密（DPAPI），model_profiles 里也只存密文
 import uuid
 from typing import Any
 from urllib.parse import urlsplit
@@ -52,6 +53,7 @@ def sync_provider_models(db, pid):
     """Every adopted model is selectable; credentials remain linked to its provider."""
     import workflow
     p = db.provider(pid)
+    host = p.get("key_host") or workflow._host_of(p["base_url"]) if p.get("api_key") else ""
     keep = []
     for model in p["models"]:
         old = db.db.execute("SELECT id FROM model_profiles WHERE provider_id=? AND model=?", (pid, model)).fetchone()
@@ -60,11 +62,11 @@ def sync_provider_models(db, pid):
         mid = old["id"] if old else uuid.uuid4().hex
         keep.append(mid)
         if not old:
-            db.db.execute("INSERT INTO model_profiles (id,name,base_url,api_key,model,is_active,created_at,api,provider_id) VALUES (?,?,?,?,?,0,?,?,?)",
-                          (mid, p["name"] + " / " + model, p["base_url"], p["api_key"], model, workflow.now(), p["api"], pid))
+            db.db.execute("INSERT INTO model_profiles (id,name,base_url,api_key,model,is_active,created_at,api,provider_id,key_host) VALUES (?,?,?,?,?,0,?,?,?,?)",
+                          (mid, p["name"] + " / " + model, p["base_url"], securestore.protect(p["api_key"]), model, workflow.now(), p["api"], pid, host))
         else:
-            db.db.execute("UPDATE model_profiles SET name=?,base_url=?,api_key=?,api=?,provider_id=? WHERE id=?",
-                          (p["name"] + " / " + model, p["base_url"], p["api_key"], p["api"], pid, mid))
+            db.db.execute("UPDATE model_profiles SET name=?,base_url=?,api_key=?,api=?,provider_id=?,key_host=? WHERE id=?",
+                          (p["name"] + " / " + model, p["base_url"], securestore.protect(p["api_key"]), p["api"], pid, host, mid))
     for r in db.db.execute("SELECT id FROM model_profiles WHERE provider_id=?", (pid,)).fetchall():
         if r["id"] not in keep:
             db.db.execute("DELETE FROM model_profiles WHERE id=?", (r["id"],))
