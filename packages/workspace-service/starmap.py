@@ -92,6 +92,24 @@ def _short(title: str, n: int = 26) -> str:
     return t if len(t) <= n else t[: n - 1] + "…"
 
 
+def overview(conn) -> dict[str, Any]:
+    """星图第一级：一个项目一个星团，只给计数（纯 SQL，不抽正文，几百毫秒内出图）。"""
+    rows = [dict(r) for r in conn.execute(
+        "SELECT t.id, t.title, t.stage, t.updated_at,"
+        " (SELECT COUNT(*) FROM papers p WHERE p.task_id=t.id) AS papers,"
+        " (SELECT COUNT(*) FROM notes n WHERE n.task_id=t.id) AS notes,"
+        " (SELECT COUNT(*) FROM md_notes m WHERE m.task_id=t.id) AS md_notes,"
+        " (SELECT COUNT(*) FROM search_cache c WHERE c.task_id=t.id) AS candidates,"
+        " (SELECT COUNT(*) FROM steps s WHERE s.task_id=t.id) AS steps"
+        " FROM research_tasks t ORDER BY t.updated_at DESC").fetchall()]
+    for r in rows:
+        r["notes"] += r.pop("md_notes")
+        r["nodes"] = r["papers"] + r["notes"] + r["candidates"] + r["steps"]
+    totals = {k: sum(r[k] for r in rows)
+              for k in ("papers", "notes", "candidates", "steps", "nodes")}
+    return {"level": "projects", "projects": rows, "totals": totals, "tasks": rows}
+
+
 def graph(conn, task_id: str = "") -> dict[str, Any]:
     import papergraph
 
@@ -282,8 +300,36 @@ def brief(conn, term: str, profile: dict[str, Any] | None = None) -> dict[str, A
     return {"term": term, "text": text, "model": profile.get("model") or "", "cached": False}
 
 
+def _overview_check() -> None:
+    """概览层：一个项目一行计数，大笔记和精读笔记要合到手栏，总数要对得上。"""
+    import sqlite3
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.executescript("""
+      CREATE TABLE research_tasks(id TEXT PRIMARY KEY, title TEXT, stage TEXT, updated_at TEXT);
+      CREATE TABLE papers(id TEXT PRIMARY KEY, task_id TEXT);
+      CREATE TABLE notes(id TEXT PRIMARY KEY, task_id TEXT);
+      CREATE TABLE md_notes(id TEXT PRIMARY KEY, task_id TEXT);
+      CREATE TABLE search_cache(id TEXT PRIMARY KEY, task_id TEXT);
+      CREATE TABLE steps(id TEXT PRIMARY KEY, task_id TEXT);
+    """)
+    c.execute("INSERT INTO research_tasks VALUES('a','项目甲','definition','2026-01-01')")
+    c.execute("INSERT INTO research_tasks VALUES('b','项目乙','writing','2026-01-02')")
+    c.execute("INSERT INTO papers VALUES('p1','a')")
+    c.execute("INSERT INTO notes VALUES('n1','a')")
+    c.execute("INSERT INTO md_notes VALUES('m1','a')")
+    c.execute("INSERT INTO search_cache VALUES('s1','b')")
+    c.execute("INSERT INTO steps VALUES('x1','b')")
+    out = overview(c)
+    assert out["level"] == "projects" and len(out["projects"]) == 2, out
+    a = next(p for p in out["projects"] if p["id"] == "a")
+    assert (a["papers"], a["notes"], a["nodes"]) == (1, 2, 3), a
+    assert out["totals"]["nodes"] == 5, out["totals"]
+
+
 def self_check() -> None:
     """最小自检：知识点只留共现 ≥2 的、二元词组优先、边能推出来。"""
+    _overview_check()
     docs = [("a", "Machine learning for materials. Machine learning again."),
             ("b", "Deep learning and machine learning in battery design."),
             ("c", "A one-off zebra appears here only once."),

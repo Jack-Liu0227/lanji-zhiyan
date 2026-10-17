@@ -16,7 +16,10 @@ const MODULES = [
 ];
 // 后端给的语义 kind → 星座层用的 kind（星座/配色/类名都按这套认）
 const KIND_OF = {paper: 'post', note: 'note', concept: 'concept', candidate: 'idea', step: 'draft'};
+// 项目层：每个项目占一个星团，外观按顺序轮流借五张已烘焙的星座图（不新画图）
+const PROJ_FIG = ['works', 'concepts', 'methods', 'ideas', 'drafts'];
 const KINDS = {
+  project: {label: '项目', en: 'Project', color: T.line.core},
   post: {label: '论文', en: 'Paper', color: T.kinds.post},
   note: {label: '笔记', en: 'Note', color: T.kinds.note},
   concept: {label: '关键词', en: 'Keyword', color: T.kinds.concept},
@@ -92,19 +95,33 @@ function targets(L, t) {
   const {w: W, h: H} = L.size, st = L.stage, narrow = W < 760;
   const swim = L.reduced ? 0 : 1;
   const res = {core: {}, cluster: {}, fan: null};
-  if (st === 'hub') {
+  if (st === 'projects') {
+    // 项目层：星核 = 全部项目，N 个星团均分在环上（只有 1 个就放右侧）
+    const n = Math.max(1, L.subs.length);
+    const cy = narrow ? H * .47 : H * .53;
+    res.core = {x: W / 2, y: cy, s: narrow ? clamp(W * .40, 150, 210) : clamp(Math.min(W, H) * .30, 200, 300)};
+    const rx = narrow ? W * .34 : Math.min(W * .30, 500), ry = narrow ? H * .22 : Math.min(H * .30, 268);
+    L.subs.forEach((m, i) => {
+      const a = ((n === 1 ? 0 : -90 + i * 360 / n) + swim * 5 * Math.sin(t * .17 + i * 1.7)) * Math.PI / 180;
+      const r = 1 + swim * .04 * Math.sin(t * .23 + i);
+      res.cluster[m.id] = {
+        x: W / 2 + Math.cos(a) * rx * r, y: cy + Math.sin(a) * ry * r + swim * 8 * Math.sin(t * .9 + i * 2.1),
+        s: narrow ? clamp(W * .40, 128, 176) : clamp(Math.min(W, H) * .20, 150, 210), o: 1
+      };
+    });
+  } else if (st === 'hub') {
     const s = narrow ? clamp(W * .56, 180, 280) : clamp(Math.min(W, H) * .5, 250, 440);
     const cy = narrow ? H * .47 : H * .53;
     res.core = {x: W / 2, y: cy, s};
     const rx = narrow ? W * .38 : Math.min(W * .345, 566), ry = narrow ? H * .23 : Math.min(H * .365, 300);
-    MODULES.forEach((m, i) => {
+    L.subs.forEach((m, i) => {
       const a = (m.angle + swim * 7 * Math.sin(t * .17 + i * 1.7)) * Math.PI / 180;
       const r = 1 + swim * .04 * Math.sin(t * .23 + i);
       res.cluster[m.id] = {x: W / 2 + Math.cos(a) * rx * r, y: cy + Math.sin(a) * ry * r + swim * 9 * Math.sin(t * .9 + i * 2.1), s: narrow ? 184 : clamp(W * .205, 206, 288), o: 1};
     });
   } else if (narrow) {
     res.core = {x: 40, y: 156, s: 86};
-    MODULES.forEach((m, i) => {
+    L.subs.forEach((m, i) => {
       const sel = m.id === L.mod, k = slotOf(L.mod, m.id);
       res.cluster[m.id] = {x: 104 + k * (W - 136) / 4, y: 152 + swim * 4 * Math.sin(t * .9 + i * 2), s: sel ? 168 : 120, o: sel ? 1 : .55};
     });
@@ -115,7 +132,7 @@ function targets(L, t) {
     res.core = {x: ox, y: cy, s: 178};
     const colX = ox + 158, cardH = 119, topY = 150, botY = H - 73;
     const gap = clamp((Math.min(cy - topY, botY - cy) - cardH / 2) / 2, 122, 200);
-    MODULES.forEach((m, i) => {
+    L.subs.forEach((m, i) => {
       const sel = m.id === L.mod, k = slotOf(L.mod, m.id);
       res.cluster[m.id] = {x: colX + (sel ? 16 : 0), y: cy + (k - 2) * gap + swim * 5 * Math.sin(t * .9 + i * 2), s: sel ? 300 : 220, o: sel ? 1 : .6};
     });
@@ -218,9 +235,8 @@ function mountCore(host, graph, reduced, getTime) {
 }
 
 export function mount(root, api, opts = {}) {
-  const graph = adapt(api);
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const stageEl = el('section', 'neural kb-star home-stage scene stage-hub');
+  const stageEl = el('section', 'neural kb-star home-stage scene stage-projects');
   stageEl.setAttribute('aria-label', '知识星图');
   root.appendChild(stageEl);
   stageEl.appendChild(el('div', 'stage-bg'));
@@ -232,7 +248,7 @@ export function mount(root, api, opts = {}) {
     + '<div class="cs-rays"></div><div class="cs-nucleus"></div>';
   stageEl.appendChild(coreBox);
 
-  // 连线层（SVG）：星核→簇 与 簇→条目 的贝塞尔，逐帧只改 d
+  // 连线层（SVG）：星核→星团 与 星团→条目 的贝塞尔，逐帧只改 d
   const svgNS = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(svgNS, 'svg');
   svg.setAttribute('class', 'threads');
@@ -242,41 +258,49 @@ export function mount(root, api, opts = {}) {
     <radialGradient id="pulse-in"><stop offset="0" stop-color="${T.pulse.in[0]}"/><stop offset=".4" stop-color="${T.pulse.in[1]}"/><stop offset="1" stop-color="${T.pulse.in[1]}" stop-opacity="0"/></radialGradient></defs>`;
   stageEl.appendChild(svg);
 
-  // 状态：与参照实现同一套字段
+  // 状态：level = projects（知识库 → 项目）/ branches（项目 → 五簇分支）；stage 只在 branches 层有 hub/module/note 三档
   const now0 = performance.now();
   const L = {
-    introSeen: false,
-    t0: now0, time: 0, stage: 'hub', mod: null, sel: null, items: [], fanRows: 0,
+    introSeen: false, t0: now0, time: 0,
+    level: 'projects', stage: 'projects', mod: null, sel: null, subs: [],
+    all: [], items: [], from: 0, fanRows: 0, prevMod: null,
     size: {w: stageEl.clientWidth || 1280, h: stageEl.clientHeight || 760},
     reduced, paused: false, hover: null, hoverStar: null, itemState: [], moreState: null, fanStart: now0,
     core: {x: 640, y: 380, s: 400},
-    springs: {dust: sp(.3), core: {x: sp(640), y: sp(380), s: sp(120), o: sp(0)},
-      cluster: Object.fromEntries(MODULES.map(m => [m.id, {x: sp(640), y: sp(380), s: sp(20), o: sp(0), lo: sp(0)}]))}
+    springs: {dust: sp(.3), core: {x: sp(640), y: sp(380), s: sp(120), o: sp(0)}, cluster: {}}
   };
-  // 开场：只有首次进来才播（同一次会话里返回不再重播）
   try { L.introSeen = reduced || !!sessionStorage.getItem('kb-star-intro'); } catch { L.introSeen = reduced; }
   if (L.introSeen) L.t0 = performance.now() - 6000;
 
-  const threadRefs = {}, pulseRefs = {}, clusterRefs = {}, canvasRefs = {}, labelRefs = {};
-  MODULES.forEach((m, i) => {
-    const g = document.createElementNS(svgNS, 'g');
+  // 层数据：概览常驻内存，项目详情进过一次就缓存 —— 退回项目层不再请求
+  const cache = {projects: [], totals: {}, byId: {}};
+  let graph = adapt({nodes: [], edges: [], task: null, tasks: []});
+  const refs = {box: {}, lab: {}, cvs: {}, th: {}, pulse: {}};
+  const svgEl = tag => document.createElementNS(svgNS, tag);
+
+  function clearSubjects() {
+    for (const id in refs.box) {
+      refs.box[id].remove(); refs.lab[id].remove(); refs.th[id].g.remove();
+    }
+    refs.box = {}; refs.lab = {}; refs.cvs = {}; refs.th = {}; refs.pulse = {};
+  }
+
+  function addSubject(m) {
+    const art = figData[m.fig];
+    const g = svgEl('g');
     g.setAttribute('style', `color:${T.link.near}`);
-    const glow = document.createElementNS(svgNS, 'path'); glow.setAttribute('class', 'thread-glow'); glow.setAttribute('filter', 'url(#thread-blur)');
-    const core = document.createElementNS(svgNS, 'path'); core.setAttribute('class', 'thread-core');
+    const glow = svgEl('path'); glow.setAttribute('class', 'thread-glow'); glow.setAttribute('filter', 'url(#thread-blur)');
+    const core = svgEl('path'); core.setAttribute('class', 'thread-core');
     g.appendChild(glow); g.appendChild(core);
     const pulses = [0, 1, 2].map(k => {
-      const c = document.createElementNS(svgNS, 'circle');
+      const c = svgEl('circle');
       c.setAttribute('r', k === 2 ? 4.5 : 5.5);
       c.setAttribute('fill', `url(#${k === 2 ? 'pulse-in' : 'pulse-out'})`);
       g.appendChild(c); return c;
     });
     svg.appendChild(g);
-    threadRefs[m.id] = {glow, core}; pulseRefs[m.id] = pulses;
-  });
+    refs.th[m.id] = {glow, core, g}; refs.pulse[m.id] = pulses;
 
-  // 五簇：画布 + 命中区 + 标注
-  MODULES.forEach(m => {
-    const art = figData[m.id];
     const box = el('div', 'cluster');
     box.style.width = art.bake.box + 'px'; box.style.height = art.bake.box + 'px';
     const cvs = el('canvas', 'cl-canvas');
@@ -287,22 +311,32 @@ export function mount(root, api, opts = {}) {
     hit.style.top = (art.bake.box / 2 + art.hit.cy - art.hit.h / 2) + 'px';
     hit.style.width = art.hit.w + 'px'; hit.style.height = art.hit.h + 'px';
     hit.style.clipPath = `polygon(${art.hit.clip})`;
+    hit.setAttribute('aria-label', m.title);
     box.appendChild(hit);
     stageEl.appendChild(box);
-    clusterRefs[m.id] = box; canvasRefs[m.id] = cvs;
+    refs.box[m.id] = box; refs.cvs[m.id] = cvs;
 
-    const sum = moduleSummary(graph, m);
     const lab = el('button', 'cluster-label below');
-    lab.style.setProperty('--mod', T.modules[m.id].color);
-    lab.innerHTML = `<span class="jl-icon">${m.icon}</span><span class="jl-count"><b>${sum.count}</b></span>`
-      + `<span class="jl-const"><b>${m.title}</b><em>${m.en.toUpperCase()}</em></span>`
-      + `<span class="jl-sub">${sum.sub[0]} ${sum.sub[1]} <em>${sum.sub[2]}</em></span>`;
+    lab.style.setProperty('--mod', KINDS[m.kind].color);
+    lab.title = m.title;
+    let count, sub;
+    if (m.kind === 'project') {                 // 项目层：标签给规模，分支要等点进去才出现
+      const p = m.data || {};
+      count = p.nodes || 0;
+      sub = [p.papers || 0, `篇文献 · ${p.notes || 0} 笔记`, 'project'];
+    } else {
+      const sm = moduleSummary(graph, m);
+      count = sm.count; sub = sm.sub;
+    }
+    lab.innerHTML = `<span class="jl-icon">${m.icon}</span><span class="jl-count"><b>${count}</b></span>`
+      + `<span class="jl-const"><b>${esc(m.title)}</b><em>${m.en.toUpperCase()}</em></span>`
+      + `<span class="jl-sub">${sub[0]} ${sub[1]} <em>${sub[2]}</em></span>`;
     stageEl.appendChild(lab);
-    labelRefs[m.id] = lab;
+    refs.lab[m.id] = lab;
 
-    const enter = () => { L.hover = m.kind; };
+    const pick = () => m.kind === 'project' ? openProject(m.id) : setFocus({mod: m.id, sel: null});
+    const enter = () => { L.hover = m.id; };
     const leave = () => { L.hover = null; L.hoverStar = null; };
-    const pick = () => setFocus({mod: m.id === L.mod && L.stage !== 'hub' ? L.mod : m.id, sel: null});
     hit.addEventListener('click', pick);
     hit.addEventListener('pointerenter', enter);
     hit.addEventListener('pointerleave', leave);
@@ -322,17 +356,46 @@ export function mount(root, api, opts = {}) {
     lab.addEventListener('click', pick);
     lab.addEventListener('pointerenter', enter);
     lab.addEventListener('pointerleave', leave);
-  });
+  }
+
+  function rebuildSubjects() {
+    clearSubjects();
+    L.springs.cluster = {};
+    L.subs.forEach(m => {
+      L.springs.cluster[m.id] = {x: sp(L.core.x), y: sp(L.core.y), s: sp(20), o: sp(0), lo: sp(0)};
+      addSubject(m);
+    });
+  }
+
+  // 星核环带：项目层铺「全部项目的四类内容数」，分支层用当前项目
+  const ovGraph = t => {
+    const box = (k, n) => Array.from({length: Math.min(Math.max(0, n | 0), 300)}, () => ({kind: k}));
+    return {nodes: [...box('post', t.papers), ...box('note', t.notes), ...box('idea', t.candidates), ...box('draft', t.steps)]};
+  };
+  let disposeCore = () => {};
+  function remountCore() {
+    try { disposeCore(); } catch { /* 旧星核已卸载 */ }
+    disposeCore = mountCore(coreBox, L.level === 'projects' ? ovGraph(cache.totals) : graph, reduced, () => L.time);
+    coreBox.classList.toggle('paused', L.paused);
+  }
 
   // 底部 KPI 条（参照实现的 dock 只留读数，不要问答框）
-  const kpis = [['内容节点', 'nodes', graph.stats.content], ['连接', 'links', graph.stats.links],
-    ['双向', 'mutual', graph.stats.mutual], ['关键词', 'keywords', graph.stats.concepts]];
   const dock = el('div', 'dock');
-  dock.innerHTML = `<div class="dock-panel glass"><div class="dock-kpis">${kpis.map(([k, en, v]) =>
-    `<div><span>${k} <em>${en}</em></span><strong class="mono">${fmt(v)}</strong></div>`).join('')}</div>`
-    + `<div class="dock-chips"><span class="me">${esc((graph.task && graph.task.title) || '')} <em>project</em></span>`
-    + `<button data-act="replay">重播开场</button><button data-act="pause">暂停</button></div></div>`;
   stageEl.appendChild(dock);
+  function renderDock() {
+    const top = L.level === 'projects';
+    const t = cache.totals || {};
+    const kpis = top
+      ? [['项目', 'projects', L.subs.length], ['文献', 'papers', t.papers || 0],
+         ['笔记', 'notes', t.notes || 0], ['检索', 'candidates', t.candidates || 0]]
+      : [['内容节点', 'nodes', graph.stats.content], ['连接', 'links', graph.stats.links],
+         ['双向', 'mutual', graph.stats.mutual], ['关键词', 'keywords', graph.stats.concepts]];
+    const me = top ? '全部项目' : ((graph.task && graph.task.title) || '');
+    dock.innerHTML = `<div class="dock-panel glass"><div class="dock-kpis">${kpis.map(([k, en, v]) =>
+      `<div><span>${k} <em>${en}</em></span><strong class="mono">${fmt(v)}</strong></div>`).join('')}</div>`
+      + `<div class="dock-chips"><span class="me">${esc(me)} <em>${top ? 'library' : 'project'}</em></span>`
+      + `<button data-act="replay">重播开场</button><button data-act="pause">${L.paused ? '继续' : '暂停'}</button></div></div>`;
+  }
 
   // 面包屑
   const crumbs = el('nav', 'crumbs');
@@ -346,6 +409,58 @@ export function mount(root, api, opts = {}) {
   const itemsWrap = el('div');
   stageEl.appendChild(itemsWrap);
   let itemEls = [], fanPathEls = [], fanPulseEls = [], moreEl = null, fanGroup = null;
+
+  function clearFan() {
+    itemsWrap.innerHTML = '';
+    itemEls = []; fanPathEls = []; fanPulseEls = []; moreEl = null;
+    if (fanGroup) { fanGroup.remove(); fanGroup = null; }
+  }
+
+  // 第一级：知识库 → 项目
+  function showProjects() {
+    L.level = 'projects'; L.stage = 'projects'; L.mod = null; L.sel = null;
+    L.subs = (cache.projects || []).map((p, i, arr) => ({
+      id: p.id, kind: 'project', title: p.title || '未命名项目', en: 'Project', icon: '◈',
+      fig: PROJ_FIG[i % PROJ_FIG.length], angle: arr.length === 1 ? 0 : -90 + i * 360 / arr.length, data: p
+    }));
+    L.all = []; L.items = []; L.fanRows = 0; L.from = 0;
+    clearFan();
+    rebuildSubjects();
+    remountCore();
+    stageEl.className = `neural kb-star home-stage scene stage-projects${L.introSeen ? ' intro-done' : ''}`;
+    renderDock(); renderCrumbs(); renderAnalysis();
+  }
+
+  // 第二级：项目内部（五簇分支）
+  function applyProject(a, focus) {
+    graph = adapt(a);
+    L.level = 'branches'; L.mod = null; L.sel = null;
+    L.all = []; L.items = []; L.fanRows = 0; L.from = 0; L.prevMod = null;
+    L.subs = MODULES.map(m => ({...m, fig: m.id}));
+    clearFan();
+    rebuildSubjects();
+    remountCore();
+    if (!L.introSeen) L.t0 = performance.now();     // 首次从项目层进来，播一次开场
+    setFocus({mod: null, sel: null});
+    renderDock();
+    if (focus) {
+      if (MODULES.some(m => m.id === focus)) setFocus({mod: focus, sel: null});
+      else {
+        const n = (graph.nodes || []).find(x => x.id === focus);
+        if (n && n.m) setFocus({mod: n.m, sel: n.id});
+      }
+    }
+  }
+
+  function openProject(id) {
+    const a = cache.byId[id];
+    if (a) { applyProject(a); return; }
+    fetch('/api/starmap?task=' + encodeURIComponent(id)).then(r => r.json()).then(a => {
+      if (!a || !a.task) throw new Error('这个项目还没有可画的内容');
+      cache.byId[id] = a;
+      applyProject(a);
+    }).catch(e => alert('打开项目失败：' + e.message));
+  }
 
   function setFocus(f) {
     L.mod = f.mod; L.sel = f.sel;
@@ -366,9 +481,9 @@ export function mount(root, api, opts = {}) {
     // 扇面 DOM 重建（条目数量变了才重建；每帧只改 transform）
     rebuildFan();
     stageEl.className = `neural kb-star home-stage scene stage-${L.stage}${L.introSeen ? ' intro-done' : ''}`;
-    MODULES.forEach(m => {
-      clusterRefs[m.id].classList.toggle('active', m.id === L.mod);
-      const lab = labelRefs[m.id];
+    L.subs.forEach(m => {
+      refs.box[m.id].classList.toggle('active', m.id === L.mod);
+      const lab = refs.lab[m.id];
       lab.classList.toggle('active', m.id === L.mod);
       lab.classList.toggle('below', L.stage === 'hub');
       lab.classList.toggle('side', L.stage !== 'hub');
@@ -418,7 +533,7 @@ export function mount(root, api, opts = {}) {
 
   // 滚轮翻页：条目多到一屏放不下时，滚一格挪 3 条（窗口在整簇列表上滑动）
   function scrollFan(step) {
-    if (!L.all || L.stage === 'hub') return false;
+    if (!L.all || L.stage === 'hub' || L.level !== 'branches') return false;
     const max = Math.max(0, L.all.length - L.rows);
     const next = clamp(L.from + step, 0, max);
     if (next === L.from) return false;
@@ -433,17 +548,20 @@ export function mount(root, api, opts = {}) {
   }
 
   function renderCrumbs() {
-    if (L.stage === 'hub') { crumbs.innerHTML = ''; crumbs.style.display = 'none'; return; }
+    if (L.level === 'projects') { crumbs.innerHTML = ''; crumbs.style.display = 'none'; return; }
     crumbs.style.display = '';
     const m = MODULES.find(x => x.id === L.mod) || {title: '', en: ''};
     const node = L.sel ? graph.index.get(L.sel) : null;
     crumbs.innerHTML = `<button class="crumb-back" aria-label="返回上一层">‹</button>`
-      + `<button data-nav="core">${esc((graph.task && graph.task.title) || '项目')} <em>core</em></button><span>/</span>`
-      + `<button data-nav="mod" style="color:${T.modules[L.mod] ? T.modules[L.mod].color : ''}">${esc(m.title)} <em>${esc(m.en)}</em></button>`
+      + `<button data-nav="lib">知识库 <em>library</em></button><span>/</span>`
+      + `<button data-nav="core">${esc((graph.task && graph.task.title) || '项目')} <em>project</em></button>`
+      + (L.mod ? `<span>/</span><button data-nav="mod" style="color:${T.modules[L.mod] ? T.modules[L.mod].color : ''}">${esc(m.title)} <em>${esc(m.en)}</em></button>` : '')
       + (node ? `<span>/</span><b>${esc(node.short || node.title)}</b>` : '');
-    crumbs.querySelector('.crumb-back').onclick = () => setFocus(L.sel ? {mod: L.mod, sel: null} : {mod: null, sel: null});
+    crumbs.querySelector('.crumb-back').onclick = () =>
+      L.sel ? setFocus({mod: L.mod, sel: null}) : L.mod ? setFocus({mod: null, sel: null}) : showProjects();
     crumbs.querySelectorAll('[data-nav]').forEach(b => b.onclick = () => {
-      if (b.dataset.nav === 'core') setFocus({mod: null, sel: null});
+      if (b.dataset.nav === 'lib') showProjects();
+      else if (b.dataset.nav === 'core') setFocus({mod: null, sel: null});
       else setFocus({mod: L.mod, sel: null});
     });
   }
@@ -500,8 +618,8 @@ export function mount(root, api, opts = {}) {
     if (!act) return;
     if (act.dataset.act === 'replay') {
       L.t0 = performance.now(); L.time = 0;
-      S.core.s.x = 120; S.core.o.x = 0;
-      setFocus({mod: null, sel: null});
+      L.springs.core.s.x = 120; L.springs.core.o.x = 0;
+      if (L.level === 'branches') setFocus({mod: null, sel: null});
     } else if (act.dataset.act === 'pause') {
       L.paused = !L.paused;
       act.textContent = L.paused ? '继续' : '暂停';
@@ -510,22 +628,22 @@ export function mount(root, api, opts = {}) {
   });
 
   stageEl.addEventListener('wheel', e => {
-    if (L.stage === 'hub' || e.target.closest('.dock, .analysis, .crumbs')) return;
+    if (L.level !== 'branches' || L.stage === 'hub' || e.target.closest('.dock, .analysis, .crumbs')) return;
     if (!L.all || L.all.length <= L.rows) return;
     const step = e.deltaY > 0 ? 3 : -3;
     if (scrollFan(step)) e.preventDefault();
   }, {passive: false});
 
-  // 星核挂载（环带宽度 = 各模块节点数）
-  const core = mountCore(coreBox, graph, reduced, () => L.time);
   stageEl.classList.toggle('intro-done', L.introSeen);
   try { sessionStorage.setItem('kb-star-intro', '1'); } catch {}
 
-  // Esc 逐层退回
+  // Esc 逐层退回：条目 → 分支 → 项目 → 项目层
   const onKey = e => {
     if (e.key !== 'Escape' || e.isComposing) return;
+    if (L.level !== 'branches') return;
     if (L.sel) setFocus({mod: L.mod, sel: null});
     else if (L.mod) setFocus({mod: null, sel: null});
+    else showProjects();
   };
   window.addEventListener('keydown', onKey);
 
@@ -545,24 +663,26 @@ export function mount(root, api, opts = {}) {
     coreBox.style.transform = `translate3d(${ox - os / 2}px,${oy - os / 2}px,0) scale(${os / 460})`;
     coreBox.style.opacity = clamp(oo, 0, 1);
 
-    MODULES.forEach((m, i) => {
-      const j = S.cluster[m.id], tg = Tt.cluster[m.id], art = figData[m.id];
+    L.subs.forEach((m, i) => {
+      const j = S.cluster[m.id], tg = Tt.cluster[m.id], art = figData[m.fig];
+      if (!j || !tg) return;
       const gated = intro && since < 1 + i * .17;
       const x = spring(j.x, gated ? ox : tg.x, dt), y = spring(j.y, gated ? oy : tg.y, dt);
       const s = spring(j.s, gated ? 24 : tg.s, dt), o = spring(j.o, gated ? 0 : tg.o, dt, 40);
       const lo = spring(j.lo, intro && since < 2 + i * .1 ? 0 : tg.o, dt, 40);
-      const k = s / BASE * (L.stage === 'hub' ? HUB_K : SUB_K);
+      const ring = L.stage === 'hub' || L.stage === 'projects';
+      const k = s / BASE * (ring ? HUB_K : SUB_K);
       const B = art.bake.box * k;
       j.cur = {x, y, s, k};
-      const box = clusterRefs[m.id], lab = labelRefs[m.id];
+      const box = refs.box[m.id], lab = refs.lab[m.id];
       box.style.transform = `translate3d(${x - B / 2}px,${y - B / 2}px,0) scale(${k})`;
       box.style.opacity = clamp(o, 0, 1);
-      const on = m.id === L.mod || L.hover === m.kind;
-      drawCluster(canvasRefs[m.id], art, t, on, L.reduced || L.paused, L.hoverStar && L.hoverStar.id === m.id ? L.hoverStar.idx : -1);
+      const on = m.id === L.mod || L.hover === m.id;
+      drawCluster(refs.cvs[m.id], art, t, on, L.reduced || L.paused, L.hoverStar && L.hoverStar.id === m.id ? L.hoverStar.idx : -1);
       if (lab) {
         const lw = lab.offsetWidth, lh = lab.offsetHeight;
-        const hub = L.stage === 'hub', narrow = L.size.w < 760;
-        // 标注贴着自己的星座、朝背离星核的一侧：方向取模块名义角度（呼吸摆动时才不跳）
+        const hub = ring, narrow = L.size.w < 760;
+        // 标注贴着自己的星团、朝背离星核的一侧：方向取下标角度（呼吸摆动时才不跳）
         const a0 = m.angle * Math.PI / 180, nX = Math.cos(a0), nY = Math.sin(a0);
         const sup = (Math.abs(nX) * art.ext.hx + Math.abs(nY) * art.ext.hy) * k;
         const gap = sup + 14 + (Math.abs(nX) * lw + Math.abs(nY) * lh) / 2;
@@ -575,10 +695,10 @@ export function mount(root, api, opts = {}) {
         j.label = {x: lx, y: ly, w: lw, h: lh};
       }
       // 星核 → 星团：金色星座线 + 缓慢流动的光粒，收在图形外沿上
-      const g = threadRefs[m.id];
+      const g = refs.th[m.id];
       if (g) {
         let x1, y1, x2, y2, c1x, c1y, c2x, c2y;
-        if (L.stage === 'hub') {
+        if (ring) {
           const dx = x - ox, dy = y - oy, d = Math.hypot(dx, dy) || 1, ux = dx / d, uy = dy / d;
           const near = (Math.abs(ux) * art.ext.hx + Math.abs(uy) * art.ext.hy) * k;
           x1 = ox + ux * os * .2; y1 = oy + uy * os * .2; x2 = x - ux * near; y2 = y - uy * near;
@@ -591,9 +711,9 @@ export function mount(root, api, opts = {}) {
         }
         const d = `M${x1},${y1} C${c1x},${c1y} ${c2x},${c2y} ${x2},${y2}`;
         g.glow.setAttribute('d', d); g.core.setAttribute('d', d);
-        const vis = clamp(o, 0, 1) * (L.stage === 'hub' ? 1 : on ? 1 : .45);
+        const vis = clamp(o, 0, 1) * (ring ? 1 : on ? 1 : .45);
         g.glow.style.opacity = vis * (on ? .95 : .5); g.core.style.opacity = vis;
-        (pulseRefs[m.id] || []).forEach((c, kk) => {
+        (refs.pulse[m.id] || []).forEach((c, kk) => {
           const inbound = kk === 2;
           let u = ((t * (inbound ? .09 : .12) + kk * .5 + i * .17) % 1);
           if (inbound) u = 1 - u;
@@ -649,13 +769,17 @@ export function mount(root, api, opts = {}) {
       L.fanSnap = false;          // 这一帧已经按目标位置落好，后面交回弹簧
     }
   }
-  // 深链：?open=<簇 id> 打开某一簇，?open=<节点 id> 直接落到条目层
-  if (opts.focus) {
-    if (MODULES.some(m => m.id === opts.focus)) setFocus({mod: opts.focus, sel: null});
-    else {
-      const n = (api.nodes || []).find(x => x.id === opts.focus);
-      if (n && n.m) setFocus({mod: n.m, sel: n.id});
-    }
+
+  // 首层：概览 → 项目层；带 task 的深链直接进该项目
+  if (api && api.level === 'projects') {
+    cache.projects = api.projects || [];
+    cache.totals = api.totals || {};
+    showProjects();
+  } else if (api && api.task) {
+    cache.byId[api.task.id] = api;
+    applyProject(api, opts.focus);
+  } else {
+    stageEl.innerHTML = '<p style="padding:40px;color:#8b9bb0">还没有项目 —— 先去「项目」页建一个，星图才有得画。</p>';
   }
 
   // ?still=1 / prefers-reduced-motion：跳过入场动画，直接把弹簧推到终点（也方便截图与验收）
@@ -671,26 +795,25 @@ export function mount(root, api, opts = {}) {
   // 尺寸：ResizeObserver 跟随窗口（含侧栏折叠）
   const measure = () => {
     L.size = {w: stageEl.clientWidth, h: stageEl.clientHeight};
-    if (L.stage === 'hub' && performance.now() - L.t0 < 300) {
+    if ((L.stage === 'hub' || L.stage === 'projects') && performance.now() - L.t0 < 300) {
       const o = targets({...L}, 0).core;
       Object.assign(S.core, {x: sp(o.x), y: sp(o.y)});
-      MODULES.forEach(m => Object.assign(S.cluster[m.id], {x: sp(o.x), y: sp(o.y)}));
+      L.subs.forEach(m => Object.assign(S.cluster[m.id] || (S.cluster[m.id] = {x: sp(20), y: sp(20), s: sp(20), o: sp(0), lo: sp(0)}), {x: sp(o.x), y: sp(o.y)}));
       L.core = {...L.core, x: o.x, y: o.y};
     }
     const rows = rowsThatFit(Math.max(L.size.h, 560));
-    if (L.stage !== 'hub' && L.fanRows > rows) setFocus({mod: L.mod, sel: L.sel});
+    if (L.level === 'branches' && L.stage !== 'hub' && L.fanRows > rows) setFocus({mod: L.mod, sel: L.sel});
     renderAnalysis();
   };
   const ro = new ResizeObserver(measure);
   ro.observe(stageEl);
   measure();
-  if (!opts.focus) setFocus({mod: null, sel: null});   // 首次落地的那一帧
 
   return () => {
     cancelAnimationFrame(raf);
     ro.disconnect();
     window.removeEventListener('keydown', onKey);
-    core();
+    disposeCore();
     unmountCosmos();
     stageEl.remove();
   };
