@@ -1,0 +1,42 @@
+/* 星图页自己的少量样式（其余全部走 neural.css，配色/尺寸沿用它的变量） */
+html, body { height: 100%; margin: 0; overflow: hidden; background: #05070f; }
+#kb-root { position: fixed; inset: 0; }
+.kb-star.home-stage { height: 100%; min-height: 0; }
+
+/* 右栏：字段表 + 关联列表（参照实现的分析栏有四块仪表，这里只留用得上的两块） */
+.an-fields { display: grid; gap: 1px; margin: 4px 0 14px; padding: 6px 16px; }
+.an-fields > div { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.an-fields span { color: var(--text-2); }
+.an-fields b { font-weight: 500; max-width: 62%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-links { padding: 0 16px 16px; overflow: auto; }
+.an-links h4 { margin: 14px 0 8px; font-size: 11.5px; font-weight: 600; letter-spacing: .06em; color: var(--text-2); }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-size: 11.5px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--line); background: color-mix(in srgb, var(--kc) 10%, transparent); color: var(--text); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip:hover { border-color: color-mix(in srgb, var(--kc) 55%, transparent); }
+.analysis h2 { margin: 2px 16px 10px; font-family: var(--serif); font-size: 19px; line-height: 1.35; font-weight: 600; }
+.analysis header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 4px; }
+.analysis .pill { margin: 0 16px 16px; align-self: flex-start; }
+.analysis .quiet { color: var(--muted); font-size: 12px; }
+
+/* 知识点简介：最多三行，超了截断（完整内容就在右栏，不另开页） */
+.an-brief-h { margin: 2px 16px 8px; font-size: 11.5px; font-weight: 600; letter-spacing: .06em; color: var(--text-2); }
+.an-brief-h em { font-style: normal; font-weight: 400; color: var(--muted); margin-left: 6px; }
+.an-brief { margin: 0 16px 14px; padding: 10px 12px; font-size: 12.5px; line-height: 1.7; color: var(--text);
+  background: rgba(255, 255, 255, .04); border: 1px solid var(--line); border-radius: 10px;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.an-brief.dim { color: var(--muted); }
+
+/* 浅色模式下不出图，只给一条提示（星图配色是给深空画的） */
+.kb-dark-only { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; color: #e6edf5; font-family: var(--sans); }
+.kb-dark-only .kb-dark-moon { font-size: 44px; line-height: 1; }
+.kb-dark-only h2 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: .01em; }
+.kb-dark-only p { margin: 0; max-width: 460px; font-size: 13px; line-height: 1.7; color: #93a2b8; }
+.kb-dark-only button { margin-top: 8px; padding: 9px 20px; border-radius: 999px; border: 1px solid rgba(232, 200, 132, .45);
+  background: rgba(232, 200, 132, .12); color: #f3dcae; font: inherit; font-size: 13px; cursor: pointer; }
+ .kb-dark-only button:hover { background: rgba(232, 200, 132, .22); }
+/* 浅色模式下整页走浅色：提示块不能是一块黑，否则像样式坏了 */
+html[data-theme=light], html[data-theme=light] body { background: #f6f8fa; }
+html[data-theme=light] .kb-dark-only { color: #16202b; }
+html[data-theme=light] .kb-dark-only p { color: #5d6b7c; }
+html[data-theme=light] .kb-dark-only button { border-color: rgba(23, 107, 135, .5); background: rgba(23, 107, 135, .08); color: #176b87; }
+html[data-theme=light] .kb-dark-only button:hover { background: rgba(23, 107, 135, .16); }

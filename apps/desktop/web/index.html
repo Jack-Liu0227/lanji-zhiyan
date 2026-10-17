@@ -1433,6 +1433,16 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .skeleton-box::after{position:absolute;top:0;right:0;bottom:0;left:0;transform:translateX(-100%);background-image:linear-gradient(90deg,rgba(255,255,255,0) 0,rgba(255,255,255,0.06) 20%,rgba(255,255,255,0.12) 60%,rgba(255,255,255,0));animation:shimmer 1.8s infinite;content:''}
 @keyframes shimmer{100%{transform:translateX(100%)}}
 .skeleton-line{height:14px;margin-bottom:8px;border-radius:4px;background:color-mix(in srgb,var(--line) 40%,transparent)}
+
+/* 知识星图：整页 iframe（星图自带一套样式表与配色，不跟本页混） */
+/* 星图页用自己的 sm- 前缀：旧的「知识库」页已占用 kb- 命名空间（.kb-bar 是 7px 进度条） */
+.sm-wrap{display:flex;flex-direction:column;gap:8px;height:calc(100vh - 150px);min-height:420px}
+.sm-bar{display:flex;align-items:center;gap:12px;flex:none;height:auto;overflow:visible}
+.sm-bar b{font-size:14px}
+.sm-bar .hint{color:var(--muted);font-size:12px}
+.sm-pick{margin-left:auto;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px;white-space:nowrap;flex:none}
+.sm-pick select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--fg);padding:3px 6px;font-size:12px;height:28px;min-width:180px;max-width:300px}
+.sm-frame{flex:1;width:100%;border:1px solid var(--line);border-radius:12px;background:#05070f;min-height:0}
 </style>
 </head>
 <body>
@@ -1577,9 +1587,11 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 
 <script src="/vendor/splash.js"></script>
 <script src="/vendor/kb3d.js"></script>
+<script src="/vendor/starmap.js"></script>
 <script src="/vendor/lunar/lunar.js"></script>
 <script src="/vendor/pdfjs/pdf.min.js"></script>
 <link rel="stylesheet" href="/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="/vendor/starmap.css">
 <script src="/vendor/marked/marked.umd.js"></script>
 <script src="/vendor/dompurify/purify.min.js"></script>
 <script src="/vendor/katex/katex.min.js"></script>
@@ -1725,6 +1737,7 @@ const NAV = [
     {id:"tasks",label:"项目",ico:"📁"},
     {id:"space",label:"项目空间",ico:"🧭"}]},
   {g:"solo",items:[
+    {id:"library",label:"知识库",ico:"📚"},
     {id:"workflow",label:"工作流",ico:"🔀"},
     {id:"schedules",label:"定时任务",ico:"⏰"},
     {id:"notes",label:"笔记",ico:"📝"},
@@ -1860,7 +1873,7 @@ function render(){
   else if(r==="space") renderSpace(m);
   else if(r==="calendar") renderCalendar(m);
   else if(r==="mail") renderMail(m);
-  else if(r==="library"){ spTab = "notes"; renderSpace(m); }   // 「知识库」并入 项目空间·笔记；旧链接落到这里
+  else if(r==="library") renderStar(m);                        // 知识星图整页（项目 → 文献/笔记/知识点/候选/工作流）
   else if(r==="notes") renderNotes(m);
   else if(r==="intel") renderIntel(m);
   else if(r==="assistants") renderAssistants(m);
@@ -5095,6 +5108,36 @@ a { color: #176b87; }
     startMailNotify();
   }
 
+/* ---------------- 知识星图（项目 = 星核，五簇 = 文献/笔记/知识点/检索候选/工作流） ----------------
+   整页是独立文档 kb.html：星图的样式与类名自成一套，塞进这个单页会跟现有样式打架。
+   这里只负责挂 iframe、切项目、以及接收星图发来的「打开某条」请求。 */
+let kbTask = localStorage.getItem("rw-kb-task") || "";
+function renderStar(m){
+  const tid = kbTask || curTask || "";
+  m.innerHTML = `<div class="sm-wrap">
+      <div class="sm-bar">
+      <b>知识星图</b>
+      <span class="hint">点星团展开 → 点条目看分析 → Esc 逐层退回</span>
+      <label class="sm-pick">项目 <select id="kbTaskSel">${(S.tasks||[]).map(t=>`<option value="${t.id}" ${t.id===tid?"selected":""}>${esc(t.title)}</option>`).join("")}</select></label>
+    </div>
+    <iframe id="kbFrame" class="sm-frame" src="/kb.html?task=${encodeURIComponent(tid)}&theme=${document.documentElement.dataset.theme||"dark"}" title="知识星图"></iframe>
+  </div>`;
+  const frame = $("kbFrame");
+  $("kbTaskSel").onchange = e => {
+    kbTask = e.target.value; localStorage.setItem("rw-kb-task", kbTask);
+    try{ frame.contentWindow.postMessage({rw:"kb-reload", task:kbTask}, "*"); }catch(_){ frame.src = "/kb.html?task="+encodeURIComponent(kbTask); }
+  };
+}
+
+// 星图里点「在应用里打开」：论文开 PDF，笔记跳到笔记页（其他类型不猜，留在星图里看分析）
+window.addEventListener("message", e => {
+  const d = e.data || {};
+  if(d.rw === "theme"){ setTheme(d.theme || "dark"); return; }   // 星图只在深色下画：点提示里的按钮直接切过来
+  if(d.rw !== "open") return;
+  if(d.kind === "post") api("/api/paper/open?id=" + encodeURIComponent(d.ref)).catch(err => alert("打开失败：" + err.message));
+  else if(d.kind === "note") openTab("notes");
+});
+
 /* ---------------- 知识库（Obsidian Vault 看板） ----------------
    版式/口径照 Baixiao-Reading-Cockpit（未读/在读/已读 + 吸收状态、年度热力、阅读完成率、状态写回笔记）；
    路径与写回边界照科研工作台的 obsidian 集成（服务端校验，永不写 .obsidian/，只改 frontmatter 那几个键）。
@@ -5548,7 +5591,8 @@ async function mdExport(fmt){
   if(fmt==="pdf"){                                   // 走浏览器打印 → 另存为 PDF
     const w = window.open("", "_blank");
     if(!w) return alert("浏览器拦了打印窗口");
-    w.document.write(`<title>${esc(note.title)}</title><link rel="stylesheet" href="/vendor/katex/katex.min.css">`
+    w.document.write(`<title>${esc(note.title)}</title><link rel="stylesheet" href="/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="/vendor/starmap.css">`
       + `<style>body{font:14px/1.75 "Microsoft YaHei",sans-serif;padding:32px;max-width:860px;margin:auto}`
       + `pre{background:#202124;color:#f4f5f7;padding:12px;border-radius:6px;overflow:auto}`
       + `table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccc;padding:6px 9px}`
@@ -5828,7 +5872,7 @@ const schTaskName = (id)=> (S.tasks||[]).find(t=>t.id===id)?.title || "";
 /* ---------------- 项目空间（页头 + tab + 概览四卡 + 快照；
      只聚合本应用真有的数据，「任务/矩阵/资源关系/知识库」四个 tab 没有对应物 → 不做空壳） ---------------- */
 let spTab = "overview", spId = null, spTeam = null, spOpen = null;
-const SP_TABS = [["overview","概览"],["team","团队"],["papers","文献"],["notes","笔记"],["calendar","日程"]];
+const SP_TABS = [["overview","概览"],["team","团队"],["papers","文献"],["stars","论文星图"],["notes","笔记"],["calendar","日程"]];
 function spProg(d){
   const stages = (S.stages||[]).map(s=>s.key);
   const map = d.stage_map || {};
@@ -5846,8 +5890,14 @@ function spBodyHTML(d){
       <span class="pill">${rows.length} 条</span><button class="btn ghost" id="spToLib">去知识库 →</button></div>
       ${rows.length ? rows.map(r=>`<div class="sp-row"><span class="sp-ic">📄</span><div class="sp-main">
         <div class="sp-nm">${esc(r.title||r.filename||"未命名")}</div>
-        <div class="sp-meta">${esc(r.filename||"")} · ${r.pages?String(r.pages).split(",").length+" 页":""} · ${esc(spWhen(r.created_at))}</div></div></div>`).join("")
+        <div class="sp-meta">${esc(r.authors||"作者未识别")}${r.doi?` · <span class="sp-doi">DOI ${esc(r.doi)}</span>`:" · DOI 未识别"}${r.year?` · ${esc(r.year)}`:""}${r.pages?` · ${String(r.pages).split(",").length} 页`:""}</div></div></div>`).join("")
       : `<div class="hint" style="margin-top:10px">这个项目还没有入库文献。到「知识库」或工作流的检索步加进来。</div>`}</div>`;
+  }
+  if(spTab === "stars"){
+    const g = d.paper_graph||{nodes:[],edges:[],stats:{}};
+    return `<div class="card" style="margin-top:12px;padding:0;border:0;background:transparent">
+      <div id="spStars" style="height:clamp(420px,70vh,760px)"></div>
+      ${(g.nodes||[]).length? "" : `<div class="hint" style="margin-top:10px">这个项目还没有入库文献，星图上没有星。</div>`}</div>`;
   }
   if(spTab === "notes") return `<div id="spNotes" class="sp-kb-host"></div>`;   // 知识库整块搬进来（不含 PDF 版块）
   if(spTab === "calendar"){
@@ -6029,6 +6079,15 @@ async function renderSpace(m){
   m.querySelectorAll("[data-sp-tab]").forEach(b=>b.onclick=()=>{ spTab = b.dataset.spTab; render(); });
   $("spBody").innerHTML = spBodyHTML(d);
   spBind(d);
+  if(spTab === "stars"){
+    const host = $("spStars");
+    const g = d.paper_graph || { nodes: [], edges: [], stats: {} };
+    if(host && window.StarMap){
+      host.__api = api; host.__toast = toast;      // 星图里双击打开 PDF 用
+      StarMap.mount(host, g);
+    }
+    else if(host) host.innerHTML = `<div class="hint">星图脚本没加载上（/vendor/starmap.js）。</div>`;
+  }
   if(spTab === "notes") renderLibrary($("spNotes"), {embed: true, project: curTask})
     .catch(e => { $("spNotes").innerHTML = `<div class="hint">知识库加载失败：${esc(e.message)}</div>`; });
 }
@@ -6394,6 +6453,10 @@ initTheme();
 setInterval(()=>{ const el=document.querySelector(".topbar .date"); if(el) el.textContent=clock();
   const g=$("calHelloText"); if(g) g.textContent=helloText(); }, 30000);   // 顶栏日期/时间自己走；问候语跟着时间变
 refreshState().catch(e=>{ $("main").innerHTML=`<div class="msg error">加载失败：${esc(e.message)}</div>`; });
+
+// 深链：#library 这样带 hash 打开就直达那一页（书签/外部链接用）
+const _hashRoute = (location.hash || "").replace(/^#\/?/, "");
+if (_hashRoute && TITLES[_hashRoute]) openTab(_hashRoute);
 
 /* ---------------- 情报日报（RSS，来源固定 5 个；读侧：
      来源/关键词/年份三条件筛选 + 手动刷新） ---------------- */
@@ -7365,7 +7428,7 @@ function buildCommandList() {
     { id: "space", title: "项目空间", ico: "🌌", cat: "导航" },
     { id: "workflow", title: "工作流总览", ico: "🔀", cat: "导航" },
     { id: "schedules", title: "定时任务", ico: "⏰", cat: "导航" },
-    { id: "library", title: "知识库 (Obsidian)", ico: "📚", cat: "导航" },
+    { id: "library", title: "知识星图", ico: "📚", cat: "导航" },
     { id: "notes", title: "笔记中心", ico: "📝", cat: "导航" },
     { id: "intel", title: "情报日报 (RSS)", ico: "📡", cat: "导航" },
     { id: "mail", title: "邮箱通讯", ico: "✉️", cat: "导航" },
