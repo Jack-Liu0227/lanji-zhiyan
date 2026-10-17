@@ -40,7 +40,7 @@
     return d;
   }
   async function saved() { await refreshState(false); await load(); window.refreshCapabilities?.(); }
-  const modelOptions = current => `<option value="">自动选择 / 跟随当前模型</option>${(S.models || []).map(m => `<option value="${h(m.id)}" ${m.id === current ? "selected" : ""}>${h(m.name)}${m.name.includes(m.model) ? "" : " · " + h(m.model)}</option>`).join("")}`;
+  const modelOptions = current => `<option value="">跟随当前模型</option>${(S.models || []).map(m => `<option value="${h(m.id)}" ${m.id === current ? "selected" : ""}>${h(m.name)}${m.name.includes(m.model) ? "" : " · " + h(m.model)}</option>`).join("")}`;
   function policyFields(a, prefix) {
     return `<label><span>模型</span><select class="control" id="${prefix}-model">${modelOptions(a.model_id)}</select></label>
       <label><span>推理强度</span><select class="control" id="${prefix}-reasoning">${options(efforts,a.reasoning || "auto",effortLabels)}</select></label>
@@ -293,7 +293,7 @@
     if (row && chat) {
       const bound = S.assistants.find(a => a.id === chat.assistant_id) || {};
       const controls = document.createElement("span"); controls.className = "ag-row";
-      controls.innerHTML = `<label class="at-sel" title="当前会话推理强度">推理<select id="ag-chat-reasoning">${options(efforts,chat.reasoning !== "auto" ? chat.reasoning : bound.reasoning || "auto",effortLabels)}</select></label><label class="at-sel" title="当前会话权限（Full Access 有风险）">权限<select id="ag-chat-permission">${options(permissions,chat.permission !== "auto" ? chat.permission : bound.permission || "auto",permissionLabels)}</select></label>`;
+      controls.innerHTML = `<label class="at-sel" title="当前会话推理强度">⚡<span class="k">推理</span><select id="ag-chat-reasoning">${options(efforts,chat.reasoning !== "auto" ? chat.reasoning : bound.reasoning || "auto",effortLabels)}</select></label><label class="at-sel" title="当前会话权限（Full Access 有风险）">🛡<span class="k">权限</span><select id="ag-chat-permission">${options(permissions,chat.permission !== "auto" ? chat.permission : bound.permission || "auto",permissionLabels)}</select></label>`;
       row.append(controls);
       for (const key of ["reasoning","permission"]) el("ag-chat-" + key).onchange = async e => {
         if (key === "permission" && !risk(chat.permission,e.target.value)) { e.target.value = chat.permission || "auto"; return; }
