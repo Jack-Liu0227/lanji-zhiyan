@@ -329,18 +329,26 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .sp-tab:hover{color:var(--fg)}
 .sp-tab.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
 .sp-kb-host{margin-top:12px}
-.sp-meta-pill{border:1px solid var(--line);border-radius:999px;padding:1px 9px;font-size:11px;color:var(--muted)}
+.sp-hd1{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 10px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.sp-hd1 h3{margin:0;font-size:16px;font-weight:700;letter-spacing:-.01em}
+.sp-step{font-size:12.5px;color:var(--muted)}
+.sp-step b{color:var(--accent);font-weight:600;margin-left:5px}
+.sp-when{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.sp-gap{flex:1}
+.sp-hd2{display:flex;align-items:center;gap:10px}
+.sp-hd2 .hint{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 .kb-head.kb-embed{padding-bottom:10px;border-bottom:1px solid var(--line)}
 
 .kb-scope{display:inline-flex;gap:4px;margin-left:6px}
 
 .kb-scope .btn.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
-.sp-grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.sp-grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .sp-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media (max-width:1180px){.sp-grid4{grid-template-columns:repeat(2,minmax(0,1fr))}.sp-grid2{grid-template-columns:1fr}}
+@media (max-width:1180px){.sp-grid3{grid-template-columns:repeat(2,minmax(0,1fr))}.sp-grid2{grid-template-columns:1fr}}
 .sp-kpi strong{display:block;font-size:26px;font-weight:700;letter-spacing:-.01em;margin:2px 0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sp-kpi-note{color:var(--muted);font-size:12px;margin:0;line-height:1.5}
+.sp-kpi-text strong{font-size:13.5px;font-weight:600;line-height:1.5;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .sp-bar{height:6px;border-radius:999px;background:var(--panel2);margin-top:8px;overflow:hidden}
 .sp-bar>div{height:100%;background:var(--accent);border-radius:999px}
 .sp-row{display:flex;gap:10px;align-items:flex-start;border-top:1px solid var(--line);padding:9px 0}
@@ -1598,7 +1606,7 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 <script>
 "use strict";
 /* ============================== 状态 ============================== */
-const S = { tasks:[], chats:[], models:[], active:null, events:[], tools:[], chat:[], chatEvents:[], loaded:false };
+const S = { tasks:[], chats:[], models:[], active:null, events:[], stages:[], tools:[], chat:[], chatEvents:[], loaded:false };
 let tabs = [{id:"agent",route:"agent",title:"Agent"}];
 let activeTab = tabs[0].id;
 let curTask = localStorage.getItem("rw-task") || null;
@@ -5107,25 +5115,17 @@ a { color: #176b87; }
     startMailNotify();
   }
 
-/* ---------------- 知识星图（项目 = 星核，五簇 = 文献/笔记/知识点/检索候选/工作流） ----------------
+/* ---------------- 知识星图（知识库 → 项目 → 五簇分支 → 条目） ----------------
    整页是独立文档 kb.html：星图的样式与类名自成一套，塞进这个单页会跟现有样式打架。
-   这里只负责挂 iframe、切项目、以及接收星图发来的「打开某条」请求。 */
-let kbTask = localStorage.getItem("rw-kb-task") || "";
+   层级全部在星图内部选（项目是第一级），这里只负责挂 iframe、接收「打开某条」请求。 */
 function renderStar(m){
-  const tid = kbTask || curTask || "";
   m.innerHTML = `<div class="sm-wrap">
       <div class="sm-bar">
       <b>知识星图</b>
-      <span class="hint">点星团展开 → 点条目看分析 → Esc 逐层退回</span>
-      <label class="sm-pick">项目 <select id="kbTaskSel">${(S.tasks||[]).map(t=>`<option value="${t.id}" ${t.id===tid?"selected":""}>${esc(t.title)}</option>`).join("")}</select></label>
+      <span class="hint">点项目进分支 → 点星团看条目 → 点条目看分析，Esc 逐层退回</span>
     </div>
-    <iframe id="kbFrame" class="sm-frame" src="/kb.html?task=${encodeURIComponent(tid)}&theme=${document.documentElement.dataset.theme||"dark"}" title="知识星图"></iframe>
+    <iframe id="kbFrame" class="sm-frame" src="/kb.html?theme=${document.documentElement.dataset.theme||"dark"}" title="知识星图"></iframe>
   </div>`;
-  const frame = $("kbFrame");
-  $("kbTaskSel").onchange = e => {
-    kbTask = e.target.value; localStorage.setItem("rw-kb-task", kbTask);
-    try{ frame.contentWindow.postMessage({rw:"kb-reload", task:kbTask}, "*"); }catch(_){ frame.src = "/kb.html?task="+encodeURIComponent(kbTask); }
-  };
 }
 
 // 星图里点「在应用里打开」：论文开 PDF，笔记跳到笔记页（其他类型不猜，留在星图里看分析）
@@ -5870,17 +5870,16 @@ const schTaskName = (id)=> (S.tasks||[]).find(t=>t.id===id)?.title || "";
 
 /* ---------------- 项目空间（页头 + tab + 概览四卡 + 快照；
      只聚合本应用真有的数据，「任务/矩阵/资源关系/知识库」四个 tab 没有对应物 → 不做空壳） ---------------- */
-let spTab = "overview", spId = null, spTeam = null, spOpen = null;
-const SP_TABS = [["overview","概览"],["team","团队"],["papers","文献"],["stars","论文星图"],["notes","笔记"],["calendar","日程"]];
+let spTab = "overview", spId = null;
+const SP_TABS = [["overview","概览"],["papers","文献"],["stars","论文星图"],["notes","笔记"]];
 function spProg(d){
   const stages = (S.stages||[]).map(s=>s.key);
   const map = d.stage_map || {};
-  const total = stages.length || 7;
+  const total = stages.length || 10;
   const done = stages.filter(k=>map[k] === "done").length;
   return { total, done, pct: Math.round(done*100/total) };
 }
 function spWhen(iso){ return iso ? fmtDate(iso) : "—"; }
-function spMonthEvents(){ const ev=(S.events||[]); return ev.filter(e=>!e.task_id || e.task_id===curTask); }
 function spBodyHTML(d){
   const t = d.task||{}, sum = d.summary||{}, p = spProg(d);
   if(spTab === "papers"){
@@ -5899,79 +5898,15 @@ function spBodyHTML(d){
       ${(g.nodes||[]).length? "" : `<div class="hint" style="margin-top:10px">这个项目还没有入库文献，星图上没有星。</div>`}</div>`;
   }
   if(spTab === "notes") return `<div id="spNotes" class="sp-kb-host"></div>`;   // 知识库整块搬进来（不含 PDF 版块）
-  if(spTab === "calendar"){
-    const rows = spMonthEvents();
-    return `<div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">CALENDAR / PROJECT</p><h3>项目日程</h3></div>
-      <span class="pill">${rows.length} 条</span><button class="btn ghost" id="spToCal">去日历 →</button></div>
-      ${rows.length ? rows.map(e=>`<div class="sp-row"><span class="sp-ic">📅</span><div class="sp-main">
-        <div class="sp-nm">${esc(e.title||"")}</div><div class="sp-meta">${esc(e.date||"")}${e.time?" "+esc(e.time):""}${e.done?" · 已完成":""}</div></div></div>`).join("")
-      : `<div class="hint" style="margin-top:10px">本月没有该项目的事件。</div>`}</div>`;
-  }
-  if(spTab === "team"){
-    const D = spTeam || {};
-    if(D.error) return `<div class="card" style="margin-top:12px"><div class="msg error">读取团队失败：${esc(D.error)}</div></div>`;
-    const ms = D.members||[], tasks = D.tasks||[], c = D.counts||{};
-    const leader = ms.find(m=>m.role==="leader") || {};
-    const others = ms.filter(m=>m.role!=="leader");
-    const stepOpts = (D.steps||[]).map(s=>`<option value="${s}">${esc(s)}</option>`).join("");
-    const st = (s)=>`<span class="pill ${s==="done"||s==="running"?"ok":(s==="failed"?"":(s==="queued"?"warn":""))}" ${s==="failed"?'style="color:var(--err)"':""}>${esc(s||"idle")}</span>`;
-    const icon = (t)=>({running:"⏳",done:"✅",failed:"⚠",canceled:"⊘",blocked:"⛔"}[t]||"•");
-    return `
-      <div class="card" style="margin-top:12px">
-        <div class="sch-head"><div><p class="inst-label">TEAM / LEADER</p><h3>团队</h3></div>
-          <span class="pill">${ms.length} 人</span><span class="pill ok">Leader 不可移除</span></div>
-        <div class="sp-row" style="align-items:flex-start"><span class="sp-ic">🧭</span>
-          <div class="sp-main"><div class="sp-nm">${esc(leader.name||"全局 Leader")} <span class="pill ok">Leader</span></div>
-            <div class="sp-meta">${esc(D.leader_brief||"")}</div></div></div>
-        ${others.length?others.map(m=>`<div class="sp-row"><span class="sp-ic">🤝</span>
-          <div class="sp-main"><div class="sp-nm">${esc(m.name)} ${m.step?`<span class="pill">${esc(m.step)}</span>`:""} ${st(m.status)}</div>
-            <div class="sp-meta">${esc(m.prompt||"（没写职责说明）")}${m.note?" · "+esc(m.note):""}</div></div>
-          <div class="sp-acts"><button class="btn ghost" data-tm-assign="${m.id}">派活</button>
-            <button class="btn ghost" data-tm-rename="${m.id}">改名</button>
-            <button class="btn ghost" data-tm-del="${m.id}" style="color:var(--err)">移除</button></div></div>`).join("")
-        :`<div class="hint" style="margin-top:8px">还没有 Partner 成员。加一个，或直接让 Leader 帮你安排。</div>`}
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
-          <input class="control" id="tmName" placeholder="新成员名字，如：检索员" style="max-width:200px">
-          <select class="control" id="tmStep" style="max-width:200px"><option value="">不绑工作流步骤</option>${stepOpts}</select>
-          <button class="btn ghost" id="tmAdd">＋ 加成员</button>
-          <input class="control" id="tmPrompt" placeholder="它的职责说明（可选）：如「只做开放获取检索，产出候选表」" style="flex:1;min-width:220px">
-        </div></div>
-      <div class="card" style="margin-top:12px">
-        <div class="sch-head"><div><p class="inst-label">ASSIGN / PARTNER AGENT</p><h3>派活</h3></div>
-          <button class="btn ghost" id="tmTellLeader">没有合适的？让 Leader 安排 →</button></div>
-        <div style="display:grid;grid-template-columns:200px 1fr auto;gap:8px;align-items:start;margin-top:8px">
-          <select class="control" id="tmAssignee">${others.map(m=>`<option value="${m.id}">${esc(m.name)}</option>`).join("")||`<option value="">（先加成员）</option>`}</select>
-          <textarea class="control" id="tmTask" rows="2" placeholder="要它干什么？写清要什么产出，例：检索 O3 型钠电正极近三年掺杂改性论文，产出候选表（标题/年份/DOI）"></textarea>
-          <button class="btn" id="tmDo">派活</button></div></div>
-      <div class="card" style="margin-top:12px">
-        <div class="sch-head"><div><p class="inst-label">RUN BOARD</p><h3>运行看板</h3></div>
-          <span class="hint">排队 ${c.queued||0} · 运行 ${c.running||0} · 完成 ${c.done||0} · 失败 ${c.failed||0} · 取消 ${c.canceled||0}</span>
-          <span style="flex:1"></span><button class="btn ghost" id="tmRefresh">刷新</button></div>
-        <div class="hint" style="margin-top:6px">${esc(D.serial_note||"")}</div>
-        ${tasks.length?tasks.map(t=>`<div class="sp-row" style="flex-wrap:wrap">
-          <span class="sp-ic">${icon(t.status)}</span>
-          <div class="sp-main"><div class="sp-nm">${esc(t.title||"")} ${st(t.status)}</div>
-            <div class="sp-meta">给「${esc(t.member_name)}」· ${esc(t.trigger)} · ${esc(spWhen(t.created_at))}${t.started_at?" → "+esc(spWhen(t.ended_at||"…")):""}${t.output_path?" · 产物 "+esc(outName(t.output_path)):""}${t.reason?" · "+esc(t.reason):""}</div></div>
-          <div class="sp-acts"><button class="btn ghost" data-tm-open="${t.id}">${spOpen===t.id?"收起":"详情"}</button>
-            ${t.status==="queued"?`<button class="btn ghost" data-tm-cancel="${t.id}">取消</button>`:""}
-            ${(t.status==="failed"||t.status==="canceled")?`<button class="btn ghost" data-tm-retry="${t.id}">重试</button>`:""}</div>
-          ${spOpen===t.id?`<div class="tm-ev">${(t.events||[]).map(e=>`<div><span class="tm-ev-k">${esc(e.kind)}</span><span class="tm-ev-t">${esc(spWhen(e.created_at).slice(11))}</span>${esc(e.text)}</div>`).join("")||`<div class="hint">没有事件</div>`}</div>`:""}
-        </div>`).join("")
-        :`<div class="hint" style="margin-top:10px">还没有派过活。上面派一个，或让 Leader 安排。</div>`}
-      </div>`;
-  }
   const stages = (S.stages||[]).map(s=>({key:s.key, label:s.label, st:(d.stage_map||{})[s.key]||""}));
   const recent = (d.steps||[]).slice(0,6);
   return `
-    <div class="sp-grid4" style="margin-top:12px">
-      <div class="card sp-kpi"><p class="inst-label">PROJECT / STATUS</p><strong>${esc(t.stage_now||"未开始")}</strong>
-        <p class="sp-kpi-note">${esc((t.question||"未填研究问题").slice(0,90))}</p></div>
+    <div class="sp-grid3" style="margin-top:12px">
       <div class="card sp-kpi"><p class="inst-label">PROGRESS</p><strong>${p.pct}%</strong>
         <p class="sp-kpi-note">${p.done}/${p.total} 步完成</p><div class="sp-bar"><div style="width:${p.pct}%"></div></div></div>
       <div class="card sp-kpi"><p class="inst-label">RESEARCH</p><strong>${sum.papers||0}</strong>
         <p class="sp-kpi-note">项目文献 · 证据 ${sum.evidence||0} 条</p></div>
-      <div class="card sp-kpi"><p class="inst-label">NEXT WINDOW</p><strong>${spMonthEvents().length}</strong>
-        <p class="sp-kpi-note">本月日程</p></div></div>
+      <div class="card sp-kpi sp-kpi-text"><p class="inst-label">QUESTION</p><strong>${esc(t.question||"未填研究问题")}</strong></div></div>
     <div class="sp-grid2" style="margin-top:12px">
       <div class="card"><div class="sch-head"><div><p class="inst-label">WORKFLOW SNAPSHOT</p><h3>工作流快照</h3></div>
         <button class="btn ghost" id="spToFlow">去工作流 →</button></div>
@@ -5994,51 +5929,8 @@ function spBodyHTML(d){
         </div></div>`).join(""):`<div class="hint" style="margin-top:10px">还没有步骤记录。</div>`}</div>`;
 }
 function spBind(d){
-  const tmApi = async (path, body, what)=>{
-    try{ await api(path, body); }catch(e){ alert((what||"操作")+"失败："+e.message); return false; }
-    spTeam = null; render(); return true;
-  };
-  const g = (id)=>$(id);
-  if(g("tmAdd")) g("tmAdd").onclick = ()=>{
-    const name=(g("tmName").value||"").trim(); if(!name) return alert("先写个名字");
-    tmApi("/api/team/member/add", {id:curTask, name, step:g("tmStep").value, prompt:(g("tmPrompt").value||"").trim()}, "加成员");
-  };
-  if(g("tmDo")) g("tmDo").onclick = ()=>{
-    const member=g("tmAssignee").value, prompt=(g("tmTask").value||"").trim();
-    if(!member) return alert("先加一个成员"); if(!prompt) return alert("要派什么活？");
-    tmApi("/api/team/assign", {id:curTask, member, prompt, manual:true}, "派活");
-  };
-  if(g("tmRefresh")) g("tmRefresh").onclick = ()=>{ spTeam=null; render(); };
-  if(g("tmTellLeader")) g("tmTellLeader").onclick = ()=>{
-    const title=(spData&&spData.task&&spData.task.title)||"这个项目";
-    openTab("agent");
-    setTimeout(()=>{ const t=$("ask"); if(t){ t.value=`帮我给《${title}》的团队加一个擅长 ___ 的成员`; t.focus(); } }, 80);
-  };
-  document.querySelectorAll("[data-tm-assign]").forEach(b=>b.onclick=()=>{
-    const a=g("tmAssignee"); if(a) a.value=b.dataset.tmAssign;
-    const t=g("tmTask"); if(t){ t.scrollIntoView({block:"center",behavior:"smooth"}); t.focus(); }
-  });
-  document.querySelectorAll("[data-tm-rename]").forEach(b=>b.onclick=()=>{
-    const cur=((spTeam&&spTeam.members)||[]).find(m=>m.id===b.dataset.tmRename)||{};
-    const name=window.prompt("新名字：", cur.name||""); if(!name) return;
-    tmApi("/api/team/member/update", {member_id:b.dataset.tmRename, name}, "改名");
-  });
-  document.querySelectorAll("[data-tm-del]").forEach(b=>b.onclick=()=>{
-    if(!window.confirm("移除这个成员？（已派给它的任务会留在看板里）")) return;
-    tmApi("/api/team/member/remove", {member_id:b.dataset.tmDel}, "移除成员");
-  });
-  document.querySelectorAll("[data-tm-open]").forEach(b=>b.onclick=()=>{
-    spOpen = spOpen===b.dataset.tmOpen ? null : b.dataset.tmOpen; render();
-  });
-  document.querySelectorAll("[data-tm-cancel]").forEach(b=>b.onclick=()=>tmApi("/api/team/task/cancel", {row_id:b.dataset.tmCancel}, "取消"));
-  document.querySelectorAll("[data-tm-retry]").forEach(b=>b.onclick=()=>tmApi("/api/team/task/retry", {row_id:b.dataset.tmRetry}, "重试"));
-  const live = ((spTeam&&spTeam.counts)||{});
-  if((live.queued||0)+(live.running||0) > 0){          // 有活在看板上就自己刷，别让人手点
-    clearTimeout(window.__tmTick);
-    window.__tmTick = setTimeout(()=>{ if(route()==="space" && spTab==="team"){ spTeam=null; render(); } }, 3000);
-  }
   const go = (id, route)=>{ const b=$(id); if(b) b.onclick = ()=>openTab(route); };
-  go("spToFlow","workflow"); go("spToCal","calendar"); go("spToLib","library");
+  go("spToFlow","workflow"); go("spToLib","library");
   const del = $("spDel");
   if(del) del.onclick = async ()=>{
     const t = d.task||{};
@@ -6050,27 +5942,28 @@ function spBind(d){
 async function renderSpace(m){
   m.style.padding = "";
   if(!curTask){ m.innerHTML = needTask(); return; }
-  if(spId !== curTask){ spId = curTask; spTab = "overview"; spTeam = null; spOpen = null; }
+  if(spId !== curTask){ spId = curTask; spTab = "overview"; }
   m.innerHTML = `<div class="muted">正在读取项目…</div>`;
-  if(spTab === "team" && !spTeam){
-    try{ spTeam = await api("/api/team?id=" + encodeURIComponent(curTask)); }
-    catch(e){ spTeam = { error: e.message }; }
-  }
   let d;
   try{ d = await api("/api/task?id=" + encodeURIComponent(curTask)); }
   catch(e){ m.innerHTML = `<div class="msg error">读取项目失败：${esc(e.message)}</div>`; return; }
   const t = d.task||{};
   const opts = (S.tasks||[]).map(x=>`<option value="${x.id}" ${x.id===curTask?"selected":""}>${esc(x.title)}</option>`).join("");
   m.innerHTML = `
-    <div class="card"><div class="sch-head">
-      <div><p class="inst-label">WORKSPACE / PROJECT</p><h3>${esc(t.title||"项目空间")} <span class="pill ok" title="绑定该项目的专用 agent">Partner Agent</span></h3>
-        <p>项目级聚合只读取已关联的本地数据；写操作回到各领域的 Command 和安全通道。归档可恢复，外部文件不会被删除。</p></div>
-      <select id="spPick" class="control" style="max-width:200px" title="选择项目空间">${opts}</select>
-      <button class="btn" id="spFlow">进入工作流 →</button>
-      <button class="btn ghost" id="spLeader">问全局 Leader →</button></div></div>
+    <div class="card">
+      <div class="sp-hd1">
+        <h3>${esc(t.title||"项目空间")} <span class="pill ok" title="绑定该项目的专用 agent">Partner Agent</span></h3>
+        <span class="sp-step">阶段<b>${esc(t.stage_now||"未开始")}</b></span>
+        <span class="sp-when">更新 ${esc(spWhen(t.updated_at))}</span>
+        <span class="sp-gap"></span>
+        <button class="btn" id="spFlow">进入科研台 →</button>
+        <button class="btn ghost" id="spLeader">问智研管家 →</button>
+      </div>
+      <div class="sp-hd2">
+        <p class="hint">项目级聚合只读取已关联的本地数据；写操作回到各领域的 Command 和安全通道。归档可恢复，外部文件不会被删除。</p>
+        <select id="spPick" class="control" style="max-width:200px" title="选择项目空间">${opts}</select>
+      </div></div>
     <div class="sp-tabs" id="spTabs">${SP_TABS.map(([k,l])=>`<button class="sp-tab ${k===spTab?"on":""}" data-sp-tab="${k}">${l}</button>`).join("")}</div>
-    <div class="card" style="margin-top:12px"><div class="hint" style="display:flex;gap:14px;flex-wrap:wrap">
-      <span>项目 ID：${esc(curTask)}</span><span class="sp-meta-pill">阶段：${esc(t.stage_now||"未开始")}</span><span>更新：${esc(spWhen(t.updated_at))}</span></div></div>
     <div id="spBody"></div>`;
   $("spPick").onchange = (e)=>{ curTask = e.target.value; localStorage.setItem("rw-task", curTask); spId = null; render(); };
   $("spFlow").onclick = ()=>openTab("workflow");
@@ -6434,7 +6327,7 @@ function md(t){
 /* ---------------- 启动 ---------------- */
 async function refreshState(rerender=true){
   const st = await api("/api/state");
-  S.tasks=st.tasks; S.chats=st.chats||[]; S.assistants=st.assistants||[]; S.models=st.models; S.active=st.active; S.events=st.events;
+  S.tasks=st.tasks; S.chats=st.chats||[]; S.assistants=st.assistants||[]; S.models=st.models; S.active=st.active; S.events=st.events; S.stages=st.stages||[];
   { const pv = await api("/api/providers"); S.providers=pv.providers; S.wires=pv.wires; S.default=pv.default; }
   if(!S.tools.length) S.tools = (await api("/api/tools")).tools;
   S.loaded=true;
