@@ -2,6 +2,45 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 2026-10-17 · Zotero 接成 MCP（读+写）+ 分类一键进下载队列
+
+论文信息不再靠「自己抽」：题录/摘要/PDF 直接从本机 Zotero 取，省掉检索+下载+元数据猜测；正文证据抽取（`extract_ai`）不变，Zotero 给不了页码级逐字引文。
+
+### 1. 新增 stdio MCP 服务（给 agent 用的读+写）
+
+`packages/connectors/zotero_mcp.py`，零新依赖，复用现有连接器：
+
+| 工具 | 走什么 | 说明 |
+|---|---|---|
+| `zotero_status` | 本机 Local API | 连接状态 + 能否写入（不能写会说明要哪个 key） |
+| `zotero_search` / `zotero_item` | 本机 Local API | 题录（title/creators/year/venue/doi/tags/abstract）；只读、无需 key、可离线 |
+| `zotero_pdf` | 本机 Local API + `storage/` | 论文 PDF 的本机绝对路径 |
+| `zotero_create_item` / `zotero_create_note` | Zotero Web API | 写入需要 key：先读 env `ZOTERO_API_KEY`(+`ZOTERO_LIBRARY_ID`/`_TYPE`)，没有就复用程序「设置」里已存的那份 |
+
+- 读=本机 API 是**只读**的，写入只能走 Web API，MCP 变不出这个能力——所以「写入可用」的前提是设置里填过 key。
+- 不碰 `zotero.sqlite`，不改本机库内文件；日志只写 stderr（stdout 是 JSON-RPC）。
+
+### 2. 分类 → 下载队列（不检索、不联网、不复制文件）
+
+- `zotero.py`：新增 `item(key)`、`pdf_path(key)`、`storage_dir()`。本机 API 不返回附件 `path`，所以按**附件自己的 key** 进 `storage/<附件key>/` 找 PDF；数据目录不在默认位置用 `ZOTERO_DATA` 指。
+- `workflow.py`：新增 `cache_result()`（命中同 DOI/同标题返回旧 id，队列才能复用）、`stage_zotero_import()`（题录用 Zotero 的、PDF 用本机附件直读入库、没附件的标「待手动」，不假装成功；笔记/附件类条目排除）。
+- `server.py`：`POST /api/workflow/zotero`（`{task_id, collection?, keys?}`）。
+- `index.html`：「从 Zotero 取文献」弹窗加「导入项目队列」按钮，结果写回弹窗状态行，不新增提示组件。
+
+### 3. 验证
+
+- `py -3.10 -m unittest tests.test_zotero` → 14/14 OK（新增：`pdf_path` 选中 PDF 附件/无附件返回空、导入分流把笔记条目排除且 DOI 补 url）。
+- 直接把 JSON-RPC 喂给服务：`initialize` / `tools/list` / `tools/call` 全通；Zotero 没开时返回「Zotero 没启动（127.0.0.1:23119 无响应）」，不编造成功。
+- 用程序自己的 MCP 客户端跑 `POST /api/capabilities/mcp` + `/discover`，6 个工具全部发现（不是 curl 假装互通）。
+- 全量 `discover`：223 tests，4 红——3 个在干净 HEAD 上同样红（`test_workflow_layout` ×2、`test_feishu` 设备码），1 个只在全量顺序下红。均非本次引入。
+
+### 4. 影响面 / 待办
+
+- 改了 `.py` → **关窗重开**，「导入项目队列」按钮和 `/api/workflow/zotero` 才在。
+- Zotero 本体必须先启动；「写入」要先在设置里填 Web API key（MCP 读同一份配置，不用填两遍）。
+- 未做：`zotero_update_item`（改已有条目要带 version）。
+- PR 注意：本条的 `workflow.py` / `server.py` / `index.html` 三处改动被并行会话的提交 `fd2bcae` 一并带走，`b98a266` 里只有 `zotero.py`、`zotero_mcp.py`、`tests/test_zotero.py`；一起 PR 时以「两个提交算一条」讲。
+
 ## 2026-10-17 · 论文星图改成「点一下才生成」
 
 `paper_graph` 以前挂在 `GET /api/task` 里**每次打开项目都现算**（58 篇要重解析 PDF、1–2 秒，越攒越慢）。改成编译产物：用户点「生成星图」才跑一次，结果落库，平时只读缓存。
