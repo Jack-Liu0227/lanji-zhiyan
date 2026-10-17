@@ -40,6 +40,7 @@ def _ensure(db):
         "CREATE TABLE IF NOT EXISTS capability_mcp_tools (server TEXT PRIMARY KEY, config_hash TEXT NOT NULL, tools TEXT NOT NULL DEFAULT '[]')",
     ):
         conn.execute(sql)
+    conn.commit()
     return conn
 
 
@@ -240,7 +241,9 @@ def _config(db) -> dict:
     if row:
         return _unprotect(row[0])
     initial = default_mcp_config()
-    _conn(db).execute("INSERT OR REPLACE INTO capability_mcp_config(id,protected) VALUES(1,?)", (_protect(initial),))
+    conn = _conn(db)
+    conn.execute("INSERT OR REPLACE INTO capability_mcp_config(id,protected) VALUES(1,?)", (_protect(initial),))
+    conn.commit()
     return initial
 
 

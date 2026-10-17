@@ -823,12 +823,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, (WEB / "index.html").read_bytes(), "text/html; charset=utf-8")
             if path == "/kb.html":                                  # 知识星图整页（iframe 挂在「知识库」视图里）
                 return self._send(200, (WEB / "kb.html").read_bytes(), "text/html; charset=utf-8")
-            if path.startswith("/vendor/"):
+            if path.startswith("/vendor/") or path.endswith((".js", ".css", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".woff2", ".woff", ".ttf")):
                 return self._static(path)
-            if path in ("/agent-settings.js", "/capabilities.js", "/workflow-layout.js", "/integrations-settings.js"):
-                return self._static(path)
-            if path.endswith((".png", ".jpg", ".jpeg", ".svg", ".ico", ".woff2")):
-                return self._static(path)
+
             if path in ("/tools/home/home.png", "/home/home.png"):
                 tool_target = ROOT / "tools" / "home" / "home.png"
                 if tool_target.is_file():
@@ -1600,9 +1597,12 @@ class Handler(BaseHTTPRequestHandler):
         run = RunManager.get_instance().create_run(task_id=tid, idempotency_key=idemp, db=db)
 
         had_error = False
+        client_disconnected = False
 
         def emit(ev: dict[str, Any]) -> None:
-            nonlocal had_error
+            nonlocal had_error, client_disconnected
+            if client_disconnected:
+                return
             # Some runners report failures as an event and return normally;
             # retain that state so the persisted step cannot be marked done.
             if isinstance(ev, dict) and ev.get("type") == "error":
@@ -1614,7 +1614,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(("data: " + json.dumps(ev, ensure_ascii=False, default=str) + "\n\n").encode("utf-8"))
                 self.wfile.flush()
             except OSError:
-                pass
+                client_disconnected = True
 
         track = bool(step and db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
         try:

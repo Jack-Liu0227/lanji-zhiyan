@@ -142,15 +142,22 @@ def _db_rows(p: Path) -> dict:
     out = {}
     if not p.is_file():
         return out
+    c = None
     try:
-        with sqlite3.connect(f"file:{p.as_posix()}?mode=ro", uri=True) as c:
-            for t in ("research_tasks", "papers", "md_notes", "chats"):
-                try:
-                    out[t] = c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
-                except sqlite3.Error:
-                    pass
+        c = sqlite3.connect(f"file:{p.as_posix()}?mode=ro", uri=True)
+        for t in ("research_tasks", "papers", "md_notes", "chats"):
+            try:
+                out[t] = c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
+            except sqlite3.Error:
+                pass
     except sqlite3.Error:
         pass
+    finally:
+        if c:
+            try:
+                c.close()
+            except Exception:
+                pass
     return out
 
 

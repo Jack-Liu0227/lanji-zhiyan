@@ -1,0 +1,809 @@
+/* ============ 论文翻译（工作流第 4 步）============
+   照用户草图：左上「＋ 添加论文」（文件对话框 / 拖进来）→ 自动解析 DOI/题目/发表时间/关键词
+   → 大框里是可滚动的 PDF（缩放 / 页码 / 荧光笔）→ 底部三个功能键：中英互译 / 笔记模式 / 荧光笔。
+   PDF 渲染用 vendor 的 pdf.js 3.11（能选中文字，荧光笔才有依据）；译文用 BabelDOC（后端）。 */
+const TR = { pid: "", meta: null, view: "read", scale: 1.15, noteScale: 1, noteZen: false, hlOn: false, hlColor: "#FFE066", hlWidth: 14,
+             pdf: null, pages: 0, sel: new Set(), hl: [], job: null, poll: 0, note: null, dual: false };
+const TR_MAX = 3.0, TR_MIN = 0.5;
+
+function trPanelHTML(active){
+  return `<div class="tr" id="panel-notes"${active?"":' style="display:none"'}>
+    <div class="tr-bar">
+      <button class="btn btn-teal" id="trAdd">＋ 添加论文</button>
+      <select id="trPick" class="tr-sel" title="这个项目文献库里已有的 PDF"><option value="">文献库已有…</option></select>
+      <span class="tr-spacer"></span>
+      <span class="tr-seg" id="trSeg">
+        <button class="tr-seg-b active" id="trBtnBack" title="只看原文（返回阅读器）">原文</button>
+        <button class="tr-seg-b" id="trBtnT" title="左边原文、右边中文">🌐 中英互译</button>
+        <button class="tr-seg-b" id="trBtnN" title="全屏：左边中文、右边随记随写">📝 笔记模式</button>
+      </span>
+      <span class="tr-grp">
+        <button class="tr-ib" id="trPenTop" title="荧光笔" aria-label="荧光笔">🖍</button>
+        <button class="tr-ib" id="trZenTop" title="全屏，左原文右中文，可拖分栏；左上角有缩放加减号（Esc 退出）" aria-label="专注模式">⛶</button>
+      </span>
+      <span class="tr-zoom"><button id="trOut" title="缩小" aria-label="缩小">−</button><span class="tr-zoomv" id="trZoomV">115%</span><button id="trIn" title="放大" aria-label="放大">＋</button></span>
+      <span class="tr-pageno" id="trPageNo">0 / 0</span>
+    </div>
+    <div class="tr-status"><span id="trMsg"></span></div>
+    <div class="tr-meta" id="trMeta">
+      <div><b>DOI：</b><span id="trDoi">暂无信息</span></div>
+      <div><b>题目：</b><span id="trTitle">暂无信息</span></div>
+      <div><b>发表时间：</b><span id="trDate">暂无信息</span></div>
+      <div><b>关键词：</b><span id="trKw">暂无信息</span></div>
+    </div>
+    <div class="tr-stage" id="trStage">
+      <button class="tr-zen-exit" id="trZenExit" title="退出专注模式（Esc）">✕ 退出专注</button>
+      <span class="tr-zen-zoom" id="trZenZoom"><button class="tr-ib" id="trZenOut" title="缩小" aria-label="缩小">−</button><button class="tr-ib" id="trZenIn" title="放大" aria-label="放大">＋</button><span class="tr-zoomv" id="trZenZoomV">100%</span></span>
+      <div class="tr-drop" id="trDrop">
+        <div class="tr-drop-in">
+          <div class="tr-drop-ico">📄</div>
+          <b>把 PDF 拖到这里，或点左上「＋ 添加论文」</b>
+          <span>选好后自动解析 DOI / 题目 / 发表时间 / 关键词</span>
+        </div>
+      </div>
+      <div class="tr-pane" id="trPaneA" data-pane="a"><div class="tr-pane-tag">原文</div><div class="tr-scroll"></div></div>
+      <div class="tr-split hidden" id="trSplit" title="拖动调整两栏宽度"></div>
+      <div class="tr-pane hidden" id="trPaneB" data-pane="b"><div class="tr-pane-tag">中文</div><div class="tr-scroll"></div></div>
+      <div class="tr-note hidden" id="trNote">
+        <div class="tr-note-bar">
+          <button class="tr-ib" id="trNoteOut" title="缩小字号" aria-label="缩小字号">−</button>
+          <button class="tr-ib" id="trNoteIn" title="放大字号" aria-label="放大字号">＋</button>
+          <span class="tr-zoomv" id="trNoteZoomV">100%</span>
+          <span class="tr-spacer"></span>
+          <button class="tr-ib tr-note-exit" id="trNoteExit" title="退出笔记模式（Esc）">✕ 退出</button>
+        </div>
+        <div class="tr-note-grid">
+        <div class="tr-note-l"><div class="tr-note-h">中文全文（只读）<span id="trNotePages"></span></div><div class="tr-note-body md-render" id="trNoteBody"></div></div>
+        <div class="tr-note-r">
+          <input id="trNoteTitle" class="tr-note-title" placeholder="笔记名">
+          <div class="tr-note-hint"><span id="trNoteBind">阅读笔记</span> · 自动保存<span id="trNoteState"></span></div>
+          <textarea id="trNoteSrc" class="tr-note-src" spellcheck="true" placeholder="在这里随记随写…"></textarea>
+        </div>
+        </div>
+      </div>
+    </div>
+    <div class="tr-pen hidden" id="trPen">
+      <b>颜色</b>
+      <div class="tr-colors" id="trColors"></div>
+      <b>粗细 <i title="荧光笔的粗细，越粗盖得越多">ⓘ</i></b>
+      <input type="range" id="trWidth" min="6" max="34" value="14">
+    </div>
+    <input type="file" id="trFile" accept="application/pdf" hidden>
+  </div>`;
+}
+
+/* ---------------- 选文件 / 拖进来 ---------------- */
+async function trUpload(files){
+  const f = [...(files||[])].find(x=>/\.pdf$/i.test(x.name));
+  if(!f) return trMsg("只认 PDF 文件");
+  if(!curTask) return trMsg("先选一个项目 —— PDF 要入当前项目的文献库");
+  trMsg("上传中… " + f.name);
+  try{
+    const r = await fetch(`/api/upload?name=${encodeURIComponent(f.name)}&task_id=${encodeURIComponent(curTask)}`,
+                          {method:"POST", headers:{"Content-Type":"application/octet-stream"}, body:f});
+    const a = await r.json(); if(a.error) throw new Error(a.error);
+    if(!a.paper_id) return trMsg("入库失败：" + (a.ingest_error || "不是有效 PDF"));
+    await trOpen(a.paper_id);
+  }catch(e){ trMsg("上传失败：" + e.message); }
+}
+function trMsg(t){ const el=$("trMsg"); if(el) el.textContent = t || ""; }
+
+async function trOpen(pid){
+  TR.pid = pid; TR.dual = false; TR.note = null;
+  trView("read");
+  trSegActive("read");
+  $("trPen")?.classList.add("hidden"); TR.hlOn = false;
+  trDualOff();
+  TR.job = null; TR.words = {}; TR.prog = 0; trStopPoll();
+  trMeta();
+  await trReader(pid);
+  trHlLoad();
+}
+
+/* ---------------- 元数据 ---------------- */
+async function trMeta(){
+  const set = (id, v)=> $(id).textContent = (v && String(v).trim()) ? v : "暂无信息";
+  const meta = $("trMeta");
+  if(!TR.pid) return;
+  meta.classList.add("busy");
+  try{
+    const d = await api(`/api/papermeta?id=${encodeURIComponent(TR.pid)}`);
+    if(d.error) throw new Error(d.error);
+    TR.meta = d;
+    set("trDoi", d.doi); set("trTitle", d.title); set("trDate", d.published); set("trKw", d.keywords);
+    $("trTitle").title = d.title || "";
+  }catch(e){ meta.classList.add("err"); trMsg("元数据读取失败：" + e.message); }
+  meta.classList.remove("busy");
+}
+
+/* ---------------- 阅读器（pdf.js，一个 pane 一套） ---------------- */
+function trWorker(){
+  if(window.pdfjsLib && !window.pdfjsLib.GlobalWorkerOptions.workerSrc)
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.js";
+}
+function trPaneEl(key){ return key === "b" ? $("trPaneB") : $("trPaneA"); }
+function trScrollEl(key){ return trPaneEl(key)?.querySelector(".tr-scroll"); }
+
+async function trReader(pid){
+  if(!window.pdfjsLib){ trMsg("pdf.js 没加载"); return; }
+  trWorker();
+  const url = `/api/pdf?id=${encodeURIComponent(pid)}`;
+  if(!TR.dual){                                   // 单栏：只留 A 栏（B 栏藏起来）
+    $("trStage").classList.remove("dual");
+    $("trStage").style.gridTemplateColumns = "";
+    $("trPaneB").classList.add("hidden");
+    $("trSplit").classList.add("hidden");
+    const box = trScrollEl("a"); if(box) box.innerHTML = "";
+    await trMount("a", url);
+  }
+}
+async function trMount(key, url){
+  const box = trScrollEl(key); if(!box) return;
+  box.innerHTML = `<div class="tr-load">正在渲染…</div>`;
+  try{
+    const pdf = await window.pdfjsLib.getDocument({url}).promise;
+    TR.pdfs = TR.pdfs || {}; TR.pdfs[key] = pdf;
+    if(key === "a"){ TR.pages = pdf.numPages; $("trPick") && trFillPick(); }
+    box.innerHTML = "";
+    for(let n = 1; n <= pdf.numPages; n++){
+      const page = await pdf.getPage(n);
+      const vp = page.getViewport({scale: TR.scale});
+      const el = document.createElement("div");
+      el.className = "tr-page"; el.dataset.page = n;
+      el.style.width = Math.round(vp.width) + "px";
+      el.style.height = Math.round(vp.height) + "px";
+      el.innerHTML = `<span class="tr-ph">第 ${n} 页</span>`;
+      box.appendChild(el);
+    }
+    box.onscroll = ()=>{ if(!TR.raf){ TR.raf = requestAnimationFrame(()=>{ TR.raf = 0; trPaintNear(key); trPageNo(key); }); } };
+    box.scrollTop = 0;
+    trPaintNear(key);
+    trPageNo(key);
+  }catch(e){
+    box.innerHTML = `<div class="tr-load err">PDF 打不开：${esc(e.message)}</div>`;
+  }
+}
+function trPaintNear(key){
+  /* 只画视口附近那几页（滚动时再补），不用 IntersectionObserver —— 在这个 WebView2 里它不触发实测 */
+  const box = trScrollEl(key); if(!box) return;
+  const top = box.scrollTop - 400, bot = box.scrollTop + box.clientHeight + 900;
+  box.querySelectorAll(".tr-page").forEach(el=>{
+    if(el.offsetTop + el.offsetHeight > top && el.offsetTop < bot) trPaint(key, +el.dataset.page, el);
+  });
+}
+function trWords(key){
+  /* 每个词的坐标从后端来（fitz），自己铺文字层：选中→荧光笔才有依据。
+     两栏各自一份（a=原文 / b=译文），所以中文那栏也能划。 */
+  TR.words = TR.words || {};
+  if(TR.words[key]) return Promise.resolve(TR.words[key]);
+  TR.words[key] = {};
+  if(!TR.pid) return Promise.resolve({});
+  const kind = key === "b" ? "mono" : "src";
+  return api(`/api/pdftext?id=${encodeURIComponent(TR.pid)}&task=${encodeURIComponent(curTask||"")}&kind=${kind}`)
+    .then(d=>{ const m = TR.words[key] = {}; (d.pages||[]).forEach(p=>{ m[p.n] = p.words || []; }); return m; })
+    .catch(()=>TR.words[key]);
+}
+function trBuildText(key, n, tl, vp){
+  const words = (TR.words || {})[key]?.[n];
+  if(!words){ trWords(key).then(()=>{ if((TR.words||{})[key]?.[n]) trBuildText(key, n, tl, vp); }); return; }
+  const s = vp.scale;
+  tl.innerHTML = words.map(w=>`<span style="left:${(w.x*s).toFixed(1)}px;top:${(w.y*s).toFixed(1)}px;`
+    + `width:${(w.w*s).toFixed(1)}px;height:${(w.h*s).toFixed(1)}px;`
+    + `font-size:${(w.h*s*0.95).toFixed(1)}px;line-height:${(w.h*s).toFixed(1)}px">${esc(w.t)}</span>`).join("");
+}
+async function trPaint(key, n, el){
+  if(el.dataset.painted === "1" && el.querySelector("canvas")) return;
+  el.dataset.painted = "1";
+  const pdf = (TR.pdfs||{})[key]; if(!pdf) return;
+  try{
+    const page = await pdf.getPage(n);
+    const vp = page.getViewport({scale: TR.scale});
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cv = document.createElement("canvas");
+    cv.width = Math.round(vp.width * dpr); cv.height = Math.round(vp.height * dpr);
+    cv.style.width = "100%"; cv.style.height = "100%";
+    el.innerHTML = "";
+    el.appendChild(cv);
+    await page.render({canvasContext: cv.getContext("2d"), viewport: vp, transform: [dpr,0,0,dpr,0,0]}).promise;
+    const tl = document.createElement("div"); tl.className = "tr-text"; el.appendChild(tl);
+    trBuildText(key, n, tl, vp);
+    const hl = document.createElement("div"); hl.className = "tr-hls"; el.appendChild(hl);
+    trPaintHls(n, el);
+  }catch(e){ el.dataset.painted = ""; el.dataset.err = String(e && e.message || e);
+             const ph = el.querySelector(".tr-ph"); if(ph) ph.textContent = "这一页渲染失败：" + el.dataset.err.slice(0, 80); }
+}
+function trPageNo(key){
+  const box = trScrollEl(key); if(!box) return;
+  const mid = box.scrollTop + box.clientHeight * 0.35;
+  let best = 1;
+  box.querySelectorAll(".tr-page").forEach(el=>{ if(el.offsetTop <= mid) best = +el.dataset.page; });
+  if(key === (TR.active==="b"?"b":"a")) $("trPageNo").textContent = `${best} / ${TR.pages || 0}`;
+  TR.cur = best;
+}
+function trZen(on){
+  /* 专注模式：只把阅读区拉到全屏，其余（pdf.js 双栏、拖分隔线、点哪栏管哪栏）全复用现成的 */
+  const st = $("trStage"); if(!st) return;
+  const show = on === undefined ? !st.classList.contains("zen") : !!on;
+  st.classList.toggle("zen", show);
+  TR.zen = show;
+  $("trZenTop")?.classList.toggle("active", show);
+  trMsg(show ? "专注模式：中间那条线照样能拖；缩放用左上角那对加减号，Esc 退出"
+             : "");
+  if(show){ trPaintNear(TR.active === "b" ? "b" : "a"); trZoomLabel(); }
+}
+function trZoom(d){
+  TR.scale = Math.min(TR_MAX, Math.max(TR_MIN, Math.round((TR.scale + d) * 100) / 100));
+  trMsg(`缩放 ${Math.round(TR.scale*100)}%`);
+  if(TR.dual){ trMount("a", `/api/pdf?id=${encodeURIComponent(TR.pid)}`);
+               if(TR.monoUrl) trMount("b", TR.monoUrl); }
+  else trReader(TR.pid);
+  trZoomLabel();
+}
+function trZoomLabel(){
+  const t = Math.round(TR.scale * 100) + "%";
+  const v = $("trZenZoomV"); if(v) v.textContent = t;      // 专注模式左上角那个
+  const w = $("trZoomV");    if(w) w.textContent = t;      // 工具栏缩放组里那个
+}
+function trExitFull(){
+  /* ✕ / Esc 的统一出口：笔记模式先退回阅读器，再把全屏收掉 */
+  if(TR.view === "note") trBack();
+  trZen(false);
+}
+function trNoteZoom(d){
+  TR.noteScale = Math.min(1.8, Math.max(0.7, Math.round((TR.noteScale + d) * 10) / 10));
+  trNoteApply();
+}
+function trNoteApply(){
+  /* 笔记模式里没有 PDF 可缩放 —— 顶栏那对加减号管的是中文/笔记两栏的字号 */
+  const px = (13.5 * TR.noteScale).toFixed(1) + "px";
+  const b = $("trNoteBody"), s = $("trNoteSrc");
+  if(b) b.style.fontSize = px;
+  if(s) s.style.fontSize = px;
+  const v = $("trNoteZoomV"); if(v) v.textContent = Math.round(TR.noteScale*100) + "%";
+}
+
+/* ---------------- 荧光笔 ---------------- */
+const TR_COLORS = ["#FFE066", "#8BD498", "#7FC4F0", "#F0A9C0", "#F07C7C"];
+function trHlLoad(){
+  let raw = null;
+  try{ raw = JSON.parse(localStorage.getItem("rw-hl-" + TR.pid) || "null"); }catch(_){ raw = null; }
+  if(raw && raw.v === 2) TR.hl = raw.list || [];          // v1 的坐标是压着文字底线的（偏低），直接丢掉重画
+  else { TR.hl = []; if(raw) localStorage.removeItem("rw-hl-" + TR.pid); }
+  trPaintAllHls();
+  trMsg(TR.hl.length ? `这份 PDF 上有 ${TR.hl.length} 处标注` : "");
+}
+function trHlSave(){ try{ localStorage.setItem("rw-hl-" + TR.pid, JSON.stringify({v:2, list:TR.hl})); }catch(_){} }
+function trPaintHls(n, el){
+  const box = el.querySelector(".tr-hls"); if(!box) return;
+  box.innerHTML = "";
+  TR.hl.filter(h=>h.p === n).forEach((h, i)=>{
+    const d = document.createElement("div");
+    d.className = "tr-hl"; d.dataset.i = TR.hl.indexOf(h);
+    d.style.cssText = `left:${h.x}px;top:${h.y}px;width:${h.w}px;height:${h.th}px;background:${h.c}`
+      + ";position:absolute;border-radius:3px;opacity:.5;mix-blend-mode:multiply;cursor:pointer";
+    d.title = "点一下删除这处标注";
+    d.onclick = ()=>{ TR.hl.splice(+d.dataset.i, 1); trHlSave(); trPaintAllHls(); };
+    box.appendChild(d);
+  });
+}
+function trPaintAllHls(){
+  document.querySelectorAll(".tr-page").forEach(el=>{ if(el.dataset.painted) trPaintHls(+el.dataset.page, el); });
+}
+function trPenPanel(on){
+  const p = $("trPen"); if(!p) return;
+  const show = on === undefined ? p.classList.contains("hidden") : !!on;
+  p.classList.toggle("hidden", !show);
+  TR.hlOn = show;
+  $("trPenTop")?.classList.toggle("active", show);
+  if(show) trMsg("选一段文字松开鼠标 → 就上色了；点已有标注 = 删掉它");
+}
+function trPenInit(){
+  $("trColors").innerHTML = TR_COLORS.map((c,i)=>`<i data-c="${c}" class="${i===0?"on":""}" style="background:${c}"></i>`).join("");
+  $("trColors").onclick = (e)=>{ const i = e.target.closest("i[data-c]"); if(!i) return;
+    TR.hlColor = i.dataset.c;
+    $("trColors").querySelectorAll("i").forEach(x=>x.classList.toggle("on", x===i)); };
+  const w = $("trWidth"); w.value = TR.hlWidth;
+  w.oninput = ()=>{ TR.hlWidth = +w.value; };
+}
+function trHlOnMouseUp(e){
+  if(!TR.hlOn) return;
+  const sel = window.getSelection();
+  if(!sel || sel.isCollapsed) return;
+  const pageEl = e.target.closest?.(".tr-page");
+  if(!pageEl || !pageEl.dataset.painted) return;
+  const pr = pageEl.getBoundingClientRect();
+  const rects = [...sel.getRangeAt(0).getClientRects()].filter(r=>r.width > 3 && r.height > 3);
+  if(!rects.length) return;
+  const n = +pageEl.dataset.page;
+  const th = TR.hlWidth;
+  rects.forEach(r=>{
+    TR.hl.push({p:n, x:Math.round(r.left - pr.left), y:Math.round(r.top - pr.top + r.height/2 - th/2),
+                w:Math.round(r.width), th, c:TR.hlColor});      // 按文字行的垂直中线居中（原来是压着底线，偏低）
+  });
+  trHlSave(); trPaintHls(n, pageEl); sel.removeAllRanges();
+  trMsg(`已标注 ${TR.hl.length} 处（存在本机，这份 PDF 专属）`);
+}
+
+/* ---------------- 中英互译（BabelDOC 后台任务） ---------------- */
+async function trTranslate(){
+  if(!TR.pid) return trMsg("先添加一篇 PDF");
+  if(TR.job && TR.job.state === "running") return;
+  const b = $("trBtnT");
+  b.disabled = true;
+  trMsg("启动翻译…（同一篇只翻一次，第二次秒开）");
+  try{
+    const r = await api("/api/trans/start", {id: TR.pid, task_id: curTask, pages: TR.testPages || ""});
+    if(r.error) throw new Error(r.error);
+    TR.job = r;
+    if(r.state === "done" || r.cached) return trDualOpen();
+    trStartPoll();
+  }catch(e){ trMsg("翻译启动失败：" + e.message); b.disabled = false; }
+}
+function trStartPoll(){
+  trStopPoll();
+  TR.poll = setInterval(async ()=>{
+    try{
+      const s = await api(`/api/trans/status?id=${encodeURIComponent(TR.pid)}`);
+      TR.job = s;
+      if(s.state === "running" || s.state === "partial"){
+        const el = Math.round((Date.now() - (TR.t0 || (TR.t0 = Date.now()))) / 1000);
+        $("trBtnT").textContent = "🌐 翻译中…";
+        const done = s.pages_done || 0;
+        trMsg(`${s.msg || "正在翻译"}　已用 ${Math.floor(el/60)}分${el%60}秒（${TR.pages||"整篇"} 页大约十几分钟，可以先干别的）`);
+        if(done > 0 && done !== TR.prog){          // 翻好一批就先给一批：第一页好了就先把第一页摆出来
+          TR.prog = done;
+          if(!TR.dual) trDualOpen(done); else trReloadB(done);
+          trMsg(`已翻好第 1-${done} 页（共 ${s.total_pages||TR.pages||"?"} 页），后面还在翻…`);
+        }
+        if(s.state === "partial"){                 // 后面失败了：已有的照看，别把已经翻好的藏起来
+          trStopPoll(); TR.t0 = 0; $("trBtnT").textContent = "🌐 中英互译"; $("trBtnT").disabled = false;
+          if(!TR.dual && done > 0) trDualOpen(done);
+          trMsg(`翻到第 ${done} 页时中断：${s.msg || ""}（已翻好的还在，日志：${s.log || ""}）`);
+        }
+      }
+      if(s.state === "done"){ trStopPoll(); TR.t0 = 0; $("trBtnT").textContent = "🌐 中英互译";
+                              $("trBtnT").disabled = false;
+                              if(TR.dual) trReloadB(s.pages_done || 0); else trDualOpen(s.pages_done || 0); }
+      if(s.state === "error"){ trStopPoll(); TR.t0 = 0; $("trBtnT").textContent = "🌐 中英互译";
+                              $("trBtnT").disabled = false;
+                              trMsg("翻译失败：" + (s.msg||"") + (s.log ? `（日志：${s.log}）` : "")); }
+    }catch(_){}
+  }, 2500);
+}
+function trStopPoll(){ if(TR.poll){ clearInterval(TR.poll); TR.poll = 0; } }
+
+function trMonoUrl(v){
+  return `/api/trans/file?id=${encodeURIComponent(TR.pid)}&task=${encodeURIComponent(curTask||"")}&kind=mono&v=${v||0}`;
+}
+async function trReloadB(v){
+  /* 译文又翻好一批：只换右栏，且保住用户读到哪 */
+  const b = trScrollEl("b"), y = b ? b.scrollTop : 0;
+  TR.monoUrl = trMonoUrl(v);
+  await trMount("b", TR.monoUrl);
+  if(b) b.scrollTop = y;
+}
+function trDualOpen(v){
+  TR.dual = true;
+  trView("dual");
+  trSegActive("dual");
+  $("trStage").classList.add("dual");
+  $("trPaneB").classList.remove("hidden");
+  $("trSplit").classList.remove("hidden");
+  TR.monoUrl = trMonoUrl(v);
+  const box = trScrollEl("b"); if(box) box.innerHTML = "";
+  if(!trScrollEl("a")?.querySelector(".tr-page")) trMount("a", `/api/pdf?id=${encodeURIComponent(TR.pid)}`);
+  trMount("b", TR.monoUrl);
+  trMsg("左原文 / 右中文 —— 中间那条线可以拖；上面的缩放/页码对着「当前栏」生效");
+}
+
+/* ---------------- 笔记模式 ---------------- */
+function trDedent(md){
+  /* PDF 抽出来的正文常带缩进 —— markdown 会把 ≥4 空格的整段当代码块渲染成黑框，先去掉行首空白 */
+  return (md || "").split("\n").map(l => l.replace(/^[ \t]+/, "")).join("\n");
+}
+function trSegActive(v){
+  /* 原文 / 中英互译 / 笔记模式 三个视图键的选中态只有这一处说了算 */
+  $("trBtnBack")?.classList.toggle("active", v === "read");
+  $("trBtnT")?.classList.toggle("active", v === "dual");
+  $("trBtnN")?.classList.toggle("active", v === "note");
+}
+function trView(v){
+  /* 阅读器 / 双栏 / 笔记 三个视图的可见性只有这一处说了算 —— 免得异步加载回来把当前视图盖掉 */
+  TR.view = v;
+  $("trNote")?.classList.toggle("hidden", v !== "note");
+  $("trDrop")?.classList.toggle("hidden", v !== "empty");
+  /* 笔记模式 = 全屏（和专注模式共用同一个 fixed 舞台）；离开笔记模式时自动收掉全屏 */
+  const st = $("trStage");
+  if(st){
+    st.classList.toggle("note", v === "note");
+    if(v === "note"){ st.classList.add("zen"); TR.zen = true; TR.noteZen = true; }
+    else if(TR.noteZen){ st.classList.remove("zen"); TR.zen = false; TR.noteZen = false; }
+  }
+}
+async function trNoteMode(){
+  /* 笔记模式：左边 3/4 中文全文（只读），右边 1/4 「阅读笔记」随记随写。
+     笔记是**绑论文**的（论文又绑项目）：同一篇论文只会有一篇，再点就是打开它。空白起步，不塞论文正文。 */
+  if(!TR.pid) return trMsg("先添加一篇 PDF");
+  trMsg("正在打开这篇论文的「阅读笔记」…");
+  try{
+    const r = await api("/api/paper/note", {id: TR.pid, task_id: curTask});
+    if(r.error) throw new Error(r.error);
+    TR.note = r.note; TR.noteText = r.text || "";
+    trDualOff();
+    trView("note");
+    trSegActive("note");
+    $("trNoteTitle").value = TR.note.title || "阅读笔记";
+    $("trNoteSrc").value = TR.note.content || "";                 // 空白：他自己写
+    trNoteApply();
+    $("trNoteBody").innerHTML = r.text ? renderMarkdown(trDedent(r.text))
+                                       : `<div class="tr-load">还没有中文全文 —— 先点上面「🌐 中英互译」，翻好一段这里就有一段。</div>`;
+    $("trNotePages").textContent = r.pages ? ` · ${r.pages} 页` : "";
+    const pname = (TR.meta && TR.meta.title) ? trShort(TR.meta.title) : (TR.pid || "").slice(0, 8);
+    $("trNoteBind").textContent = `已绑定论文：${pname}${curTask ? " · 项目" : ""} · 自动保存`;
+    trMsg(`「阅读笔记」已绑到这篇论文；左边中文、右边随记随写，顶栏加减号调字号、✕ 退出（Esc）${r.pages ? "" : "（暂无中文全文）"}`);
+  }catch(e){ trMsg("笔记打开失败：" + e.message + (/(not found|404)/i.test(e.message) ? "（服务端是旧版本，重启一次）" : "")); }
+}
+function trShort(s, n){ s = String(s || ""); return s.length > n ? s.slice(0, n) + "…" : s; }
+function trNoteBind(){
+  const t = $("trNoteTitle"), s = $("trNoteSrc");
+  const save = async ()=>{
+    if(!TR.note) return;
+    $("trNoteState").textContent = " · 保存中…";
+    try{
+      const d = await api("/api/mdnotes/save", {id: TR.note.id, title: t.value.trim() || "未命名笔记",
+                                                content: s.value, task_id: curTask || ""});
+      Object.assign(TR.note, d.note); $("trNoteState").textContent = " · 已保存";
+      if(mdLoaded){ const i = mdNotes.findIndex(n=>n.id===TR.note.id); if(i >= 0) mdNotes[i] = {...mdNotes[i], ...TR.note}; else mdNotes.unshift(TR.note); }
+    }catch(e){ $("trNoteState").textContent = " · 保存失败"; }
+  };
+  let t0 = 0;
+  const later = ()=>{ clearTimeout(t0); t0 = setTimeout(save, 700); };
+  t.oninput = later; s.oninput = later;
+}
+function trDualOff(){
+  TR.dual = false;
+  $("trStage").classList.remove("dual");
+  $("trStage").style.gridTemplateColumns = "";
+  $("trPaneB").classList.add("hidden");
+  $("trSplit").classList.add("hidden");
+  $("trPaneA").classList.remove("act"); $("trPaneB").classList.remove("act");
+}
+function trBack(){
+  trStopPoll();
+  trDualOff();
+  trView("read");
+  trSegActive("read");
+  TR.hlOn = false; $("trPen")?.classList.add("hidden");
+  $("trBtnT").textContent = "🌐 中英互译"; $("trBtnT").disabled = false;
+  if(TR.pid){ $("trDrop")?.classList.add("hidden"); trReader(TR.pid); } else $("trDrop")?.classList.remove("hidden");
+}
+
+/* ---------------- 交互绑定 ---------------- */
+async function trFillPick(){
+  const sel = $("trPick"); if(!sel || !curTask) return;
+  try{
+    const d = await api(`/api/task?id=${encodeURIComponent(curTask)}`);
+    const list = d.paper_list || [];
+    sel.innerHTML = `<option value="">文献库已有…</option>` +
+      list.map(p=>`<option value="${p.id}"${p.id===TR.pid?" selected":""}>${esc(p.filename)}</option>`).join("");
+    if(list.length === 1 && !TR.pid) setTimeout(()=>trOpen(list[0].id), 50);   // 只有一篇就直接开
+  }catch(_){}
+}
+function trBind(){
+  const inFile = $("trFile");
+  $("trAdd").onclick = ()=>inFile.click();
+  inFile.onchange = (e)=>{ trUpload(e.target.files); e.target.value = ""; };
+  $("trPick").onchange = (e)=>{ if(e.target.value) trOpen(e.target.value); };
+  $("trIn").onclick = ()=>trZoom(+0.15);
+  $("trOut").onclick = ()=>trZoom(-0.15);
+  $("trPenTop").onclick = ()=>trPenPanel();
+  $("trBtnT").onclick = ()=>trTranslate();
+  $("trBtnN").onclick = ()=>trNoteMode();
+  $("trBtnBack").onclick = ()=>trBack();
+  trPenInit(); trNoteBind(); trFillPick(); trZoomLabel();
+  if(!TR.hlBound){ TR.hlBound = 1;                     // 文档级监听只挂一次（renderWorkflow 会反复调 trBind）
+    document.addEventListener("mouseup", (e)=>{ if($("trStage")?.contains(e.target)) trHlOnMouseUp(e); });
+    document.addEventListener("keydown", (e)=>{ if(e.key === "Escape"){ trPenPanel(false); trExitFull(); } });
+  }
+  // 拖进来（整页都能接）
+  const st = $("trStage"); let depth = 0;
+  ["dragenter","dragover"].forEach(t=>st.addEventListener(t,(e)=>{ e.preventDefault(); e.stopPropagation();
+    if(t==="dragenter") depth++; st.classList.add("dragging"); }));
+  ["dragleave","drop"].forEach(t=>st.addEventListener(t,(e)=>{ e.preventDefault(); e.stopPropagation();
+    if(t==="drop"){ depth = 0; st.classList.remove("dragging"); trUpload(e.dataTransfer?.files); }
+    else if(--depth <= 0){ depth = 0; st.classList.remove("dragging"); } }));
+  st.addEventListener("drop",(e)=>{ e.preventDefault(); trUpload(e.dataTransfer?.files); });
+  // 两栏之间的分隔线
+  const sp = $("trSplit"); let dragging = false;
+  sp.addEventListener("pointerdown",(e)=>{ dragging = true; sp.setPointerCapture(e.pointerId); e.preventDefault(); });
+  sp.addEventListener("pointermove",(e)=>{
+    if(!dragging) return;
+    const box = $("trStage"), r = box.getBoundingClientRect();
+    const pct = Math.min(0.85, Math.max(0.15, (e.clientX - r.left) / r.width));
+    box.style.gridTemplateColumns = `${pct*100}% 6px ${(1-pct)*100}%`;
+  });
+  ["pointerup","pointercancel"].forEach(t=>sp.addEventListener(t,()=>{ dragging = false; }));
+  $("trZenTop").onclick = () => trZen();
+  $("trZenExit").onclick = () => trExitFull();
+  $("trZenIn").onclick = () => trZoom(0.15);
+  $("trZenOut").onclick = () => trZoom(-0.15);
+  $("trNoteIn").onclick = () => trNoteZoom(0.1);
+  $("trNoteOut").onclick = () => trNoteZoom(-0.1);
+  $("trNoteExit").onclick = () => trExitFull();
+  // 缩放只认左上角那对加减号：触屏捏合（浏览器报成 ctrl+wheel）/ Ctrl+滚轮 一律吞掉，
+  // 不吞的话浏览器本体缩放会把 PDF 文字层带偏（文字层是按缩放比例铺的绝对定位）
+  $("trStage").addEventListener("wheel",(e)=>{ if(e.ctrlKey) e.preventDefault(); },{passive:false});
+  // 点哪一栏，工具栏就管哪一栏
+  $("trStage").addEventListener("mousedown",(e)=>{
+    const p = e.target.closest(".tr-pane"); if(!p) return;
+    TR.active = p.dataset.pane;
+    $("trPaneA").classList.toggle("act", TR.active === "a");
+    $("trPaneB").classList.toggle("act", TR.active === "b");
+    trPageNo(TR.active);
+  });
+}
+
+
+/* ==== 梳理精读（第 5 步）：左 2/3 谱系图（大纲小标题 → 精读结论 / 实验数据）+ 右 1/3 结构 agent ==== */
+const MP = { nodes:[], edges:[], sel:"", src:null, busy:false, poll:0, outline:"" };
+const MP_COL = { section:"var(--muted)", paper:"var(--accent)", note:"#8f7fb5", data:"#4ade80" };
+const MP_TAG = { section:"小节", paper:"论文", note:"笔记", data:"数据" };
+const MP_W = { sec:250, ref:196, gapx:92, gapy:14, padx:34, pady:26 };
+
+function mapPanelHTML(active){
+  const proj = (S.tasks||[]).find(t=>t.id===curTask);
+  return `<section class="at" id="panel-map"${active?"":' style="display:none"'}>
+    <div class="mp-grid">
+      <div class="mp-left">
+        <div class="mp-head">
+          <b>🧩 谱系图</b><span class="ol-tag" id="mp-file">谱系.json</span>
+          <span class="mp-meta" id="mp-meta"></span>
+          <span class="mp-spacer"></span>
+          <button class="btn ghost" id="mp-refresh" title="从磁盘重新读">↻ 刷新</button>
+          <button class="btn ghost" id="mp-edit" title="直接改那份 JSON">✎ 手改</button>
+          <button class="btn ghost hidden" id="mp-save">保存</button>
+        </div>
+        <div class="mp-src" id="mp-src"></div>
+        <div class="mp-canvas-wrap" id="mp-wrap">
+          <div class="mp-canvas" id="mp-canvas"></div>
+        </div>
+      </div>
+      <div class="mp-right">
+        <div class="at-head">
+          <div class="at-heading"><span style="color:var(--accent);font-size:15px">🧩</span>
+            <div><h1 id="map-title">${esc(proj ? proj.title : "梳理精读")}</h1>
+            <p id="map-sub">与项目绑定 · 左边那张谱系图就是这一步的产物</p></div></div>
+        </div>
+        <div class="at-tabs">
+          <button class="at-tab on" data-dv="map|conversation">对话</button>
+          <button class="at-tab" data-dv="map|trajectory">轨迹 <span id="map-trail-n">0</span></button></div>
+        <div class="at-msgs" id="map-msgs" role="log" aria-label="结构 agent 对话"></div>
+        <div class="at-dock">
+          <div class="at-panel">
+            <div class="st-box st-counts">
+              <div class="st-row"><span>对话轮数</span><b id="map-turns">0</b></div>
+              <div class="st-row"><span>调用工具数</span><b id="map-calls">0</b></div>
+              <div class="st-row"><span>消耗 token</span><b id="map-tok">0</b></div></div>
+            <div class="st-box"><p>工具名称</p><div class="st-log" id="map-tools"></div></div>
+            <div class="st-box"><p>产出目录</p><div class="st-log" id="map-outs"></div></div>
+          </div>
+          <div class="atts" id="map-atts"></div>
+          <div class="composer" id="map-composer">
+            <textarea id="map-ask" rows="1" placeholder="说「按大纲建一版谱系图」/ 让它把某篇挂到某一节下面…（Enter 发送，Shift+Enter 换行）"></textarea>
+            <div class="at-tools">
+              <div class="at-tools-l"><button class="icon-btn" id="map-plus" title="附加文件">＋</button>
+                <label class="at-sel" title="这一步用哪个模型档案">🔌<select id="map-modpick"><option value="">未配置模型</option>
+                  ${S.models.map(mm => `<option value="${mm.id}" ${S.active && mm.id === S.active.id ? "selected" : ""}>${esc(mm.name)}</option>`).join("")}</select></label></div>
+              <div class="at-tools-r">
+                <label class="at-sel" title="助手署名">🤖<input id="map-assist" placeholder="researcher" value="${esc(assistantKey())}"></label>
+                <button class="send-btn" id="map-send" title="发送" aria-label="发送">↑</button></div>
+            </div>
+            <input type="file" id="map-filepick" multiple style="display:none">
+          </div>
+          <p class="at-hint">Enter 发送 · 说「更新谱系」→ 画布立刻换成新版（谱系.json 就地覆盖）</p>
+        </div>
+      </div>
+    </div>
+    <textarea class="ol-src hidden" id="mp-json" spellcheck="false"></textarea>
+  </section>`;
+}
+
+async function mpLoad(){
+  if(!curTask) return;
+  try{
+    const d = await api(`/api/map/state?id=${encodeURIComponent(curTask)}`);
+    MP.nodes = d.nodes||[]; MP.edges = d.edges||[]; MP.src = d.sources||null; MP.outline = (d.outline&&d.outline.markdown)||"";
+    MP.sig = JSON.stringify([MP.nodes, MP.edges]);
+    $("mp-file").textContent = (d.path||"谱系.json").split(/[\\/]/).pop();
+    $("mp-meta").textContent = `${d.sections||0} 小节 · ${d.refs||0} 关联${d.exists?"":" · 还没有图"}${d.broken?" · JSON 坏了":""}`;
+    const chips = [];
+    if(MP.src){
+      chips.push(`<span class="mp-chip">大纲小节 ${MP.src.sections.length}</span>`);
+      chips.push(`<span class="mp-chip">精读笔记 ${MP.src.notes.length}</span>`);
+      chips.push(`<span class="mp-chip">文献库 ${MP.src.papers.length}</span>`);
+      chips.push(`<span class="mp-chip">实验数据 ${MP.src.data.length}</span>`);
+      chips.push(`<span class="mp-chip">拖文件到画布 = 上传数据</span>`);
+    }
+    $("mp-src").innerHTML = chips.join("");
+    mpPaint();
+    mpMsgs(d.messages||[]);
+  }catch(e){
+    $("mp-meta").textContent = "读取失败：" + e.message;
+  }
+}
+
+function mpLayout(){
+  /* 小节竖着一列，右挂它们的关联节点；同一小节下的关联分列排（每列最多 3 个） */
+  const secs = MP.nodes.filter(n=>n.type==="section");
+  const rest = MP.nodes.filter(n=>n.type!=="section");
+  const bySec = {};
+  MP.edges.forEach(e=>{ if(!bySec[e.from]) bySec[e.from]=[]; bySec[e.from].push(e.to); });
+  rest.forEach(n=>{ const hit = MP.edges.find(e=>e.to===n.id); (bySec[hit?hit.from:"__free__"] = bySec[hit?hit.from:"__free__"]||[]).push(n.id); });
+  const pos = {}; let y = MP_W.pady, maxy = y;
+  const rowH = 34, colH = rowH + MP_W.gapy;                 /* 关联节点单行 34px（方案 A） */
+  secs.forEach(sec=>{
+    const kids = (bySec[sec.id]||[]).filter((v,i,a)=>a.indexOf(v)===i);
+    const rows = Math.max(1, Math.ceil(kids.length/2));
+    const h = Math.max(58, rows*colH - MP_W.gapy + 16);
+    pos[sec.id] = {x:MP_W.padx, y, w:MP_W.sec, h, t:"section"};
+    const x1 = MP_W.padx + MP_W.sec;
+    kids.forEach((kid,i)=>{ pos[kid] = {x:x1 + MP_W.gapx + (i%2)*(MP_W.ref+28), y: y + 8 + Math.floor(i/2)*colH, w:MP_W.ref, h:rowH, t:"ref"}; });
+    y += h + 26; maxy = y;
+  });
+  const free = (bySec["__free__"]||[]).filter((v,i,a)=>a.indexOf(v)===i);
+  free.forEach((id,i)=>{ pos[id] = {x:MP_W.padx, y: maxy + i*colH, w:MP_W.sec, h:40, t:"ref"}; });
+  return {pos, h: maxy + free.length*colH + MP_W.pady, w: MP_W.padx*2 + MP_W.sec + MP_W.gapx*2 + MP_W.ref*2 + 28};
+}
+
+function mpOutlineNote(label){
+  /* 方案 A：小节节点下面那行「说明」——直接取大纲里 `### 小节` 后面那句 `- 说明：…` */
+  const md = MP.outline || ""; if(!md || !label) return "";
+  const key = String(label).replace(/[\s　]+/g, "");
+  const lines = md.split(/\r?\n/);
+  for(let i=0;i<lines.length;i++){
+    const h = lines[i].match(/^\s*#{2,4}\s+(.+?)\s*$/);
+    if(!h || h[1].replace(/[\s　]+/g,"") !== key) continue;
+    for(let j=i+1;j<Math.min(i+4,lines.length);j++){
+      const t = lines[j].trim();
+      if(/^#{2,4}\s/.test(t)) break;
+      const m = t.match(/^[-*]?\s*说明[：:]\s*(.+)$/);
+      if(m) return m[1].trim();
+    }
+  }
+  return "";
+}
+function mpPaint(){
+  const box = $("mp-canvas"); if(!box) return;
+  if(!MP.nodes.length){
+    box.style.width = ""; box.style.height = "";
+    box.innerHTML = `<div class="mp-empty"><span class="big">🧩</span>
+      <span class="t1">还没有谱系图</span>
+      <span class="t2">右边跟 agent 说一句「按大纲建一版谱系图」，<br>它会把每个小标题挂上项目的精读结论；<br>实验数据直接拖到这块画布上。</span></div>`;
+    return;
+  }
+  const L = mpLayout(), pos = L.pos;
+  box.style.width = L.w + "px"; box.style.height = L.h + "px";
+  const NEG = /反例|反驳|冲突|不支持|反证|相左|相反/;
+  const paths = [], labels = [];
+  MP.edges.forEach(e=>{
+    const a = pos[e.from], b = pos[e.to]; if(!a||!b) return;
+    const x1 = a.x + a.w, y1 = a.y + a.h/2, x2 = b.x, y2 = b.y + b.h/2, mx = (x1+x2)/2;
+    const on = (MP.sel === e.from || MP.sel === e.to);
+    paths.push(`<path class="mp-edge${on ? " on" : ""}${NEG.test(e.label || "") ? " dash" : ""}" d="M${x1} ${y1} C${mx} ${y1} ${mx} ${y2} ${x2} ${y2}"/>`);
+    if(e.label) labels.push(`<text class="mp-elabel" x="${mx-16}" y="${(y1+y2)/2-6}">${esc(e.label)}</text>`);
+  });
+  const cards = MP.nodes.map(n=>{
+    const p = pos[n.id]; if(!p) return "";
+    const dot = `<span class="mp-dot" style="background:${MP_COL[n.type]||"var(--muted)"}"></span>`;
+    if(n.type === "section"){
+      const d = n.detail || mpOutlineNote(n.label);
+      return `<div class="mp-node sec${MP.sel===n.id?" on":""}" data-mp="${esc(n.id)}"
+        style="left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px">
+        <div class="t">${dot}${esc(n.label)}</div>
+        ${d?`<div class="d">${esc(d)}</div>`:""}
+      </div>`;
+    }
+    return `<div class="mp-node ref${MP.sel===n.id?" on":""}" data-mp="${esc(n.id)}"
+      style="left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px">
+      <div class="t" title="${esc(n.detail||"")}">${dot}<span class="lbl">${esc(n.label)}</span></div>
+      <span class="mp-pill">${MP_TAG[n.type]||""}</span>
+    </div>`;
+  }).join("");
+  box.innerHTML = `<svg class="mp-svg" width="${L.w}" height="${L.h}">${paths.join("")}${labels.join("")}</svg>${cards}`;
+  if(MP.sel) mpCard(MP.sel);
+}
+
+function mpCard(id){
+  const n = MP.nodes.find(x=>x.id===id); if(!n) return;
+  const old = document.querySelector(".mp-card"); if(old) old.remove();
+  const kids = MP.edges.filter(e=>e.from===id).map(e=>(MP.nodes.find(x=>x.id===e.to)||{}).label).filter(Boolean);
+  const par = MP.edges.filter(e=>e.to===id).map(e=>(MP.nodes.find(x=>x.id===e.from)||{}).label).filter(Boolean);
+  const wrap = $("mp-wrap");
+  const div = document.createElement("div");
+  div.className = "mp-card";
+  div.innerHTML = `<h4><span class="mp-dot" style="background:${MP_COL[n.type]||"var(--muted)"}"></span>${esc(n.label)}</h4>
+    <p>${esc(n.detail||"（没有说明）")}${n.ref?`\n来源：${esc(n.ref)}`:""}</p>
+    ${par.length?`<p>挂在小节：${esc(par.join("、"))}</p>`:""}
+    ${kids.length?`<p>它挂出去的：${esc(kids.join("、"))}</p>`:""}
+    <div class="row"><button class="btn ghost" id="mp-cx">关闭</button>
+      <button class="btn ghost" id="mp-cdel">删掉这个节点</button></div>`;
+  wrap.appendChild(div);
+  $("mp-cx").onclick = ()=>{ MP.sel=""; div.remove(); mpPaint(); };
+  $("mp-cdel").onclick = async ()=>{
+    MP.nodes = MP.nodes.filter(x=>x.id!==id);
+    MP.edges = MP.edges.filter(e=>e.from!==id && e.to!==id);
+    MP.sel = "";
+    await mpSave(); docMsg("map", "已删掉这个节点（谱系.json 已更新）");
+  };
+}
+
+async function mpSave(){
+  try{
+    const d = await api("/api/map/save", {task_id: curTask, data: {nodes: MP.nodes, edges: MP.edges}});
+    if(d.error) throw new Error(d.error);
+    MP.nodes = d.nodes; MP.edges = d.edges;
+    $("mp-meta").textContent = `${d.sections} 小节 · ${d.refs} 关联`;
+    mpPaint();
+  }catch(e){ docMsg("map", "保存失败：" + e.message); }
+}
+
+function mpBind(m){
+  docBind("map", m);                                  /* 右栏＝「确认大纲」那套（对话/轨迹/统计/附件），post 走 /api/map */
+  $("mp-refresh").onclick = ()=>mpLoad();
+  $("mp-edit").onclick = ()=>{
+    const ta = $("mp-json"), show = ta.classList.contains("hidden");
+    ta.classList.toggle("hidden", !show);
+    $("mp-save").classList.toggle("hidden", !show);
+    if(show){ ta.value = JSON.stringify({nodes:MP.nodes, edges:MP.edges}, null, 1); $("mp-wrap").classList.add("hidden"); }
+    else { $("mp-wrap").classList.remove("hidden"); }
+  };
+  $("mp-save").onclick = async ()=>{
+    try{ const d = JSON.parse($("mp-json").value || "{}");
+      const r = await api("/api/map/save", {task_id: curTask, data: d});
+      if(r.error) throw new Error(r.error);
+      MP.nodes = r.nodes; MP.edges = r.edges;
+      $("mp-json").classList.add("hidden"); $("mp-save").classList.add("hidden"); $("mp-wrap").classList.remove("hidden");
+      mpPaint();
+    }catch(e){ docMsg("map", "JSON 有问题：" + e.message); }
+  };
+  // 画布：点节点出信息卡；拖文件进来 = 上传实验数据
+  const wrap = $("mp-wrap");
+  wrap.onclick = (e)=>{ const n = e.target.closest("[data-mp]"); if(!n) return; MP.sel = n.dataset.mp; mpPaint(); };
+  let depth = 0;
+  ["dragenter","dragover"].forEach(t=>wrap.addEventListener(t,(e)=>{ e.preventDefault(); e.stopPropagation();
+    if(t === "dragenter") depth++; wrap.classList.add("dragging"); }));
+  ["dragleave","drop"].forEach(t=>wrap.addEventListener(t,(e)=>{ e.preventDefault(); e.stopPropagation();
+    if(t === "drop"){ depth = 0; wrap.classList.remove("dragging"); mpUpload(e.dataTransfer && e.dataTransfer.files); }
+    else if(--depth <= 0){ depth = 0; wrap.classList.remove("dragging"); } }));
+  mpLoad();
+  if(!MP.poll) MP.poll = setInterval(()=>{             /* 实时：别的窗口/agent 改了图，这里 3 秒跟上（只在这一步可见时问） */
+    if(wfStep !== "map" || document.hidden) return;
+    const p = $("panel-map"); if(!p || p.style.display === "none") return;
+    mpReloadQuiet();
+  }, 3000);
+}
+async function mpReloadQuiet(){
+  if(MP.busy || !curTask) return;
+  try{
+    const d = await api(`/api/map/state?id=${encodeURIComponent(curTask)}`);
+    const sig = JSON.stringify([d.nodes, d.edges]);
+    if(sig === MP.sig) return;
+    MP.sig = sig; MP.nodes = d.nodes||[]; MP.edges = d.edges||[]; mpPaint();
+    $("mp-meta").textContent = `${d.sections||0} 小节 · ${d.refs||0} 关联`;
+  }catch(_){}
+}
+async function mpUpload(files){
+  if(!files || !files.length) return;
+  for(const f of files){
+    try{
+      const buf = await f.arrayBuffer();
+      const r = await fetch(`/api/upload?filename=${encodeURIComponent(f.name)}&task=${encodeURIComponent(curTask||"")}`,
+                            {method:"POST", headers:{"Content-Type":"application/octet-stream"}, body: buf});
+      const d = await r.json();
+      if(d.error) throw new Error(d.error);
+      docMsg("map", `📎 已上传 ${f.name} → ${d.path||""}`);
+    }catch(e){ docMsg("map", "上传失败：" + e.message); }
+  }
+  await mpLoad();
+  docMsg("map", "数据文件进来了 —— 跟 agent 说一句「把刚上传的这份挂到某一节下面」它就会画进谱系图。");
+}

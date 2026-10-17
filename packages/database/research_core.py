@@ -7,6 +7,7 @@ import sqlite3
 import urllib.error
 import urllib.request
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,29 @@ def excerpt_matches(excerpt: str, page_text: str) -> bool:
     return compact(excerpt).lower() in compact(page_text).lower()
 
 
+@contextmanager
+def open_db_session(path: str | Path, timeout: float = 10.0):
+    """独立短期数据库连接上下文：自动 WAL / timeout 配置并在退出时强制释放句柄。"""
+    p = Path(path)
+    if str(p) != ":memory:":
+        p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(p, timeout=timeout)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 class ResearchDB:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -106,7 +130,26 @@ class ResearchDB:
         self.db.commit()
 
     def close(self) -> None:
-        self.db.close()
+        try:
+            self.db.close()
+        except Exception:
+            pass
+
+    def __enter__(self) -> "ResearchDB":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
+
+    @contextmanager
+    def transaction(self):
+        """事务安全上下文：自动 commit / rollback。"""
+        try:
+            yield self.db
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
 
     def create_task(self, title: str, question: str = "", material_system: str = "", base_dir: str = "") -> str:
         if not title.strip():
