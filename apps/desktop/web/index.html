@@ -1785,7 +1785,7 @@ let sidebarCollapsed = localStorage.getItem("rw-sidebar") === "true";
 
 function renderSidebar(){
   const v = route();
-  const item = (it,cls="")=>`<button class="nav-item ${v===it.id?"active":""} ${cls}" data-nav="${it.id}" title="${it.label}"><span class="nav-ico">${it.ico}</span><span class="lbl">${it.label}</span>${it.id==="mail"?`<span class="nav-badge hidden" id="navMailBadge">0</span>`:""}</button>`;
+  const item = (it,cls="")=>`<button class="nav-item ${v===it.id?"active":""} ${cls}" data-nav="${it.id}" title="${it.label}"><span class="nav-ico">${it.id==="agent"?`<img src="${Q_AV}" alt="" style="width:18px;height:18px;object-fit:contain;display:block;margin:0 auto">`:it.ico}</span><span class="lbl">${it.label}</span>${it.id==="mail"?`<span class="nav-badge hidden" id="navMailBadge">0</span>`:""}</button>`;
   const researchActive = NAV[1].items.some(i=>i.id===v);
   const open = navResearchOpen || researchActive;
   $("sidebar").className = "sidebar"+(sidebarCollapsed?" collapsed":"");
@@ -2365,13 +2365,11 @@ function asEmpty(){                       // 空状态：没绑专家 = 智研�
   const a = (S.assistants||[]).find(x=>x.id === (((S.chats||[]).find(c=>c.id===curChat)||{}).assistant_id||"")) || null;
   let ps = []; try{ ps = JSON.parse((a&&a.prompts)||"[]"); }catch(e){ ps = []; }
   const chips = document.getElementById("msgs");
-  const face = a ? asAvatarOf(a, 72)
-    : `<img src="${Q_AV}" alt="智研管家" style="width:190px;height:190px;object-fit:contain"
-         draggable="false">`;
+  const face = faceOf(a, 72);          // 没绑专家也是 72px 的同一块方框，不再放大
   return `<div class="at-empty-wrap" style="display:flex;flex-direction:column;align-items:center;gap:20px;padding:0 24px;text-align:center;max-width:560px;margin:auto">
     ${face}
     <div style="display:flex;flex-direction:column;gap:6px">
-      <span style="font-size:${a?16:18}px;font-weight:600">${esc(a?a.name:"智研管家")}</span>
+      <span style="font-size:16px;font-weight:600">${esc(a?a.name:"智研管家")}</span>
       <span style="font-size:13px;color:var(--muted)">${esc(a&&a.description ? a.description : "全局工作台助手 · 不限项目，帮你查资料、排日程、改论文、把活派给专家。直接说你要做什么。")}</span></div>
     ${ps.length?`<div class="as-chips">${ps.map(p=>`<button class="as-chip" data-chip="${esc(p)}">${esc(p)}</button>`).join("")}</div>`:""}</div>`;
 }
