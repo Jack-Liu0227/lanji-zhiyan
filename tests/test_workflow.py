@@ -30,6 +30,20 @@ class WorkflowTest(unittest.TestCase):
         self.db.close()
         self.td.cleanup()
 
+    def test_project_tree_has_dated_chat_dir_and_final_artifacts(self) -> None:
+        """项目位置里「对话」按日期分夹、「最终产物」装交付件；老的「最终成品」空壳自动改名。"""
+        from datetime import datetime
+        base = Path(self.td.name) / "proj"
+        (base / "最终成品").mkdir(parents=True)
+        tree = workflow.make_project_tree(base)
+        self.assertIn("对话", tree)
+        self.assertIn("最终产物", tree)
+        self.assertTrue((base / "对话" / datetime.now().strftime("%Y-%m-%d")).is_dir())
+        self.assertFalse((base / "最终成品").exists())          # 不留旧名两份
+        self.db.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?", (str(base), self.task))
+        self.assertEqual(self.db.pdir(self.task, "最终产物"), base / "最终产物")
+        self.assertEqual(self.db.pdir(self.task, "对话"), base / "对话")
+
     def test_paper_graph_is_cached_until_built(self) -> None:
         """论文星图是编译产物：没点「生成」就是空图；点过才有图，并带上 built_at / took_ms。"""
         tid = self.db.create_task("星图项目", "问题", "体系", "")

@@ -526,9 +526,9 @@ class WorkflowDB(ResearchDB):
         return Path(raw).expanduser() if raw else None
 
     def pdir(self, task_id: str, kind: str) -> Path:
-        """按用途拿目录。设了项目位置就落到那六个子夹里，没设就退回工作区默认目录（老项目不受影响）。"""
+        """按用途拿目录。设了项目位置就落到那固定子夹里，没设就退回工作区默认目录（老项目不受影响）。"""
         names = {n for n, _ in PROJ_DIRS}
-        fallback = {"文献库": PAPERS, "笔记": NOTES, "论文正文": OUT, "最终成品": OUT, "其余": OUT, "记忆": OUT}
+        fallback = {"文献库": PAPERS, "笔记": NOTES, "论文正文": OUT, "最终产物": OUT, "其余": OUT, "记忆": OUT, "对话": OUT}
         base = self.base_dir(task_id)
         folder = (base / kind) if (base and kind in names) else fallback.get(kind, OUT)
         folder.mkdir(parents=True, exist_ok=True)
@@ -1587,26 +1587,31 @@ PROJ_DIRS: list[tuple[str, str]] = [
     ("文献库", "开放获取(OA) 全文 PDF：文件名 = 论文标题；只放 OA 全文，付费墙文献请走学校图书馆。"),
     ("笔记", "逐篇精读的 Markdown 笔记：一份笔记一个 .md 文件，含证据表与页码。"),
     ("论文正文", "章节草稿 Markdown：draft-*.md，按章节名命名，是「文章撰写」这一步的直接产物。"),
-    ("最终成品", "格式转换后的交付件：.docx / .md / .html，可直接拿去投稿或交稿。"),
+    ("对话", "对话与过程记录：按日期分 YYYY-MM-DD 子目录，当天产生的记录都落在当天那一层。"),
+    ("最终产物", "最终交付件：中文 Word(.docx)、LaTeX(.tex)、参考文献(.bib)、成稿 PDF(.pdf)、图片(PNG/SVG) 和画图代码(.py) 都放这里。"),
     ("其余", "工作流产生的其它杂项文件：中间态导出、脚本、临时数据等，不影响主流程。"),
 ]
 
 
 def make_project_tree(base: str | Path, task: dict[str, Any] | None = None) -> list[str]:
-    """在用户选的项目位置里建好六个子目录 + 每个目录一个 README，再写一个根 README 说明结构。"""
+    """在用户选的项目位置里建好固定子目录 + 每个目录一个 README，再写一个根 README 说明结构。"""
     root = Path(str(base)).expanduser()
     root.mkdir(parents=True, exist_ok=True)
+    old, new = root / "最终成品", root / "最终产物"
+    if old.is_dir() and not new.exists():
+        old.rename(new)                                    # 老项目的旧名目录改名，别留两份
     made: list[str] = []
     for name, desc in PROJ_DIRS:
         d = root / name
         d.mkdir(parents=True, exist_ok=True)
         (d / "README.md").write_text(f"# {name}\n\n{desc}\n", encoding="utf-8")
         made.append(name)
+    (root / "对话" / datetime.now().strftime("%Y-%m-%d")).mkdir(parents=True, exist_ok=True)
     t = task or {}
     (root / "README.md").write_text("\n".join([
         f"# {t.get('title') or root.name}",
         "",
-        "这个文件夹是「览籍智研」的一个项目位置：程序按用途把文件分到下面六个子目录，",
+        f"这个文件夹是「览籍智研」的一个项目位置：程序按用途把文件分到下面 {len(PROJ_DIRS)} 个子目录，",
         "每个子目录里都有一份 README.md 说明该放什么。",
         "",
         "## 项目信息",
@@ -2002,7 +2007,7 @@ def stage_review(db: WorkflowDB, task_id: str, draft: str) -> dict[str, Any]:
 def stage_convert(db: WorkflowDB, task_id: str, markdown: str, fmt: str = "docx", name: str = "paper") -> dict[str, Any]:
     fmt = (fmt or "docx").lower()
     safe = re.sub(r"[^\w\-. ]+", "_", name)[:60] or "paper"
-    folder = db.pdir(task_id, "最终成品")
+    folder = db.pdir(task_id, "最终产物")
     if fmt == "md":
         dest = folder / f"{safe}.md"; dest.write_text(markdown, encoding="utf-8")
     elif fmt == "html":
@@ -2184,7 +2189,7 @@ def _xelatex() -> str:
 
 
 def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "") -> dict[str, Any]:
-    """一键格式转换：以正文.md（或指定文件）为源，导出到「最终成品」。latex 会就地编译出 PDF。"""
+    """一键格式转换：以正文.md（或指定文件）为源，导出到「最终产物」。latex 会就地编译出 PDF。"""
     fmt = (fmt or "docx").lower()
     src = Path(source) if source else doc_path(db, task_id, "write")
     md = src.read_text(encoding="utf-8", errors="replace") if src.is_file() else ""
@@ -2193,7 +2198,7 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "") -> dict
     title = doc_read(db, task_id, "outline")["markdown"].splitlines()
     title = next((l.lstrip("# ").strip() for l in title if l.strip().startswith("#")),
                  db.summary(task_id)["task"]["title"] or Path(src).stem)      # 没框架就用项目名，别叫「正文」
-    folder = db.pdir(task_id, "最终成品")
+    folder = db.pdir(task_id, "最终产物")
     safe = re.sub(r"[^\w\-. ]+", "_", title)[:60] or "paper"
     out = folder / f"{safe}.{'pdf' if fmt == 'latex' else fmt}"
     if fmt == "md":
@@ -2228,8 +2233,8 @@ CONV_EXT = (".md", ".tex", ".txt", ".json", ".csv", ".html", ".docx", ".pdf")
 def conv_files(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     """左边文件区：项目里这几个子夹的可读文件（按时间倒序）+ 最新那份 PDF（右边默认预览它）。"""
     rows: list[dict[str, Any]] = []
-    labels = [("论文正文", _doc_dir(db, task_id)), ("最终成品", db.pdir(task_id, "最终成品")),
-              ("LaTeX 源文件", db.pdir(task_id, "最终成品") / "_tex")]
+    labels = [("论文正文", _doc_dir(db, task_id)), ("最终产物", db.pdir(task_id, "最终产物")),
+              ("LaTeX 源文件", db.pdir(task_id, "最终产物") / "_tex")]
     newest_pdf = ""
     seen: set[str] = set()
     for label, d in dict.fromkeys(labels):
@@ -2237,7 +2242,7 @@ def conv_files(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
             continue
         for p in sorted(d.glob("*"), key=lambda x: -x.stat().st_mtime if x.is_file() else 0):
             if not p.is_file() or p.suffix.lower() not in CONV_EXT or str(p) in seen:
-                continue                       # 没设项目位置时论文正文/最终成品是同一个目录，别把同一份列两遍
+                continue                       # 没设项目位置时论文正文/最终产物是同一个目录，别把同一份列两遍
             if p.name.startswith(CITE_FILE[:-3]) and p.suffix.lower() == ".json":
                 continue                       # 台账的 json 是内部账本，不摆到文件区
             seen.add(str(p))
