@@ -18,6 +18,16 @@ print(json.dumps({'dir': _select_folder(sys.argv[2], sys.argv[3])}, ensure_ascii
 
 
 def _select_folder(initial: str, title: str) -> str:
+    # 子进程默认是 DPI-UNAWARE：在 125%/150% 缩放下，Windows 会把整张对话框位图拉伸 → 糊。
+    # 必须在创建 Tk 之前声明 DPI 感知（per-monitor 优先，退回系统级）。
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
     import tkinter as tk
     from tkinter import filedialog
 

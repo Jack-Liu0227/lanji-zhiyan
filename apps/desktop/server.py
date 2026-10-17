@@ -33,6 +33,7 @@ for _p in ("database", "workspace-core", "workspace-service", "connectors", "ai-
     if _d.is_dir() and str(_d) not in sys.path:
         sys.path.insert(0, str(_d))
 
+import fileguard                  # 文件安全：写前快照 / 打开白名单 / 审计
 import papertran                 # 论文翻译页：PDF 服务 / 元数据 / BabelDOC 任务
 import rss                       # 情报日报：RSS 抓取/解析
 import vault                     # 知识库：Obsidian Vault 扫描 / 状态写回
@@ -61,10 +62,24 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
 
 HERE = Path(__file__).resolve().parent
 WEB = HERE / "web"
-DB_PATH = Path(os.environ.get("RESEARCH_WORKBENCH_DB", ROOT / "data" / "research.sqlite3"))
+# ---- 布局：单一路径来源 + 建树 + 旧 data/ 迁移（都幂等）----
+import paths                                                       # noqa: E402
+_LAYOUT = paths.ensure_layout()
+try:
+    _MIGRATION = paths.migrate_legacy()
+except Exception as _exc:                     # 迁移出任何岔子都不能挡住启动
+    _MIGRATION = {"done": False, "reason": "迁移异常：%s" % _exc}
+if _MIGRATION.get("done"):
+    print("[layout] 旧 data/ 已迁到 %s：%s" % (paths.DATA, "、".join(_MIGRATION.get("copied", []))), flush=True)
+elif _MIGRATION.get("reason") not in ("没有旧布局", "新位置已有库，不动"):
+    print("[layout] 迁移跳过：%s" % _MIGRATION.get("reason"), flush=True)
+
+DB_PATH = paths.DB_PATH
+if not DB_PATH.exists() and (paths.APP / "data" / "research.sqlite3").is_file():
+    DB_PATH = paths.APP / "data" / "research.sqlite3"      # 迁移没成：先用老库跑，绝不让人看到空库
 schedule.DB_PATH = DB_PATH          # 定时任务共用同一个库（schedule 不反向 import server）
 team.DB_PATH = DB_PATH              # 团队共用同一个库
-UPLOADS = ROOT / "data" / "uploads"
+UPLOADS = paths.UPLOADS
 PORT = 8765
 CARD_W, CARD_H = 1117, 625      # 「开始卡片」尺寸（CSS 逻辑像素）
 CARD_PIN = True                 # True=窗口一直钉在卡片尺寸；点「进入」走 /api/win/maximize 后放掉
@@ -288,12 +303,12 @@ def _webview_window(url: str, stamp: int) -> bool:
             x=int(x / s), y=int(y / s), width=int(w / s), height=int(h / s),
             min_size=(int(420 / s), int(380 / s)), background_color="#F9FCFE")   # 逻辑像素！专注模式的「窄栏」只有 580 物理，按 DPI 反算，否则会把窗口钳在 ~690 宽
         webview.start(gui="edgechromium", private_mode=False,   # 关掉隐私模式，localStorage/头像才留得住
-                      storage_path=str(HERE / "data" / "webview"),
+                      storage_path=str(paths.CACHE / "webview"),
                       icon=str(icon) if icon.is_file() else None,
                       func=lambda: _fit_after())
         return True                                   # 关窗 → 这里返回 → main 退出 → 服务一起停
     except Exception:
-        log = HERE / "data" / "server-error.log"
+        log = paths.CACHE / "server-error.log"
         log.write_text(traceback.format_exc(), encoding="utf-8")
         return False
 
@@ -534,6 +549,7 @@ class Handler(BaseHTTPRequestHandler):
         dest = UPLOADS / f"{hashlib.sha256(blob).hexdigest()[:12]}_{name}"
         if not dest.exists():                       # 同内容重传只留一份
             dest.write_bytes(blob)
+            fileguard.audit("upload", dest, bytes=len(blob))
         out: dict[str, Any] = {"name": name, "path": str(dest), "size": len(blob),
                                "ext": name.rsplit(".", 1)[-1].lower()}
         if task_id and out["ext"] == "pdf":
@@ -899,6 +915,11 @@ class Handler(BaseHTTPRequestHandler):
                     cap = int(q.get("cap", ["200000"])[0])
                     return self._json({"path": str(p), "name": p.name, "ext": p.suffix.lower()[1:],
                                        "text": text[:cap], "truncated": len(text) > cap, "bytes": len(text)})
+            if path == "/api/file/snapshots":             # 某文件还有几个历史版本（写前快照）
+                p = _safe_path(q.get("path", [""])[0])
+                return self._json({"path": str(p),
+                                   "snapshots": [{"at": s.parent.name + " " + s.name, "bytes": s.stat().st_size}
+                                                 for s in fileguard.snapshots(p)]})
             if path == "/api/file":                       # 把项目里的文件发出去（PDF 给 iframe 预览用）
                 p = _safe_path(q.get("path", [""])[0])
                 if not p.is_file():
@@ -1000,7 +1021,7 @@ class Handler(BaseHTTPRequestHandler):
                     pid = (q.get("id") or [""])[0]
                     src = papertran.pdf_path(db, pid)
                     tid = (q.get("task") or [""])[0]
-                    out = db.pdir(tid, "文献库") if tid else (HERE / "data" / "out")
+                    out = db.pdir(tid, "文献库") if tid else (paths.OUT)
                 if not src:
                     return self._send(404, b"not found", "text/plain; charset=utf-8")
                 f = papertran.out_paths(src, out)[0 if kind == "dual" else 1]
@@ -1013,7 +1034,7 @@ class Handler(BaseHTTPRequestHandler):
                 with WorkflowDB(DB_PATH) as db:
                     f = papertran.pdf_path(db, (q.get("id") or [""])[0])
                     tid = (q.get("task") or [""])[0]
-                    out = db.pdir(tid, "文献库") if tid else (HERE / "data" / "out")
+                    out = db.pdir(tid, "文献库") if tid else (paths.OUT)
                 if not f:
                     return self._json({"error": "找不到这篇 PDF 的文件"}, 404)
                 if kind == "mono":
@@ -1102,6 +1123,13 @@ class Handler(BaseHTTPRequestHandler):
                 out = vault.set_status(str(data.get("vault") or ""), str(data.get("path") or ""),
                                        str(data.get("field") or ""), str(data.get("value") or ""))
                 return self._json({**out, **vault.scan(str(data.get("vault") or ""))})
+            except vault.VaultError as exc:
+                return self._json({"error": str(exc)}, 400)
+        if path == "/api/vault/project":          # 笔记绑定项目（写 frontmatter「项目」）
+            try:
+                v = str(data.get("vault") or "")
+                out = vault.set_project(v, str(data.get("path") or ""), str(data.get("project") or ""))
+                return self._json({**out, **vault.scan(v)})
             except vault.VaultError as exc:
                 return self._json({"error": str(exc)}, 400)
         if path == "/api/vault/open":              # 「在 Obsidian 打开」
@@ -1277,7 +1305,7 @@ class Handler(BaseHTTPRequestHandler):
                     tid = (data.get("task_id") or "").strip()
                     pid = (data.get("id") or "").strip()
                     with WorkflowDB(DB_PATH) as db:
-                        out = db.pdir(tid, "文献库") if tid else (HERE / "data" / "out")
+                        out = db.pdir(tid, "文献库") if tid else (paths.OUT)
                         return self._json(papertran.start(db, pid, out, str(data.get("pages") or ""),
                                                           bool(data.get("force"))))
                 if path == "/api/en/run":                   # 一键翻译（中文 markdown → 英文 markdown）
@@ -1292,8 +1320,12 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/conv/save":                # 手改文件（代码区保存）
                     p = _safe_path(data.get("path", ""))
                     p.parent.mkdir(parents=True, exist_ok=True)
+                    fileguard.before_write(p, "代码区保存")     # 覆盖前留一份，可回滚
                     p.write_text(data.get("text", ""), encoding="utf-8")
+                    fileguard.audit("save", p, bytes=p.stat().st_size)
                     return self._json({"ok": True, "path": str(p), "bytes": p.stat().st_size})
+                if path == "/api/file/rollback":            # 回滚到最近一次写前快照
+                    return self._json(fileguard.rollback(_safe_path(data.get("path", ""))))
                 if path == "/api/conv/run":                 # 一键格式转换（latex 会编译出 PDF）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(conv_run(db, (data.get("task_id") or "").strip(),
@@ -1325,7 +1357,7 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/paper/note":
                     tid = (data.get("task_id") or "").strip()
                     with WorkflowDB(DB_PATH) as db:
-                        out = db.pdir(tid, "文献库") if tid else (HERE / "data" / "out")
+                        out = db.pdir(tid, "文献库") if tid else (paths.OUT)
                         return self._json(papertran.reading_note(db, tid, (data.get("id") or "").strip(), out))
                 if path == "/api/rss/refresh":
                     return self._json(rss.refresh(db))
@@ -1613,6 +1645,8 @@ def main() -> int:
                     "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
                     "固态锂电池, 复合固态电解质, 锂金属负极",
                 )
+        import mail
+        mail.encrypt_legacy()          # 老 mail.json 里的明文授权码 → DPAPI 密文（幂等，干净时是空转）
         srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         schedule.start()          # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
@@ -1658,7 +1692,7 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except BaseException:  # pythonw 下没有控制台，错误必须落盘，否则双击后“什么都没发生”
-        log = HERE / "data" / "server-error.log"
+        log = paths.CACHE / "server-error.log"
         log.parent.mkdir(parents=True, exist_ok=True)
         log.write_text(traceback.format_exc(), encoding="utf-8")
         raise SystemExit(1)

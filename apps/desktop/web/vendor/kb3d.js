@@ -59,7 +59,7 @@
     chrome: { a: "#eef2f3", b: "#6c7780", c: "#11171d" }
   };
   var CARDS = {
-    today: { preset: "chrome", a: PRESETS.chrome.a, b: PRESETS.chrome.b, c: PRESETS.chrome.c, speed: 1.92, intensity: 1.6, pointer: 1.5, surface: .86, seed: 1.7 },
+    today: { preset: "chrome", a: PRESETS.chrome.a, b: PRESETS.chrome.b, c: PRESETS.chrome.c, speed: 1.92, intensity: 1.6, pointer: 1.5, surface: .08, seed: 1.7 },
     unread: { preset: "custom", a: "#00e7d2", b: "#3cc8ff", c: "#096907", speed: .84, intensity: 1.08, pointer: .8, surface: .08, seed: 4.9 },
     read: { preset: "custom", a: "#3158ff", b: "#36ff33", c: "#20252e", speed: .76, intensity: .98, pointer: .72, surface: .08, seed: 8.4 },
     backlog: { preset: "original", a: PRESETS.original.a, b: PRESETS.original.b, c: PRESETS.original.c, speed: .75, intensity: 1.05, pointer: .86, surface: .08, seed: 12.1 }
@@ -139,7 +139,7 @@
         var light = clamp((conf.surface - .25) / .21, 0, 1);
         card.style.setProperty("--surface-opacity", conf.surface);
         card.style.setProperty("--content-shade", (.48 * Math.pow(1 - conf.surface, 1.45)).toFixed(3));
-        card.style.setProperty("--stat-text", light > .5 ? "#16201d" : "#f3fffb");
+        card.style.setProperty("--stat-text", light > .5 ? "#16201d" : "#ffffff");   // 深色底一律纯白字（原来 #f3fffb 偏绿、且首卡是亮底深字）
         card.dataset.surfaceTone = light > .5 ? "light" : "dark";
 
         var mouse = { x: .5, y: .5, tx: .5, ty: .5, vx: 0, vy: 0, hit: 0 };

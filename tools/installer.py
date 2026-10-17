@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
 """览籍智研安装程序（单文件 exe）
 
-用户双击即装：把打包进来的 ResearchWorkbench/ 复制到
-    %LOCALAPPDATA%\\Programs\\ResearchWorkbench
-再建桌面快捷方式、启动程序。数据目录 data/ 不覆盖，重装不丢资料。
+用户双击即装，装完是这一套布局（程序、数据、用户、执行器分开）：
+    %LOCALAPPDATA%\\ResearchWorkbench\\
+        app\\          程序（ResearchWorkbench.exe 与只读资源）
+        data\\         运行数据（库 / 文献 / 产物 / 备份），重装不覆盖
+        user\\         用户资料与加密凭据
+        executors\\    agents / skills / tools（模型和用户都能写）
+        layout.json    布局版本
 
 重新打包（改完程序代码后，在仓库根目录跑）：
     "%LOCALAPPDATA%\\Programs\\Python\\Python310\\python.exe" -m PyInstaller --noconfirm --clean \
@@ -41,28 +45,49 @@ def main():
         say("包里没有 %s.exe，安装包损坏。" % APP)
         return 1
 
-    root = os.path.join(os.environ["LOCALAPPDATA"], "Programs", APP)
-    exe = os.path.join(root, APP + ".exe")
+    root = os.path.join(os.environ["LOCALAPPDATA"], APP)          # 数据根
+    app_dir = os.path.join(root, "app")                          # 程序根
+    exe = os.path.join(app_dir, APP + ".exe")
 
     say("=" * 46)
     say("  %s 安装程序" % TITLE)
     say("=" * 46)
-    say("安装到：%s" % root)
+    say("程序装到：%s" % app_dir)
     say()
 
     # 关掉正在运行的旧版本，否则文件被占用
     subprocess.run(["taskkill", "/F", "/IM", APP + ".exe"], capture_output=True)
     time.sleep(0.5)
 
+    # 建树：data / user / executors 与程序分开，升级只换 app
+    for sub in ("data", "user", os.path.join("executors", "agents"),
+                os.path.join("executors", "skills"), os.path.join("executors", "tools")):
+        os.makedirs(os.path.join(root, sub), exist_ok=True)
+    layout = os.path.join(root, "layout.json")
+    if not os.path.isfile(layout):
+        with open(layout, "w", encoding="utf-8") as fh:
+            fh.write('{\n  "layout": 2\n}\n')
+
+    # 老版本（Programs\\ResearchWorkbench）里如果有真库，搬过来别丢
+    old_root = os.path.join(os.environ["LOCALAPPDATA"], "Programs", APP)
+    old_db = os.path.join(old_root, "data", "research.sqlite3")
+    new_db = os.path.join(root, "data", "research.sqlite3")
+    if os.path.isfile(old_db) and not os.path.exists(new_db):
+        try:
+            shutil.copy2(old_db, new_db)
+            say("  已把老版本的数据搬到新布局：%s" % new_db)
+        except Exception:
+            pass
+
     # 复制：跳过 data/（用户资料）与被占用的失败项
-    os.makedirs(root, exist_ok=True)
+    os.makedirs(app_dir, exist_ok=True)
     n = skipped = 0
     for dirpath, dirnames, filenames in os.walk(src):
         rel = os.path.relpath(dirpath, src)
         if rel != "." and rel.split(os.sep)[0] == "data":
             dirnames[:] = []
             continue
-        target_dir = root if rel == "." else os.path.join(root, rel)
+        target_dir = app_dir if rel == "." else os.path.join(app_dir, rel)
         os.makedirs(target_dir, exist_ok=True)
         for name in filenames:
             try:
@@ -76,13 +101,13 @@ def main():
 
     # 桌面快捷方式：优先 pywin32；没有就退回 PowerShell（两者任一都能成）
     lnk = os.path.join(os.path.expanduser("~"), "Desktop", TITLE + ".lnk")
-    icon = os.path.join(root, "build", "icon.ico")
+    icon = os.path.join(app_dir, "build", "icon.ico")
     try:
         import win32com.client  # noqa: F401  pywin32
         sh = win32com.client.Dispatch("WScript.Shell")
         sc = sh.CreateShortcut(lnk)
         sc.TargetPath = exe
-        sc.WorkingDirectory = root
+        sc.WorkingDirectory = app_dir
         if os.path.isfile(icon):
             sc.IconLocation = icon
         sc.Description = TITLE
@@ -91,7 +116,7 @@ def main():
         ps = (
             "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%s');"
             "$s.TargetPath='%s';$s.WorkingDirectory='%s';$s.Description='%s';$s.Save()"
-            % (lnk, exe, root, TITLE)
+            % (lnk, exe, app_dir, TITLE)
         )
         subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True)
     say("  桌面快捷方式：%s" % ("已创建" if os.path.isfile(lnk) else "创建失败（可手动从安装目录启动）"))
@@ -99,10 +124,10 @@ def main():
 
     # 启动
     try:
-        subprocess.Popen([exe], cwd=root)
+        subprocess.Popen([exe], cwd=app_dir)
         say("装好了！桌面上的「%s」双击就能用。" % TITLE)
     except Exception as e:
-        say("启动失败：%s（可从 %s 手动双击）" % (e, root))
+        say("启动失败：%s（可从 %s 手动双击）" % (e, app_dir))
     say()
     say("提醒：第一次打开要去「模型」页填自己的 API key。")
     say()

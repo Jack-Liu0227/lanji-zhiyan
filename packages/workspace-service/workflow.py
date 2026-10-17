@@ -14,8 +14,11 @@ import concurrent.futures
 import json
 import os
 
+import fileguard        # 文件安全：子进程环境洗白 / 写前快照 / 打开白名单 / 审计
 import guards          # 出站脱敏 + 引用核验（见 guards.py）
+import paths            # 唯一路径来源（data / user / executors 都在 HOME 下）
 import pdfio            # PDF 读写（pypdf/pdfplumber，见 pdfio.py）
+import securestore      # 凭据保护（DPAPI，见 securestore.py）
 import re
 import shutil
 import socket
@@ -32,12 +35,61 @@ from typing import Any
 from research_core import ResearchDB
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[1] if (HERE.parents[1] / "packages").is_dir() else HERE   # 源码树根 / 打包后 exe 根
-DATA = ROOT / "data"
-PAPERS = DATA / "papers"
-NOTES = DATA / "notes"
-OUT = DATA / "out"
+ROOT = HERE.parents[1] if (HERE.parents[1] / "packages").is_dir() else HERE   # 程序根（只读资源）
+DATA, PAPERS, NOTES, OUT = paths.DATA, paths.PAPERS, paths.NOTES, paths.OUT   # 唯一路径来源
 UA = {"User-Agent": "research-workbench-1.0 (mailto:local@localhost)"}
+
+
+# ---------------- 凭据：库里只存密文（DPAPI），读出来才解 ----------------
+# ponytail: 只挡「整份拷走 data/ 就等于拿走 key」这一层；不挡「同一 Windows 用户下的本机进程」
+# （那需要给 HTTP 加 token / 降权运行，见 docs/交接.md 的安全一节）。
+def _stored_key(value: Any) -> str:
+    """明文 → 入库值：加密；空串/已加密原样返回（幂等）。"""
+    text = str(value or "").strip()
+    return securestore.protect(text) if text else ""
+
+
+def _reveal_key(row: dict[str, Any]) -> dict[str, Any]:
+    """出库 → 明文（给 chat/search 用；给前端前 server.py 还会再打码成 ***）。"""
+    if row.get("api_key"):
+        row["api_key"] = securestore.unprotect(row["api_key"])
+    return row
+
+
+def _host_of(url: object) -> str:
+    """取 base_url 的域名（小写）；解析不了给空串。"""
+    try:
+        return (urllib.parse.urlsplit(str(url or "")).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _assert_key_host(profile: dict[str, Any]) -> None:
+    """key 绑定它被填进来时的域名：接口地址换了域名就拒发，防止 key 被引到别的站点。"""
+    bound = str(profile.get("key_host") or "").lower()
+    host = _host_of(profile.get("base_url"))
+    if profile.get("api_key") and bound and host and host != bound:
+        raise RuntimeError(f"API key 是给 {bound} 设的，而当前接口地址是 {host} —— "
+                           f"换域名后请到「设置 → 模型与 Agent」重新填一次 key（防止 key 被发到别的站点）")
+
+
+def encrypt_legacy_secrets(db: "WorkflowDB") -> dict[str, int]:
+    """把老库里的明文 key 升格成密文（幂等：每次开库跑一遍，干净时就两条 SELECT）。
+    顺手给 key 补上「绑定域名」——老数据没记过，只能按当前 base_url 认。"""
+    fixed = 0
+    for table in ("providers", "model_profiles"):
+        for r in db.db.execute(f"SELECT id, api_key, base_url, key_host FROM {table} WHERE api_key<>''").fetchall():
+            value, host = r["api_key"], str(r["key_host"] or "")
+            if not securestore.is_protected(value):
+                value = securestore.protect(value)
+                fixed += 1
+            if not host:
+                host = _host_of(r["base_url"])
+            if value != r["api_key"] or host != r["key_host"]:
+                db.db.execute(f"UPDATE {table} SET api_key=?, key_host=? WHERE id=?", (value, host, r["id"]))
+    if fixed:
+        db.db.commit()
+    return {"encrypted": fixed}
 
 WORKFLOW_SCHEMA = """
 CREATE TABLE IF NOT EXISTS calendar_events (
@@ -283,6 +335,11 @@ class WorkflowDB(ResearchDB):
             self.db.execute("ALTER TABLE chat ADD COLUMN sender TEXT NOT NULL DEFAULT ''")
         import agent_settings
         agent_settings.migrate(self)
+        for _t in ("providers", "model_profiles"):        # key 绑定的域名（换域名就不许拿旧 key 发）
+            _cols = {r["name"] for r in self.db.execute(f"PRAGMA table_info({_t})")}
+            if "key_host" not in _cols:
+                self.db.execute(f"ALTER TABLE {_t} ADD COLUMN key_host TEXT NOT NULL DEFAULT ''")
+        encrypt_legacy_secrets(self)                   # 老库里的明文 key → DPAPI 密文（幂等）
         self.db.commit()
         for folder in (PAPERS, NOTES, OUT):
             folder.mkdir(parents=True, exist_ok=True)
@@ -843,6 +900,7 @@ class WorkflowDB(ResearchDB):
             try:
                 if p.is_file() and PAPERS in p.resolve().parents:
                     p.unlink()
+                    fileguard.audit("delete_paper_file", p, task_id=task_id)
                     removed += 1
             except OSError:
                 pass
@@ -887,7 +945,8 @@ class WorkflowDB(ResearchDB):
         if not name.strip() or not base_url.strip() or not model.strip():
             raise ValueError("模型档案需要 名称/接口地址/模型名")
         mid = uuid.uuid4().hex
-        self.db.execute("INSERT INTO model_profiles (id,name,base_url,api_key,model,is_active,created_at) VALUES (?,?,?,?,?,?,?)", (mid, name.strip(), base_url.strip().rstrip("/"), api_key.strip(), model.strip(), 0, now()))
+        self.db.execute("INSERT INTO model_profiles (id,name,base_url,api_key,model,is_active,created_at,key_host) VALUES (?,?,?,?,?,?,?,?)", (mid, name.strip(), base_url.strip().rstrip("/"), _stored_key(api_key), model.strip(), 0, now(),
+                        _host_of(base_url) if api_key.strip() else ""))
         self.db.commit()
         if activate or not self.active_model():
             self.set_active(mid)
@@ -897,10 +956,10 @@ class WorkflowDB(ResearchDB):
         row = self.db.execute("SELECT * FROM model_profiles WHERE id=?", (mid,)).fetchone()
         if not row:
             raise KeyError(mid)
-        return dict(row)
+        return _reveal_key(dict(row))
 
     def models(self) -> list[dict[str, Any]]:
-        return [dict(r) for r in self.db.execute("SELECT * FROM model_profiles ORDER BY created_at")]
+        return [_reveal_key(dict(r)) for r in self.db.execute("SELECT * FROM model_profiles ORDER BY created_at")]
 
     def set_active(self, mid: str) -> dict[str, Any]:
         self.model(mid)  # 不存在则抛 KeyError
@@ -915,7 +974,7 @@ class WorkflowDB(ResearchDB):
 
     def active_model(self) -> dict[str, Any] | None:
         row = self.db.execute("SELECT * FROM model_profiles WHERE is_active=1").fetchone()
-        return dict(row) if row else None
+        return _reveal_key(dict(row)) if row else None
 
     # ---------- Provider（模型与 Agent 卡片） ----------
     def providers(self) -> list[dict[str, Any]]:
@@ -927,7 +986,7 @@ class WorkflowDB(ResearchDB):
                 d["models"] = json.loads(d["models"])
             except ValueError:
                 d["models"] = []
-            out.append(d)
+            out.append(_reveal_key(d))
         return out
 
     def provider(self, pid: str) -> dict[str, Any]:
@@ -938,7 +997,7 @@ class WorkflowDB(ResearchDB):
                 d["models"] = json.loads(d["models"])
             except ValueError:
                 d["models"] = []
-            return d
+            return _reveal_key(d)
         if pid in PROVIDER_CATALOG:            # 还没落库的内置 Provider：给一份只读视图
             c = PROVIDER_CATALOG[pid]
             return {"id": pid, "name": c["name"], "base_url": c["base_url"] or "",
@@ -965,17 +1024,19 @@ class WorkflowDB(ResearchDB):
         if not name.strip() or not base_url.strip():
             raise ValueError("Provider 需要名称和接口地址")
         pid = "custom:" + uuid.uuid4().hex[:12]
-        self.db.execute("INSERT INTO providers (id,name,base_url,api,api_key,models,source,enabled,created_at)"
-                        " VALUES (?,?,?,?,?,?,?,?,?)",
-                        (pid, name.strip(), base_url.strip().rstrip("/"), api, api_key.strip(),
-                         "[]", "custom", 1 if api_key.strip() else 0, now()))
+        self.db.execute("INSERT INTO providers (id,name,base_url,api,api_key,models,source,enabled,created_at,key_host)"
+                        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (pid, name.strip(), base_url.strip().rstrip("/"), api, _stored_key(api_key),
+                         "[]", "custom", 1 if api_key.strip() else 0, now(),
+                         _host_of(base_url) if api_key.strip() else ""))
         self.db.commit()
         return self.provider(pid)
 
     def set_provider_key(self, pid: str, api_key: str) -> dict[str, Any]:
-        self.ensure_provider(pid)
-        self.db.execute("UPDATE providers SET api_key=?, enabled=? WHERE id=?",
-                        (api_key.strip(), 1 if api_key.strip() else 0, pid))
+        p = self.ensure_provider(pid)
+        self.db.execute("UPDATE providers SET api_key=?, key_host=?, enabled=? WHERE id=?",
+                        (_stored_key(api_key), _host_of(p["base_url"]) if api_key.strip() else "",
+                         1 if api_key.strip() else 0, pid))
         self.db.commit()
         import agent_settings
         agent_settings.sync_provider_models(self, pid)
@@ -1162,6 +1223,7 @@ def chat_raw(profile: dict[str, Any], messages: list[dict[str, Any]], tools: lis
     """返回 assistant message 原始结构（含 tool_calls），供 agent 循环使用。"""
     if not profile:
         raise RuntimeError("尚未配置模型：到「模型」页添加一个 OpenAI 兼容接口并设为当前模型。")
+    _assert_key_host(profile)          # key 只发它被填进来时的那个域名
     try:
         import runtime
         return runtime.call(profile, messages, tools=tools, temperature=temperature, timeout=timeout, max_tokens=max_tokens)
@@ -1931,6 +1993,8 @@ def cite_sync(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
         if e.get("paper_id"):
             lines.append(f"- 库内 paper_id：{e['paper_id']}")
         lines.append("")
+    fileguard.before_write(md, "引用台账")
+    fileguard.before_write(js, "引用台账")
     md.write_text("\n".join(lines), encoding="utf-8")
     js.write_text(json.dumps(entries, ensure_ascii=False, indent=1), encoding="utf-8")
     return {"path": str(md), "count": len(entries), "stale": sum(1 for e in entries if not e.get("ok")),
@@ -1954,6 +2018,7 @@ def cite_add(db: "WorkflowDB", task_id: str, args: dict[str, Any]) -> dict[str, 
     entries.append(e)
     md, js = cite_paths(db, task_id)
     md.parent.mkdir(parents=True, exist_ok=True)
+    fileguard.before_write(js, "引用台账")
     js.write_text(json.dumps(entries, ensure_ascii=False, indent=1), encoding="utf-8")
     out = cite_sync(db, task_id)
     out["added"] = e
@@ -2036,8 +2101,7 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "") -> dict
         build.mkdir(parents=True, exist_ok=True)
         tex_path = build / f"{safe}.tex"
         tex_path.write_text(md_to_tex(md, title), encoding="utf-8", newline="\n")   # 必须 LF：CR 会让 TeX 报 ^^M
-        env = dict(os.environ)
-        env["PATH"] = str(Path(_xelatex()).parent) + os.pathsep + env.get("PATH", "")
+        env = fileguard.clean_env(str(Path(_xelatex()).parent))   # 子进程不需要我们的 key
         proc = subprocess.run([_xelatex(), "-interaction=nonstopmode", "-halt-on-error", tex_path.name],
                               cwd=str(build), env=env, capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=180)
@@ -2086,8 +2150,7 @@ def conv_compile(path: str) -> dict[str, Any]:
     if p.suffix.lower() != ".tex" or not p.is_file():
         raise ValueError("只能编译 .tex 文件")
     pdf = p.with_suffix(".pdf")
-    env = dict(os.environ)
-    env["PATH"] = str(Path(_xelatex()).parent) + os.pathsep + env.get("PATH", "")
+    env = fileguard.clean_env(str(Path(_xelatex()).parent))       # 子进程不需要我们的 key
     try:
         proc = subprocess.run([_xelatex(), "-interaction=nonstopmode", "-halt-on-error", p.name],
                               cwd=str(p.parent), env=env, capture_output=True, text=True,
@@ -2101,14 +2164,9 @@ def conv_compile(path: str) -> dict[str, Any]:
 
 
 def conv_open(path: str) -> dict[str, Any]:
-    """用系统默认程序打开（预览窗口右上那个 ↗）。"""
+    """用系统默认程序打开（预览窗口右上那个 ↗）。**只放行文档类扩展名**。"""
     p = _safe_path(path)
-    if not p.is_file():
-        raise ValueError("文件不存在")
-    if hasattr(os, "startfile"):
-        os.startfile(str(p))                      # noqa: S606  Windows 专用，够用
-        return {"opened": str(p)}
-    raise RuntimeError("这个系统没有 startfile")
+    return fileguard.open_document(p)
 
 
 def _safe_path(path: str, extra_roots: list[Path] | None = None) -> Path:
@@ -2217,6 +2275,7 @@ def en_run(db: "WorkflowDB", task_id: str, text: str, name: str = "", style: str
     folder = _doc_dir(db, task_id)
     folder.mkdir(parents=True, exist_ok=True)
     dest = folder / f"{stem}_en.md"
+    fileguard.before_write(dest, "中译英覆盖")
     dest.write_text(out["text"] + "\n", encoding="utf-8", newline="\n")
     db.log_step(task_id, "entrans", "done", f"译成 {dest.name}")
     return {"path": str(dest), "name": dest.name, "text": out["text"], "chars": len(out["text"]),
@@ -2599,6 +2658,7 @@ def map_write(db: "WorkflowDB", task_id: str, data: Any) -> dict[str, Any]:
              if isinstance(e, dict) and str(e.get("from")) in seen and str(e.get("to")) in seen]
     p = map_path(db, task_id)
     p.parent.mkdir(parents=True, exist_ok=True)
+    fileguard.before_write(p, "谱系图覆盖")
     p.write_text(json.dumps({"nodes": nodes, "edges": edges, "updated": now()},
                             ensure_ascii=False, indent=1), encoding="utf-8")
     return map_read(db, task_id)
@@ -2627,6 +2687,7 @@ def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str) -> dict[
     """就地覆盖写（他要的就是「修改调整都直接在原文件改」）。"""
     p = doc_path(db, task_id, kind)
     p.parent.mkdir(parents=True, exist_ok=True)
+    fileguard.before_write(p, f"{kind}正文覆盖")
     p.write_text((markdown or "").strip() + "\n", encoding="utf-8")
     out = doc_read(db, task_id, kind)
     out["written"] = True

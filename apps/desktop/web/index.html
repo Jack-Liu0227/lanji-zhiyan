@@ -24,11 +24,10 @@ a{color:var(--accent)}
 .sidebar.collapsed{width:64px}
 .sidebar.collapsed .lbl,.sidebar.collapsed .sidebar-group-children,.sidebar.collapsed .swatches{display:none}
 .brand{display:flex;align-items:center;gap:10px;padding:12px 12px 10px}
-.mark{display:flex;gap:3px;align-items:flex-end;height:22px}
-.mark i{width:4px;border-radius:2px;background:var(--accent);display:block}
-.mark i:nth-child(1){height:10px;opacity:.6}.mark i:nth-child(2){height:16px;opacity:.85}.mark i:nth-child(3){height:22px}
-.brand b{font-size:16px;font-weight:700;display:block;line-height:1.15}
-.brand small{color:var(--muted);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase}
+.mark{width:30px;height:30px;flex:none;display:block}   /* 应用徽标：来自 mark.png（透明圆弧,无白底） */
+.brand .lbl{display:flex;flex-direction:column;justify-content:center;gap:1px;min-width:0;text-align:center}   /* 中文/英文共用同一条竖中线 */
+.brand b{font-size:16px;font-weight:700;display:block;line-height:1.2}
+.brand small{color:var(--muted);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;display:block;line-height:1.2}
 .as-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;margin-top:12px}
 .as-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;transition:border-color .18s,transform .18s}
 .as-card:hover{border-color:var(--accent)}
@@ -329,6 +328,14 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .sp-tab{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);font:inherit;font-size:13px;padding:8px 12px;cursor:pointer;white-space:nowrap}
 .sp-tab:hover{color:var(--fg)}
 .sp-tab.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.sp-kb-host{margin-top:12px}
+.sp-meta-pill{border:1px solid var(--line);border-radius:999px;padding:1px 9px;font-size:11px;color:var(--muted)}
+
+.kb-head.kb-embed{padding-bottom:10px;border-bottom:1px solid var(--line)}
+
+.kb-scope{display:inline-flex;gap:4px;margin-left:6px}
+
+.kb-scope .btn.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
 .sp-grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .sp-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media (max-width:1180px){.sp-grid4{grid-template-columns:repeat(2,minmax(0,1fr))}.sp-grid2{grid-template-columns:1fr}}
@@ -1279,7 +1286,7 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .kb-fluid-stat .kb-stat-content{position:relative;z-index:2;color:var(--stat-text,#f4f7f5);text-shadow:0 1px 8px rgba(0,0,0,var(--content-shade,.45))}
 .kb-fluid-stat .kb-stat-t,.kb-fluid-stat .kb-stat-c,.kb-fluid-stat .kb-stat-u{color:inherit;opacity:.88}
 .kb-fluid-stat .kb-stat-v{color:inherit}
-.kb-fluid-stat .kb-stat-i{color:inherit;opacity:.55;border:0}
+.kb-fluid-stat .kb-stat-i{color:inherit;opacity:.85;border:0}
 .kb-fluid-stat:not(.is-fallback)::before{content:"";position:absolute;inset:-20%;z-index:0;pointer-events:none;background:radial-gradient(ellipse at 76% 23%,rgba(76,255,231,.20),transparent 39%),radial-gradient(ellipse at 28% 88%,rgba(45,198,255,.15),transparent 43%);mix-blend-mode:screen;filter:blur(12px);animation:kb-fluid-breathe 5.5s ease-in-out infinite}
 @keyframes kb-fluid-breathe{50%{transform:translate(-7%,5%) scale(1.13);opacity:.55}}
 @keyframes kb-fluid-fallback{50%{transform:translate(4%,-3%) scale(1.08);opacity:.62}}
@@ -1720,7 +1727,6 @@ const NAV = [
   {g:"solo",items:[
     {id:"workflow",label:"工作流",ico:"🔀"},
     {id:"schedules",label:"定时任务",ico:"⏰"},
-    {id:"library",label:"知识库",ico:"📚"},
     {id:"notes",label:"笔记",ico:"📝"},
     {id:"intel",label:"情报日报",ico:"📡"}]},
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
@@ -1754,7 +1760,7 @@ function renderSidebar(){
   const open = navResearchOpen || researchActive;
   $("sidebar").className = "sidebar"+(sidebarCollapsed?" collapsed":"");
   $("sidebar").innerHTML = `
-    <div class="brand"><div class="mark"><i></i><i></i><i></i></div>
+    <div class="brand"><img class="mark" src="/mark.png" alt="">
       <div class="lbl" style="min-width:0"><b>览籍智研</b><small>Research workspace</small></div>
       <button class="collapse" title="${sidebarCollapsed?"展开侧栏":"折叠侧栏"}">${sidebarCollapsed?"›":"‹"}</button></div>
     <div class="profile-card" id="profileCard" title="点击编辑个人资料">
@@ -1854,7 +1860,7 @@ function render(){
   else if(r==="space") renderSpace(m);
   else if(r==="calendar") renderCalendar(m);
   else if(r==="mail") renderMail(m);
-  else if(r==="library") renderLibrary(m);
+  else if(r==="library"){ spTab = "notes"; renderSpace(m); }   // 「知识库」并入 项目空间·笔记；旧链接落到这里
   else if(r==="notes") renderNotes(m);
   else if(r==="intel") renderIntel(m);
   else if(r==="assistants") renderAssistants(m);
@@ -5099,11 +5105,12 @@ const KB_TABS = [["all", "全部"], ["today", "今日新增"], ["unread", "未�
 let kb = { vault: localStorage.getItem("rw-vault") || "", data: null, err: "", busy: false,
            tab: "all", folder: "", q: "", active: "", tip: "" };
 
-async function renderLibrary(m){
+async function renderLibrary(m, opts={}){
+  kb.embed = !!opts.embed; kb.project = opts.project || ""; kb.host = m;   // 嵌进 项目空间·笔记：不给 PDF 版块、默认只看本项目
   m.innerHTML = kbShell();
   kbBind(m);
   if(kb.vault && !kb.data && !kb.busy) kbLoad();
-  kbPapers(m);
+  if(!kb.embed) kbPapers(m);   // 嵌进项目空间时不挂「本项目已入库 PDF」版块
 }
 
 async function kbLoad(){
@@ -5116,7 +5123,7 @@ async function kbLoad(){
   kb.busy = false; kbRender();
 }
 
-function kbDom(){ return $("main"); }
+function kbDom(){ return kb.host || $("main"); }
 function kbRender(){ const m = kbDom(); if(!m || !m.querySelector(".kb-page")) return; m.innerHTML = kbShell(); kbBind(m); }
 function kbState(cls, text){ return `<span class="kb-state kb-${cls}">${esc(text)}</span>`; }
 function kbFmt(iso){ return iso ? esc(iso) : "—"; }
@@ -5125,6 +5132,10 @@ function kbToday(){ return new Date().toLocaleDateString("sv-SE"); }
 function kbFiltered(){
   if(!kb.data) return [];
   let ns = kb.data.notes.slice();
+  if(kb.embed && kb.onlyProject !== false){                     // 项目空间里默认只看绑到本项目的笔记
+    const name = kbProjectName();
+    if(name) ns = ns.filter(n => n.project === name);
+  }
   if(kb.folder) ns = ns.filter(n=>n.rootFolder === kb.folder);
   const t = kbToday();
   if(kb.tab === "today") ns = ns.filter(n=>n.createdFromFrontmatter && n.created === t);
@@ -5161,12 +5172,14 @@ function kbShell(){
   const d = kb.data, st = d ? d.stats : null;
   const name = kb.vault ? kb.vault.replace(/[\\/]+$/, "").split(/[\\/]/).pop() : "";
   const head = `<header class="kb-head">
-    <div><h2>知识库</h2><p>未读识别 · 阅读推进 · 知识沉淀</p></div>
+    ${kb.embed ? "" : `<div><h2>知识库</h2><p>未读识别 · 阅读推进 · 知识沉淀</p></div>`}
     <div class="kb-actions">
       <label class="kb-search">⌕<input id="kbQ" placeholder="搜索笔记、目录或标签…" value="${esc(kb.q)}"></label>
       <button class="btn" id="kbFolder">${kb.folder ? "⌁ " + esc(kb.folder) : "⌁ 全部目录"}</button>
       <button class="btn" id="kbVault">选择 Vault</button>
       <button class="btn btn-primary" id="kbScan">${kb.busy ? "扫描中…" : "＋ 立即扫描"}</button>
+
+      ${kb.embed ? `<span class="kb-scope"><button class="btn${kb.onlyProject !== false ? " on" : ""}" id="kbScopeP" title="只看绑到当前项目的笔记">本项目</button><button class="btn${kb.onlyProject === false ? " on" : ""}" id="kbScopeA" title="整个 Vault">全库</button></span>` : ""}
     </div></header>`;
   const vault = kb.vault
     ? `<div class="kb-vault"><span class="kb-vault-i">◈</span><b>${esc(d ? d.name : name)}</b>
@@ -5178,6 +5191,9 @@ function kbShell(){
   if(!d) return `<div class="kb-page">${head}${vault}<div class="card kb-load">正在扫描 Vault…</div></div>`;
 
   const ns = kbFiltered();
+
+  if(ns.length && !ns.some(n => n.path === kb.active)) kb.active = ns[0].path;   // 过滤后别把看不见的笔记留在详情里
+
   const list = ns.length ? ns.map(n=>`<button class="kb-row${n.path===kb.active?" on":""}" data-note="${esc(n.path)}">
       <span class="kb-row-t" title="${esc(n.path)}">${esc(n.title)}</span>
       <span class="kb-row-f">${esc(n.folder)}</span>
@@ -5198,13 +5214,13 @@ function kbShell(){
       <div class="kb-sec-head"><b>阅读队列</b><span>真实数据 · ${ns.length}/${d.notes.length} 篇</span></div>
       <div class="kb-tabs">${KB_TABS.map(([k,label])=>`<button class="kb-tab${kb.tab===k?" on":""}" data-tab="${k}">${esc(label)}</button>`).join("")}</div>
       <div class="kb-list">${list}</div>
-      <div class="kb-foot">全库 ${d.notes.length} 篇 · 待沉淀 ${st.pending} 篇 · 词数合计 ${st.words.toLocaleString()}${folders.length?` · 目录 ${folders.length} 个`:""}</div>
+      <div class="kb-foot">${kb.embed && kb.onlyProject !== false ? `本项目 ${ns.length} 篇 · ` : ""}全库 ${d.notes.length} 篇 · 待沉淀 ${st.pending} 篇 · 词数合计 ${st.words.toLocaleString()}${folders.length?` · 目录 ${folders.length} 个`:""}</div>
     </div>
     ${kbVisual(st)}
     <div class="kb-side">${kbDetail()}</div></section>`;
 
   const heat = `<section class="card kb-heat">${kbHeat()}</section>`;
-  const pdf = `<section class="card" id="kbPapers"><h3>本项目已入库 PDF</h3><div class="hint">加载中…</div></section>`;
+  const pdf = kb.embed ? "" : `<section class="card" id="kbPapers"><h3>本项目已入库 PDF</h3><div class="hint">加载中…</div></section>`;   // 项目空间里不放 PDF 版块
   return `<div class="kb-page">${head}${vault}${stats}${board}${heat}${pdf}</div>`;
 }
 
@@ -5218,6 +5234,8 @@ function kbDetail(){
     <div class="kb-detail-title">${esc(n.title)}</div>
     <div class="kb-detail-grid">
       <span>所属目录</span><b>☑ ${esc(n.folder)}</b>
+
+      ${kb.embed ? `<span>所属项目</span><select class="kb-sel" id="kbProjSel">${opts(["", ...(S.tasks || []).map(t => t.title)], n.project || "")}</select>` : ""}
       <span>创建日期</span><b>▣ ${kbFmt(n.created)}${n.createdFromFrontmatter?"":"（按文件时间）"}</b>
       <span>最近修改</span><b>${esc(fmtDate(new Date(n.modified*1000).toISOString()))}</b>
       <span>词数</span><b>${n.words.toLocaleString()}</b>
@@ -5305,6 +5323,9 @@ function kbBind(m){
         const t = m.querySelector("#kbHeatTip"); if(t) t.textContent = kb.tip; });
     c.addEventListener("click", ()=>{ const t = m.querySelector("#kbHeatTip"); if(t) t.textContent = kb.tip + "（已固定）"; });
   });
+  on("#kbProjSel", "change", e => kbBindProject(e.target.value));
+  on("#kbScopeP", "click", () => { kb.onlyProject = true; kbRender(); });
+  on("#kbScopeA", "click", () => { kb.onlyProject = false; kbRender(); });
   const n = kb.data ? kb.data.notes.find(x=>x.path===kb.active) : null;
   m.querySelectorAll(".kb-sel").forEach(s=>s.addEventListener("change", ()=>kbWrite(n, s.dataset.field, s.value)));
   on("#kbOpen", "click", ()=>api("/api/vault/open", {vault:kb.vault, path:kb.active}).catch(e=>alert(e.message)));
@@ -5318,6 +5339,24 @@ function kbBind(m){
     KB3D.orbit(m, { folders: kbFolders(), onCycle: cycleFolder,
       onPick: name=>{ kb.folder = (kb.folder === name ? "" : name); kbRender(); } });
   }
+}
+
+const kbProjectName = () => (S.tasks || []).find(t => t.id === kb.project)?.title || "";
+
+async function kbBindProject(project){
+
+  const n = kb.data ? kb.data.notes.find(x => x.path === kb.active) : null;
+
+  if(!n) return;
+
+  try{
+
+    const d = await api("/api/vault/project", {vault: kb.vault, path: n.path, project});
+
+    kb.data = d; kbRender();
+
+  }catch(e){ alert("绑定失败：" + e.message); }
+
 }
 
 async function kbWrite(n, field, value){
@@ -5810,14 +5849,7 @@ function spBodyHTML(d){
         <div class="sp-meta">${esc(r.filename||"")} · ${r.pages?String(r.pages).split(",").length+" 页":""} · ${esc(spWhen(r.created_at))}</div></div></div>`).join("")
       : `<div class="hint" style="margin-top:10px">这个项目还没有入库文献。到「知识库」或工作流的检索步加进来。</div>`}</div>`;
   }
-  if(spTab === "notes"){
-    const rows = d.notes||[];
-    return `<div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">NOTES / PROJECT</p><h3>项目笔记</h3></div>
-      <span class="pill">${rows.length} 篇</span><button class="btn ghost" id="spToNote">去笔记页 →</button></div>
-      ${rows.length ? rows.map(n=>`<div class="sp-row"><span class="sp-ic">📝</span><div class="sp-main">
-        <div class="sp-nm">${esc(n.title||"未命名笔记")}</div><div class="sp-meta">${esc(spWhen(n.created_at))}</div></div></div>`).join("")
-      : `<div class="hint" style="margin-top:10px">还没有绑定到本项目的笔记。在「笔记」页把笔记绑到这个项目即可。</div>`}</div>`;
-  }
+  if(spTab === "notes") return `<div id="spNotes" class="sp-kb-host"></div>`;   // 知识库整块搬进来（不含 PDF 版块）
   if(spTab === "calendar"){
     const rows = spMonthEvents();
     return `<div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">CALENDAR / PROJECT</p><h3>项目日程</h3></div>
@@ -5957,7 +5989,7 @@ function spBind(d){
     window.__tmTick = setTimeout(()=>{ if(route()==="space" && spTab==="team"){ spTeam=null; render(); } }, 3000);
   }
   const go = (id, route)=>{ const b=$(id); if(b) b.onclick = ()=>openTab(route); };
-  go("spToFlow","workflow"); go("spToNote","notes"); go("spToCal","calendar"); go("spToLib","library");
+  go("spToFlow","workflow"); go("spToCal","calendar"); go("spToLib","library");
   const del = $("spDel");
   if(del) del.onclick = async ()=>{
     const t = d.task||{};
@@ -5989,7 +6021,7 @@ async function renderSpace(m){
       <button class="btn ghost" id="spLeader">问全局 Leader →</button></div></div>
     <div class="sp-tabs" id="spTabs">${SP_TABS.map(([k,l])=>`<button class="sp-tab ${k===spTab?"on":""}" data-sp-tab="${k}">${l}</button>`).join("")}</div>
     <div class="card" style="margin-top:12px"><div class="hint" style="display:flex;gap:14px;flex-wrap:wrap">
-      <span>项目 ID：${esc(curTask)}</span><span class="sp-stage">阶段：${esc(t.stage_now||"未开始")}</span><span>更新：${esc(spWhen(t.updated_at))}</span></div></div>
+      <span>项目 ID：${esc(curTask)}</span><span class="sp-meta-pill">阶段：${esc(t.stage_now||"未开始")}</span><span>更新：${esc(spWhen(t.updated_at))}</span></div></div>
     <div id="spBody"></div>`;
   $("spPick").onchange = (e)=>{ curTask = e.target.value; localStorage.setItem("rw-task", curTask); spId = null; render(); };
   $("spFlow").onclick = ()=>openTab("workflow");
@@ -5997,6 +6029,8 @@ async function renderSpace(m){
   m.querySelectorAll("[data-sp-tab]").forEach(b=>b.onclick=()=>{ spTab = b.dataset.spTab; render(); });
   $("spBody").innerHTML = spBodyHTML(d);
   spBind(d);
+  if(spTab === "notes") renderLibrary($("spNotes"), {embed: true, project: curTask})
+    .catch(e => { $("spNotes").innerHTML = `<div class="hint">知识库加载失败：${esc(e.message)}</div>`; });
 }
 
 async function renderNotes(m){
