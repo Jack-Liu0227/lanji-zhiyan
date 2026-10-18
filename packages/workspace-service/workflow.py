@@ -330,7 +330,14 @@ class WorkflowDB(ResearchDB):
         self.schedule_seed(BUILTIN_SCHEDULES, _recent["id"] if _recent else "")   # 内置定时任务：只补缺（没有项目就先留空，等用户绑）
         self.db.execute("""CREATE TABLE IF NOT EXISTS teams (
               id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'fixed',
-              status TEXT NOT NULL DEFAULT 'idle', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+              status TEXT NOT NULL DEFAULT 'idle', project_id TEXT NOT NULL DEFAULT '',
+              purpose TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(teams)")}
+        if "project_id" not in cols:                   # 老库补列：团队挂在项目上
+            self.db.execute("ALTER TABLE teams ADD COLUMN project_id TEXT NOT NULL DEFAULT ''")
+        if "purpose" not in cols:                      # 老库补列：加急团队「为什么组」
+            self.db.execute("ALTER TABLE teams ADD COLUMN purpose TEXT NOT NULL DEFAULT ''")
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(team_members)")}
         if "assistant_id" not in cols:                 # 老库补列：成员 = 哪个助手
             self.db.execute("ALTER TABLE team_members ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''")
@@ -687,17 +694,18 @@ class WorkflowDB(ResearchDB):
         row = self.db.execute("SELECT * FROM teams WHERE id=?", (tid,)).fetchone()
         return dict(row) if row else None
 
-    def team_add(self, name: str, kind: str = "fixed") -> dict[str, Any]:
+    def team_add(self, name: str, kind: str = "fixed", project_id: str = "", purpose: str = "") -> dict[str, Any]:
         tid = uuid.uuid4().hex
-        self.db.execute("INSERT INTO teams (id,name,kind,status,created_at,updated_at) VALUES (?,?,?,?,?,?)",
-                        (tid, (name or "新团队").strip(), kind, "idle", now(), now()))
-        self.db.execute("INSERT OR IGNORE INTO chats (id,title,out_dir,created_at,updated_at) VALUES (?,?,?,?,?)",
-                        (tid, (name or "新团队").strip(), "", now(), now()))
+        self.db.execute("INSERT INTO teams (id,name,kind,status,project_id,purpose,created_at,updated_at)"
+                        " VALUES (?,?,?,?,?,?,?,?)",
+                        (tid, (name or "新团队").strip(), kind, "idle", project_id or "", purpose or "", now(), now()))
+        # 不再顺手建同名 chats 行：团队有独立的 team_sessions，混进「智研管家」对话列表只会删不掉
         self.db.commit()
         return self.team(tid) or {}
 
     def team_update(self, tid: str, **fields: Any) -> dict[str, Any]:
-        allow = {k: v for k, v in fields.items() if k in ("name", "status", "kind") and v is not None}
+        allow = {k: v for k, v in fields.items()
+                 if k in ("name", "status", "kind", "project_id", "purpose") and v is not None}
         if allow:
             allow["updated_at"] = now()
             self.db.execute("UPDATE teams SET %s WHERE id=?" % ", ".join("%s=?" % k for k in allow),
@@ -1545,11 +1553,13 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
     if name == "delegate":
         return _delegate(db, task_id, args.get("jobs") or [], emit=emit, profile=profile,
                          scope=scope, parallel=int(args.get("parallel") or 3))
-    if name in ("team_board", "team_assign"):
+    if name in ("team_board", "team_assign", "team_form"):
         import team as _team                                  # 延迟导入：team 反向依赖 workflow
         tid = _team_project(db, task_id, args.get("project", ""))
         if name == "team_board":
             return _team.board(tid)
+        if name == "team_form":
+            return _team.form_team(tid, args.get("purpose", ""), args.get("members") or [])
         return _team.assign(tid, args.get("member", ""), args.get("prompt", ""), trigger="leader",
                             origin="leader@" + task_id[:8])
     if name == "memory_save":
@@ -1864,6 +1874,8 @@ def _brief(name: str, result: Any) -> str:
             c.get("done", 0), c.get("failed", 0))
     if name == "team_assign":
         return "已派给「%s」，排队等待执行" % result.get("member_name", "")
+    if name == "team_form":
+        return "已组队「%s」：%d 人（加急办公室）" % (result.get("name", ""), len(result.get("added") or []))
     if name == "paper_search":
         return f"检索到 {result.get('found')} 条，新增入库 {len(result.get('saved') or [])} 条"
     if name == "paper_download":

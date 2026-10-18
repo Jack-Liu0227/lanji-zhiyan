@@ -26,7 +26,8 @@ def migrate(db):
     db.db.execute("""CREATE TABLE IF NOT EXISTS team_sessions (
       id TEXT PRIMARY KEY, team_id TEXT NOT NULL, title TEXT NOT NULL,
       active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
-    db.db.execute("INSERT OR IGNORE INTO chats (id,title,out_dir,created_at,updated_at) SELECT id,name,'',created_at,updated_at FROM teams")
+    # 老迁移（teams → chats 复制）已删：它每次开库都跑，把固定团队「论文精读/论文写作」
+    # 反复塞回智研管家的对话列表，删了下次开库又回来。团队现在有独立的 team_sessions。
     for p in db.providers():
         adopted = {r["model"] for r in db.db.execute("SELECT model FROM model_profiles WHERE provider_id=?", (p["id"],))}
         if adopted != set(p["models"]):
@@ -203,7 +204,7 @@ def route(method, path, body, query, db):
         tid = b.get("id")
         if not str(b.get("name") or "").strip():
             raise ValueError("团队名称不能为空")
-        t = db.team_update(tid, name=b["name"]) if tid else db.team_add(b["name"], "custom")
+        t = db.team_update(tid, name=b["name"]) if tid else db.team_add(b["name"], "custom", project_id=str(b.get("project") or ""))
         if not t:
             raise ValueError("团队不存在")
         db.db.execute("UPDATE teams SET description=? WHERE id=?", (str(b.get("description") or ""), t["id"]))

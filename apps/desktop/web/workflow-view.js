@@ -36,6 +36,12 @@ function ideaPanelHTML(active){
       </div>
       <p class="at-hint">Enter 发送 · Shift + Enter 换行 · 这个对话与当前项目绑定</p>
     </div>
+    <div class="wf-idea-out">
+      <p class="eyebrow">本步产出</p>
+      <h2>创新点判定</h2>
+      <p class="wf-out-path" id="iw-outpath">还没有产出 —— 先多轮问清约束，再说「出一版判定」</p>
+      <p class="hint">对话在右边「创新点审查助手」；判定结果会写进项目 out 目录。</p>
+    </div>
   </section>`;
 }
 /* ==== 确认大纲 / 论文撰写 / 稿件审查：三步共用一套「左 2/3 文件 + 右 1/3 agent」面板 ====
@@ -737,27 +743,179 @@ const PANELS = {
 };   // 有专门功能区的步骤；其余留白卡
 let wfStep=localStorage.getItem("rw-wf-step")||"idea";
 let wfMin=localStorage.getItem("rw-wf-min")==="1";
+let wfMsgs=[], wfEvents=[];   // 右栏「本步助手」的历史与事件
+
+/* ==== 三栏工作台：左十步 / 中展示区+确认交付 / 右本步助手 ==== */
+/* 每一步一个助手：emoji + 名字 + 一句话职责 + 聊天挂在哪个 scoped 端点 */
+const WF_AGENT = {
+  idea:    {emoji:"🔍", name:"创新点审查助手", sub:"多轮问清约束 → 出正式判定；对话只在这一步", api:"/api/idea",
+            ph:"说说你的创新点，或回答追问…", hint:"Enter 发送 · 说「出一版判定」→ 结论写进本步产出"},
+  search:  {emoji:"📚", name:"文献检索助手", sub:"检索式、筛选口径、入库都归它管", api:"/api/agent",
+            ph:"说检索式，或让我按目标改筛选…", hint:"Enter 发送 · 说「重跑检索」→ 结果刷新到左边"},
+  download:{emoji:"⬇️", name:"入库助手", sub:"下载队列、OA 直链、手动补全文", api:"/api/agent",
+            ph:"说下要下哪批 / 哪篇要手动补…", hint:"Enter 发送 · 说「继续下载」→ 队列接着跑"},
+  notes:   {emoji:"🌐", name:"翻译助手", sub:"翻译口径、术语表、双语对照", api:"/api/agent",
+            ph:"说翻译要求（保留排版 / 术语表 / 只译正文）…", hint:"Enter 发送 · 说「重译这段」→ 译文更新"},
+  outline: {emoji:"🗂", name:"框架助手", sub:"大标题 + 小标题 + 一句说明，定稿写进框架.md", api:"/api/outline",
+            ph:"说题目和目标 / 贴导师要求…", hint:"Enter 发送 · 说「更新框架」→ 左边立刻换新版"},
+  map:     {emoji:"🧩", name:"谱系助手", sub:"按大纲把精读结论挂成树，改完立刻重画", api:"/api/map",
+            ph:"说说怎么改，比如「按大纲建一版谱系图」…", hint:"Enter 发送 · 说「更新谱系」→ 画布立刻换新版"},
+  write:   {emoji:"✍️", name:"写作助手", sub:"按框架逐节写，缺数据写「待补」，不编数字", api:"/api/write",
+            ph:"说要求 / 让我写某一节…", hint:"Enter 发送 · 说「更新正文」→ 左边立刻换新版"},
+  review:  {emoji:"🧐", name:"审查助手", sub:"以审稿人视角挑问题，先说大思路", api:"/api/review",
+            ph:"说「审一遍」或问某处逻辑…", hint:"Enter 发送 · 说「更新正文」→ 左边立刻换新版"},
+  entrans: {emoji:"🌍", name:"中译英助手", sub:"学术口径中译英，术语统一", api:"/api/agent",
+            ph:"说目标期刊口径 / 要不要译图表标题…", hint:"Enter 发送 · 说「开始翻译」→ 译文落进产出"},
+  convert: {emoji:"🔄", name:"格式助手", sub:"转 docx / pdf / tex，样式跟模板走", api:"/api/agent",
+            ph:"说导出格式和模板…", hint:"Enter 发送 · 说「导出 docx」→ 文件落进产出"}
+};
+/* 这五步的面板本来就自带对话 —— 三栏页里对话统一收到右栏，面板里那份藏掉，避免两个聊天 */
+const WF_OWN_CHAT = new Set(["idea", "map", "outline", "write", "review"]);
+
+function wfAgentHTML(step){
+  const a = WF_AGENT[step] || WF_AGENT.idea;
+  const mdl = (S.active && (S.active.name || S.active.model)) || "未配置模型";
+  return `<header class="at-head"><div class="at-heading"><span class="wf-av">${a.emoji}</span>
+      <div><h1>${esc(a.name)}</h1><p>${esc(a.sub)}</p></div>
+      <span class="wf-mdl" title="这一步用的模型">${esc(mdl)}</span></div></header>
+    <div class="at-tabs">
+      <button class="at-tab on" data-wv="conversation">对话 <span id="wv-turns">0</span></button>
+      <button class="at-tab" data-wv="trajectory">轨迹 <span id="wv-calls">0</span></button></div>
+    <div class="at-msgs" id="wv-msgs" role="log" aria-label="${esc(a.name)}对话"></div>
+    <div class="at-dock">
+      <div class="at-panel">
+        <div class="st-box st-counts">
+          <div class="st-row"><span>对话轮数</span><b id="wv-st-turns">0</b></div>
+          <div class="st-row"><span>调用工具</span><b id="wv-st-calls">0</b></div>
+          <div class="st-row"><span>消耗 token</span><b id="wv-st-tok">0</b></div></div>
+        <div class="st-box"><p>工具名称</p><div class="st-log" id="wv-tools"></div></div>
+        <div class="st-box"><p>产出目录</p><div class="st-log" id="wv-outs"></div></div></div>
+      <div class="composer">
+        <textarea id="wv-ask" rows="1" placeholder="${esc(a.ph)}（Enter 发送，Shift+Enter 换行）"></textarea>
+        <div class="at-tools">
+          <div class="at-tools-l"><button class="icon-btn" id="wv-plus" title="把这台机器上的文件以路径形式附上">＋</button></div>
+          <div class="at-tools-r"><span class="at-sel" title="本步助手署名">🤖 ${esc(a.name.replace("助手", ""))}</span>
+            <button class="send-btn" id="wv-send" title="发送" aria-label="发送">↑</button></div></div></div>
+      <p class="at-hint">${esc(a.hint)}</p></div>`;
+}
+
+async function wfAgentPaint(m, step){
+  const host = m.querySelector("#wfAgent"); if(!host) return;
+  host.innerHTML = wfAgentHTML(step);
+  const a = WF_AGENT[step] || WF_AGENT.idea;
+  const box = $("wv-msgs"); if(!box) return;
+  wfMsgs = []; wfEvents = [];
+  try{
+    const d = await api(`/api/step/messages?id=${encodeURIComponent(curTask)}&step=${encodeURIComponent(step)}`);
+    wfMsgs = d.messages || [];
+  }catch(e){}
+  wfEvents = wfMsgs.flatMap(mv => mv.events || []);
+  wfPaintMsgs(step);
+  wfPaintStats();
+  const tabs = host.querySelectorAll("[data-wv]");
+  tabs.forEach(b => b.onclick = ()=>{ wfView = b.dataset.wv; tabs.forEach(x=>x.classList.toggle("on", x===b)); wfPaintMsgs(step); });
+  const ta = $("wv-ask"), send = $("wv-send");
+  send.onclick = ()=> wfSend(m, step);
+  ta.onkeydown = e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); wfSend(m, step); } };
+  ta.oninput = ()=>{ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,120)+"px"; };
+  const plus = $("wv-plus"); if(plus) plus.onclick = ()=>{ ta.value += (ta.value?"\n":"") + "（附件：把文件拖到这里或贴路径）"; ta.focus(); };
+}
+
+let wfView = "conversation";
+function wfPaintMsgs(step){
+  const box = $("wv-msgs"); if(!box) return;
+  if(wfView === "trajectory"){ box.innerHTML = ""; renderTrajectory(box, wfEvents); return; }
+  if(!wfMsgs.length){
+    const a = WF_AGENT[step] || WF_AGENT.idea;
+    box.innerHTML = `<div class="wf-empty"><span>${a.emoji}</span><b>这是「${esc(STAGE[step].slice(STAGE[step].indexOf(" ")+1))}」的助手</b>
+      <p>${esc(a.sub)}。在下面说一句就能开始，产出会出现在中间。</p></div>`;
+    return;
+  }
+  box.innerHTML = "";
+  wfMsgs.forEach(mv => appendOne(box, {type:mv.role, content:mv.content, events:mv.events, replay:true, at:mv.created_at}));
+  box.scrollTop = box.scrollHeight;
+}
+function wfPaintStats(){
+  const turns = wfMsgs.filter(x=>x.role==="user").length;
+  const calls = wfEvents.filter(e=>e.type==="tool_call");
+  const tok = wfEvents.filter(e=>e.type==="usage").reduce((n,e)=>n+(e.total||0),0);
+  const set = (id,v)=>{ const el=$(id); if(el) el.textContent = v; };
+  set("wv-turns", turns); set("wv-calls", calls.length);
+  set("wv-st-turns", turns); set("wv-st-calls", calls.length); set("wv-st-tok", tok.toLocaleString());
+  const log = (id, rows, empty)=>{ const el=$(id); if(!el) return;
+    el.innerHTML = rows.length ? rows.slice(-20).map(r=>`<div title="${esc(r)}">${esc(r)}</div>`).join("")
+                               : `<div class="none">${esc(empty)}</div>`;
+    el.scrollTop = el.scrollHeight; };
+  log("wv-tools", calls.map(e=>e.name), "还没有工具调用");
+  log("wv-outs", wfEvents.filter(e=>e.type==="tool_result"&&e.path).map(e=>e.path), "还没有产出");
+}
+async function wfSend(m, step){
+  const ta = $("wv-ask"), btn = $("wv-send"), box = $("wv-msgs");
+  const text = (ta.value||"").trim(); if(!text) return;
+  const a = WF_AGENT[step] || WF_AGENT.idea;
+  ta.value = ""; ta.style.height = "auto";
+  if(box.querySelector(".wf-empty")) box.innerHTML = "";
+  appendOne(box, {type:"user", content:text});
+  wfMsgs.push({role:"user", content:text, events:[]});
+  btn.disabled = true; btn.textContent = "■";
+  const evs = [];
+  try{
+    const res = await fetch(a.api, {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({task_id:curTask, message:text})});
+    if(!res.ok || !res.body) throw new Error("HTTP "+res.status);
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "", final = "";
+    for(;;){
+      const {value, done} = await reader.read(); if(done) break;
+      buf += dec.decode(value, {stream:true});
+      let i;
+      while((i = buf.indexOf("\n\n")) >= 0){
+        const chunk = buf.slice(0,i); buf = buf.slice(i+2);
+        const line = chunk.split("\n").find(l=>l.startsWith("data: ")); if(!line) continue;
+        let ev; try{ ev = JSON.parse(line.slice(6)); }catch{ continue; }
+        if(ev.type === "done"){ final = ev.content || ""; continue; }
+        appendOne(box, ev); evs.push(ev);
+      }
+    }
+    if(final){ appendOne(box, {type:"assistant", content:final}); evs.push({type:"content", content:final}); }
+  }catch(err){
+    appendOne(box, {type:"error", message:"发送失败：" + err.message});
+  }finally{
+    btn.disabled = false; btn.textContent = "↑";
+    wfMsgs.push({role:"assistant", content:"", events:evs});
+    wfEvents = wfEvents.concat(evs);
+    wfPaintStats();
+    box.scrollTop = box.scrollHeight;
+  }
+}
 
 function renderWorkflow(m){
-  m.style.padding = "";        // 清掉 Agent 页留下的 10px 内边距，让竖线的负边距对得上 .main 的 16px
+  m.style.padding = "";        // 清掉别的页面留下的内边距
+  const proj = (S.tasks||[]).find(t => t.id === curTask);
   m.innerHTML = needTask() || `
-    <div class="wf-head">
-      <span class="pill ok" title="绑定单个项目的专用 agent">Partner Agent</span>
-      <span class="hint">绑定《${esc((S.tasks||[]).find(t=>t.id===curTask)?.title||"当前项目")}》· 只在这个项目范围内工作；跨项目的事回首页 Agent（智研管家）</span>
-      <span style="flex:1"></span>
-      <button class="btn ghost" id="wfToLeader">回首页智研管家 →</button></div>
-    <div class="wf-page${wfMin?" min":""}">
-      <div class="wf-rail"><button class="wf-collapse" id="wf-collapse" title="${wfMin?"展开步骤条":"折叠步骤条"}">${wfMin?"›":"‹"}</button>${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}" title="${STAGE[s]}"><span class="wf-ico">${STAGE[s].split(" ")[0]}</span><span class="wf-lbl">${STAGE[s].slice(STAGE[s].indexOf(" ")+1)}</span></button>`).join("")}</div>
-      <div class="wf-body">${WF_ORDER.map(s=> PANELS[s] ? PANELS[s](s===wfStep)
-        : `<div class="card" id="panel-${s}"${s===wfStep?"":' style="display:none"'}><h3>${STAGE[s]}</h3><div id="out-${s}"></div></div>`).join("")}</div>
+    <div class="wf-page${wfMin?" min":""}" id="wfPage">
+      <aside class="wf-rail" id="wfRail">
+        <div class="wf-proj"><small>项目名</small><b>${esc(proj?proj.title:"未命名项目")}</b></div>
+        <button class="wf-fold" id="wf-collapse" title="${wfMin?"展开步骤":"折叠步骤"}">&lt; 折叠</button>
+        ${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}" title="${STAGE[s]}">
+            <span class="wf-ico">${STAGE[s].split(" ")[0]}</span><span class="wf-lbl">${STAGE[s].slice(STAGE[s].indexOf(" ")+1)}</span>
+            <span class="wf-dot"></span></button>`).join("")}
+      </aside>
+      <main class="wf-stage" id="wfStage">
+        <div class="wf-panels">${WF_ORDER.map(s=> PANELS[s] ? PANELS[s](s===wfStep)
+          : `<div class="card" id="panel-${s}"${s===wfStep?"":' style="display:none"'}><h3>${STAGE[s]}</h3><div id="out-${s}"></div></div>`).join("")}</div>
+        <div class="wf-foot">
+          <span class="hint" id="wfFootHint">确认后这一步锁定，下一步才能拿它当输入。</span>
+          <span style="flex:1"></span>
+          <button class="btn ghost" id="wfBack">退回上一步</button>
+          <button class="btn primary" id="wfDeliver">确认交付 →</button></div>
+      </main>
+      <aside class="wf-agent" id="wfAgent"></aside>
     </div>`;
   if(!curTask) return;
   const wfc = m.querySelector("#wf-collapse");
-  if(wfc) wfc.onclick=()=>{ wfMin=!wfMin; localStorage.setItem("rw-wf-min",wfMin?"1":"0"); renderWorkflow(m); };
-  m.querySelectorAll(".wf-step").forEach(b=>b.onclick=()=>{
-    wfStep=b.dataset.step; localStorage.setItem("rw-wf-step",wfStep);
-    m.querySelectorAll(".wf-step").forEach(x=>x.classList.toggle("on",x.dataset.step===wfStep));
-    WF_ORDER.forEach(s=>{ const p=$("panel-"+s); if(p) p.style.display=s===wfStep?"":"none"; });
+  if(wfc) wfc.onclick = ()=>{ wfMin=!wfMin; localStorage.setItem("rw-wf-min",wfMin?"1":"0"); renderWorkflow(m); };
+  const bindStep = ()=>{
     if(wfStep==="idea") iwBind(m);
     if(wfStep==="search") wsBind(m);
     if(wfStep==="download") dlBind(m);
@@ -766,17 +924,31 @@ function renderWorkflow(m){
     if(DOC_UI[wfStep]) docBind(wfStep, m);
     if(wfStep==="convert") cvBind();
     if(wfStep==="entrans") enBind();
+  };
+  m.querySelectorAll(".wf-step").forEach(b=>b.onclick=()=>{
+    wfStep = b.dataset.step; localStorage.setItem("rw-wf-step", wfStep);
+    m.querySelectorAll(".wf-step").forEach(x=>x.classList.toggle("on", x.dataset.step===wfStep));
+    WF_ORDER.forEach(s=>{ const p=$("panel-"+s); if(p) p.style.display = s===wfStep ? "" : "none"; });
+    bindStep(); wfAgentPaint(m, wfStep); wfPaintFoot();
   });
-  const wfL = $("wfToLeader"); if(wfL) wfL.onclick = ()=>openTab("agent");
-  if(wfStep==="idea") iwBind(m);
-  if(wfStep==="search") wsBind(m);
-  if(wfStep==="download") dlBind(m);
-  if(wfStep==="notes") trBind(m);
-  if(wfStep==="map") mpBind(m);
-  if(DOC_UI[wfStep]) docBind(wfStep, m);
-  if(wfStep==="convert") cvBind();
-  if(wfStep==="entrans") enBind();
+  const back = $("wfBack"); if(back) back.onclick = ()=>{
+    const i = WF_ORDER.indexOf(wfStep); if(i > 0) m.querySelector(`.wf-step[data-step="${WF_ORDER[i-1]}"]`)?.click();
+  };
+  const deliver = $("wfDeliver"); if(deliver) deliver.onclick = async ()=>{
+    deliver.disabled = true; const old = deliver.textContent; deliver.textContent = "确认中…";
+    try{ await api("/api/step/done", {task_id:curTask, step:wfStep}); }
+    catch(e){ alert("确认失败：" + e.message); }
+    finally{ deliver.disabled = false; deliver.textContent = old; await loadTaskState(); }
+  };
+  bindStep();
+  wfAgentPaint(m, wfStep);
+  wfPaintFoot();
   loadTaskState();
+}
+function wfPaintFoot(){
+  const a = WF_AGENT[wfStep];
+  const hint = $("wfFootHint");
+  if(hint && a) hint.textContent = `${STAGE[wfStep]}：产出由右边的「${a.name}」生成，看一眼没问题就确认交付。`;
 }
 function iwBind(m){
   const box=$("iw-msgs"); if(!box) return;
@@ -822,6 +994,7 @@ async function iwLoad(){
   try{
     const d = await api(`/api/idea/memory?id=${encodeURIComponent(curTask)}`);
     iwMsgs = d.short || []; iwOut = d.out || "";
+    const op = $("iw-outpath"); if(op) op.textContent = iwOut || "还没有产出 —— 先多轮问清约束，再说「出一版判定」";
     iwEvents = iwMsgs.flatMap(mv=>mv.events || []);
     iwStat = { turns: iwMsgs.filter(mv=>mv.role==="user").length,
                calls: iwEvents.filter(e=>e.type==="tool_call").length,
@@ -1138,6 +1311,13 @@ async function wsRun(){
 async function loadTaskState(){
   try{ const d=await api(`/api/task?id=${encodeURIComponent(curTask)}`);
     const sm=d.stage_map||{}; Object.keys(STAGE).forEach(s=>{ const el=$("st-"+s); if(el&&sm[s]) el.className="pill ok"; });
+    // 左栏十步：已完成的亮、没开始的暗、当前步主色
+    document.querySelectorAll(".wf-step[data-step]").forEach(b=>{
+      const s=b.dataset.step, st=sm[s];
+      b.classList.toggle("done", !!st && st!=="failed");
+      b.classList.toggle("todo", !st && s!==wfStep);
+      if(st==="failed") b.classList.add("fail");
+    });
   }catch(e){}
 }
 /* ---------------- 项目 ---------------- */

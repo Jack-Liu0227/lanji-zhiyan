@@ -309,6 +309,11 @@ TOOL_SPECS = [
     _schema("knowledge_query", "在本任务已入库的笔记与证据里做关键词检索。", {"query": {"type": "string"}}, ["query"]),
     _schema("team_board", "看团队看板：成员各自状态 + 最近派活与执行情况（谁在跑、谁完成了、失败原因）。",
             {"project": {"type": "string", "description": "项目名或 id；不填=当前项目"}}),
+    _schema("team_form", "为一个项目临时组队：说清为什么组、要交什么、拉哪几个助手（写名字），开一间加急办公室。"
+            "加急位最多 3 间，用完自动归还；先 team_board 看有哪些人可用。",
+            {"purpose": {"type": "string", "description": "这支队为什么组、要交什么"},
+             "members": {"type": "array", "items": {"type": "string"}, "description": "助手名字，2-4 个"},
+             "project": {"type": "string", "description": "项目名或 id；不填=当前项目"}}, ["purpose", "members"]),
     _schema("team_assign", "把一件事派给某个团队成员（Partner Agent）执行；先 team_board 看有哪些成员。",
             {"member": {"type": "string", "description": "成员名字（或 id）"},
              "prompt": {"type": "string", "description": "要它干什么，写清楚要什么产出"},

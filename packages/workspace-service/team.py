@@ -471,12 +471,12 @@ def chat_state(scope: str) -> dict[str, Any]:
 
 MAX_TEAMS, MAX_FIXED, MAX_TEMP = 5, 2, 3
 
-# 两个固定团队（常驻、不可解散）与它们的预置成员 —— 成员按「助手名字」找，找不到就跳过。
-#   论文精读：分块员 → 图表解读员 → 论文精读（读正文）
-#   论文写作：结构规划员 → 论文写作 → 论文审查（照十步里「确认大纲 / 文章撰写 / 稿件审查」那条线）
+# 每个项目都有一套常驻办公室（常驻=项目在它就在）。成员按「助手名字」找，找不到就跳过。
+#   文献抽取：检索 → 分块 → 读图表 → 抽数
+#   文件撰写：定大纲 → 写作 → 成篇 → 润色
 FIXED_TEAMS = [
-    ("论文精读", ["分块员", "图表解读员", "论文精读"]),
-    ("论文写作", ["结构规划员", "论文写作", "论文审查"]),
+    ("文献抽取", ["文献检索员", "分块员", "图表解读员", "数据抽取员"]),
+    ("文件撰写", ["结构规划员", "写作搭档", "论文写作", "语言润色"]),
 ]
 _PLACEHOLDER = re.compile(r"^团队\s*\d+$")      # 第一版播的空占位团队
 
@@ -507,65 +507,120 @@ def _seed_roster(tid: str) -> int:
     return n
 
 
-def ensure_defaults() -> list[dict[str, Any]]:
-    """保证两个固定团队在（幂等）：论文精读 / 论文写作，并预置成员。
-    老库里第一版播的空占位「团队 N」会被改名接手，多的转成「已收工」的机动（名额还回去，记录不删）。"""
+def ensure_defaults(project_id: str = "") -> list[dict[str, Any]]:
+    """保证这个项目有两间常驻办公室（幂等）。
+
+    老库里没绑项目的固定团队按顺序接手第一个打开的项目 —— 只改名字，成员和会话都留着；
+    没有可接手的新建一套并播种成员。播种只在「一个成员都没有」时做，用户删掉的人不会被加回来。
+    """
+    pid = (project_id or "").strip()
+    made: list[str] = []
     with workflow.WorkflowDB(_db_path()) as db:
+        ts = db.teams()
+        own = [x for x in ts if (x.get("project_id") or "") == pid]
+        orphans = [x for x in ts if not (x.get("project_id") or "") and x["kind"] == "fixed"]
         for name, _roster in FIXED_TEAMS:
-            ts = db.teams()
-            if any(x["name"] == name and x["kind"] == "fixed" for x in ts):
+            if any(x["name"] == name and x["kind"] == "fixed" for x in own):
                 continue
-            holder = next((x for x in ts if x["kind"] == "fixed" and _PLACEHOLDER.match(x["name"] or "")
-                           and not [m for m in db.team_members(x["id"]) if m["role"] == "member"]), None)
-            if holder:
-                db.team_update(holder["id"], name=name)
+            if orphans:
+                o = orphans.pop(0)
+                db.team_update(o["id"], project_id=pid, name=name)
+                own.append({**o, "project_id": pid, "name": name})
             else:
-                db.team_add(name, "fixed")
-        for x in db.teams():                    # 剩下的空占位 → 机动位（不删数据）
-            if x["kind"] == "fixed" and _PLACEHOLDER.match(x["name"] or "") \
+                made.append(db.team_add(name, "fixed", project_id=pid)["id"])
+        for x in db.teams():                    # 剩下没人接手的空占位 → 转成已收工的加急，把常驻位还回来
+            if not (x.get("project_id") or "") and x["kind"] == "fixed" and _PLACEHOLDER.match(x["name"] or "") \
                and not [m for m in db.team_members(x["id"]) if m["role"] == "member"]:
                 db.team_update(x["id"], kind="temp", status="done")
-        fixed_ids = [x["id"] for x in db.teams() if x["kind"] == "fixed"]
+        fixed_ids = [x["id"] for x in db.teams()
+                     if (x.get("project_id") or "") == pid and x["kind"] == "fixed"]
     for tid in fixed_ids:                       # 播种放在 DB 关掉之后（add_assistant 自己开会话）
         _seed_roster(tid)
     with workflow.WorkflowDB(_db_path()) as db:
-        return db.teams()
+        return [x for x in db.teams() if (x.get("project_id") or "") == pid]
 
 
-def teams() -> dict[str, Any]:
-    """团队清单（带成员数、成员各自的模型名）。"""
+def teams(project_id: str | None = None) -> dict[str, Any]:
+    """团队清单（带成员、成员各自的模型、Leader、最近 4 条流水）。给 project_id 就只看这个项目。"""
+    pid = (project_id or "").strip()
+    if pid:
+        ensure_defaults(pid)
     with workflow.WorkflowDB(_db_path()) as db:
-        ts = ensure_defaults()
+        ts = db.teams()
+        if pid:
+            ts = [x for x in ts if (x.get("project_id") or "") == pid]
+        avatars = {a["id"]: (a.get("avatar") or "") for a in db.assistants()}   # 成员专属 emoji
         out = []
         for x in ts:
-            ms = [m for m in db.team_members(x["id"]) if m["role"] == "member"]
-            for m in ms:
+            rows = db.team_members(x["id"])
+            for m in rows:
+                m["avatar"] = avatars.get(m.get("assistant_id") or "", "")
                 m["model"] = _member_model(db, m)
-            out.append({**x, "members": ms, "picks": len(ms)})
+            ms = [m for m in rows if m["role"] == "member"]
+            ev = [{"text": r["text"], "kind": r["kind"], "at": r["created_at"]}
+                  for r in db.db.execute("SELECT text,kind,created_at FROM team_events"
+                                         " WHERE task_id=? ORDER BY created_at DESC LIMIT 4", (x["id"],))]
+            out.append({**x, "members": ms, "leader": next((m for m in rows if m["role"] == "leader"), None),
+                        "picks": len(ms), "events": ev})
         return {"teams": out, "max": MAX_TEAMS, "max_fixed": MAX_FIXED, "max_temp": MAX_TEMP,
                 "fixed": len([x for x in out if x["kind"] == "fixed"]),
                 "temp": len([x for x in out if x["kind"] == "temp"])}
 
 
-def new_team(kind: str = "temp", name: str = "") -> dict[str, Any]:
-    """建团队。固定位 2 个（论文精读 / 论文写作，只改名不解散）、机动位 3 个；机动位满了会先把「已收工」的自动收掉（用完即释放）。"""
+def new_team(kind: str = "temp", name: str = "", project_id: str = "", purpose: str = "") -> dict[str, Any]:
+    """建团队。每个项目：常驻位 2 个（文献抽取 / 文件撰写，只改名不解散）、加急位 3 个
+    （加急位满了会先把「已收工」的自动收掉，用完即释放）。"""
+    pid = (project_id or "").strip()
     with workflow.WorkflowDB(_db_path()) as db:
-        ensure_defaults()
-        ts = db.teams()
+        ensure_defaults(pid)
+        ts = [x for x in db.teams() if (x.get("project_id") or "") == pid]
         if kind == "fixed":
             if len([x for x in ts if x["kind"] == "fixed"]) >= MAX_FIXED:
-                raise ValueError("固定团队只能有 %d 个" % MAX_FIXED)
+                raise ValueError("常驻办公室只能有 %d 间" % MAX_FIXED)
         else:
             temps = [x for x in ts if x["kind"] == "temp"]
             if len(temps) >= MAX_TEMP:
                 done = [x for x in temps if x["status"] == "done"]
                 if not done:
-                    raise ValueError("三个机动位都在用 —— 等它们跑完，或先解散一个")
-                db.team_delete(done[0]["id"])          # 用完的机动团队自动回收，腾出名额
-        if len(db.teams()) >= MAX_TEAMS:               # 兜底（正常走不到：上面两种位各卡了一道）
-            raise ValueError("最多 %d 个团队（%d 固定 + %d 机动）" % (MAX_TEAMS, MAX_FIXED, MAX_TEMP))
-        n = len([x for x in db.teams() if x["kind"] == kind]) + 1
-        return db.team_add(name.strip() or ("%s %d" % ("团队" if kind == "fixed" else "机动", n)), kind)
+                    raise ValueError("三个加急位都在用 —— 等它们跑完，或先散一间")
+                db.team_delete(done[0]["id"])          # 用完的加急团队自动回收，腾出名额
+                ts = [x for x in ts if x["id"] != done[0]["id"]]   # 名额按删后的算，不然下面那道兜底还会拦
+        if len(ts) >= MAX_TEAMS:                       # 兜底（正常走不到：上面两种位各卡了一道）
+            raise ValueError("最多 %d 间办公室（%d 常驻 + %d 加急）" % (MAX_TEAMS, MAX_FIXED, MAX_TEMP))
+        n = len([x for x in ts if x["kind"] == kind]) + 1
+        default = ("%s %d" % ("常驻" if kind == "fixed" else "加急", n))
+        return db.team_add((name or "").strip() or default, kind, project_id=pid, purpose=purpose)
+
+
+def form_team(project_id: str, purpose: str, members: list[str]) -> dict[str, Any]:
+    """智研管家组队：开一间加急办公室，把点到的助手按名字拉进来。"""
+    pid = (project_id or "").strip()
+    purpose = (purpose or "").strip()
+    if not pid:
+        raise ValueError("组队要指定项目")
+    if not purpose:
+        raise ValueError("先说清这支队为什么组、要交什么")
+    names = [str(n).strip() for n in (members or []) if str(n).strip()]
+    if not names:
+        raise ValueError("一个人都没点，组什么队")
+    t = new_team("temp", purpose[:24], pid, purpose)
+    with workflow.WorkflowDB(_db_path()) as db:
+        pool = {a["name"]: a for a in db.assistants() if a.get("enabled", 1)}
+    added, missing = [], []
+    for n in names:
+        a = pool.get(n)
+        if not a:
+            missing.append(n)
+            continue
+        try:
+            add_assistant(t["id"], a["id"])
+            added.append(n)
+        except Exception:
+            missing.append(n)
+    if not added:                                  # 一个人都没进来就别留空房间
+        dissolve(t["id"])
+        raise ValueError("这些助手都没找到：%s" % "、".join(missing))
+    return {**(_team_row(t["id"]) or t), "added": added, "missing": missing}
 
 
 def rename_team(tid: str, name: str) -> dict[str, Any]:

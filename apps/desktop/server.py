@@ -517,6 +517,9 @@ class Handler(BaseHTTPRequestHandler):
         )
         if not path.startswith(prefixes):
             return False
+        # 建 / 改名 / 解散团队走 do_POST 里那段（这里只有 <id>/members 这些），别被扩展路由吃掉
+        if method == "POST" and path.startswith("/api/teams/"):
+            return False
         try:
             with WorkflowDB(DB_PATH) as db:
                 for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync, reproduction_routes, v130_routes):
@@ -901,6 +904,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/chat":
                 with WorkflowDB(DB_PATH) as db:
                     return self._json({"messages": db.messages(q["id"][0])})
+            if path == "/api/step/messages":               # 三栏页：右栏「本步助手」的历史（按 scope 取）
+                with WorkflowDB(DB_PATH) as db:
+                    step = (q.get("step") or ["idea"])[0]
+                    return self._json({"step": step, "messages": db.messages(q["id"][0], step)})
             if path == "/api/doc/state":                  # 确认大纲 / 论文撰写 / 稿件审查 共用的「左边那份文件」
                 step = (q.get("step") or ["outline"])[0]
                 with WorkflowDB(DB_PATH) as db:
@@ -985,9 +992,9 @@ class Handler(BaseHTTPRequestHandler):
                     project = (q.get("project_id") or [""])[0]
                     row = db.db.execute("SELECT base_dir FROM research_tasks WHERE id=?", (project,)).fetchone()
                     return self._json(capabilities.settings_meta(db, str(row["base_dir"] or "") if row else ""))
-            if path == "/api/teams":                     # 团队清单（多团队：2 固定 + 3 机动）
+            if path == "/api/teams":                     # 团队清单（每项目 2 常驻 + 3 加急；不带 project 就是全部）
                 try:
-                    return self._json(team.teams())
+                    return self._json(team.teams((q.get("project") or [""])[0] or None))
                 except ValueError as exc:
                     return self._json({"error": str(exc), "teams": []}, 400)
             if path == "/api/team/chat":                 # 团队 v2：成员（从助手选）+ 群记录 + 接力状态
@@ -1224,7 +1231,8 @@ class Handler(BaseHTTPRequestHandler):
                     b = data or {}
                     try:
                         if path == "/api/teams/new":
-                            return self._json({"team": team.new_team(b.get("kind", "temp"), b.get("name", ""))})
+                            return self._json({"team": team.new_team(b.get("kind", "temp"), b.get("name", ""),
+                                                                    b.get("project", ""), b.get("purpose", ""))})
                         if path == "/api/teams/rename":
                             return self._json({"team": team.rename_team(b.get("id", ""), b.get("name", ""))})
                         if path == "/api/teams/dissolve":
@@ -1393,6 +1401,13 @@ class Handler(BaseHTTPRequestHandler):
                     cid = data.get("id", "")
                     db.clear_messages(cid)
                     return self._json(db.delete_chat(cid))
+                if path == "/api/step/done":                  # 三栏页「确认交付」：把这一步记成已完成
+                    tid = str(data.get("task_id") or "")
+                    step = str(data.get("step") or "")
+                    if not tid or step not in ("idea", "search", "download", "notes", "outline",
+                                               "map", "write", "review", "entrans", "convert"):
+                        return self._json({"error": "缺 task_id 或 step 不认识"}, 400)
+                    return self._json(db.log_step(tid, step, "done", str(data.get("summary") or "用户确认交付")[:200]))
                 if path == "/api/chat/bind":                  # 对话绑项目（'' = 解绑成随意对话）
                     b = data or {}
                     with WorkflowDB(DB_PATH) as db:

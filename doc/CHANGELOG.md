@@ -2,6 +2,57 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 待发 PR（本轮：科研台三栏改版 + 开场卡 + 两处修复）
+
+**已定稿的视觉**：科研台三栏方案（用户 2026-10-18 确认「就这版」）。未提交，攒在一起一次 PR。
+
+### 1. 科研台改三栏（定稿）
+
+左 172px（折叠后 52px）｜中 展示区 + 底部确认条｜右 404px 本步助手。
+
+- 左栏：顶部独立卡片＝浅灰小字「项目名」+ 项目名 17px 粗体（左侧 3px 主色渐变态）；下面 `< 折叠` 按钮（原 `‹` 图标废掉）；十步只留 emoji + 名称（**无序号**）。状态：已完成满亮 + 绿点、未开始 `.todo` 45% 透明、当前步主色底 + 左侧 3px 条。折叠用 `wf-page.min`（52px，只留 emoji）。
+- 中栏：原有 10 个面板不动，外面包一层 `.wf-stage` + `.wf-foot`（退回上一步 / 确认交付 →）。`确认交付` → `POST /api/step/done` → `log_step(done,"用户确认交付")`。
+- 右栏：`.wf-agent` 复用 `.at-*` 外壳 —— emoji 头像 + 助手名 + 一句职责 + 模型胶囊、`对话/轨迹` 带计数、消息区、三格统计（轮数/工具/token）+ 工具名/产出目录、composer（＋、🤖署名、↑）+ Enter 提示。历史走 `GET /api/step/messages?id=&step=`，发送走各步 scoped 端点（`/api/idea|map|outline|write|review`，其余 `/api/agent`）。
+- 自带对话的五步（idea / map / outline / write / review）：面板里那份 `.ol-right` / `.mp-right` / `#panel-idea > .at-*` 隐藏，对话统一收到右栏（同一 scope，历史不丢）。
+- 每步助手：🔍创新点审查助手 / 📚文献检索助手 / ⬇️入库助手 / 🌐翻译助手 / 🗂框架助手 / 🧩谱系助手 / ✍️写作助手 / 🧐审查助手 / 🌍中译英助手 / 🔄格式助手（表在 `workflow-view.js` 的 `WF_AGENT`）。
+- 顶部 `Partner Agent · 绑定《…》· 回首页智研管家 →` 整条删除（连同 `#wfToLeader`）。
+
+验证：CDP 实测十步逐个点开——每步只有 1 个可见面板、面板内旧对话不可见、右栏助手名对得上、无 JS 异常；`确认交付` 写入 `steps` 表；`/api/agent` 流式正常（ping 拿到 usage/tool_call/tool_result）。
+
+### 2. 开场卡改版（方案 A）
+
+- 原来那个药丸按钮（边框 + SVG 箭头）废掉，改成横排「进 入」行楷（`STXingkai`，系统自带；`document.fonts` 实测非回退字体）+ 笔锋线 + 朱印「研」+ `点击或按 Enter`。
+- **白边根因**：`.sp-stage` 旋转 ±8° 时投影小于视口，露出 `#splash` 底色；`.sp-bg` 还有 12px 圆角。修法 = 新增 `.sp-bleed{inset:-10%}` 包住背景与雾层（8° 时远边缩 8.8%，10% 够），去掉圆角。
+- 云雾：三条 `radial-gradient + blur(38px) + screen`，共用 `spFogDrift`，19/27/34s + 双向 alternate 拉开相位。
+- 删掉声纳环 `.sp-btn-pulse`、SVG 箭头、`@keyframes spRadar`；冲击波位置对准新 CTA。
+
+### 3. 智研管家对话「删不掉」
+
+根因两处：`agent_settings.migrate()` 每次开库 `INSERT OR IGNORE INTO chats SELECT FROM teams`；`WorkflowDB.team_add()` 建团队顺手插一条同名 chats 行。两处都删（留注释）。空壳对话已清（备份在 `data/_backup/research.sqlite3.bak-20261018-124913`）。
+
+回归：新增 `tests/test_chat_migrate.py`（团队不生成对话 / 删掉的对话重启不复活），`test_team` 24 条仍全过。
+
+### 4. 项目空间两处
+
+- 全局搜索框原来两个 🔍（placeholder 里一个 + 左上浮层一个）→ 删 placeholder 里的，浮层 opacity 提到 1。
+- 笔记预览从 560/760 写死高度改为整页撑满：`.main.sp-fill` + `.sp-notes-layout`（`render()` 每次清 `sp-fill`，换页不串样式）。
+
+### 5. 团队页改「一层办公室」（定稿）
+
+- 团队从「研讨室聊天页」变成一层平面：左图纸、右人员栏。房间＝团队：每个项目两间**常驻**（文献抽取 / 文件撰写）+ 三间**加急**（智研管家为某件事拉人组建，交完归还）。点房间 → 右栏出人员结构（emoji＋名字＋职责＋模型＋状态）与最近流水。
+- 数据：`teams` 加 `project_id` / `purpose`（老库 ALTER 补列）。`FIXED_TEAMS` 改成 文献抽取 / 文件撰写，**按项目一套**；`ensure_defaults(pid)` 幂等播种，老库里没绑项目的固定团队由第一个打开的项目接手改名（成员与会话不动）。加急位满了先回收「已收工」。
+- 管家组队：新工具 `team_form(purpose, members, project)`；页面右上「＋ 组队」是手动版。
+- 桌子固定（2 列 × N 行，按房间尺寸算一次），小人六个部件。行为跟真实 `member.status`：`running/queued` 坐桌前敲键盘（显示器亮），其余溜达、累了回自己桌前坐；`prefers-reduced-motion` 时全员坐着。
+- 「修改编制」→ 原团队管理页（已按项目过滤）；「进入研讨室」→ 跳到科研台并把 `curTask` 绑到该项目。
+- 顺手修两处：`_extension_route` 把 POST `/api/teams/*` 吃掉（`do_POST` 那段成了死代码）；`research_core.summary()` 认不出团队 id，导致 `team._round` 抛 KeyError。
+- 回归：新增 `tests/test_team_project.py`（每项目一套 / 项目隔离 / 老库接手 / 组队 / 加急位上限回收）。
+- 验证：1440×900 隔离实例（真库副本）跑通 点房间换人栏 / 小人走动 / 修改编制 / 进入研讨室 / ＋组队，无 JS 异常、无元素越界。
+
+### 提交注意
+
+- `sketches/`（splash-redesign、wf-panel 各版稿 + landed-final3.png）是设计稿，**不入库**。
+- 工作区还有别人的未提交改动，PR 前先 `git status` 分开看。
+
 ## 待发 PR（chore/dead-code → main）
 
 本轮三项改动，一次 PR 讲清：

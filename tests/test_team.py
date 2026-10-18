@@ -166,21 +166,21 @@ class TeamsTest(unittest.TestCase):
 
     # ---------- 固定位 ----------
     def test_01_two_fixed_seeded_idempotent(self):
-        a = team.ensure_defaults()
+        a = team.ensure_defaults("p1")
         fixed = [x for x in a if x["kind"] == "fixed"]
-        self.assertEqual([x["name"] for x in fixed], ["论文精读", "论文写作"])
-        b = team.ensure_defaults()
+        self.assertEqual([x["name"] for x in fixed], ["文献抽取", "文件撰写"])
+        b = team.ensure_defaults("p1")
         self.assertEqual(len(b), 2)                       # 幂等，不重复播
-        self.assertEqual(team.teams()["fixed"], 2)
+        self.assertEqual(team.teams("p1")["fixed"], 2)
         with self.assertRaises(ValueError):
-            team.new_team("fixed")                        # 第 3 个固定位不给
+            team.new_team("fixed", "", "p1")              # 第 3 个常驻位不给
 
     def test_01b_fixed_teams_preseeded_roster(self):
         """两个固定团队各预置 3 个成员（按助手名字找），再调一次不会重复拉人。"""
-        team.ensure_defaults()
-        want = {"论文精读": ["分块员", "图表解读员", "论文精读"],
-                "论文写作": ["结构规划员", "论文写作", "论文审查"]}
-        for t in team.teams()["teams"]:
+        team.ensure_defaults("p1")
+        want = {"文献抽取": ["文献检索员", "分块员", "图表解读员", "数据抽取员"],
+                "文件撰写": ["结构规划员", "写作搭档", "论文写作", "语言润色"]}
+        for t in team.teams("p1")["teams"]:
             if t["kind"] != "fixed":
                 continue
             names = [m["name"] for m in team.picks(t["id"])]
@@ -188,9 +188,9 @@ class TeamsTest(unittest.TestCase):
             for m in team.picks(t["id"]):
                 self.assertTrue(m["assistant_id"])        # 每个成员都挂在助手上
                 self.assertGreaterEqual(m["color"], 1)    # Leader 占 0 号色
-        again = [m["name"] for t in team.teams()["teams"] if t["name"] == "论文精读"
+        again = [m["name"] for t in team.teams("p1")["teams"] if t["name"] == "文献抽取"
                  for m in team.picks(t["id"])]
-        self.assertEqual(again, want["论文精读"])          # 幂等：还是 3 个
+        self.assertEqual(again, want["文献抽取"])          # 幂等：不会重复拉人
 
     # ---------- 机动位 ----------
     def test_02_three_temp_then_full(self):
@@ -282,14 +282,14 @@ class TeamsTest(unittest.TestCase):
         for i in (1, 2, 3):
             with workflow.WorkflowDB(_p) as db:
                 db.team_add("团队 %d" % i, "fixed")
-        team.ensure_defaults()
-        ts = team.teams()["teams"]
+        team.ensure_defaults("p9")
+        ts = team.teams("p9")["teams"]
         fixed = [x["name"] for x in ts if x["kind"] == "fixed"]
-        self.assertEqual(sorted(fixed), ["论文写作", "论文精读"])
-        left = [x for x in ts if x["kind"] == "temp" and x["name"].startswith("团队")]
+        self.assertEqual(sorted(fixed), ["文件撰写", "文献抽取"])
+        left = [x for x in team.teams()["teams"] if x["kind"] == "temp" and x["name"].startswith("团队")]
         self.assertEqual(len(left), 1)                    # 多出来的那一个转成了机动位
         self.assertEqual(left[0]["status"], "done")       # 标已收工，等着被回收
-        self.assertEqual(team.teams()["fixed"], 2)
+        self.assertEqual(team.teams("p9")["fixed"], 2)
 
 
 # ---------------- 来自 test_team_chat.py ----------------

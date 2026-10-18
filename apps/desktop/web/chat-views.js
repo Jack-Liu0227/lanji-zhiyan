@@ -2,6 +2,7 @@
 function render(){
   renderSidebar(); renderTopbar(); renderTabs(); renderStatus();
   const r = route(); const m = $("main");
+  m.classList.remove("sp-fill", "tof-fill");
   if(!S.loaded) m.innerHTML = `<div class="muted">加载中…</div>`;
   else if(r==="agent") renderAgent(m);
   else if(r==="workflow") renderWorkflow(m);
