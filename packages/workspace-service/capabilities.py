@@ -40,6 +40,7 @@ def _ensure(db):
         "CREATE TABLE IF NOT EXISTS capability_mcp_tools (server TEXT PRIMARY KEY, config_hash TEXT NOT NULL, tools TEXT NOT NULL DEFAULT '[]')",
     ):
         conn.execute(sql)
+    conn.commit()
     return conn
 
 
@@ -201,9 +202,49 @@ def _unprotect(value: str) -> dict:
     return json.loads(securestore.unprotect(value))
 
 
+def default_mcp_config() -> dict:
+    import sys
+    zotero_script = str(Path(__file__).resolve().parents[1] / "connectors" / "zotero_mcp.py")
+    return {
+        "mcpServers": {
+            "zotero": {
+                "command": sys.executable or "python",
+                "args": [zotero_script],
+                "cwd": ".",
+                "transport": "stdio",
+                "enabled": True,
+                "description": "Zotero 本地题录检索、PDF直读与Web API写入"
+            }
+        }
+    }
+
+
+def ensure_zotero_mcp(db) -> dict:
+    cfg = _config(db)
+    servers = cfg.setdefault("mcpServers", {})
+    import sys
+    zotero_script = str(Path(__file__).resolve().parents[1] / "connectors" / "zotero_mcp.py")
+    servers["zotero"] = {
+        "command": sys.executable or "python",
+        "args": [zotero_script],
+        "cwd": ".",
+        "transport": "stdio",
+        "enabled": True,
+        "description": "Zotero 本地题录检索、PDF直读与Web API写入"
+    }
+    save_mcp(db, cfg)
+    return {"ok": True, "server": servers["zotero"]}
+
+
 def _config(db) -> dict:
     row = _ensure(db).execute("SELECT protected FROM capability_mcp_config WHERE id=1").fetchone()
-    return _unprotect(row[0]) if row else {"mcpServers": {}}
+    if row:
+        return _unprotect(row[0])
+    initial = default_mcp_config()
+    conn = _conn(db)
+    conn.execute("INSERT OR REPLACE INTO capability_mcp_config(id,protected) VALUES(1,?)", (_protect(initial),))
+    conn.commit()
+    return initial
 
 
 def _redact(value: Any, key: str = "") -> Any:

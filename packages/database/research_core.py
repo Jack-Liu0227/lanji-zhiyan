@@ -7,6 +7,7 @@ import sqlite3
 import urllib.error
 import urllib.request
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -65,6 +66,13 @@ CREATE TABLE IF NOT EXISTS rss_items (
   category TEXT NOT NULL DEFAULT '', fetched_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS rss_items_link ON rss_items(link);
+CREATE TABLE IF NOT EXISTS background_jobs (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'running', progress REAL NOT NULL DEFAULT 0,
+  last_event_id INTEGER NOT NULL DEFAULT 0, checkpoint TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status);
 """
 
 
@@ -88,6 +96,55 @@ def excerpt_matches(excerpt: str, page_text: str) -> bool:
     return compact(excerpt).lower() in compact(page_text).lower()
 
 
+@contextmanager
+def open_db_session(path: str | Path, timeout: float = 10.0):
+    """独立短期数据库连接上下文：自动 WAL / timeout 配置并在退出时强制释放句柄。"""
+    p = Path(path)
+    if str(p) != ":memory:":
+        p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(p, timeout=timeout)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+class ManagedConnection:
+    """统一数据库事务与安全连接上下文管理器。"""
+    def __init__(self, path: str | Path):
+        self.path = Path(path)
+
+    @contextmanager
+    def transaction(self, timeout: float = 10.0):
+        if str(self.path) != ":memory:":
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self.path, timeout=timeout)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 class ResearchDB:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -106,7 +163,26 @@ class ResearchDB:
         self.db.commit()
 
     def close(self) -> None:
-        self.db.close()
+        try:
+            self.db.close()
+        except Exception:
+            pass
+
+    def __enter__(self) -> "ResearchDB":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.close()
+
+    @contextmanager
+    def transaction(self):
+        """事务安全上下文：自动 commit / rollback。"""
+        try:
+            yield self.db
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
 
     def create_task(self, title: str, question: str = "", material_system: str = "", base_dir: str = "") -> str:
         if not title.strip():
@@ -433,6 +509,52 @@ class ResearchDB:
         vals.append(int(limit))
         rows = self.db.execute(f"SELECT * FROM audit_events{where} ORDER BY created_at DESC LIMIT ?", vals).fetchall()
         return [dict(r) for r in rows]
+
+    def create_background_job(self, job_id: str, task_id: str = "", status: str = "running",
+                              progress: float = 0.0, last_event_id: int = 0, checkpoint: dict[str, Any] | None = None) -> dict[str, Any]:
+        t = now()
+        cp = json.dumps(checkpoint or {}, ensure_ascii=False)
+        self.db.execute(
+            "INSERT OR REPLACE INTO background_jobs (id, task_id, status, progress, last_event_id, checkpoint, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (job_id, task_id, status, progress, last_event_id, cp, t, t)
+        )
+        self.db.commit()
+        return self.get_background_job(job_id) or {}
+
+    def get_background_job(self, job_id: str) -> dict[str, Any] | None:
+        row = self.db.execute("SELECT * FROM background_jobs WHERE id=?", (job_id,)).fetchone()
+        if not row:
+            return None
+        res = dict(row)
+        try:
+            res["checkpoint"] = json.loads(res.get("checkpoint") or "{}")
+        except Exception:
+            res["checkpoint"] = {}
+        return res
+
+    def update_background_job(self, job_id: str, status: str = "", progress: float | None = None,
+                              last_event_id: int | None = None, checkpoint: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        cur = self.get_background_job(job_id)
+        if not cur:
+            return None
+        sets, vals = ["updated_at=?"], [now()]
+        if status:
+            sets.append("status=?")
+            vals.append(status)
+        if progress is not None and progress >= 0:
+            sets.append("progress=?")
+            vals.append(float(progress))
+        if last_event_id is not None and last_event_id >= 0:
+            sets.append("last_event_id=?")
+            vals.append(int(last_event_id))
+        if checkpoint is not None:
+            sets.append("checkpoint=?")
+            vals.append(json.dumps(checkpoint, ensure_ascii=False))
+        vals.append(job_id)
+        self.db.execute(f"UPDATE background_jobs SET {', '.join(sets)} WHERE id=?", vals)
+        self.db.commit()
+        return self.get_background_job(job_id)
 
 
 

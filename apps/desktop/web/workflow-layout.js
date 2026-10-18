@@ -325,6 +325,7 @@
         const tid=result.task_id || result.id; if(!tid) throw new Error("服务端未返回项目 ID");
         curTask=tid; localStorage.setItem("rw-task",tid); tDir="";
         projectNotice="项目已创建"+(result.dirs?.length?"，已建立 "+result.dirs.length+" 个项目目录":"");
+        message.textContent=projectNotice;
         if(dialog) dialog.close(); await refreshState(false); render();
       }catch(error){ message.textContent="创建失败："+error.message; create.disabled=false; }
     };

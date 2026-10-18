@@ -126,7 +126,7 @@
     if (!S.loaded || !container) return;
     const expectedRoute = route(), epoch = ++viewEpoch;
     try {
-      await load();
+      if (!registry) await load();
       if (!container.isConnected || route() !== expectedRoute || epoch !== viewEpoch) return;
       container.innerHTML = `<div class="ag-head"><div><h3>模型与 Provider</h3><p class="hint">先选择 Provider 配置，再拉取或手动添加模型。已配置的模型可在助手和团队中选择。</p></div></div>
         <div class="card ag-row"><label style="flex:1">支持的 Provider <select class="control" id="ag-provider-select"><option value="">选择 Provider…</option>${registry.catalog.map(p => `<option value="${h(p.id)}">${h(p.name)}${p.supported ? "" : "（请改选兼容协议）"}</option>`).join("")}<option value="custom">自定义兼容接口</option></select></label><button class="btn btn-primary" id="ag-provider-add">配置</button></div>
@@ -269,13 +269,21 @@
       el("ag-team-new").onclick = () => teamEditor();
       el("ag-team-edit").onclick = () => teamEditor(t);
       if (el("ag-team-dissolve")) el("ag-team-dissolve").onclick = async () => { if (!confirm("解散这个机动团队？")) return; try { await api("/api/teams/dissolve",{id:teamScope}); teamScope = ""; render(); } catch(e) { alert(e.message); } };
-      el("ag-team-go-chat").onclick = () => { openTab("team"); render(); };
+      el("ag-team-go-chat").onclick = () => { window.__teamMode = "chat"; render(); };
       el("ag-member-new").onclick = () => memberEditor(teamScope);
       container.querySelectorAll("[data-ag-team]").forEach(b => b.onclick = () => { teamScope = b.dataset.agTeam; teamSession = ""; localStorage.setItem("rw-team-chat",teamScope); render(); });
       container.querySelectorAll("[data-ag-member]").forEach(b => b.onclick = () => memberEditor(teamScope,data.members.find(m => m.id === b.dataset.agMember)));
       el("ag-team-session").onchange = async e => { try { teamSession = e.target.value; await request("team-session",{team_id:teamScope,session_id:teamSession}); render(); } catch(e) { alert(e.message); } };
       el("ag-session-new").onclick = async () => { try { const r = await request("team-session",{team_id:teamScope,create:true}); teamSession = r.session.id; render(); } catch(e) { alert(e.message); } };
     } catch(e) { error(container,e); }
+  };
+
+  const originalRenderTeam = typeof renderTeam === "function" ? renderTeam : null;
+  renderTeam = function(container) {
+    if (window.__teamMode === "chat" && originalRenderTeam) {
+      return originalRenderTeam(container);
+    }
+    return renderTeamSettings(container);
   };
 
   const originalRenderAgent = renderAgent;

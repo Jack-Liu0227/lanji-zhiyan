@@ -54,6 +54,11 @@ class RunState:
                     db.record_run_event(self.run_id, eid, ev_type or "unknown", event)
                     if ev_type in ("done", "failed", "cancelled"):
                         db.update_async_task(self.run_id, status=self.status, progress=1.0)
+                        if hasattr(db, "update_background_job"):
+                            db.update_background_job(self.run_id, status=self.status, progress=1.0, last_event_id=eid)
+                    else:
+                        if hasattr(db, "update_background_job"):
+                            db.update_background_job(self.run_id, last_event_id=eid)
                 except Exception:
                     pass
 
@@ -71,6 +76,8 @@ class RunState:
             if db is not None:
                 try:
                     db.update_async_task(self.run_id, status="cancelled", cancel_requested=True)
+                    if hasattr(db, "update_background_job"):
+                        db.update_background_job(self.run_id, status="cancelled")
                 except Exception:
                     pass
         self.emit({"type": "cancelled", "message": "Run cancelled by user"}, db=db)
@@ -106,6 +113,8 @@ class RunManager:
             if db is not None:
                 try:
                     db.create_async_task("agent_run", owner_id=task_id, idempotency_key=idempotency_key, task_id=run_id)
+                    if hasattr(db, "create_background_job"):
+                        db.create_background_job(job_id=run_id, task_id=task_id, status="running", progress=0.0, last_event_id=0)
                 except Exception:
                     pass
             return state

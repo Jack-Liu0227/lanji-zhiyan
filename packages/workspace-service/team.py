@@ -50,7 +50,7 @@ def ensure_leader(task_id: str) -> dict[str, Any]:
     with workflow.WorkflowDB(_db_path()) as db:
         rows = [m for m in db.team_members(task_id) if m["role"] == "leader"]
         if rows:
-            if rows[0]["name"] != LEADER_NAME:      # 旧库里还叫「全局 Leader」→ 顺手改成新称呼
+            if rows[0]["name"] == "全局 Leader":      # 旧库里还叫「全局 Leader」→ 顺手改成新称呼
                 return db.team_member_update(rows[0]["id"], name=LEADER_NAME)
             return rows[0]
         return db.team_member_add(task_id, LEADER_NAME, "leader", "", LEADER_BRIEF)
@@ -167,22 +167,29 @@ def _run_one(row: dict[str, Any]) -> None:
         extra = role + "。只在这个项目范围内工作。\n" + (brief + "\n" if brief else "")
     outs: list[str] = []
 
+    active_db: list[Any] = []
+
     def emit(ev: dict[str, Any]) -> None:
         t = ev.get("type")
+        c_db = active_db[0] if active_db else None
         if t == "tool_call":
-            _ev(row, "tool", "调用 %s" % ev.get("name"))
+            _ev(row, "tool", "调用 %s" % ev.get("name"), db=c_db)
         elif t == "tool_result":
-            _ev(row, "tool", ("%s：%s" % (ev.get("name"), ev.get("summary"))) if ev.get("ok") else ("失败：" + str(ev.get("summary"))))
+            _ev(row, "tool", ("%s：%s" % (ev.get("name"), ev.get("summary"))) if ev.get("ok") else ("失败：" + str(ev.get("summary"))), db=c_db)
         elif t == "assistant" and ev.get("content"):
             outs.append(ev["content"])
-            _ev(row, "assistant", str(ev["content"])[:400])
+            _ev(row, "assistant", str(ev["content"])[:400], db=c_db)
         elif t == "usage":
-            _ev(row, "note", "tokens %s" % ev.get("total"))
+            _ev(row, "note", "tokens %s" % ev.get("total"), db=c_db)
 
     try:
         with workflow.WorkflowDB(_db_path()) as db:
-            out = workflow.run_agent(db, t_id, row["prompt"], emit=emit, publish=False,
-                                     extra_context=extra, max_steps=8, assistant_id=mem.get("assistant_id", ""), member=mem)
+            active_db.append(db)
+            try:
+                out = workflow.run_agent(db, t_id, row["prompt"], emit=emit, publish=False,
+                                         extra_context=extra, max_steps=8, assistant_id=mem.get("assistant_id", ""), member=mem)
+            finally:
+                active_db.clear()
         text = (out.get("reply") or "\n".join(outs) or "").strip()
         with workflow.WorkflowDB(_db_path()) as db:
             folder = db.pdir(t_id, "其余") / "团队"
@@ -203,10 +210,13 @@ def _run_one(row: dict[str, Any]) -> None:
             db.team_event_add(row["id"], t_id, "fail", "%s: %s" % (type(exc).__name__, exc))
 
 
-def _ev(row: dict[str, Any], kind: str, text: str) -> None:
+def _ev(row: dict[str, Any], kind: str, text: str, db: Any = None) -> None:
     try:
-        with workflow.WorkflowDB(_db_path()) as db:
+        if db is not None:
             db.team_event_add(row["id"], row["task_id"], kind, text)
+        else:
+            with workflow.WorkflowDB(_db_path()) as conn:
+                conn.team_event_add(row["id"], row["task_id"], kind, text)
     except Exception:
         pass
 

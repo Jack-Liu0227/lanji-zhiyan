@@ -24,7 +24,19 @@ CREATE TABLE IF NOT EXISTS audit_events (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS background_jobs (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'running',
+  progress REAL NOT NULL DEFAULT 0,
+  last_event_id INTEGER NOT NULL DEFAULT 0,
+  checkpoint TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_idempotency ON tasks(idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_run_events_run_id ON run_events(run_id, event_id);
 CREATE INDEX IF NOT EXISTS idx_audit_events_project ON audit_events(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status);
