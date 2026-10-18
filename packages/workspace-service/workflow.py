@@ -17,12 +17,9 @@ import os
 import fileguard        # 文件安全：子进程环境洗白 / 写前快照 / 打开白名单 / 审计
 import guards          # 出站脱敏 + 引用核验（见 guards.py）
 import paths            # 唯一路径来源（data / user / executors 都在 HOME 下）
-import pdfio            # PDF 读写（pypdf/pdfplumber，见 pdfio.py）
 import securestore      # 凭据保护（DPAPI，见 securestore.py）
 import re
-import shutil
 import socket
-import subprocess
 import time
 import urllib.error
 import urllib.parse

@@ -1,7 +1,6 @@
 """项目空间增强服务：聚合搜索与项目笔记选择/预览。"""
 from __future__ import annotations
 
-import re
 from typing import Any
 
 

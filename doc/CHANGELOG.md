@@ -2,6 +2,17 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 待发 PR（本轮：清废旧代码）
+
+按死代码审计（顶层定义全文只出现一次 / import 了没用 / CSS 类没人引）过了一遍，只删**证明确认没人用**的：
+
+- **Python**：删 5 个文件里 12 处未使用的 import（`space_service` re、`workflow` pdfio/shutil/subprocess、`workflow_converters` urllib、`workflow_documents` time、`workflow_stages` json/time/fileguard/pdfio）；删 `research_core.open_db_session`（v1.3.0 重构留下的，全文 0 引用）。
+- **前端**：删 `starmap-view.js` 里整套「知识库看板」渲染器（`renderLibrary` + 17 个 `kb*` 函数，282 行）——知识库 2026-10-17 已并入项目空间·笔记，全文 0 引用；该文件 303 → 21 行。星图仍在 `/kb.html` 里（未动）。
+- **CSS**：`app.css` 删 131 条规则（判据：选择器末级类名全在死类集合里），1697 → 1550 行。主要是 `.kb-*`（旧看板）、`.tc-*`/`.tm-*`/`.tr-*`（旧团队对话/翻译面板）、`.wf-head`（三栏改版后没了）、`.sp-acts`、`.skeleton-*`、`.q-av` 等。
+- 每一条都先 grep 过：动态拼类名（`"kb-" + x`）全仓 0 处，删除不会误伤。
+
+验证：`py_compile` 6 个 py + `node --check` 全部 js 通过；全量 241 项测试仍是那 3 红（`test_feishu` 1、`test_workflow_layout` 2，与 origin/main 基线同族）；真库副本实测 团队 / 科研台 / 项目空间 / 知识库 四页：无 JS 异常、无横向溢出，科研台三栏实测 左 172 / 右 404 / 10 步。
+
 ## 待发 PR（本轮：科研台三栏改版 + 开场卡 + 两处修复）
 
 **已定稿的视觉**：科研台三栏方案（用户 2026-10-18 确认「就这版」）。未提交，攒在一起一次 PR。
