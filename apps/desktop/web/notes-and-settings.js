@@ -537,8 +537,8 @@ function spBodyHTML(d){
 
   // ---------- 4. 笔记（左侧选择列表 + 右侧 Markdown 实时预览） ----------
   if(spTab === "notes"){
-    return `<div class="sp-notes-layout" style="display:grid;grid-template-columns:350px 1fr;gap:14px;margin-top:12px;min-height:560px;align-items:start">
-      <div class="card" style="margin:0;display:flex;flex-direction:column;height:100%;max-height:760px">
+    return `<div class="sp-notes-layout">
+      <div class="card">
         <div class="sch-head" style="margin-bottom:8px">
           <div><p class="inst-label">PROJECT NOTES</p><h3 style="margin:0">项目笔记</h3></div>
           <span class="pill" id="spNotesCount">0 篇</span>
@@ -558,7 +558,7 @@ function spBodyHTML(d){
           <div class="hint">正在加载项目笔记…</div>
         </div>
       </div>
-      <div class="card" id="spNotePreviewCard" style="margin:0;min-height:560px;max-height:760px;display:flex;flex-direction:column;overflow:hidden">
+      <div class="card" id="spNotePreviewCard">
         <div id="spNotePreviewEmpty" style="margin:auto;text-align:center;color:var(--muted);padding:40px">
           <div style="font-size:36px;margin-bottom:12px">📝</div>
           <h4 style="margin:0 0 6px">请选择一篇笔记进行预览</h4>
@@ -882,6 +882,7 @@ function spBind(d){
 
 async function renderSpace(m){
   m.style.padding = "";
+  m.classList.remove("sp-fill");
   if(!curTask){ m.innerHTML = needTask(); return; }
   if(spId !== curTask){ spId = curTask; spTab = "overview"; spActiveNoteId = null; spSelectedNoteIds.clear(); }
   m.innerHTML = `<div class="muted">正在读取项目…</div>`;
@@ -906,8 +907,8 @@ async function renderSpace(m){
       </div>
       <div class="sp-search-bar" style="margin-top:12px;position:relative">
         <div style="position:relative;display:flex;gap:8px;align-items:center">
-          <input id="spSearchInput" class="control" placeholder="🔍 全局搜索当前项目的文献、笔记、证据、待办任务…" style="flex:1;padding-left:32px">
-          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:0.6;pointer-events:none">🔍</span>
+          <input id="spSearchInput" class="control" placeholder="全局搜索当前项目的文献、笔记、证据、待办任务…" style="flex:1;padding-left:32px">
+          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:1;pointer-events:none">🔍</span>
           <button class="btn ghost" id="spSearchClear" style="display:none;padding:5px 10px;font-size:12px">清除</button>
         </div>
         <div id="spSearchResults" class="card" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:90;max-height:460px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,0.18);border:1px solid var(--accent);background:var(--panel)"></div>
@@ -921,6 +922,7 @@ async function renderSpace(m){
   const sl = $("spLeader"); if(sl) sl.onclick = ()=>openTab("agent");
   m.querySelectorAll("[data-sp-tab]").forEach(b=>b.onclick=()=>{ spTab = b.dataset.spTab; render(); });
   $("spBody").innerHTML = spBodyHTML(d);
+  if(spTab === "notes") m.classList.add("sp-fill");
   spBind(d);
 
   // 全局搜索交互

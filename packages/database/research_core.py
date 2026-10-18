@@ -379,6 +379,10 @@ class ResearchDB:
             # 通用 Agent 对话（不绑项目）也要能跑工具：给它一个合成的「任务」上下文
             c = self.db.execute("SELECT * FROM chats WHERE id=?", (task_id,)).fetchone()
             if not c:
+                t = self.db.execute("SELECT * FROM teams WHERE id=?", (task_id,)).fetchone()
+                if t:                                  # 团队自己也能当上下文（团队页的接力/组队按团队 id 走）
+                    c = {"id": t["id"], "title": t["name"], "created_at": t["created_at"], "updated_at": t["updated_at"]}
+            if not c:
                 raise KeyError(task_id)
             task = {"id": c["id"], "title": c["title"], "question": "", "material_system": "",
                     "stage": "chat", "created_at": c["created_at"], "updated_at": c["updated_at"]}

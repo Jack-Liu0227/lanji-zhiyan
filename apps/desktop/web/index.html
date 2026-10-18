@@ -15,8 +15,14 @@ document.title = "览籍智研 · v" + (new URLSearchParams(location.search).get
 <!-- 开始卡片：动态入场（山水背景 + 浮动主角 + 书法字 + 交互进入按钮） -->
 <div id="splash" class="pywebview-drag-region">
   <div class="sp-stage" id="spStage">
-    <!-- 纯净山水画卷底图（background.png） -->
-    <img src="/background.png" alt="背景" class="sp-layer sp-bg" draggable="false">
+    <!-- 画面层：背景 + 云雾，整体 overscan 10%，倾斜时永远盖住底（白边根因） -->
+    <div class="sp-bleed" id="spBleed">
+      <img src="/background.png" alt="背景" class="sp-layer sp-bg" draggable="false">
+      <div class="sp-fog sp-fog-a"></div>
+      <div class="sp-fog sp-fog-b"></div>
+      <div class="sp-fog sp-fog-c"></div>
+      <div class="sp-veil"></div>
+    </div>
 
     <!-- 科技微粒流动光效画布 -->
     <canvas id="spParticles" class="sp-particles"></canvas>
@@ -35,22 +41,17 @@ document.title = "览籍智研 · v" + (new URLSearchParams(location.search).get
       <img src="/star.png" alt="星标" class="sp-star" draggable="false">
     </div>
 
-    <!-- 动态进入交互按钮：声纳脉冲波 + 渐变边框 + 浮雕箭头 -->
+    <!-- 进入：横排行楷 + 笔锋 + 朱印 -->
     <div class="sp-btn-anchor" id="spBtnAnchor">
-      <div class="sp-btn-pulse"></div>
-      <div class="sp-btn-pulse sp-pulse-delay"></div>
       <button id="spGo" class="sp-go-btn" type="button" title="进入主页面 (Enter)" aria-label="进入">
-        <span class="sp-btn-content">
-          <span class="sp-btn-txt">进 入</span>
-          <svg class="sp-btn-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M5 12h14"></path>
-            <path d="m12 5 7 7-7 7"></path>
-          </svg>
-        </span>
+        <span class="sp-kai">进 入</span>
+        <span class="sp-brush"></span>
+        <span class="sp-seal" aria-hidden="true">研</span>
         <!-- 保持对原有自动化测试的兼容性 -->
         <span class="sp-in" style="display:none"><span class="sp-dot"></span><span class="sp-lb">Enter</span></span>
         <span class="sp-hv" style="display:none"><span>Enter</span></span>
       </button>
+      <div class="sp-go-hint">点击或按 Enter</div>
     </div>
 
     <!-- 瞬间跃迁冲击波 -->
@@ -164,6 +165,7 @@ document.title = "览籍智研 · v" + (new URLSearchParams(location.search).get
 <script src="/vendor/katex/katex.min.js"></script>
 <script src="/app-core.js"></script>
 <script src="/chat-views.js"></script>
+<script src="/team-office.js"></script>
 <script src="/workflow-view.js"></script>
 <script src="/mail-view.js"></script>
 <script src="/starmap-view.js"></script>
