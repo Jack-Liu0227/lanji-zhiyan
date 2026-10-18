@@ -96,29 +96,6 @@ def excerpt_matches(excerpt: str, page_text: str) -> bool:
     return compact(excerpt).lower() in compact(page_text).lower()
 
 
-@contextmanager
-def open_db_session(path: str | Path, timeout: float = 10.0):
-    """独立短期数据库连接上下文：自动 WAL / timeout 配置并在退出时强制释放句柄。"""
-    p = Path(path)
-    if str(p) != ":memory:":
-        p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(p, timeout=timeout)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
 class ManagedConnection:
     """统一数据库事务与安全连接上下文管理器。"""
     def __init__(self, path: str | Path):

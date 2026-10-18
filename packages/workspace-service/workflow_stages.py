@@ -2,16 +2,12 @@
 """七步工作流阶段逻辑（创新点审查/检索入库/精读/知识库笔记/撰写审查）模块。"""
 from __future__ import annotations
 
-import json
 import re
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
-import fileguard
 import paths
-import pdfio
 
 PAPERS = paths.PAPERS
 NOTES = paths.NOTES
