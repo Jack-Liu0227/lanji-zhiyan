@@ -73,6 +73,28 @@ def get(db, asset_id: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def find_by_metadata(db, *, project_id: str = "", kind: str = "", key: str,
+                     value: Any) -> list[dict[str, Any]]:
+    """Find assets by a small legacy identifier stored in metadata JSON."""
+    conn = _conn(db)
+    clauses, args = ["1=1"], []
+    if project_id:
+        clauses.append("project_id=?")
+        args.append(project_id)
+    if kind:
+        clauses.append("kind=?")
+        args.append(kind)
+    rows = conn.execute("SELECT * FROM assets WHERE " + " AND ".join(clauses) +
+                        " ORDER BY updated_at DESC", args).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        metadata = _metadata(item.get("metadata"))
+        if str(metadata.get(key, "")) == str(value):
+            out.append(item)
+    return out
+
+
 def list_assets(db, project_id: str = "", kind: str = "", limit: int = 200) -> list[dict[str, Any]]:
     conn = _conn(db)
     clauses, args = ["1=1"], []
@@ -312,6 +334,9 @@ def rebuild_project_index(db, project_id: str, *, include_files: bool = True) ->
                                body=str(row.get("markdown") or ""),
                                metadata={"paper_id": row.get("paper_id") or "", "table": "notes"},
                                uri_prefix="notes")
+        if paper_assets.get(row.get("paper_id")):
+            link(db, asset["id"], "derived_from", paper_assets[row["paper_id"]],
+                 {"paper_id": row["paper_id"]})
         counts["notes"] += 1
 
     for note in conn.execute("SELECT * FROM md_notes WHERE task_id=?", (project_id,)).fetchall():
@@ -321,6 +346,9 @@ def rebuild_project_index(db, project_id: str, *, include_files: bool = True) ->
                                body=str(row.get("content") or ""),
                                metadata={"paper_id": row.get("paper_id") or "", "table": "md_notes"},
                                uri_prefix="md_notes")
+        if paper_assets.get(row.get("paper_id")):
+            link(db, asset["id"], "derived_from", paper_assets[row["paper_id"]],
+                 {"paper_id": row["paper_id"]})
         counts["notes"] += 1
 
     if include_files:

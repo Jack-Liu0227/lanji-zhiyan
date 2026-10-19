@@ -412,8 +412,30 @@ class WorkflowDB(ResearchDB):
         asset_service.register_file(self, path, project_id=note["task_id"], kind="note",
                                     title=note["title"], source="md_notes", body=note["content"],
                                     metadata={"paper_id": note["paper_id"], "legacy_id": nid})
+        self._link_note_paper_asset(note["task_id"], note["paper_id"], path)
         note["canonical_path"] = str(path)
         return note
+
+    def _link_note_paper_asset(self, task_id: str, paper_id: str, note_path: str | Path) -> None:
+        """Keep the canonical note -> paper edge in sync with legacy bindings."""
+        import asset_service
+        note_row = self.db.execute(
+            "SELECT id FROM assets WHERE canonical_uri=?", (str(Path(note_path).resolve()),)
+        ).fetchone()
+        if not note_row:
+            return
+        self.db.execute("DELETE FROM asset_relations WHERE from_asset_id=? AND relation='derived_from'",
+                        (note_row["id"],))
+        if not paper_id:
+            self.db.commit()
+            return
+        papers = asset_service.find_by_metadata(self, project_id=task_id, kind="paper",
+                                                key="paper_id", value=paper_id)
+        if papers:
+            asset_service.link(self, note_row["id"], "derived_from", papers[0]["id"],
+                               {"paper_id": paper_id})
+        else:
+            self.db.commit()
 
     def delete_md_note(self, nid: str) -> None:
         self.db.execute("DELETE FROM md_notes WHERE id=?", (nid,))
@@ -1246,6 +1268,7 @@ class WorkflowDB(ResearchDB):
         asset_service.register_file(self, path, project_id=task_id, kind="note",
                                     title=title.strip() or "未命名笔记", source="workflow", body=markdown,
                                     metadata={"paper_id": paper_id or "", "legacy_id": nid})
+        self._link_note_paper_asset(task_id, paper_id or "", path)
         out = self.note(nid)
         out["canonical_path"] = str(path)
         return out

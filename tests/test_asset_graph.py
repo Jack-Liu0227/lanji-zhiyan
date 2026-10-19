@@ -56,6 +56,24 @@ class AssetGraphTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in hits], [a["id"]])
         self.assertEqual(asset_service.relations(self.db, b["id"])[0]["to_asset_id"], a["id"])
 
+    def test_note_paper_binding_creates_asset_edge(self):
+        paper = asset_service.register(
+            self.db, project_id=self.project, kind="paper", title="论文",
+            canonical_uri="db://paper/p1", storage="sqlite", body="source",
+            metadata={"paper_id": "p1"})
+        self.db.add_note(self.project, "精读笔记", "结论", "p1")
+        note_asset = asset_service.list_assets(self.db, self.project, "note")[0]
+        relations = asset_service.relations(self.db, note_asset["id"])
+        self.assertEqual(relations[0]["to_asset_id"], paper["id"])
+        self.assertEqual(relations[0]["relation"], "derived_from")
+
+        editable = self.db.save_md_note("", "编辑笔记", "正文", self.project, "p1")
+        editable_asset = next(item for item in asset_service.list_assets(self.db, self.project, "note")
+                              if item["canonical_uri"].endswith(editable["id"] + ".md"))
+        self.assertEqual(asset_service.relations(self.db, editable_asset["id"])[0]["to_asset_id"], paper["id"])
+        self.db.save_md_note(editable["id"], "编辑笔记", "解绑", None, "")
+        self.assertEqual(asset_service.relations(self.db, editable_asset["id"]), [])
+
     def test_workflow_run_idempotency_and_node(self):
         first = run_service.start(self.db, self.project, "paper_read", idempotency_key="paper-1")
         again = run_service.start(self.db, self.project, "paper_read", idempotency_key="paper-1")
