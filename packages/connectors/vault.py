@@ -251,6 +251,7 @@ def open_in_obsidian(value: str, rel: str = "") -> dict:
 
 
 if __name__ == "__main__":       # 手跑自检：py -3.10 vault.py <vault 绝对路径>
+    import json
     import sys
 
     out = scan(sys.argv[1] if len(sys.argv) > 1 else "")

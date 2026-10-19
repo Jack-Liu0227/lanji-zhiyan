@@ -190,6 +190,7 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "") -> dict
     if fmt == "md":
         out.write_text(md, encoding="utf-8")
     elif fmt in ("docx", "html"):
+        from workflow_stages import stage_convert      # 反向 import 会成环，用时再拿
         stage_convert(db, task_id, md, fmt, safe)
         out = folder / f"{safe}.{fmt}"
     elif fmt == "latex":
@@ -348,6 +349,8 @@ def en_translate(profile: dict[str, Any], md: str, style: str = "formal") -> dic
         "公式、LaTeX、DOI、URL、数字、人名、机构名、[引用] 原样保留；"
         "术语用材料/计算领域的常用英文说法；不增删内容，不合并段落。"
     )
+
+    from workflow import chat                          # chat 住在 workflow.py，反向 import 会成环
 
     def one(piece: str) -> str:
         out = chat(profile, [{"role": "system", "content": sys_prompt},

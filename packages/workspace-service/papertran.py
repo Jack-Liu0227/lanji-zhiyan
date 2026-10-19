@@ -56,7 +56,6 @@ def pdf_path(db: Any, paper_id: str) -> Path | None:
 # ---------------- 元数据 ----------------
 def _crossref(doi: str, timeout: float = 12) -> dict[str, Any]:
     """按 DOI 反查 Crossref 补全题目/时间/关键词/作者（直连；代理关着也能用）。"""
-    env = {k: v for k, v in os.environ.items() if not k.lower().endswith("_proxy")}
     req = urllib.request.Request(f"https://api.crossref.org/works/{urllib.parse.quote(doi)}",
                                  headers={"User-Agent": "research-workbench/1.0 (mailto:local)"})
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))

@@ -2,7 +2,6 @@
 # 请求连路由都进不去（窗口按钮/上传就是栽在这上面）。
 # python -m unittest test_web_fetch -v
 from __future__ import annotations
-import os
 import pathlib
 import re
 import sys

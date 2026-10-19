@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import json
 import os
 
@@ -89,8 +90,7 @@ def encrypt_legacy_secrets(db: "WorkflowDB") -> dict[str, int]:
     return {"encrypted": fixed}
 
 from workflow_prompts import (
-    WORKFLOW_SCHEMA, IDEA_FALLBACK, READ_FALLBACK, READ_SYSTEM,
-    OUTLINE_TEMPLATE, AGENT_SYSTEM, _DELEGATE_SYSTEM, PONY_RULES, BUILTIN_ASSISTANTS,
+    WORKFLOW_SCHEMA, IDEA_FALLBACK, AGENT_SYSTEM, _DELEGATE_SYSTEM, BUILTIN_ASSISTANTS
 )
 
 # 内置 Provider 目录：从科研工作台内嵌的 pi-ai SDK 里导出（40 家），不手抄
@@ -224,39 +224,6 @@ PROJ_DIRS: list[tuple[str, str]] = [
     ("最终产物", "最终交付件：中文 Word(.docx)、LaTeX(.tex)、参考文献(.bib)、成稿 PDF(.pdf)、图片(PNG/SVG) 和画图代码(.py) 都放这里。"),
     ("其余", "工作流产生的其它杂项文件：中间态导出、脚本、临时数据等，不影响主流程。"),
 ]
-
-
-def make_project_tree(base: str | Path, task: dict[str, Any] | None = None) -> list[str]:
-    """在用户选的项目位置里建好固定子目录 + 每个目录一个 README，再写一个根 README 说明结构。"""
-    root = Path(str(base)).expanduser()
-    root.mkdir(parents=True, exist_ok=True)
-    old, new = root / "最终成品", root / "最终产物"
-    if old.is_dir() and not new.exists():
-        old.rename(new)                                    # 老项目的旧名目录改名，别留两份
-    made: list[str] = []
-    for name, desc in PROJ_DIRS:
-        d = root / name
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "README.md").write_text(f"# {name}\n\n{desc}\n", encoding="utf-8")
-        made.append(name)
-    (root / "对话" / datetime.now().strftime("%Y-%m-%d")).mkdir(parents=True, exist_ok=True)
-    t = task or {}
-    (root / "README.md").write_text("\n".join([
-        f"# {t.get('title') or root.name}",
-        "",
-        f"这个文件夹是「览籍智研」的一个项目位置：程序按用途把文件分到下面 {len(PROJ_DIRS)} 个子目录，",
-        "每个子目录里都有一份 README.md 说明该放什么。",
-        "",
-        "## 项目信息",
-        f"- 研究问题：{t.get('question') or '（未填）'}",
-        f"- 关键词 / 材料体系：{t.get('material_system') or '（未填）'}",
-        f"- 建立时间：{(t.get('created_at') or '')[:19]}",
-        "",
-        "## 目录结构",
-        *[f"- `{name}/` —— {desc.split('：')[0]}" for name, desc in PROJ_DIRS],
-        "",
-    ]), encoding="utf-8")
-    return made
 
 
 class WorkflowDB(ResearchDB):
@@ -1499,9 +1466,8 @@ def test_provider(base_url: str, api_key: str, model: str, timeout: int = 60) ->
 # ============================ 论文搜索（开放接口） ============================
 
 from workflow_search import (
-    _get, search_crossref, _oa_pdf, search_openalex, search_arxiv,
-    SOURCES, enrich_oa, lit_terms, lit_clusters, _openalex_works,
-    litgraph, search, make_project_tree, download_pdf, _GRAPH_CACHE,
+    SOURCES, _openalex_works,
+    litgraph, search, make_project_tree, download_pdf, _GRAPH_CACHE
 )
 
 # ============================ 七步工作流 ============================
@@ -1509,17 +1475,15 @@ from workflow_search import (
 from workflow_stages import (
     stage_idea, _relevant, stage_search, stage_download, stage_download_selected,
     stage_zotero_import, is_paper_pdf, deepread_state, deepread_stop, deepread_kick,
-    _deepread_worker, stage_read, stage_notes, stage_write, stage_review, stage_convert,
-    DeepreadStopped,
+    stage_read, stage_notes, stage_write, stage_review, stage_convert,
+    DeepreadStopped
 )
 
 
 from workflow_converters import (
-    _doc_dir, _doc_fallback, CITE_FILE, CITE_JSON, cite_paths, _cite_load,
-    cite_sync, cite_read, cite_add, md_to_tex, tex_escape, _xelatex,
-    conv_run, conv_files, conv_compile, conv_open, _safe_path,
-    EN_LIMIT, EN_PROMPT, en_chunks, en_translate, en_state, en_run, compose_draft,
-    CONV_FORMATS,
+    cite_sync, cite_read, cite_add, conv_run, conv_files, conv_compile, conv_open, _safe_path,
+    en_state, en_run, compose_draft,
+    CONV_FORMATS
 )
 
 
@@ -1533,8 +1497,8 @@ ACTION = {
 # ============================ Agent：把七步当工具调用 ============================
 
 from workflow_prompts import (
-    _schema, DELEGATE_TOOL, TOOL_SPECS, TOOL_NAMES, IDEA_TOOLS,
-    SKILL_ROOTS, skill_text,
+    TOOL_SPECS, IDEA_TOOLS,
+    skill_text
 )
 
 
@@ -1722,11 +1686,8 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
 
 
 from workflow_documents import (
-    DOC_STEPS, doc_path, doc_read, doc_write,
-    outline_read, outline_write, DRAFT_TEMPLATE,
-    doc_tools, map_tools, outline_system, map_system,
-    write_system, review_system, evidence_system, critic_system,
-    doc_seed, read_attachment, map_path, map_read, map_write, map_sources,
+    doc_path, doc_read, doc_write,
+    outline_read, outline_write, doc_tools, map_tools, doc_seed, read_attachment, map_path, map_read, map_write, map_sources
 )
 from workflow_runners import (
     run_idea, run_map, run_outline, run_write, run_review, _wants_draft,

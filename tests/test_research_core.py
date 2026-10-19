@@ -2,7 +2,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import pdfio
 from _pdf_fixture import write_text_pdf
 from research_core import ResearchDB
 

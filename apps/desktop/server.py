@@ -54,10 +54,9 @@ from run_manager import RunManager
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
-                      outline_read, outline_write, doc_read, doc_write, doc_seed, OUTLINE_TEMPLATE,
-                      run_map, map_read, map_write, map_sources,
-                      cite_read, cite_add, cite_sync, conv_files, conv_run, conv_compile, conv_open,
-                      en_state, en_run, CONV_FORMATS, _safe_path,
+                      outline_read, outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
+                      cite_read, cite_add, conv_files, conv_run, conv_compile, conv_open,
+                      en_state, en_run, _safe_path,
                       stage_download_selected, stage_zotero_import, test_provider,
                       deepread_kick, deepread_state, deepread_stop)
 

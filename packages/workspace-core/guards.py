@@ -88,7 +88,6 @@ def audit(draft: str, entries: list[dict], papers: list[dict], online: bool = Fa
     """逐条对账。返回 {"total","bad":[{code,where,what,msg}],"ok","inline"}。纯函数，不碰模型、不写文件。"""
     draft = draft or ""
     bad: list[dict] = []
-    lines = draft.split("\n")
 
     for m in INLINE.finditer(draft):                                        # A. 正文里混进行内引用
         ln = draft[:m.start()].count("\n") + 1

@@ -9,8 +9,9 @@ from typing import Any
 
 import fileguard
 import paths
+import pdfio
 from research_core import now
-from workflow_prompts import _schema, DELEGATE_TOOL, skill_text
+from workflow_prompts import OUTLINE_TEMPLATE, _schema, DELEGATE_TOOL, skill_text
 
 DATA, PAPERS, NOTES, OUT = paths.DATA, paths.PAPERS, paths.NOTES, paths.OUT
 
@@ -207,8 +208,10 @@ def read_attachment(path: str, chars: int = 8000) -> dict[str, Any]:
         raise ValueError(f"只读 data/ 与项目目录里的文件：{p}")
     cap = max(500, min(int(chars or 8000), READ_MAX))
     if p.suffix.lower() == ".pdf":
-
         text = pdfio.text(p)
+    else:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    return {"path": str(p), "chars": len(text), "text": text[:cap], "truncated": len(text) > cap}
 
 
 
@@ -413,7 +416,6 @@ for _lst in (EVIDENCE_TOOLS, CRITIC_TOOLS):
 
 def evidence_system(db: "WorkflowDB", task_id: str) -> str:
     """素材官（后台 agent）：只出素材简报，不写正文、不落盘、不登记台账。"""
-    task = db.summary(task_id)["task"]
     out = doc_read(db, task_id, "outline")
     return f"""你是「览籍智研」里「文章撰写」这一步的**素材官**（后台 agent，用户看不到你的对话，只看到进度）。你在为一篇论文的正文准备**可用素材**。
 
@@ -436,7 +438,6 @@ def evidence_system(db: "WorkflowDB", task_id: str) -> str:
 def critic_system(db: "WorkflowDB", task_id: str, brief: str) -> str:
     """审查 agent（后台）：只挑能在正文里直接改掉的硬伤，输出可执行修改指令；不落盘。"""
     from workflow_converters import cite_sync
-    task = db.summary(task_id)["task"]
     out = doc_read(db, task_id, "outline")
     cur = doc_read(db, task_id, "write")
     cite = cite_sync(db, task_id)

@@ -35,7 +35,6 @@ a{color:var(--accent)}
 .as-toggle.off{background:var(--panel2);border-color:var(--line);color:var(--muted)}
 .as-toggle .as-knob{width:8px;height:8px;border-radius:50%;background:var(--muted);transition:background .18s}
 .as-toggle.on .as-knob{background:var(--ok);box-shadow:0 0 0 2px color-mix(in srgb,var(--ok) 35%,transparent)}
-.as-dot.on{background:var(--ok)}
 .as-form{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;margin-top:8px}
 .as-form .field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
 .as-card + .as-card{}
@@ -55,8 +54,6 @@ a{color:var(--accent)}
 .nav-item:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
 .nav-item.active{background:color-mix(in srgb,var(--accent) 20%,transparent);box-shadow:inset 2px 0 0 var(--accent);font-weight:600}
 .nav-ico{width:20px;flex:none;text-align:center;font-size:15px;line-height:1;font-family:"Segoe UI Emoji","Segoe UI Symbol",var(--app-font,inherit)}
-.sidebar-group>.nav-item{color:var(--muted);font-size:12.5px}
-.chev.open{transform:rotate(180deg)}
 .sidebar-foot{border-top:1px solid var(--line);padding:8px}
 .online{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);padding:6px 10px}
 .dot{width:6px;height:6px;border-radius:50%;background:var(--ok)}
@@ -212,7 +209,6 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .msg-meta{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:10px}
 .msg-meta strong{color:var(--fg);font-weight:700}
 .msg-ava{display:grid;width:20px;height:20px;place-items:center;border-radius:6px;background:var(--panel2);font-size:11px}
-.q-av img{width:100%;height:100%;display:block;object-fit:cover;border-radius:inherit}
 .msg-chip{border-radius:999px;background:var(--panel2);padding:1px 7px;font-size:9px}
 .msg-err{border:1px solid color-mix(in srgb,var(--err) 30%,var(--line));border-radius:10px;background:color-mix(in srgb,var(--err) 10%,transparent);padding:10px 12px;color:var(--err);font-size:12px}
 .tool-card{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;background:var(--panel);font-size:12px}
@@ -240,7 +236,6 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .st-log .dir{color:var(--accent)}
 .at-outbtn{max-width:min(46vw,420px);overflow:hidden}
 .at-outbtn span{max-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.at-live.on{color:var(--ok)}
 
 .composer{position:relative;margin-top:12px;border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
 .composer.drop-on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
@@ -283,9 +278,6 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .proj-new{position:sticky;top:-16px;z-index:6}
 
 .pf{display:grid;grid-template-columns:118px 1fr;gap:10px;align-items:center;margin-bottom:10px}
-.pf.area{align-items:start}
-.pf .lb{background:var(--accent);color:var(--accent-ink);border-radius:8px;padding:9px 6px;text-align:center;font-weight:600;font-size:13px;line-height:1.35}
-.pf.area .lb{padding:13px 6px}
 /* 项目页 = 卡片托盘（方案 C）：一个项目一张卡，左侧 3px 色带按顺序轮换莫兰迪六色 */
 .pj-sec{background:none;border:0;box-shadow:none;padding:0}
 .proj-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
@@ -340,7 +332,6 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .sch-run .tm{font-size:11.5px;color:var(--muted)}
 .sch-run .det{flex-basis:100%;font-size:11.5px;color:var(--muted);margin-top:2px;overflow-wrap:anywhere}
 .sch-run .acts{margin-left:auto;display:flex;gap:6px}
-.wf-head .hint{font-size:12.5px}
 .sp-tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);margin-top:12px}
 .sp-tab{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);font:inherit;font-size:13px;padding:8px 12px;cursor:pointer;white-space:nowrap}
 .sp-tab:hover{color:var(--fg)}
@@ -353,8 +344,6 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .sp-gap{flex:1}
 .sp-hd2{display:flex;align-items:center;gap:10px}
 .sp-hd2 .hint{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-
-.kb-scope .btn.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
 .sp-grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .sp-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 @media (max-width:1180px){.sp-grid3{grid-template-columns:repeat(2,minmax(0,1fr))}.sp-grid2{grid-template-columns:1fr}}
@@ -409,8 +398,6 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .pf-actions .btn{background:var(--accent);color:var(--accent-ink);border:0;border-radius:999px;padding:8px 20px;font-size:13.5px;font-weight:600;cursor:pointer}
 .pf-actions .btn:hover{filter:brightness(1.08)}
 .proj-new{border-radius:14px}
-.proj-new .lb{border-radius:10px}
-
 
 /* ================= 日历页：四块卡片，上下 3:1，上排 2:1，下排 1:1（数值全走本项目的 --accent/--line/--muted/--err/--panel/--panel2） ================= */
 .cal-page{display:grid;grid-template-rows:3fr 1fr;gap:14px;height:100%;min-height:0}
@@ -450,7 +437,6 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .tc-chat-full{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
 
 .tc-chat-main{display:flex;flex-direction:column;min-width:0;min-height:0;position:relative}
-.tc-head-info b{font-size:15px;font-weight:700}
 .tc-tl{min-height:0;flex:1;overflow:auto;padding:16px 20px}
 .tc-msg{position:relative;display:flex;flex-direction:row;align-self:stretch;gap:12px;max-width:none;padding:0 0 16px}
 .tc-msg::before{content:"";position:absolute;left:15px;top:32px;bottom:0;width:1px;background:var(--line)}
@@ -476,13 +462,6 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .tc-composer textarea{width:100%;box-sizing:border-box;min-height:58px;max-height:180px;resize:vertical;font-size:13.5px;line-height:1.6}
 .tc-composer-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .tc-composer-actions .btn{flex:none;height:36px;padding:0 18px;background:var(--accent);color:var(--accent-ink);border:0;font-weight:700;border-radius:8px;cursor:pointer}
-.tc-prog i{display:block;height:100%;background:var(--accent);transition:width .3s}
-.tc-step .d{flex:none;width:7px;height:7px;border-radius:50%;background:var(--muted)}
-.tc-step.now .d{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 20%,transparent)}
-.tc-step.idle{opacity:.5}
-.tc-step b{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tc-step em{margin-left:auto;font-style:normal;font-size:10.5px;color:var(--muted)}
-.tc-kv b{color:var(--fg);font-weight:600}
 @media (max-width:1080px){.tc-panel{min-height:220px}}
 .hello-avatar{display:grid;width:48px;height:48px;flex:none;place-items:center;border-radius:50%;background:var(--panel2);border:1px solid var(--line);font-size:24px}
 .avatar-img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}
@@ -550,8 +529,6 @@ html[data-theme="light"] .quick-add .quick-time{color-scheme:light}
 .hidden{display:none}
 
 .hidden { display: none !important; }
-.field-inline > span { flex-shrink: 0; white-space: nowrap; }
-.field-inline .tb-input, .field-inline .tb-select { flex: 1; min-width: 120px; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;   /* 内容居中：inline-flex 默认是 flex-start，被拉宽的按键（三等分/定宽）文字会贴左（2026-10-12 他定的规矩：功能键一律居中） */
   padding: 8px 14px; border: 1px solid var(--line); background: var(--panel);
@@ -839,7 +816,6 @@ html[data-theme="light"] .quick-add .quick-time{color-scheme:light}
 .wf-empty b{display:block;margin:8px 0 4px;font-size:13px;color:var(--fg)}
 .wf-empty p{font-size:11.5px;line-height:1.65;margin:0}
 .steps{display:flex;flex-direction:column;gap:6px}
-.steprow .n{width:20px;height:20px;flex:none;border-radius:50%;background:var(--panel);border:1px solid var(--line);display:grid;place-items:center;font-size:11px;color:var(--muted)}
 
 /* ===== 论文搜索（照科研工作台 literature.tsx 的「联网检索」）===== */
 .ws{display:flex;flex-direction:column;height:100%;min-height:0;gap:10px;padding:14px 16px 0}   /* 上/左右留白，底部留给结果面板贴框 */
@@ -885,7 +861,6 @@ html[data-theme="light"] .quick-add .quick-time{color-scheme:light}
 .ws-foot{display:flex;flex:none;align-items:center;gap:12px;border-top:1px solid var(--line);background:var(--panel2);padding:7px 14px;font-size:11.5px;color:var(--muted)}
 .ws-foot .ws-pageinfo{margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap}
 .ws-foot #wsNote{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-.steprow.done .n{background:var(--accent);color:var(--accent-ink);border-color:transparent}
 .swatches{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .sw{display:inline-flex;align-items:center;gap:7px;padding:4px 10px 4px 5px;border-radius:999px;border:1px solid var(--line);background:var(--panel);cursor:pointer;font-size:12px;color:var(--muted)}
 .sw::before{content:"";width:18px;height:18px;border-radius:50%;background:var(--c,var(--accent));flex:none}
@@ -987,7 +962,6 @@ body.md-narrow .wctl button:hover { background: #eee; }
 .md-render img { max-width: 100%; }
 .md-render mark { background: #ffe58f; padding: 0 2px; }
 
-
 /* ---------------- 情报日报（RSS：筛选条 + 条目列表 + 来源管理） ---------------- */
 .intel .it-head{display:flex;align-items:center;gap:10px;margin:0 0 12px}
 .intel .it-head h3{margin:0}
@@ -1042,7 +1016,6 @@ body.md-narrow .wctl button:hover { background: #eee; }
   color:var(--fg);font:600 13px/1 system-ui,"Microsoft YaHei",sans-serif;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.28)}
 .tr-zen-exit:hover{border-color:var(--accent);color:var(--accent)}
 .tr-stage.zen .tr-zen-exit{display:flex}
-.tr-pane-tag{position:absolute;left:10px;top:8px;z-index:6;background:color-mix(in srgb,var(--panel) 88%,transparent);border:1px solid var(--line);border-radius:999px;padding:1px 9px;font-size:11px;color:var(--muted)}
 .tr-scroll{position:absolute;inset:0;overflow:auto;display:flex;flex-direction:column;align-items:center;gap:12px;padding:30px 12px 16px;background:color-mix(in srgb,var(--bg) 70%,var(--panel2))}
 .tr-page{position:relative;background:#fff;box-shadow:0 3px 14px rgba(0,0,0,.28);flex:none}
 .tr-page canvas{display:block;width:100%;height:100%}
@@ -1059,7 +1032,6 @@ body.md-narrow .wctl button:hover { background: #eee; }
 .tr-colors i{width:24px;height:24px;border-radius:50%;cursor:pointer;border:2px solid transparent}
 .tr-colors i.on{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 32%,transparent)}
 .tr-pen input[type=range]{width:100%;accent-color:var(--accent)}
-.tr-foot .btn.active{border-color:var(--accent);color:var(--accent)}
 /* ---- 中译英：左上 ＋ / 右上 一键翻译，下面左英文右中文 ---- */
 .en{display:flex;flex-direction:column;height:100%;min-height:0;gap:10px}
 .en-bar{display:flex;align-items:center;gap:10px;flex:none;height:40px}
@@ -1233,9 +1205,7 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .sm-bar{display:flex;align-items:center;gap:12px;flex:none;height:auto;overflow:visible}
 .sm-bar b{font-size:14px}
 .sm-bar .hint{color:var(--muted);font-size:12px}
-.sm-pick select{background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--fg);padding:3px 6px;font-size:12px;height:28px;min-width:180px;max-width:300px}
 .sm-frame{flex:1;width:100%;border:1px solid var(--line);border-radius:12px;background:#05070f;min-height:0}
-
 
 /* ================= 团队 · 一层办公室（微立体 + 人员栏） =================
    房间是摆在桌面上的模型：1px 描边 + 2px 底厚 + 长投影；地面极淡点阵。

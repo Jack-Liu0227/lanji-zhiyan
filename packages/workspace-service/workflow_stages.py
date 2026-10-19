@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 import paths
+from workflow_prompts import READ_SYSTEM
+from workflow_search import download_pdf, enrich_oa, search
 
 PAPERS = paths.PAPERS
 NOTES = paths.NOTES
@@ -17,6 +19,7 @@ def _text(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", value or "")).strip()
 
 def stage_idea(db: WorkflowDB, task_id: str, idea: str) -> dict[str, Any]:
+    from workflow import chat_json
     task = db.summary(task_id)["task"]
     profile = db.active_model()
     out = chat_json(profile, [
@@ -276,6 +279,7 @@ def _deepread_worker(db_path: str, task_id: str) -> None:
 def stage_read(db: WorkflowDB, task_id: str, paper_id: str, per_page: int = 6000,
                should_stop: Any = None) -> dict[str, Any]:
     """逐页精读：把每页文本连同页码交给模型，要求中文要点 + 可引用原文。"""
+    from workflow import chat
     profile = db.active_model()
     paper = db.paper(paper_id)
     if paper["text_chars"] < 100:
@@ -332,6 +336,7 @@ def stage_notes(db: WorkflowDB, task_id: str, note_id: str, vault: str | None = 
 
 
 def stage_write(db: WorkflowDB, task_id: str, title: str = "", section: str = "引言") -> dict[str, Any]:
+    from workflow import chat
     profile = db.active_model()
     task = db.summary(task_id)["task"]
     notes = db.notes(task_id)
@@ -350,6 +355,7 @@ def stage_write(db: WorkflowDB, task_id: str, title: str = "", section: str = "�
 
 
 def stage_review(db: WorkflowDB, task_id: str, draft: str) -> dict[str, Any]:
+    from workflow import chat_json
     profile = db.active_model()
     ev = [dict(r) for r in db.evidence(task_id)]
     ev_text = "\n".join(f"- {r['field']}: {r['value']}（{r['filename']} p.{r['page_no']}）" for r in ev[:60])

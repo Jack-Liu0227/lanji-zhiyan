@@ -2,6 +2,33 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 待发 PR（本轮：清废旧代码 pass 2 —— 死 import / 死 CSS / 死图 / 拆模块漏的 import）
+
+**判据不变：只删「全仓 0 引用」的；名字可能被字符串/反射拿的一律留着。**
+
+- **死 import**：10 条 import 语句、44 个名字（server 3、workflow 7 块 40 个、zotero_sync 1、tests 2）。
+  没用 `ruff --fix`：它按「本文件内未用」判，会把 workflow.py 里给别人转导出的
+  `from workflow_search import search, litgraph, …` 整段删掉，server.py 正是从 workflow import 这些，
+  一删就起不来。改用「本文件没用 + 没人 `from <本模块> import` 过 + 名字没在别处当字符串出现」三条一起判。
+- **死 CSS**：app.css 删 26 条规则（30 行，127241 → 122108 字符）。判据：一条规则的**每个选择器**都带死类名
+  （`.tc-step .d` 这种复合的算死）。注释一条没动。
+- **死图**：删 `background.png` / `logo_badge.png` / `title.png` / `star.png`（开场卡片删掉后全仓 0 引用，约 3.5MB）。
+- **拆模块漏的 import（真 bug，不是清理）**：下面这些名字以前是 NameError，走到那一步才炸：
+  `workflow_stages` 缺 search / enrich_oa / download_pdf / READ_SYSTEM / chat / chat_json（论文搜索、下载、精读、写作、审查五步全中）；
+  `workflow_documents` 缺 pdfio、OUTLINE_TEMPLATE（读 PDF 附件、大纲起稿）；`workflow_converters` 缺 chat、stage_convert（中译英、转 docx/html）；
+  `schedule` 缺 re（定时任务文件名）；`workflow` 缺 hashlib（审计事件静默丢失）。`chat/chat_json` 在 workflow.py 里，
+  反向 import 会成环 → 改成函数内 import。
+- **顺手补的**：`read_attachment` 被截断过（`if .pdf:` 之后没有 else 也没有 return，任何附件都返回 None）→ 补回文本分支 + 按 chars 截断；
+  workflow.py 里 `make_project_tree` 有份与 workflow_search 一模一样的副本、被后面的 import 遮蔽 → 删副本（31 行）。
+- **新增守卫** `tests/test_module_wiring.py`（3 项）：跨模块名字必须解析得到、read_attachment 能读能截断。
+
+**验**：`unittest discover` 244 → 247 项，仍是既有的 test_feishu 1 红 + test_workflow_layout 2 红（后两条单跑/全跑结果会变，
+与 origin/main 基线同族，今天 stash 前后都复现）；`py_compile` 全过；`capabilities` 工具数 31 → 31（没掉功能）；
+server.py 能 import、真起 8765 跑通；浏览器实测 app.css 解析出 1211 条规则、侧栏 232px、深色底、聊天区正常。
+
+**没动（下一步可选）**：20 来个服务端路由在 JS 里 0 引用（`/api/vault/*`、`/api/team/member*`、`/api/models/{add,delete,test}`、
+`/api/notes`、`/api/chat/clear` 等）—— 学长那套 TS 前端有可能调它们，删前要先对一下，别自己这边清爽了、合并过去炸他那边。
+
 ## 待发 PR（本轮：聊天消息重复渲染修复 —— 用户 2026-10-19 报「问题和回答各显示两遍」）
 
 **根因（数据没坏，是前端多画了一遍）**：库里一条消息只有一份，重复来自回放与回声两条路径。
