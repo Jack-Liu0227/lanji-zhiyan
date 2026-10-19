@@ -330,7 +330,10 @@ TOOL_SPECS = [
     _schema("team_assign", "把一件事派给某个团队成员（Partner Agent）执行；先 team_board 看有哪些成员。",
             {"member": {"type": "string", "description": "成员名字（或 id）"},
              "prompt": {"type": "string", "description": "要它干什么，写清楚要什么产出"},
-             "project": {"type": "string", "description": "项目名或 id；不填=当前项目"}}, ["member", "prompt"]),
+             "project": {"type": "string", "description": "项目名或 id；不填=当前项目"},
+             "depends_on": {"type": "array", "items": {"type": "string"}, "description": "IDs of prerequisite team tasks"},
+             "output_contract": {"type": "object", "description": "Expected output shape"},
+             "reviewer_id": {"type": "string", "description": "Reviewer member ID"}}, ["member", "prompt"]),
 ]
 
 TOOL_NAMES = [t["function"]["name"] for t in TOOL_SPECS]

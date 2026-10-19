@@ -28,7 +28,7 @@ class MigrationsTest(unittest.TestCase):
 
         rows = self.conn.execute("SELECT version, checksum FROM schema_migrations ORDER BY version").fetchall()
         versions = [r[0] for r in rows]
-        self.assertEqual(versions, ["001_core_schema", "002_workflow_schema", "003_reliability_tables", "004_v130_features", "005_asset_graph_upgrade"])
+        self.assertEqual(versions, ["001_core_schema", "002_workflow_schema", "003_reliability_tables", "004_v130_features", "005_asset_graph_upgrade", "006_team_task_dag"])
 
         tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         self.assertIn("research_tasks", tables)

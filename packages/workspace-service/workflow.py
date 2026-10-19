@@ -657,10 +657,17 @@ class WorkflowDB(ResearchDB):
 
     def team_tasks(self, task_id: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
         if task_id:
-            rows = self.db.execute("SELECT * FROM team_tasks WHERE task_id=? ORDER BY created_at DESC LIMIT ?",
-                                   (task_id, limit)).fetchall()
+            if limit is None:
+                rows = self.db.execute("SELECT * FROM team_tasks WHERE task_id=? ORDER BY created_at DESC",
+                                       (task_id,)).fetchall()
+            else:
+                rows = self.db.execute("SELECT * FROM team_tasks WHERE task_id=? ORDER BY created_at DESC LIMIT ?",
+                                       (task_id, limit)).fetchall()
         else:
-            rows = self.db.execute("SELECT * FROM team_tasks ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+            if limit is None:
+                rows = self.db.execute("SELECT * FROM team_tasks ORDER BY created_at DESC").fetchall()
+            else:
+                rows = self.db.execute("SELECT * FROM team_tasks ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
 
     def team_task(self, tid: str) -> dict[str, Any] | None:
@@ -668,26 +675,39 @@ class WorkflowDB(ResearchDB):
         return dict(row) if row else None
 
     def team_task_add(self, task_id: str, member_id: str, member_name: str, title: str, prompt: str,
-                      trigger: str = "leader", origin: str = "") -> dict[str, Any]:
+                      trigger: str = "leader", origin: str = "", depends_on: list[str] | None = None,
+                      output_contract: dict[str, Any] | None = None, reviewer_id: str = "") -> dict[str, Any]:
+        depends = json.dumps(depends_on or [], ensure_ascii=False)
+        contract = json.dumps(output_contract or {}, ensure_ascii=False)
+        review_status = "pending" if reviewer_id else "not_required"
         row = (uuid.uuid4().hex, task_id, member_id, member_name, title[:120], prompt, "queued",
-               now(), "", "", "", "", "", trigger, origin, 0, "{}", "", "", "[]", "[]", "pending")
+               now(), "", "", "", "", "", trigger, origin, 0, "{}", "", "", "[]", "[]", "pending",
+               depends, contract, reviewer_id or "", 0, "", "")
+        row = row[:21] + (review_status,) + row[22:]
         self.db.execute("""INSERT INTO team_tasks
             (id,task_id,member_id,member_name,title,prompt,status,created_at,started_at,ended_at,
-             output_path,result,reason,trigger,origin,attempt,checkpoint,retry_at,run_id,input_assets,output_assets,review_status)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
+             output_path,result,reason,trigger,origin,attempt,checkpoint,retry_at,run_id,input_assets,output_assets,review_status,
+             depends_on,output_contract,reviewer_id,review_attempt,approved_at,review_feedback)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM team_tasks WHERE id=?", (row[0],)).fetchone())
 
     def team_task_mark(self, tid: str, status: str, **fields: Any) -> None:
         allow = {k: v for k, v in fields.items()
                  if k in ("started_at", "ended_at", "output_path", "result", "reason", "attempt",
-                          "checkpoint", "retry_at", "run_id", "input_assets", "output_assets", "review_status")}
+                          "checkpoint", "retry_at", "run_id", "input_assets", "output_assets", "review_status",
+                          "depends_on", "output_contract", "reviewer_id", "review_attempt", "approved_at",
+                          "review_feedback")}
         if isinstance(allow.get("checkpoint"), dict):
             allow["checkpoint"] = json.dumps(allow["checkpoint"], ensure_ascii=False)
         if isinstance(allow.get("input_assets"), list):
             allow["input_assets"] = json.dumps(allow["input_assets"], ensure_ascii=False)
         if isinstance(allow.get("output_assets"), list):
             allow["output_assets"] = json.dumps(allow["output_assets"], ensure_ascii=False)
+        if isinstance(allow.get("depends_on"), list):
+            allow["depends_on"] = json.dumps(allow["depends_on"], ensure_ascii=False)
+        if isinstance(allow.get("output_contract"), dict):
+            allow["output_contract"] = json.dumps(allow["output_contract"], ensure_ascii=False)
         allow["status"] = status
         sets = ", ".join("%s=?" % k for k in allow)
         self.db.execute("UPDATE team_tasks SET %s WHERE id=?" % sets, (*allow.values(), tid))
@@ -1729,7 +1749,8 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         if name == "team_form":
             return _team.form_team(tid, args.get("purpose", ""), args.get("members") or [])
         return _team.assign(tid, args.get("member", ""), args.get("prompt", ""), trigger="leader",
-                            origin="leader@" + task_id[:8])
+                            origin="leader@" + task_id[:8], depends_on=args.get("depends_on"),
+                            output_contract=args.get("output_contract"), reviewer_id=args.get("reviewer_id", ""))
     if name == "memory_save":
         return db.add_memory(task_id, args.get("kind", "long"), args.get("text", ""))
     if name == "library_overview":

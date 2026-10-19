@@ -1264,11 +1264,17 @@ class Handler(BaseHTTPRequestHandler):
                     if path == "/api/team/assign":
                         return self._json({"task": team.assign(
                             b.get("id", ""), b.get("member", ""), b.get("prompt", ""),
-                            b.get("title", ""), "manual" if b.get("manual") else "leader")})
+                            b.get("title", ""), "manual" if b.get("manual") else "leader",
+                            depends_on=b.get("depends_on"), output_contract=b.get("output_contract"),
+                            reviewer_id=b.get("reviewer_id", ""))})
                     if path == "/api/team/task/cancel":
                         return self._json(team.cancel(b.get("row_id", "")))
                     if path == "/api/team/task/retry":
                         return self._json(team.retry(b.get("row_id", "")))
+                    if path == "/api/team/task/review":
+                        return self._json({"task": team.review(
+                            b.get("row_id", ""), bool(b.get("approved")),
+                            b.get("reviewer_id", ""), b.get("feedback", ""))})
                 if path.startswith("/api/schedule/"):      # 定时任务：保存/启停/删除/立即运行/删运行记录
                     if path == "/api/schedule/save":
                         name = str(data.get("name") or "").strip()
