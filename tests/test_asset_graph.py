@@ -106,6 +106,12 @@ class AssetGraphTest(unittest.TestCase):
         self.assertEqual(done["status"], "succeeded")
         self.assertEqual(run_service.get(self.db, first["id"])["status"], "succeeded")
 
+        failed = run_service.start(self.db, self.project, "paper_read", idempotency_key="paper-failed")
+        run_service.finish(self.db, failed["id"], "failed", error="provider timeout")
+        same_failed = run_service.start(self.db, self.project, "paper_read", idempotency_key="paper-failed")
+        self.assertEqual(same_failed["id"], failed["id"])
+        self.assertEqual(same_failed["status"], "failed")
+
     def test_recover_stale_run(self):
         self.db.db.execute(
             "INSERT INTO workflow_runs VALUES(?,?,?,?,?,?,?,?,?)",
