@@ -27,8 +27,10 @@ if ((q.get('theme') || 'dark') !== 'dark') {
   document.getElementById('kbToDark').onclick = () => parent.postMessage({rw: 'theme', theme: 'dark'}, '*');
 } else {
   // 不带 task：第一级是项目（知识库 → 项目 → 分支）；带 task：深链直达该项目的分支层
+  // 分支层读的是编译产物（第一次进来算一次就落库）；带 rebuild=1（顶部「重算星图」）才重新编译
   const tid = q.get('task') || '';
-  fetch('/api/starmap' + (tid ? '?task=' + encodeURIComponent(tid) : '')).then(r => r.json()).then(api => {
+  const rb = q.get('rebuild') ? '&rebuild=1' : '';
+  fetch('/api/starmap' + (tid ? '?task=' + encodeURIComponent(tid) + rb : '')).then(r => r.json()).then(api => {
     const empty = !api || (api.level === 'projects' ? !(api.projects || []).length : !api.task);
     if (empty) {
       root.innerHTML = '<p style="padding:40px;color:#8b9bb0">还没有项目 —— 先去「项目」页建一个，星图才有得画。</p>';

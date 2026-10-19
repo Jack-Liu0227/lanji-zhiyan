@@ -73,7 +73,6 @@ class CapabilityWebTests(unittest.TestCase):
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(self.url, wait_until="networkidle")
         page.wait_for_function("S.loaded")
-        page.evaluate("document.getElementById('splash')?.remove(); setSec='skills'; openTab('settings'); render()")
         page.locator('[data-cap-preview="demo"]').click()
         page.locator("[data-edit]").click()
         page.locator("[data-content]").fill("---\nname: demo\ndescription: Safe browser fixture\n---\nEdited by browser fixture\n")

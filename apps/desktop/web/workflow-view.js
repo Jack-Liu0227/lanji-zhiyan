@@ -1,49 +1,20 @@
 /* ==== 创新点审查（这一步 = 100% 绑项目的受限对话页，记忆分长期/短期两区）==== */
-let iwView="conversation", iwMsgs=[], iwEvents=[], iwOut="", iwStat={turns:0,calls:0,tok:0};
 function ideaPanelHTML(active){
-  const proj = (S.tasks||[]).find(t=>t.id===curTask);
-  return `<section class="at" id="panel-idea"${active?"":' style="display:none"'} >
-    <header class="at-head">
-      <div class="at-heading"><span style="color:var(--accent);font-size:15px">✦</span>
-        <div><h1 id="iw-title">${esc(proj?proj.title:"创新点审查")}</h1>
-        <p id="iw-sub">与项目绑定 · 这一步只做创新点审查：多轮问清约束 → 出正式判定</p></div></div>
-    </header>
-    <div class="at-tabs">
-      <button class="at-tab" data-iv="conversation">对话</button>
-      <button class="at-tab" data-iv="trajectory">轨迹 <span id="iw-trail-n">0</span></button></div>
-    <div class="at-msgs" id="iw-msgs" role="log" aria-label="创新点审查对话"></div>
-    <div class="at-dock">
-      <div class="at-panel">
-        <div class="st-box st-counts">
-          <div class="st-row"><span>对话轮数</span><b id="iw-turns">0</b></div>
-          <div class="st-row"><span>调用工具数</span><b id="iw-calls">0</b></div>
-          <div class="st-row"><span>消耗 token</span><b id="iw-tok">0</b></div></div>
-        <div class="st-box"><p>工具名称</p><div class="st-log" id="iw-tools"></div></div>
-        <div class="st-box"><p>产出目录</p><div class="st-log" id="iw-outs"></div></div>
-      </div>
-      <div class="atts" id="atts"></div>
-      <div class="composer" id="composer">
-        <textarea id="ask" rows="1" placeholder="说说你的创新点，或回答追问…（Enter 发送，Shift+Enter 换行）"></textarea>
-        <div class="at-tools">
-          <div class="at-tools-l"><button class="icon-btn" id="iw-plus" title="附加文件">＋</button>
-            <label class="at-sel" title="这一步用哪个模型档案">🔌<select id="modpick"><option value="">未配置模型</option>
-              ${S.models.map(mm=>`<option value="${mm.id}" ${S.active&&mm.id===S.active.id?"selected":""}>${esc(mm.name)}</option>`).join("")}</select></label></div>
-          <div class="at-tools-r">
-            <label class="at-sel" title="助手署名">🤖<input id="assist" placeholder="researcher" value="${esc(assistantKey())}"></label>
-            <button class="send-btn" id="send" title="发送" aria-label="发送">↑</button></div>
-        </div>
-        <input type="file" id="filepick" multiple style="display:none">
-      </div>
-      <p class="at-hint">Enter 发送 · Shift + Enter 换行 · 这个对话与当前项目绑定</p>
+  return `<section class="iw-page" id="panel-idea"${active?"":' style="display:none"'}>
+    <div class="iw-top">
+      <div class="ol-head"><b>我的创新点</b><span class="ol-meta" id="iw-mine-state">自动保存</span>
+        <span class="ol-spacer"></span><span class="ol-meta">右边助手每轮都读这份文字</span></div>
+      <textarea class="iw-mine" id="iwMine" spellcheck="true"
+        placeholder="写清楚：做了什么、和谁不一样、凭什么能成（约束也写上：数据 / 算力 / 时间 / 目标期刊）"></textarea>
     </div>
-    <div class="wf-idea-out">
-      <p class="eyebrow">本步产出</p>
-      <h2>创新点判定</h2>
-      <p class="wf-out-path" id="iw-outpath">还没有产出 —— 先多轮问清约束，再说「出一版判定」</p>
-      <p class="hint">对话在右边「创新点审查助手」；判定结果会写进项目 out 目录。</p>
+    <div class="iw-out">
+      <div class="ol-head"><b>判定结果</b><span class="ol-tag" id="iw-verdict-at"></span>
+        <span class="ol-spacer"></span><span class="ol-meta">由右侧「创新点审查助手」产出</span></div>
+      <div class="md-render iw-verdict" id="iwVerdict"></div>
     </div>
   </section>`;
 }
+
 /* ==== 确认大纲 / 论文撰写 / 稿件审查：三步共用一套「左 2/3 文件 + 右 1/3 agent」面板 ====
    左边是项目里那一份 markdown（框架.md / 正文.md），右边是这一步专属的 agent 对话。
    审查那一步左边还能用荧光笔标细节（dw-*），标完一键发给 agent 逐条回应。 */
@@ -450,6 +421,7 @@ async function docSend(k){
         const line = chunk.split("\n").find(l => l.startsWith("data: ")); if(!line) continue;
         let ev; try{ ev = JSON.parse(line.slice(6)); }catch{ continue; }
         if(ev.type === "done"){ final = ev.content || ""; continue; }
+        if(ev.type === "user") continue;                 // 本地已经先画了，回声不再画、也不进事件流
         appendOne(box, ev); evs.push(ev);
         if(ev.type === "usage") st.stat.tok += ev.total || 0;
         else if(ev.type === "tool_call") st.stat.calls++;
@@ -471,27 +443,18 @@ async function docSend(k){
   await refreshState(false);
 }
 
-/* ==== 格式转换：照 Overleaf —— 上面可选格式 + 一键转换，下面 文件区 / 代码区 / PDF 预览 ==== */
+/* ==== 格式转换：文件区 / 编译区 / PDF 预览 三张卡片；转换本身交给右栏「格式助手」 ==== */
 let cvCur = { path: "", ext: "" };
-const CV_FMTS = [["docx", "Word (.docx)"], ["latex", "LaTeX (.tex → PDF，本机 MiKTeX)"], ["md", "Markdown"], ["html", "HTML"]];
 
 function convPanelHTML(active){
   return `<section class="cv" id="panel-convert"${active ? "" : ' style="display:none"'}>
-    <div class="cv-bar">
-      <span class="cv-label">可选格式列表</span>
-      <div class="cv-fmts" id="cvFmts">${CV_FMTS.map(([v, t], i) =>
-        `<label class="${i === 1 ? "on" : ""}"><input type="radio" name="cvfmt" value="${v}"${i === 1 ? " checked" : ""}>${esc(t)}</label>`).join("")}</div>
-      <span class="cv-spacer"></span>
-      <span class="cv-msg" id="cvMsg"></span>
-      <button class="btn btn-teal" id="cvRun">⚡ 一键格式转换</button>
-    </div>
     <div class="cv-grid">
       <div class="cv-col">
         <div class="cv-h"><b>文件</b><span class="cv-spacer"></span><button class="cv-ib" id="cvRefresh" title="重新读目录">↻</button></div>
         <div class="cv-list" id="cvList"></div>
       </div>
       <div class="cv-col">
-        <div class="cv-h"><b id="cvName">代码 / 编译区</b><span class="cv-spacer"></span>
+        <div class="cv-h"><b id="cvName">编译区</b><span class="cv-msg" id="cvMsg"></span><span class="cv-spacer"></span>
           <button class="cv-ib hidden" id="cvCompile" title="用 xelatex 编译这份 .tex">⚙ 编译</button>
           <button class="cv-ib" id="cvSave" title="保存到磁盘">💾 保存</button></div>
         <textarea class="cv-src" id="cvSrc" spellcheck="false"
@@ -501,7 +464,7 @@ function convPanelHTML(active){
         <div class="cv-h"><b>PDF 预览</b><span class="cv-spacer"></span><span class="cv-tag" id="cvPdfName"></span>
           <button class="cv-ib hidden" id="cvOpenExt" title="用系统默认程序打开">↗</button></div>
         <iframe class="cv-frame" id="cvFrame" src="about:blank"></iframe>
-        <div class="cv-empty" id="cvEmpty">还没有 PDF —— 选「LaTeX」点「一键格式转换」，或打开一个 .tex 点「编译」，这里就会出预览。</div>
+        <div class="cv-empty" id="cvEmpty">还没有 PDF —— 打开一个 .tex 点「⚙ 编译」，编出来就显示在这里。</div>
       </div>
     </div>
   </section>`;
@@ -538,7 +501,7 @@ async function cvOpen(path){
     if(d.error) throw new Error(d.error);
     cvCur = { path: d.path, ext: d.ext || "" };
     $("cvList").querySelectorAll(".cv-f").forEach(el => el.classList.toggle("on", el.dataset.p === d.path));
-    $("cvName").textContent = (d.name || "") + (d.bytes ? ` · ${d.bytes} 字` : "");
+    $("cvName").textContent = "编译区 · " + (d.name || "") + (d.bytes ? ` · ${d.bytes} 字` : "");
     $("cvSrc").value = d.binary ? "" : (d.text || "");
     $("cvSrc").readOnly = !!d.binary;
     $("cvCompile").classList.toggle("hidden", d.ext !== "tex");
@@ -553,19 +516,6 @@ async function cvSave(){
     const r = await api("/api/conv/save", { path: cvCur.path, text: $("cvSrc").value });
     cvMsg(`已保存 ${r.bytes} 字节`, 3000);
   }catch(e){ cvMsg("保存失败：" + e.message); }
-}
-async function cvRun(){
-  const btn = $("cvRun"), fmt = (document.querySelector("input[name=cvfmt]:checked") || {}).value || "docx";
-  btn.disabled = true; cvMsg(`正在转换（${fmt}）…`);
-  try{
-    const r = await api("/api/conv/run", { task_id: curTask, format: fmt });
-    if(r.error) throw new Error(r.error);
-    cvMsg(`已导出 ${r.name}（${Math.round((r.size || 0) / 1024)} KB）`, 6000);
-    await cvLoad();
-    if(r.pdf && r.path) cvShowPdf(r.path);
-    else cvMsg(`已导出 ${r.name} —— 想要 PDF 预览就选 LaTeX 再转一次`, 6000);
-  }catch(e){ cvMsg("转换失败：" + e.message); }
-  btn.disabled = false;
 }
 async function cvCompile(){
   if(!cvCur.path) return;
@@ -584,11 +534,7 @@ function cvBind(){
   if(!$("cvList")) return;
   $("cvRefresh").onclick = cvLoad;
   $("cvSave").onclick = cvSave;
-  $("cvRun").onclick = cvRun;
   $("cvCompile").onclick = cvCompile;
-  $("cvFmts").querySelectorAll("label").forEach(l => l.onclick = () => {
-    $("cvFmts").querySelectorAll("label").forEach(x => x.classList.remove("on")); l.classList.add("on");
-  });
   $("cvOpenExt").onclick = () => { if(cvCur.path || $("cvPdfName").textContent)
     api("/api/conv/open", { path: cvCur.path }).catch(()=>{}); };
   cvLoad();
@@ -801,6 +747,11 @@ function wfAgentHTML(step){
 
 async function wfAgentPaint(m, step){
   const host = m.querySelector("#wfAgent"); if(!host) return;
+  // 论文翻译的「笔记模式」：右栏这一列换成阅读笔记窄栏（点「助手模式」再换回来）
+  if(step === "notes" && window.TR && TR.noteMode && typeof trPaintNoteColumn === "function"){
+    trPaintNoteColumn();
+    return;
+  }
   host.innerHTML = wfAgentHTML(step);
   const a = WF_AGENT[step] || WF_AGENT.idea;
   const box = $("wv-msgs"); if(!box) return;
@@ -853,6 +804,7 @@ async function wfSend(m, step){
   const ta = $("wv-ask"), btn = $("wv-send"), box = $("wv-msgs");
   const text = (ta.value||"").trim(); if(!text) return;
   const a = WF_AGENT[step] || WF_AGENT.idea;
+  if(step === "idea" && typeof iwFlush === "function") await iwFlush();   // 上区刚改的字先落库，这一轮就读到最新的
   ta.value = ""; ta.style.height = "auto";
   if(box.querySelector(".wf-empty")) box.innerHTML = "";
   appendOne(box, {type:"user", content:text});
@@ -874,10 +826,11 @@ async function wfSend(m, step){
         const line = chunk.split("\n").find(l=>l.startsWith("data: ")); if(!line) continue;
         let ev; try{ ev = JSON.parse(line.slice(6)); }catch{ continue; }
         if(ev.type === "done"){ final = ev.content || ""; continue; }
+        if(ev.type === "user") continue;                 // 本地已经先画了，回声不再画、也不进事件流
         appendOne(box, ev); evs.push(ev);
       }
     }
-    if(final){ appendOne(box, {type:"assistant", content:final}); evs.push({type:"content", content:final}); }
+    if(final && !evs.some(e=>e.type==="assistant")){ appendOne(box, {type:"assistant", content:final}); evs.push({type:"content", content:final}); }
   }catch(err){
     appendOne(box, {type:"error", message:"发送失败：" + err.message});
   }finally{
@@ -886,6 +839,9 @@ async function wfSend(m, step){
     wfEvents = wfEvents.concat(evs);
     wfPaintStats();
     box.scrollTop = box.scrollHeight;
+    if(step === "search") wsLoadState();      // 助手检索完 → 左边结果立刻回填
+    if(step === "convert") cvLoad();          // 助手导出完 → 左边文件/预览立刻刷新
+    if(step === "idea" && typeof iwLoad === "function") iwLoad();   // 刚出的判定 → 左边下区刷新
   }
 }
 
@@ -951,154 +907,65 @@ function wfPaintFoot(){
   if(hint && a) hint.textContent = `${STAGE[wfStep]}：产出由右边的「${a.name}」生成，看一眼没问题就确认交付。`;
 }
 function iwBind(m){
-  const box=$("iw-msgs"); if(!box) return;
-  m.querySelectorAll("[data-iv]").forEach(b=>b.onclick=()=>{ iwView=b.dataset.iv; iwPaintMsgs(); });
-  $("send").onclick = iwSend;
-  $("ask").onkeydown = (e)=>{ if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); iwSend(); } };
-  $("ask").oninput = grow;
-  $("iw-plus").onclick = ()=>pick("files");
-  $("filepick").onchange = (e)=>{ const fs=[...e.target.files]; e.target.value=""; addFiles(fs); };
-  $("modpick").onchange = async (e)=>{ if(!e.target.value) return; await api("/api/models/active",{id:e.target.value}); await refreshState(false); render(); };
-  $("assist").oninput = (e)=>localStorage.setItem("rw-assist", e.target.value.trim()||"researcher");
-  wireDrop($("composer")); setAtts(); grow();
+  const ta = $("iwMine"); if(!ta) return;
+  let t0 = 0;
+  const save = async ()=>{
+    const st = $("iw-mine-state"); if(st) st.textContent = "保存中…";
+    try{ await api("/api/idea/input", {task_id: curTask, text: ta.value}); if(st) st.textContent = "已保存"; }
+    catch(e){ if(st) st.textContent = "保存失败：" + e.message; }
+  };
+  ta.oninput = ()=>{ const st = $("iw-mine-state"); if(st) st.textContent = "未保存…";
+    clearTimeout(t0); t0 = setTimeout(save, 700); };
+  ta.onblur = ()=>{ clearTimeout(t0); save(); };
   iwLoad();
 }
-function iwPaintMsgs(){
-  const box=$("iw-msgs"); if(!box) return;
-  document.querySelectorAll("[data-iv]").forEach(b=>b.classList.toggle("on", b.dataset.iv===iwView));
-  if(iwView==="trajectory"){ renderTrajectory(box, iwEvents); return; }
-  if(!iwMsgs.length){
-    box.innerHTML = emptyState("✦","这是项目的创新点审查","先把创新点讲清楚：做了什么、和谁不一样、凭什么能成。我会先追问关键约束，再给正式判定。");
+async function iwFlush(){
+  /* 送消息之前先把上区刚改的字落库 —— 右栏助手这一轮就要读到最新的 */
+  const ta = $("iwMine"); if(!ta || !curTask) return;
+  try{ await api("/api/idea/input", {task_id: curTask, text: ta.value}); }catch(_){}
+}
+function iwVerdictPaint(v){
+  const box = $("iwVerdict"), at = $("iw-verdict-at"); if(!box) return;
+  if(!v || !v.markdown){
+    box.innerHTML = `<p class="ol-empty">还没有判定 —— 在右边跟助手把约束问清，说「出一版判定」，结果落在这里。</p>`;
+    if(at) at.textContent = "";
     return;
   }
-  box.innerHTML="";
-  iwMsgs.forEach(mv=>appendOne(box,{type:mv.role,content:mv.content,events:mv.events,replay:true,at:mv.created_at}));
-  box.scrollTop = box.scrollHeight;
-}
-function iwPaintStats(){
-  const t=$("iw-turns"), c=$("iw-calls"), k=$("iw-tok"), tn=$("iw-trail-n");
-  if(t) t.textContent = iwStat.turns;
-  if(c) c.textContent = iwStat.calls;
-  if(k) k.textContent = (iwStat.tok||0).toLocaleString();
-  if(tn) tn.textContent = iwStat.calls;
-  const log=(id,rows,empty)=>{ const el=$(id); if(!el) return;
-    el.innerHTML = rows.length ? rows.map(r=>`<div title="${esc(r)}">${esc(r)}</div>`).join("")
-                               : `<div class="none">${esc(empty)}</div>`;
-    el.scrollTop = el.scrollHeight; };
-  log("iw-tools", iwEvents.filter(e=>e.type==="tool_call").map(e=>e.name).slice(-40), "还没有工具调用");
-  const outs = [iwOut].filter(Boolean).concat(iwEvents.filter(e=>e.type==="tool_result"&&e.path).map(e=>e.path));
-  log("iw-outs", outs.slice(-40), "还没有产出");
+  box.innerHTML = renderMarkdown(v.markdown);
+  if(at) at.textContent = v.created_at ? `更新于 ${fmtDate(v.created_at)}` : "";
 }
 async function iwLoad(){
-  if(!curTask){ iwMsgs=[]; iwEvents=[]; }
+  if(!curTask) return;
   try{
     const d = await api(`/api/idea/memory?id=${encodeURIComponent(curTask)}`);
-    iwMsgs = d.short || []; iwOut = d.out || "";
-    const op = $("iw-outpath"); if(op) op.textContent = iwOut || "还没有产出 —— 先多轮问清约束，再说「出一版判定」";
-    iwEvents = iwMsgs.flatMap(mv=>mv.events || []);
-    iwStat = { turns: iwMsgs.filter(mv=>mv.role==="user").length,
-               calls: iwEvents.filter(e=>e.type==="tool_call").length,
-               tok: iwEvents.filter(e=>e.type==="usage").reduce((n,e)=>n+(e.total||0),0) };
+    const ta = $("iwMine");
+    if(ta && document.activeElement !== ta && ta.value !== (d.mine || "")) ta.value = d.mine || "";
+    iwVerdictPaint(d.verdict);
   }catch(e){}
-  iwPaintMsgs(); iwPaintStats();
-}
-async function iwSend(){
-  const ta=$("ask"); const text=ta.value.trim(); if(!text) return;
-  const attsLine = atts.length ? "\n\n[附件]\n" + atts.map(a=> a.url ? `- ${a.url}`
-      : `- ${a.name}${a.paper_id?`（已入库 PDF，paper_id=${a.paper_id}，${a.pages} 页）`:`（本地文件：${a.path}）`}`).join("\n") : "";
-  const msg = text + attsLine;
-  ta.value=""; grow(); atts.length=0; setAtts();
-  const box=$("iw-msgs");
-  if(iwView!=="conversation"){ iwView="conversation"; iwPaintMsgs(); }
-  if(box.querySelector(".at-empty")) box.innerHTML="";
-  appendOne(box,{type:"user",content:msg});
-  iwMsgs.push({role:"user",content:msg,events:[]}); iwStat.turns++; iwPaintStats();
-  const btn=$("send"); btn.disabled=true; btn.textContent="■";
-  let errMsg="";
-  let final="", evs=[];
-  try{
-    const res=await fetch("/api/idea",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({task_id:curTask, message:msg})});
-    if(!res.ok || !res.body) throw new Error("HTTP "+res.status);
-    const reader=res.body.getReader(); const dec=new TextDecoder(); let buf="";
-    for(;;){
-      const {value,done}=await reader.read(); if(done) break;
-      buf+=dec.decode(value,{stream:true});
-      let i;
-      while((i=buf.indexOf("\n\n"))>=0){
-        const chunk=buf.slice(0,i); buf=buf.slice(i+2);
-        const line=chunk.split("\n").find(l=>l.startsWith("data: ")); if(!line) continue;
-        let ev; try{ ev=JSON.parse(line.slice(6)); }catch{ continue; }
-        if(ev.type==="done"){ final=ev.content||""; continue; }
-        appendOne(box,ev); evs.push(ev);
-        if(ev.type==="usage") iwStat.tok += ev.total||0;
-        else if(ev.type==="tool_call") iwStat.calls++;
-        iwPaintStats();
-      }
-    }
-  }catch(e){ errMsg = e.message; appendOne(box,{type:"error",message:e.message}); }
-  iwMsgs.push({role:"assistant",content:final,events:evs});
-  iwEvents = iwEvents.concat(evs);
-  btn.disabled=false; btn.textContent="↑";
-  box.scrollTop = box.scrollHeight;
-  iwLoad();                       // 重新拉一次：工具可能写了长期记忆 / 新笔记
-  if(errMsg) appendOne(box,{type:"error",message:errMsg});   // 重渲染会把报错行刷掉，补回去
-  await refreshState(false);
 }
 
 /* ==== 论文搜索（照科研工作台 literature.tsx「联网检索」：工具条 + 筛选行 + 结果面板）==== */
-const WS_SRCS = [["all","学术搜索（全部免费来源）"],
-                 ["openalex","OpenAlex"],["crossref","Crossref"],["arxiv","arXiv"]];
 const WS_LABEL = {openalex:"OpenAlex",crossref:"Crossref",arxiv:"arXiv",pubmed:"PubMed"};
-let wsRes=[], wsPage=1, wsSort="relevance", wsYFrom="all", wsYTo="all", wsText="", wsSrc="all", wsRows=20, wsNote="", wsBusy=false;
+let wsRes=[], wsPage=1, wsRows=20, wsNote="";
 let wsPicked = new Set();                       // 论文搜索里勾选的 result id（进「下载精读」处理）
 let dlPoll = null, dlBusy = false;
-const wsSources = ()=> wsSrc==="all" ? ["openalex","crossref","arxiv"] : [wsSrc];
-const wsYears = ()=> [...new Set((wsRes||[]).map(r=>r.year).filter(Boolean))].sort((a,b)=>String(b).localeCompare(String(a)));
-function wsFiltered(){
-  let list = (wsRes||[]).slice();
-  if(wsYFrom!=="all" || wsYTo!=="all"){                     // 起止年份（含端点；年份未知的不算在内）
-    let f = wsYFrom==="all" ? 0 : Number(wsYFrom), t = wsYTo==="all" ? 9999 : Number(wsYTo);
-    if(f>t){ const tmp=f; f=t; t=tmp; }
-    list = list.filter(r=>{ const y=Number(r.year); return y && y>=f && y<=t; });
-  }
-  if(wsText.trim()){ const q=wsText.trim().toLowerCase();
-    list = list.filter(r=> ((r.title||"")+" "+(r.authors||"")).toLowerCase().includes(q)); }
-  if(wsSort==="year-desc") list.sort((a,b)=>String(b.year||"").localeCompare(String(a.year||"")));
-  else if(wsSort==="year-asc") list.sort((a,b)=>String(a.year||"9999").localeCompare(String(b.year||"9999")));
-  else if(wsSort==="title") list.sort((a,b)=>String(a.title||"").localeCompare(String(b.title||""),"zh"));
-  return list;
-}
+const wsFiltered = ()=> (wsRes||[]).slice();   // 没有手动筛选了：检索条件都交给右栏助手
 function searchPanelHTML(active){
-  const opt=(v,t,sel)=>`<option value="${v}"${sel===v?" selected":""}>${t}</option>`;
   return `<div class="ws" id="panel-search"${active?"":' style="display:none"'}>
-    <div class="ws-bar">
-      <button class="ws-navbtn" id="wsPrev" title="上一页">‹</button>
-      <button class="ws-navbtn" id="wsNext" title="下一页">›</button>
-      <div class="ws-query"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20.5 20.5l-3.9-3.9"></path></svg><input id="wsQ" placeholder="输入关键词、DOI、标题或作者"></div>
-      <button class="btn" id="wsRun">检索</button>
-      <select id="wsSrc" style="min-width:190px">${WS_SRCS.map(([v,t])=>opt(v,t,wsSrc)).join("")}</select>
-      <button class="btn ghost" id="wsAdv" title="跳到筛选行">☷ 高级检索</button>
-      <label class="ws-field" style="margin-left:auto"><input type="checkbox" id="wsAll" style="width:15px;height:15px;accent-color:var(--accent)"><span>全选本页</span></label>
-      <span class="ws-pickinfo" id="wsPickN">已勾选 0</span>
-      <button class="btn" id="wsToDl" disabled>进入下载</button>
-    </div>
-    <div class="ws-fields" id="wsFields">
-      <label class="ws-field"><span>检索范围</span><select id="wsRange">${WS_SRCS.map(([v,t])=>opt(v,v==="all"?"全部结果":t,wsSrc)).join("")}</select></label>
-      <label class="ws-field"><span>初始显示</span><select id="wsPer">${[10,20,50].map(n=>opt(n,n,wsRows)).join("")}</select></label>
-      <label class="ws-field ws-yr"><span>年份</span><select id="wsYFrom"></select><em style="font-style:normal">–</em><select id="wsYTo"></select></label>
-      <label class="ws-field"><span>排序</span><select id="wsS">
-        ${opt("relevance","相关性",wsSort)}${opt("year-desc","年份最新",wsSort)}${opt("year-asc","年份最早",wsSort)}${opt("title","标题",wsSort)}</select></label>
-      <details class="ws-more"><summary>更多筛选</summary>
-        <div><label class="ws-field" style="display:flex"><span>筛选当前结果</span><input id="wsT" placeholder="标题或作者" value="${esc(wsText)}"></label>
-          <p class="hint" style="margin:8px 0 0">只作用于已加载的检索结果；年份与排序同理，不会重新联网。</p></div></details>
-    </div>
     <div class="ws-results">
       <div class="ws-head"><p class="eyebrow">SEARCH / FREE SOURCES</p>
         <h1>联网检索<span id="wsCount" class="hint" style="font-size:12px;font-weight:400"></span></h1>
-        <p class="hint">用上方搜索栏并行检索 OpenAlex、Crossref、arXiv（都是免费源，只走开放获取）；结果可排序、筛选，有 OA 全文的可直接下载入库。</p></div>
+        <p class="hint">在右边助手说方向和年份（例：2020–2024 钠电 O3 型 NFM 掺杂），它并行检索 OpenAlex、Crossref、arXiv（只走开放获取）；结果回填到这里，勾选后可下载入库。</p></div>
       <div class="ws-list" id="wsList"></div>
-      <div class="ws-foot"><span id="wsNote"></span><span class="ws-pageinfo" id="wsPageInfo"></span></div>
+      <div class="ws-foot">
+        <label class="ws-field"><input type="checkbox" id="wsAll" style="width:15px;height:15px;accent-color:var(--accent)"><span>全选本页</span></label>
+        <span class="ws-pickinfo" id="wsPickN">已勾选 0</span>
+        <button class="btn" id="wsToDl" disabled>进入下载</button>
+        <span id="wsNote"></span>
+        <span class="ws-pageinfo" id="wsPageInfo"></span>
+        <button class="ws-navbtn" id="wsPrev" title="上一页">‹</button>
+        <button class="ws-navbtn" id="wsNext" title="下一页">›</button>
+      </div>
     </div>
   </div>`;
 }
@@ -1233,18 +1100,13 @@ function wsSyncPick(){
 async function wsPaint(){
   const listEl=$("wsList"); if(!listEl) return;
   const per = wsRows; const all = wsFiltered();
-  const from=$("wsYFrom"), to=$("wsYTo");
-  if(from && to){ const ys=wsYears();
-    const fill=(el,cur)=> el.innerHTML = `<option value="all">不限</option>`
-      + ys.map(v=>`<option value="${v}"${String(cur)===String(v)?" selected":""}>${v}</option>`).join("");
-    fill(from, wsYFrom); fill(to, wsYTo); }
   const pages = Math.max(1, Math.ceil(all.length/per));
   wsPage = Math.min(Math.max(1, wsPage), pages);
   const slice = all.slice((wsPage-1)*per, wsPage*per);
   listEl.innerHTML = slice.length ? slice.map(r=>wsCard(r,"search")).join("")
     : `<div style="display:grid;place-items:center;height:100%;padding:30px 16px;text-align:center">
-        <div><p class="hint" style="font-size:13px;margin:0 0 6px">${wsRes.length?"当前筛选下没有结果":"暂无检索结果"}</p>
-        <p class="hint">输入关键词后检索 OpenAlex、Crossref、arXiv。${wsRes.length?"":"已有的检索结果会累积在这个项目里。"}</p></div></div>`;
+        <div><p class="hint" style="font-size:13px;margin:0 0 6px">暂无检索结果</p>
+        <p class="hint">在右边助手说方向和年份，它检索完结果会回填到这里；同一个项目里会累积。</p></div></div>`;
   $("wsCount").textContent = all.length ? ` · ${all.length}` : "";
   $("wsNote").textContent = wsNote || (wsRes.length? `项目里累计 ${wsRes.length} 条检索结果` : "");
   wsSyncPick();
@@ -1258,19 +1120,9 @@ async function wsLoadState(){
   wsPaint();
 }
 function wsBind(m){
-  const q=$("wsQ"); if(!q) return;
-  $("wsRun").onclick = wsRun;
-  q.onkeydown = (e)=>{ if(e.key==="Enter"){ e.preventDefault(); wsRun(); } };
-  $("wsSrc").onchange = (e)=>{ wsSrc=e.target.value; $("wsRange").value=wsSrc; };
-  $("wsRange").onchange = (e)=>{ wsSrc=e.target.value; $("wsSrc").value=wsSrc; };
-  $("wsPer").onchange = (e)=>{ wsRows=Number(e.target.value)||20; wsPage=1; wsPaint(); };
-  $("wsYFrom").onchange = (e)=>{ wsYFrom=e.target.value; wsPage=1; wsPaint(); };
-  $("wsYTo").onchange = (e)=>{ wsYTo=e.target.value; wsPage=1; wsPaint(); };
-  $("wsS").onchange = (e)=>{ wsSort=e.target.value; wsPage=1; wsPaint(); };
-  $("wsT").oninput = (e)=>{ wsText=e.target.value; wsPage=1; wsPaint(); };
+  if(!$("wsList")) return;
   $("wsPrev").onclick = ()=>{ wsPage--; wsPaint(); };
   $("wsNext").onclick = ()=>{ wsPage++; wsPaint(); };
-  $("wsAdv").onclick = ()=>{ $("wsFields").scrollIntoView({behavior:"smooth",block:"nearest"}); const t=$("wsT"); if(t) t.focus(); };
   $("wsList").addEventListener("change", (e)=>{
     const cb = e.target.closest("[data-pick]"); if(!cb) return;
     if(cb.checked) wsPicked.add(cb.dataset.pick); else wsPicked.delete(cb.dataset.pick);
@@ -1292,20 +1144,6 @@ function wsBind(m){
     }catch(err){ b.disabled=false; b.textContent=old; act.insertAdjacentHTML("beforeend", `<span style="color:var(--err);font-size:11.5px">${esc(err.message)}</span>`); }
   };
   wsLoadState();
-}
-async function wsRun(){
-  const q = ($("wsQ").value||"").trim(); if(!q || wsBusy) return;
-  wsBusy = true; const btn=$("wsRun"); btn.disabled=true; const old=btn.textContent; btn.textContent="检索中…";
-  wsNote = "正在并行检索…"; wsPaint();
-  try{
-    const r = await api("/api/workflow/search",{task_id:curTask, query:q, sources:wsSources(), rows:wsRows});
-    const d = await api(`/api/task?id=${encodeURIComponent(curTask)}`);
-    wsRes = d.results || [];
-    wsNote = `已检索「${r.query}」：本次返回 ${r.found} 条，新增入库 ${(r.saved||[]).length} 条，补到 OA 直链 ${r.enriched||0} 条`;
-    wsPage = 1; wsYFrom = "all"; wsYTo = "all"; wsText = "";
-  }catch(e){ wsNote = "检索失败：" + e.message; }
-  btn.disabled=false; btn.textContent=old; wsBusy=false;
-  wsPaint();
 }
 
 async function loadTaskState(){
@@ -1439,7 +1277,8 @@ function renderCalendar(m){
     return `<div class="${cls}" data-date="${key}" title="${esc(evs.map(e=>e.label).join("；"))}"><span class="cal-num">${c.d}</span>${info.label?`<span class="cal-lunar">${esc(info.label)}</span>`:""}<span class="cal-dots">${dots}${more}</span></div>`;
   }).join("");
   const selEvs = [...(events[calSel]||[]), ...calendarDateInfo(calSel).events];
-  const dayItems = S.events.filter(e=>e.date===calSel).sort((a,b)=>(a.done||0)-(b.done||0));
+  const dayItems = S.events.filter(e=>e.date===calSel)
+    .sort((a,b)=> (a.time||"99:99").localeCompare(b.time||"99:99") || String(a.created_at).localeCompare(String(b.created_at)));   // 按当日钟点从上到下排，没定时间的垫底
   const now = new Date();
   const yearOpts = Array.from({length:11},(_,i)=>now.getFullYear()-5+i).map(v=>`<option value="${v}" ${v===y?"selected":""}>${v}</option>`).join("");
   const monthOpts = Array.from({length:12},(_,i)=>`<option value="${i}" ${i===mo?"selected":""}>${i+1}月</option>`).join("");
@@ -1477,9 +1316,9 @@ function renderCalendar(m){
 
       <div class="card">
         <div class="card-head"><b>☀ 当日工作计划</b><span class="side-count">${calSel}</span></div>
-        <div class="check-list">${dayItems.length ? dayItems.map(e=>`<div class="check-item ${e.done?"done":""}"><input type="checkbox" data-chk="${e.id}" ${e.done?"checked":""}><span class="check-title">${esc(e.title)}</span><span class="check-due">${hhmm(e.created_at)}</span><button class="check-del" data-del="${e.id}" title="删除">✕</button></div>`).join("")
+        <div class="check-list">${dayItems.length ? dayItems.map(e=>`<div class="check-item ${e.done?"done":""}"><input type="checkbox" data-chk="${e.id}" ${e.done?"checked":""}>${e.time?`<span class="check-time">${esc(e.time)}</span>`:""}<span class="check-title">${esc(e.title)}</span><button class="check-del" data-del="${e.id}" title="删除">✕</button></div>`).join("")
           : `<div class="hint">这一天还没有安排 🎉🎉🎉</div>`}</div>
-        <div class="quick-add"><input id="todayInput" class="tb-input" placeholder="＋ 添加任务，回车确认…"><button class="btn" id="btnTodayAdd">添加</button></div>
+        <div class="quick-add"><input id="todayInput" class="tb-input" placeholder="＋ 添加任务，回车确认…"><input id="todayTime" class="tb-input quick-time" type="time" title="可选：这条安排的具体时间"><button class="btn" id="btnTodayAdd">添加</button></div>
       </div>
     </div>
 
@@ -1510,10 +1349,11 @@ function renderCalendar(m){
   m.querySelectorAll("[data-chk]").forEach(i=>i.onchange=async()=>{ await api("/api/calendar/toggle",{id:i.dataset.chk,done:i.checked}); await refreshState(); });
   m.querySelectorAll("[data-del]").forEach(b=>b.onclick=async(ev)=>{ ev.stopPropagation(); if(!confirm("删除这一条？")) return; await api("/api/calendar/delete",{id:b.dataset.del}); await refreshState(); });
   const add = async()=>{ const v=$("todayInput").value.trim(); if(!v) return;
-    await api("/api/calendar/add",{title:v,date:calSel,task_id:curTask||null,kind:"todo"});
-    $("todayInput").value=""; await refreshState(); };
+    await api("/api/calendar/add",{title:v,date:calSel,task_id:curTask||null,kind:"todo",time:$("todayTime").value});
+    $("todayInput").value=""; $("todayTime").value=""; await refreshState(); };
   $("btnTodayAdd").onclick = add;
   $("todayInput").onkeydown = e=>{ if(e.key==="Enter"){ e.preventDefault(); add(); } };
+  $("todayTime").onkeydown = e=>{ if(e.key==="Enter"){ e.preventDefault(); add(); } };
 }
 
 /* 邮箱页标记：收件箱视图 + 两个弹窗 */

@@ -691,7 +691,12 @@ function renderTrajectory(box, evs = S.chatEvents){  // 轨迹：把 tool_call /
 }
 function appendOne(box,ev){
   if(ev.replay && ev.type==="assistant" && (ev.events||[]).length){
+    // 事件流里已经含这条回复的 assistant 文本事件；再按整条消息渲染一次就会重复一整行，
+    // 所以嵌套事件里只要渲染出了 assistant 行，就不再画外层那一条。没有 assistant 事件的
+    // 老消息（只有 usage / 空回复）照旧走下面整条渲染，内容不丢。
+    const before = box.querySelectorAll(".msg-row.msg-assistant").length;
     ev.events.forEach(e=>appendOne(box,e));
+    if(box.querySelectorAll(".msg-row.msg-assistant").length > before) return;
   }
   const el=document.createElement("div");
   if(ev.sub) el.style.marginLeft="14px";                 // 子 agent 的行缩进一层
@@ -841,7 +846,14 @@ document.addEventListener("click",(e)=>{          // 点菜单外面收起（监
 
 async function send(){
   const ta=$("ask"); const text=ta.value.trim(); if(!text && !atts.length) return;
-  if(!curChat) return alert("先新建一个对话（左上角 ＋）");
+  // 没对话（或 localStorage 里那条已经删了）就直接发 → 自动新建一条不绑项目的对话，不弹框拦人
+  if(!curChat || !(S.chats||[]).some(c=>c.id===curChat)){
+    try{
+      const r = await api("/api/chat/create", {title:""});
+      curChat = r.chat.id; localStorage.setItem("rw-chat", curChat);
+      await refreshState(false); render();        // 侧栏与抬头立刻换成这条新对话
+    }catch(e){ return alert("新建对话失败：" + e.message); }
+  }
   const msg = atts.length ? (text?text+"\n\n":"") + "[附件]\n" + atts.map(a=> a.url ? `- ${a.url}`
       : `- ${a.name}${a.paper_id?`（已入库 PDF，paper_id=${a.paper_id}，${a.pages} 页）`:`（本地文件：${a.path}）`}`).join("\n") : text;
   ta.value=""; grow(); atts.length=0; setAtts();
@@ -861,7 +873,7 @@ async function send(){
         const chunk=buf.slice(0,i); buf=buf.slice(i+2);
         const line=chunk.split("\n").find(l=>l.startsWith("data: ")); if(!line) continue;
         let ev; try{ ev=JSON.parse(line.slice(6)); }catch{ continue; }
-        if(ev.type!=="done") appendOne(box,ev);
+        if(ev.type!=="done" && ev.type!=="user") appendOne(box,ev);  // user 已经本地先画了，服务端回声不再画一遍
         stEvent(ev);
       }
     }

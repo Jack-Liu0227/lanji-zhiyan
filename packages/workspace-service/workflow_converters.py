@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from workflow_documents import doc_read, doc_path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1] if (HERE.parents[1] / "packages").is_dir() else HERE
 OUT = paths.OUT
+DATA, PAPERS, NOTES = paths.DATA, paths.PAPERS, paths.NOTES     # 唯一路径来源（_safe_path 的白名单根）
 EN_LIMIT = 2400
 
 EN_PROMPT = """你是资深学术英语审稿人兼专业学术翻译。将以下中文学术论文段落翻译为地道、精确、简练的学术英文（Nature / IEEE 风格）。
@@ -263,13 +265,26 @@ def conv_open(path: str) -> dict[str, Any]:
     return fileguard.open_document(p)
 
 
+def _project_roots() -> list[Path]:
+    """项目位置是用户自选的（桌面上也行），也得进白名单：一次 SELECT 拿到所有 base_dir。"""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(str(paths.DB_PATH))
+        try:
+            return [Path(r[0]) for r in conn.execute("SELECT base_dir FROM research_tasks WHERE base_dir<>''")]
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
+
 def _safe_path(path: str, extra_roots: list[Path] | None = None) -> Path:
     """只允许项目目录 / data 目录里的文件（读写都走它）。"""
     p = Path(path).expanduser()
     if not p.is_absolute():
         raise ValueError("必须是绝对路径")
     p = p.resolve()
-    roots = [*(extra_roots or []), DATA, DATA / "uploads", PAPERS, NOTES, OUT]
+    roots = [*(extra_roots or []), *_project_roots(), DATA, DATA / "uploads", PAPERS, NOTES, OUT]
     roots = [r.resolve() for r in roots if r.exists()]
     if not any(p.is_relative_to(r) for r in roots):        # 前缀比较会让 data-evil/ 混进来
         raise ValueError(f"只允许项目目录与 data 目录里的文件：{p}")

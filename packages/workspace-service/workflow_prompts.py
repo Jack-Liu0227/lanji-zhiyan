@@ -61,6 +61,18 @@ CREATE TABLE IF NOT EXISTS paper_graph (         -- 论文星图的编译结果�
   task_id TEXT PRIMARY KEY, json TEXT NOT NULL DEFAULT '{}',
   built_at TEXT NOT NULL, took_ms INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS kb_graph (             -- 知识星图的编译结果：进「知识库」时算一次，平时只读这份（不实时重算）
+  task_id TEXT PRIMARY KEY, json TEXT NOT NULL DEFAULT '{}',
+  built_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS idea_input (           -- 创新点审查：用户在上区写的创新点原文（助手每轮都读它）
+  task_id TEXT PRIMARY KEY, text TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tr_hl (               -- 论文翻译的荧光笔标注（带圈中的文字）：助手读它才答得上「这句什么意思」
+  paper_id TEXT NOT NULL, task_id TEXT NOT NULL DEFAULT '',
+  json TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL,
+  PRIMARY KEY (paper_id, task_id)
+);
 """
 
 IDEA_FALLBACK = """按 idea-evaluator 的五维框架打分（Higher 更强 / Faster 更快 / Stronger 更稳 / Cheaper 更省 / Broader 更通用，各 1-10，从 5 分起、凭证据或机理调分），
@@ -100,7 +112,8 @@ OUTLINE_TEMPLATE = """# <题目：一句话说清做什么>
 - 说明：诚实地写清楚边界条件与下一步。
 """
 
-AGENT_SYSTEM = """你是「览籍智研」的研究 Agent，用中文工作，只通过工具动手，不编造数据。
+AGENT_SYSTEM = """你叫「览籍智研」，是这个软件的主 Agent，也是一位做科研的研究生的科研助手（查文献、读论文、记笔记、写稿、跑数据都归你管）。
+用户怎么问「你是谁」就怎么答：你是览籍智研，他的科研助手。用中文工作，只通过工具动手，不编造数据。
 可用工具覆盖：创新点审查、论文搜索、OA 下载、逐页精读、知识库笔记、文章撰写、稿件审查、格式转换、日历、库内检索。
 规则：
 1. 先调 library_overview 或 knowledge_query 了解现状，再决定下一步；用户没说清楚目标时先问一句，不要瞎跑。
@@ -305,7 +318,7 @@ TOOL_SPECS = [
     _schema("draft_write", "用当前任务的笔记与证据起草一个章节。", {"section": {"type": "string"}, "title": {"type": "string"}}),
     _schema("draft_review", "以审稿人视角审查稿件，给出结论/评分/问题清单/证据缺口。", {"draft": {"type": "string"}}),
     _schema("format_convert", "把稿件导出为 docx / md / html。", {"format": {"type": "string", "enum": ["docx", "md", "html"]}, "name": {"type": "string"}}, ["format"]),
-    _schema("calendar_add", "在日历里加一条日程并关联当前任务。", {"title": {"type": "string"}, "date": {"type": "string", "description": "YYYY-MM-DD"}, "kind": {"type": "string"}}, ["title", "date"]),
+    _schema("calendar_add", "在日历里加一条日程并关联当前任务。用户说了钟点就把 time 填上，别说「14:00 开会」这种把时间写进标题的写法。", {"title": {"type": "string", "description": "日程标题，不要带钟点"}, "date": {"type": "string", "description": "YYYY-MM-DD"}, "time": {"type": "string", "description": "24 小时制 HH:MM，例如 14:00；用户没给时间就留空"}, "kind": {"type": "string"}}, ["title", "date"]),
     _schema("knowledge_query", "在本任务已入库的笔记与证据里做关键词检索。", {"query": {"type": "string"}}, ["query"]),
     _schema("team_board", "看团队看板：成员各自状态 + 最近派活与执行情况（谁在跑、谁完成了、失败原因）。",
             {"project": {"type": "string", "description": "项目名或 id；不填=当前项目"}}),

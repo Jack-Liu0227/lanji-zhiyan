@@ -174,6 +174,26 @@ def _text(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", value or "")).strip()
 
 
+def _norm_hhmm(value: str) -> str:
+    """日程钟点归一成 HH:MM；认不出来就当没定时间（空串），不因为一个格式问题丢掉整条日程。
+    认：14:00 / 9:5 / 14点 / 930 / 1400 / 14 —— 这些模型和人都会写。"""
+    s = re.sub(r"[\s点時时：]", ":", str(value or "").strip()).strip(":")
+    m = re.match(r"^(\d{1,3}):(\d{1,2})$", s)
+    if m:
+        hh, mi = int(m.group(1)), int(m.group(2))
+    else:
+        d = s.replace(":", "")
+        if not d.isdigit():
+            return ""
+        if len(d) <= 2:
+            hh, mi = int(d), 0
+        elif len(d) in (3, 4):
+            hh, mi = int(d[:-2]), int(d[-2:])
+        else:
+            return ""
+    return f"{hh:02d}:{mi:02d}" if 0 <= hh <= 23 and 0 <= mi <= 59 else ""
+
+
 # ------------------------------------------------------------ 内置定时任务 ----
 # 内置定时规则（DEFAULT 清单）：4 条，id 固定，
 # 这样重复播种是「只补缺」而不是反复插入；prompt 换成我们这套（检索 → 精读 → 落盘）的说法。
@@ -258,6 +278,8 @@ class WorkflowDB(ResearchDB):
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(calendar_events)")}
         if "done" not in cols:
             self.db.execute("ALTER TABLE calendar_events ADD COLUMN done INTEGER NOT NULL DEFAULT 0")
+        if "time" not in cols:                          # 老库补列：当天的钟点 HH:MM（空 = 没定时间）
+            self.db.execute("ALTER TABLE calendar_events ADD COLUMN time TEXT NOT NULL DEFAULT ''")
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(research_tasks)")}
         if "base_dir" not in cols:                      # 老库补列：项目位置
             self.db.execute("ALTER TABLE research_tasks ADD COLUMN base_dir TEXT NOT NULL DEFAULT ''")
@@ -901,7 +923,7 @@ class WorkflowDB(ResearchDB):
         files = [r["source_path"] for r in self.db.execute("SELECT source_path FROM papers WHERE task_id=?", (task_id,))]
         self.db.execute("DELETE FROM paper_pages WHERE paper_id IN (SELECT id FROM papers WHERE task_id=?)", (task_id,))
         self.db.execute("DELETE FROM evidence WHERE paper_id IN (SELECT id FROM papers WHERE task_id=?)", (task_id,))
-        for table in ("papers", "artifacts", "runs", "calendar_events", "notes", "steps", "search_cache", "chat", "paper_graph"):
+        for table in ("papers", "artifacts", "runs", "calendar_events", "notes", "steps", "search_cache", "chat", "paper_graph", "kb_graph"):
             self.db.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
         self.db.execute("DELETE FROM research_tasks WHERE id=?", (task_id,))
         self.db.commit()
@@ -918,11 +940,18 @@ class WorkflowDB(ResearchDB):
         return {"deleted": True, "id": task_id, "files_removed": removed}
 
     # ---------- 日历 ----------
-    def add_event(self, title: str, date: str, task_id: str | None = None, kind: str = "milestone", note: str = "") -> dict[str, Any]:
+    def add_event(self, title: str, date: str, task_id: str | None = None, kind: str = "milestone",
+                  note: str = "", time: str = "") -> dict[str, Any]:
         if not title.strip() or not re.match(r"^\d{4}-\d{2}-\d{2}$", date or ""):
             raise ValueError("日历事件需要标题和 YYYY-MM-DD 日期")
-        row = (uuid.uuid4().hex, task_id or None, title.strip(), date, kind, note, now())
-        self.db.execute("INSERT INTO calendar_events (id,task_id,title,date,kind,note,created_at) VALUES (?,?,?,?,?,?,?)", row)
+        title = title.strip()
+        if not time:                                             # 模型有时仍把钟点写进标题：「14:00 参加学术会议」
+            m = re.match(r"^(\d{1,2}\s*[:：]\s*\d{1,2})\s*(.+)$", title)
+            if m:
+                time, title = _norm_hhmm(m.group(1)), m.group(2).strip()
+        time = _norm_hhmm(time)                                  # 空 = 没定时间；'9:5' → '09:05'
+        row = (uuid.uuid4().hex, task_id or None, title, date, kind, note, time, now())
+        self.db.execute("INSERT INTO calendar_events (id,task_id,title,date,kind,note,time,created_at) VALUES (?,?,?,?,?,?,?,?)", row)
         self.db.commit()
         return self.event(row[0])
 
@@ -941,10 +970,12 @@ class WorkflowDB(ResearchDB):
         return dict(row)
 
     def events(self, month: str | None = None) -> list[dict[str, Any]]:
+        # 同一天按钟点排，没定时间的排当天最后；再往后按落库时间
+        order = "ORDER BY date, COALESCE(NULLIF(time,''),'99:99'), created_at"
         if month:
-            rows = self.db.execute("SELECT * FROM calendar_events WHERE date LIKE ? ORDER BY date", (month + "%",))
+            rows = self.db.execute(f"SELECT * FROM calendar_events WHERE date LIKE ? {order}", (month + "%",))
         else:
-            rows = self.db.execute("SELECT * FROM calendar_events ORDER BY date")
+            rows = self.db.execute(f"SELECT * FROM calendar_events {order}")
         return [dict(r) for r in rows]
 
     def delete_event(self, event_id: str) -> None:
@@ -1217,6 +1248,81 @@ class WorkflowDB(ResearchDB):
         self.db.commit()
         g["built_at"], g["took_ms"] = built, took
         return g
+
+    def kb_graph(self, task_id: str, rebuild: bool = False) -> dict[str, Any]:
+        """知识星图（编译产物）：第一次进「知识库」时算一次落库，之后只读这份，不实时重算。
+        rebuild=True（点了「重算星图」）才重新扫库编译。"""
+        if not rebuild:
+            row = self.db.execute("SELECT json, built_at FROM kb_graph WHERE task_id=?", (task_id,)).fetchone()
+            if row:
+                try:
+                    g = json.loads(row["json"] or "{}")
+                except ValueError:
+                    g = {}
+                g["built_at"] = row["built_at"]
+                return g
+        import starmap
+        g = starmap.graph(self.db, task_id)
+        g["built_at"] = now()
+        self.db.execute("INSERT OR REPLACE INTO kb_graph (task_id,json,built_at) VALUES (?,?,?)",
+                        (task_id, json.dumps(g, ensure_ascii=False), g["built_at"]))
+        self.db.commit()
+        return g
+
+    # ---------- 创新点审查：上区原文 + 下区判定 ----------
+    def idea_input(self, task_id: str) -> str:
+        row = self.db.execute("SELECT text FROM idea_input WHERE task_id=?", (task_id,)).fetchone()
+        return (row["text"] if row else "") or ""
+
+    def idea_input_save(self, task_id: str, text: str) -> int:
+        text = str(text or "")
+        self.db.execute("INSERT OR REPLACE INTO idea_input (task_id,text,updated_at) VALUES (?,?,?)",
+                        (task_id, text, now()))
+        self.db.commit()
+        return len(text)
+
+    def idea_verdict(self, task_id: str) -> dict[str, Any]:
+        """左边下区那份「判定结果」= 这一步最近一次 idea_review 落下的项目笔记。"""
+        for n in self.notes(task_id):
+            if (n.get("title") or "").startswith("创新点审查"):
+                return {"id": n["id"], "title": n["title"], "markdown": n["markdown"],
+                        "created_at": n["created_at"]}
+        return {}
+
+    # ---------- 论文翻译：荧光笔标注（助手要看得到圈了什么）----------
+    def tr_hl(self, paper_id: str, task_id: str = "") -> list[dict[str, Any]]:
+        row = self.db.execute("SELECT json FROM tr_hl WHERE paper_id=? AND task_id=?",
+                              (paper_id, task_id)).fetchone()
+        try:
+            return json.loads(row["json"]) if row else []
+        except (ValueError, TypeError):
+            return []
+
+    def tr_hl_save(self, paper_id: str, task_id: str, items: list[dict[str, Any]]) -> int:
+        self.db.execute("INSERT OR REPLACE INTO tr_hl (paper_id,task_id,json,updated_at) VALUES (?,?,?,?)",
+                        (paper_id, task_id, json.dumps(items or [], ensure_ascii=False), now()))
+        self.db.commit()
+        return len(items or [])
+
+    def tr_hl_context(self, task_id: str, limit: int = 12) -> str:
+        """给通用 Agent 的一段上下文：用户最近在翻译页用荧光笔圈的内容（按论文取最近更新的那篇）。"""
+        row = self.db.execute("SELECT paper_id FROM tr_hl WHERE task_id=? ORDER BY updated_at DESC LIMIT 1",
+                              (task_id,)).fetchone()
+        if not row:
+            return ""
+        seen, out = set(), []
+        for h in self.tr_hl(row["paper_id"], task_id):
+            t = (h.get("t") or "").strip()
+            if not t or t in seen:
+                continue
+            seen.add(t)
+            out.append(f"第 {h.get('p') or '?'} 页：{t}")
+            if len(out) >= limit:
+                break
+        if not out:
+            return ""
+        return ("用户在论文翻译里用荧光笔圈了这些（他说「这句/这里」就是指它们；引用原文，别改数字）：\n"
+                + "\n".join(out))
 
     # ---------- Agent 对话记录 ----------
     def add_message(self, task_id: str, role: str, content: str, events: list | None = None,
@@ -1566,7 +1672,8 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
     if name == "knowledge_query":
         return _knowledge_query(db, task_id, args.get("query", ""))
     if name == "calendar_add":
-        return db.add_event(args.get("title", ""), args.get("date", ""), task_id, args.get("kind", "milestone"))
+        return db.add_event(args.get("title", ""), args.get("date", ""), task_id, args.get("kind", "milestone"),
+                            time=args.get("time", ""))
     if name == "search":
         return stage_search(db, task_id, args.get("query", ""), args.get("sources"), int(args.get("rows", 10)))
     if name == "paper_search":
@@ -1734,7 +1841,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         except Exception:
             pass
     elif chat_row:  # 首页 Agent = 智研管家：不绑项目，但有全局视野
-        ctx = ("你是这个软件的 **智研管家**（首页 Agent，不属于任何单个项目）：可以跨项目工作 —— 查任意项目、"
+        ctx = ("你叫「览籍智研」，是这个软件的主 Agent（首页就叫「智研管家」），用户的科研助手。"
+               "有人问「你是谁」，答：我是览籍智研，你的科研助手。\n"
+               "你是 **智研管家**（首页 Agent，不属于任何单个项目）：可以跨项目工作 —— 查任意项目、"
                "任意文献/笔记/日程，也能新建项目、加日程、检索下载精读文献、写笔记。\n"
                "项目工作流里跑的是 **绑定单个项目的 Partner Agent**；要在某个项目内部推进，就按「哪个项目、要什么产出」把话说清，"
                "或建议用户进那个项目的「项目空间 / 工作流」。\n"
@@ -1891,7 +2000,7 @@ def _brief(name: str, result: Any) -> str:
     if name == "format_convert":
         return f"已导出 {result.get('path', '')}"
     if name == "calendar_add":
-        return f"已加日程 {result.get('title')} @ {result.get('date')}"
+        return f"已加日程 {result.get('title')} @ {result.get('date')} {result.get('time') or ''}".strip()
     if name == "knowledge_query":
         return f"命中 {result.get('total', 0)} 条"
     if name == "library_overview":

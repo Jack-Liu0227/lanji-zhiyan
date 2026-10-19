@@ -82,8 +82,6 @@ schedule.DB_PATH = DB_PATH          # 定时任务共用同一个库（schedule 
 team.DB_PATH = DB_PATH              # 团队共用同一个库
 UPLOADS = paths.UPLOADS
 PORT = 8765
-CARD_W, CARD_H = 1117, 625      # 「开始卡片」尺寸（CSS 逻辑像素）
-CARD_PIN = True                 # True=窗口一直钉在卡片尺寸；点「进入」走 /api/win/maximize 后放掉
 APP_TITLE = "览籍智研"      # 窗口标题前缀（web/index.html 会追加 " · v<构建戳>"）
 STAMP = 0                       # web/index.html 的时间戳；无边框窗口靠它认「自己那扇窗」
 
@@ -207,21 +205,6 @@ def _fit(h: int, zoom: bool) -> None:
     _set_client_rect(h, x, y, w, hh)
 
 
-def _fit_card(h: int, w: int = CARD_W, hh: int = CARD_H) -> None:
-    """把窗口钉成「开始卡片」的大小（CSS 逻辑像素 → 物理）并居中。点「进入」后
-    前端打 /api/win/maximize → CARD_PIN 放掉、铺回工作区。"""
-    import ctypes
-    from ctypes import wintypes
-    u = ctypes.windll.user32
-    if u.IsIconic(h):
-        u.ShowWindow(h, 9)
-    x, y, w0, h0 = _work_area()
-    s = _dpi_scale()
-    W, H = int(round(w * s)), int(round(hh * s))
-    X, Y = x + (w0 - W) // 2, y + (h0 - H) // 2
-    _set_client_rect(h, X, Y, W, H)
-
-
 def _fit_side(h: int, width: int = 580) -> None:
     """窄栏：钉到屏幕右缘、全高（读论文时把工作台放旁边随手记）。"""
     import ctypes
@@ -257,8 +240,6 @@ def _win(action: str) -> dict[str, Any]:
     if action == "minimize":
         u.ShowWindow(h, 6)                                     # SW_MINIMIZE
     elif action == "maximize":
-        global CARD_PIN                 # 卡片阶段结束 → 之后不再往卡片尺寸钉
-        CARD_PIN = False
         x, y, w, hh = _work_area()
         cr = wintypes.RECT()
         u.GetClientRect(h, ctypes.byref(cr))
@@ -292,8 +273,6 @@ def _webview_window(url: str, stamp: int) -> bool:
         icon = ROOT / "tools" / "build" / "icon.ico"
     x, y, w, h = _work_area()
     s = _dpi_scale()      # pywebview 把 x/y/宽高当逻辑像素再乘 DPI，先除回去，起来后再钉准
-    cw, ch = int(round(CARD_W * s)), int(round(CARD_H * s))   # 先按「开始卡片」大小居中开窗，「进入」再铺满
-    x, y, w, h = x + (w - cw) // 2, y + (h - ch) // 2, cw, ch
     if os.environ.get("RW_DEBUG_CDP"):     # 给验证用的：RW_DEBUG_CDP=9333 就能用 CDP 连进这扇窗读 DOM
         webview.settings["REMOTE_DEBUGGING_PORT"] = int(os.environ["RW_DEBUG_CDP"])
     threading.Thread(target=_watch_restore, daemon=True).start()
@@ -302,7 +281,8 @@ def _webview_window(url: str, stamp: int) -> bool:
             f"{APP_TITLE} · v{stamp}", url + "&pw=1",
             frameless=True, easy_drag=False,      # 拖动靠 .pywebview-drag-region（顶栏），不是抓哪儿拖哪儿
             x=int(x / s), y=int(y / s), width=int(w / s), height=int(h / s),
-            min_size=(int(420 / s), int(380 / s)), background_color="#F9FCFE")   # 逻辑像素！专注模式的「窄栏」只有 580 物理，按 DPI 反算，否则会把窗口钳在 ~690 宽
+            min_size=(int(420 / s), int(380 / s)), background_color="#0b0f14")   # 逻辑像素！专注模式的「窄栏」只有 580 物理，按 DPI 反算，否则会把窗口钳在 ~690 宽
+            # 窗口底色 = 深色主题的 --bg（原来是开始卡片的 #F9FCFE，卡片一删，那一下就变成白闪）
         webview.start(gui="edgechromium", private_mode=False,   # 关掉隐私模式，localStorage/头像才留得住
                       storage_path=str(paths.CACHE / "webview"),
                       icon=str(icon) if icon.is_file() else None,
@@ -355,27 +335,15 @@ def _fit_after() -> None:
     """窗口起来后把矩形钉到工作区。WinForms 的 AutoScaleMode.Dpi 会在窗口 show 之后
     自己重排一次尺寸（实测 2488x1600 被打回 1866x1200 居中），所以 4 秒内每隔 100ms
     检查一次，偏了就再钉一次；钉住了就不再碰（避免反复重排把页面刷花）。
-    卡片尺寸由 CARD_W/CARD_H 定；CARD_PIN 被 /api/win/maximize 放掉后就回归「铺满工作区」。"""
+    没有开始卡片了，起来直接钉满工作区。"""
     pinned = False
     for _ in range(40):
         h = _win_hwnd()
-        if h and CARD_PIN and not _at_card(h):
-            _fit_card(h)
+        if h and not _at_work_area(h):
+            _fit(h, True)
         if h and not pinned:                     # 首次拿到窗口就补缩放边框（之后能拖边改宽窄）
             pinned = _resizable(h)
         time.sleep(0.1)
-
-
-def _at_card(h: int) -> bool:
-    """窗口的客户区是不是已经到了卡片大小（CSS 逻辑像素）；卡片是居中钉的，位置不管。"""
-    import ctypes
-    from ctypes import wintypes
-    u = ctypes.windll.user32
-    s = _dpi_scale()
-    W, H = int(round(CARD_W * s)), int(round(CARD_H * s))
-    r = wintypes.RECT()
-    u.GetClientRect(h, ctypes.byref(r))
-    return abs((r.right - r.left) - W) <= 2 and abs((r.bottom - r.top) - H) <= 2
 
 
 def _at_work_area(h: int) -> bool:
@@ -848,9 +816,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"zoomed": bool(h and _at_work_area(h))})
             if path == "/api/starmap":
                 tid = (q.get("task") or [""])[0]
+                fresh = (q.get("rebuild") or [""])[0] in ("1", "true")
                 with WorkflowDB(DB_PATH) as db:
                     # 不带 task = 第一级（知识库 → 项目）；带 task = 该项目的五簇分支
-                    return self._json(starmap.graph(db.db, tid) if tid else starmap.overview(db.db))
+                    # 分支层是编译产物：第一次进来算一次落库，之后直接读（不实时重算）；?rebuild=1 才重编译
+                    return self._json(db.kb_graph(tid, fresh) if tid else starmap.overview(db.db))
+            if path == "/api/tr/hl":                     # 论文翻译：荧光笔标注（读）
+                with WorkflowDB(DB_PATH) as db:
+                    return self._json({"list": db.tr_hl((q.get("id") or [""])[0], (q.get("task") or [""])[0])})
             if path == "/api/starmap/brief":            # 知识点简介：库里有回库里的，没有才调一次模型
                 term = (q.get("term") or [""])[0]
                 with WorkflowDB(DB_PATH) as db:
@@ -973,6 +946,8 @@ class Handler(BaseHTTPRequestHandler):
                     db.seed_long_memory(tid)
                     return self._json({
                         "out": str(db.out_dir(tid)),
+                        "mine": db.idea_input(tid),                 # 上区：用户写的创新点原文
+                        "verdict": db.idea_verdict(tid),            # 下区：最近一次判定（笔记 markdown）
                         "long": db.memory(tid, "long"),
                         "short": [{"role": m["role"], "content": m["content"], "created_at": m["created_at"],
                                    "events": m.get("events") or []} for m in db.messages(tid)],
@@ -1169,6 +1144,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": str(exc)}, 400)
         if path.startswith("/api/win/"):
             return self._json(_win(path.rsplit("/", 1)[-1]))
+        if path == "/api/idea/input":                # 创新点审查：存上区那段原文（助手每轮读它）
+            try:
+                with WorkflowDB(DB_PATH) as db:
+                    n = db.idea_input_save(str(data.get("task_id") or ""), str(data.get("text") or ""))
+                return self._json({"saved": n})
+            except Exception as exc:
+                return self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
+        if path == "/api/tr/hl":                     # 论文翻译：荧光笔标注（存：助手要读）
+            try:
+                with WorkflowDB(DB_PATH) as db:
+                    n = db.tr_hl_save(str(data.get("id") or ""), str(data.get("task_id") or ""),
+                                      data.get("list") or [])
+                return self._json({"saved": n})
+            except Exception as exc:
+                return self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
         if path == "/api/agent":
             return self._sse(data)
         if path == "/api/idea":
@@ -1435,7 +1425,7 @@ class Handler(BaseHTTPRequestHandler):
                             return self._json({"cancelled": True})
                     return self._json({"chat": db.update_chat(cid, out_dir=picked)})
                 if path == "/api/calendar/add":
-                    return self._json(db.add_event(data.get("title", ""), data.get("date", ""), data.get("task_id"), data.get("kind", "milestone"), data.get("note", "")))
+                    return self._json(db.add_event(data.get("title", ""), data.get("date", ""), data.get("task_id"), data.get("kind", "milestone"), data.get("note", ""), data.get("time", "")))
                 if path == "/api/calendar/delete":
                     db.delete_event(data.get("id", ""))
                     return self._json({"deleted": True})
@@ -1622,6 +1612,12 @@ class Handler(BaseHTTPRequestHandler):
 
         db = WorkflowDB(DB_PATH)
         tid = str(data.get("task_id") or data.get("chat_id") or "")
+        # 没带对话、或 localStorage 里那条已经删了 → 现开一个「不绑项目」的对话。
+        # 以前这里直接拿空 id 往下走，run_agent 里 db.summary('') 抛 KeyError，整轮发言变成一条报错。
+        if not (db.db.execute("SELECT 1 FROM chats WHERE id=?", (tid,)).fetchone()
+                or db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone()):
+            tid = db.create_chat("")
+            data = {**data, "task_id": tid}
         idemp = str(data.get("idempotency_key") or "")
         run = RunManager.get_instance().create_run(task_id=tid, idempotency_key=idemp, db=db)
 
@@ -1650,7 +1646,16 @@ class Handler(BaseHTTPRequestHandler):
             if track:
                 db.log_step(tid, step, "running", "开始执行")
             runners = {"idea": run_idea, "outline": run_outline, "map": run_map, "write": run_write, "review": run_review}
-            (runners.get(step) or run_agent)(db, tid, data.get("message", ""), emit)
+            fn = runners.get(step)
+            if fn:
+                fn(db, tid, data.get("message", ""), emit)
+            else:
+                # 通用 Agent（含「论文翻译」步的助手）：把荧光笔圈中的原文塞进上下文，它才答得上「这句什么意思」
+                try:
+                    extra = db.tr_hl_context(tid)
+                except Exception:
+                    extra = ""
+                run_agent(db, tid, data.get("message", ""), emit, extra_context=extra)
             if track:
                 db.log_step(tid, step, "failed" if had_error else "done",
                             "执行过程报告错误" if had_error else "执行完成")

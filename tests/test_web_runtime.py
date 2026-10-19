@@ -91,7 +91,6 @@ class WebRuntimeTest(unittest.TestCase):
     def test_zotero_modal_closes_from_button_and_mask(self) -> None:
         self.load_page()
         # Exercise the real modal and its bindings without requiring Zotero to run.
-        self.page.evaluate("document.getElementById('splash').remove()")
         modal = self.page.locator("#zoteroModal")
         for selector in ("#btnZotClose", "#zoteroModal .modal-mask"):
             modal.evaluate("element => element.classList.remove('hidden')")

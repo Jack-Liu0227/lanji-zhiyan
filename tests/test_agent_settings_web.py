@@ -65,7 +65,6 @@ class AgentSettingsWebTest(unittest.TestCase):
         self.page.on("pageerror", lambda e: self.errors.append(str(e)))
         self.page.goto(self.url, wait_until="networkidle")
         self.page.wait_for_function("S.loaded")
-        self.page.evaluate("document.getElementById('splash')?.remove()")
 
     def post(self, path, body):
         return self.page.evaluate("async ([path,body])=>api(path,body)", [path,body])
@@ -149,7 +148,6 @@ class AgentSettingsWebTest(unittest.TestCase):
         page.wait_for_function("document.querySelector('#ag-team-session').value===document.querySelector('#ag-team-session option:checked').value")
         page.reload(wait_until="networkidle")
         page.wait_for_function("S.loaded")
-        page.evaluate("document.getElementById('splash')?.remove(); openTab('team')")
         page.wait_for_selector("#ag-team-session")
         self.assertEqual(page.locator("#ag-team-session").input_value(), previous)
         self.assertEqual(self.errors, [])

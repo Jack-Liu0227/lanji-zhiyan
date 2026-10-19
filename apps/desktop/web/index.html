@@ -7,61 +7,12 @@
 <script>
 /* 标题带上构建戳：启动器靠它认出「哪扇窗是这一版」（app 窗口的 --app 复用不可靠） */
 document.title = "览籍智研 · v" + (new URLSearchParams(location.search).get("v") || "dev");
+/* 主题在首帧前就定好：以前等 refreshState 回来才套 rw-theme，浅色用户会先看到一帧深色页再翻白（同样算闪一下） */
+document.documentElement.dataset.theme = localStorage.getItem("rw-theme") || "dark";
 </script>
 <link rel="stylesheet" href="/app.css">
-<style>#splash.ready{opacity:1;pointer-events:auto}</style>
 </head>
 <body>
-<!-- 开始卡片：动态入场（山水背景 + 浮动主角 + 书法字 + 交互进入按钮） -->
-<div id="splash" class="pywebview-drag-region">
-  <div class="sp-stage" id="spStage">
-    <!-- 画面层：背景 + 云雾，整体 overscan 10%，倾斜时永远盖住底（白边根因） -->
-    <div class="sp-bleed" id="spBleed">
-      <img src="/background.png" alt="背景" class="sp-layer sp-bg" draggable="false">
-      <div class="sp-fog sp-fog-a"></div>
-      <div class="sp-fog sp-fog-b"></div>
-      <div class="sp-fog sp-fog-c"></div>
-      <div class="sp-veil"></div>
-    </div>
-
-    <!-- 科技微粒流动光效画布 -->
-    <canvas id="spParticles" class="sp-particles"></canvas>
-
-    <!-- 浮动主角：读书机器人徽标卡片（logo.png） -->
-    <div class="sp-hero-wrap" id="spHeroWrap">
-      <img src="/logo_badge.png" alt="标志" class="sp-hero-img" draggable="false">
-    </div>
-
-    <!-- 书法字标题 + 扫光 + 旋转星辉 -->
-    <div class="sp-title-wrap" id="spTitleWrap">
-      <div class="sp-title-box">
-        <img src="/title.png" alt="览籍智研" class="sp-title-img" draggable="false">
-        <div class="sp-title-shimmer"></div>
-      </div>
-      <img src="/star.png" alt="星标" class="sp-star" draggable="false">
-    </div>
-
-    <!-- 进入：横排行楷 + 笔锋 + 朱印 -->
-    <div class="sp-btn-anchor" id="spBtnAnchor">
-      <button id="spGo" class="sp-go-btn" type="button" title="进入主页面 (Enter)" aria-label="进入">
-        <span class="sp-kai">进 入</span>
-        <span class="sp-brush"></span>
-        <span class="sp-seal" aria-hidden="true">研</span>
-        <!-- 保持对原有自动化测试的兼容性 -->
-        <span class="sp-in" style="display:none"><span class="sp-dot"></span><span class="sp-lb">Enter</span></span>
-        <span class="sp-hv" style="display:none"><span>Enter</span></span>
-      </button>
-      <div class="sp-go-hint">点击或按 Enter</div>
-    </div>
-
-    <!-- 瞬间跃迁冲击波 -->
-    <div class="sp-shockwave" id="spShockwave"></div>
-  </div>
-
-  <canvas id="spGlobe" class="sp-globe"></canvas>
-  <canvas id="spWord" class="sp-word"></canvas>
-  <button id="spClose" class="sp-close" type="button" title="关闭">✕</button>
-</div>
 <div class="app-shell">
   <aside class="sidebar" id="sidebar"></aside>
   <div class="content">
@@ -153,7 +104,6 @@ document.title = "览籍智研 · v" + (new URLSearchParams(location.search).get
   </div>
 </div>
 
-<script src="/vendor/splash.js"></script>
 <script src="/vendor/kb3d.js"></script>
 <script src="/vendor/starmap.js"></script>
 <script src="/vendor/lunar/lunar.js"></script>

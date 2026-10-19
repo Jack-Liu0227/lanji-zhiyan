@@ -13,7 +13,6 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
 
     def load_workspace(self):
         self.load_page()
-        self.page.evaluate("document.getElementById('splash')?.remove()")
 
     def create_project(self, title):
         result = self.page.request.post(self.url + "api/task/create", data={"title": title}).json()
@@ -45,7 +44,6 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
             self.assertEqual(saved["base_dir"], base)
             self.assertEqual(saved["question"], "Does creation persist?")
             self.page.reload(wait_until="networkidle")
-            self.page.evaluate("document.getElementById('splash')?.remove(); openTab('tasks')")
             self.assertIn("Bottom card project", self.page.locator(".proj-cards").inner_text())
         self.assertEqual(self.errors, [])
 
@@ -89,7 +87,6 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
         self.assertEqual(editor.input_value(), "Keep my unsent text")
         self.page.unroute("**/api/workflow/layouts/state?*")
         self.page.reload(wait_until="networkidle")
-        self.page.evaluate("document.getElementById('splash')?.remove(); openTab('workflow')")
         self.page.wait_for_selector('[data-wfl-node="review"].selected')
         self.assertIn("Browser custom workflow", self.page.locator(".wfl-graph summary").inner_text())
         self.assertEqual(self.errors, [])

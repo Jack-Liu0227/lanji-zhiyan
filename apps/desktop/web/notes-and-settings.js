@@ -1345,7 +1345,13 @@ function md(t){
 /* ---------------- 启动 ---------------- */
 async function refreshState(rerender=true){
   const st = await api("/api/state");
+  const seen = S.loaded ? new Set((S.events||[]).map(e=>e.id)) : null;          // 首屏不算「新增」，免得一进来就跳走
   S.tasks=st.tasks; S.chats=st.chats||[]; S.assistants=st.assistants||[]; S.models=st.models; S.active=st.active; S.events=st.events; S.stages=st.stages||[];
+  const fresh = seen ? (st.events||[]).filter(e=>!seen.has(e.id)) : [];
+  if(fresh.length){                                                            // 刚加的日程（agent 或别的窗口）：日历停到那一天
+    const d = fresh[fresh.length-1].date || "";
+    if(/^\d{4}-\d{2}-\d{2}$/.test(d)){ calSel = d; calY = +d.slice(0,4); calM = +d.slice(5,7)-1; }
+  }
   { const pv = await api("/api/providers"); S.providers=pv.providers; S.wires=pv.wires; S.default=pv.default; }
   if(!S.tools.length) S.tools = (await api("/api/tools")).tools;
   S.loaded=true;

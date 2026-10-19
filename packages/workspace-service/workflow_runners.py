@@ -17,7 +17,10 @@ def run_idea(db: Any, task_id: str, text: str, emit: Any = None) -> dict[str, An
     """创新点审查这一步：受限工具（只看创新点）+ 博导 skill 框架 + 项目长期/短期记忆。"""
     import workflow
     system = workflow.idea_system(db, task_id).replace("%%MEMORY%%", db.memory_block(task_id))
-    return workflow.run_agent(db, task_id, text, emit, max_steps=6, system=system, tools=IDEA_TOOLS, scope="idea")
+    mine = (db.idea_input(task_id) or "").strip()          # 用户在上区写的创新点原文：每轮都带上，他改了就按新的看
+    extra = ("【用户在上区「我的创新点」里写的原文 —— 以这份为准，他会随时编辑】\n" + mine) if mine else ""
+    return workflow.run_agent(db, task_id, text, emit, max_steps=6, system=system, tools=IDEA_TOOLS,
+                              scope="idea", extra_context=extra)
 
 
 def run_map(db: Any, task_id: str, text: str, emit: Any = None) -> dict[str, Any]:

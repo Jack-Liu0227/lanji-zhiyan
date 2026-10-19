@@ -11,23 +11,29 @@ function trPanelHTML(active){
     <div class="tr-bar">
       <button class="btn btn-teal" id="trAdd">＋ 添加论文</button>
       <select id="trPick" class="tr-sel" title="这个项目文献库里已有的 PDF"><option value="">文献库已有…</option></select>
-      <span class="tr-spacer"></span>
       <span class="tr-seg" id="trSeg">
-        <button class="tr-seg-b active" id="trBtnBack" title="只看原文（返回阅读器）">原文</button>
-        <button class="tr-seg-b" id="trBtnT" title="左边原文、右边中文">🌐 中英互译</button>
-        <button class="tr-seg-b" id="trBtnN" title="全屏：左边中文、右边随记随写">📝 笔记模式</button>
+        <button class="tr-seg-b active" id="trBtnEn" title="英文原文 PDF">English</button>
+        <button class="tr-seg-b" id="trBtnZh" title="纯中文（BabelDOC 译文）">中文</button>
       </span>
+      <span class="tr-spacer"></span>
       <span class="tr-grp">
         <button class="tr-ib" id="trPenTop" title="荧光笔" aria-label="荧光笔">🖍</button>
-        <button class="tr-ib" id="trZenTop" title="全屏，左原文右中文，可拖分栏；左上角有缩放加减号（Esc 退出）" aria-label="专注模式">⛶</button>
+        <button class="tr-ib" id="trZenTop" title="全屏阅读（Esc 退出）" aria-label="专注模式">⛶</button>
       </span>
       <span class="tr-zoom"><button id="trOut" title="缩小" aria-label="缩小">−</button><span class="tr-zoomv" id="trZoomV">115%</span><button id="trIn" title="放大" aria-label="放大">＋</button></span>
       <span class="tr-pageno" id="trPageNo">0 / 0</span>
+      <button class="btn" id="trBtnN" title="右栏切成阅读笔记">📝 笔记模式</button>
     </div>
-    <div class="tr-status"><span id="trMsg"></span></div>
-    <div class="tr-meta" id="trMeta">
-      <div><b>DOI：</b><span id="trDoi">暂无信息</span></div>
+    <div class="tr-strip" id="trStrip">
+      <span class="tr-strip-t" id="trStripTitle">还没有打开论文</span>
+      <span class="tr-strip-m" id="trStripMeta"></span>
+      <button class="tr-strip-x hidden" id="trStripMore" title="看完整元数据">详情 ▾</button>
+      <span class="tr-spacer"></span>
+      <span class="tr-msg" id="trMsg"></span>
+    </div>
+    <div class="tr-detail hidden" id="trDetail">
       <div><b>题目：</b><span id="trTitle">暂无信息</span></div>
+      <div><b>DOI：</b><span id="trDoi">暂无信息</span></div>
       <div><b>发表时间：</b><span id="trDate">暂无信息</span></div>
       <div><b>关键词：</b><span id="trKw">暂无信息</span></div>
     </div>
@@ -41,26 +47,7 @@ function trPanelHTML(active){
           <span>选好后自动解析 DOI / 题目 / 发表时间 / 关键词</span>
         </div>
       </div>
-      <div class="tr-pane" id="trPaneA" data-pane="a"><div class="tr-pane-tag">原文</div><div class="tr-scroll"></div></div>
-      <div class="tr-split hidden" id="trSplit" title="拖动调整两栏宽度"></div>
-      <div class="tr-pane hidden" id="trPaneB" data-pane="b"><div class="tr-pane-tag">中文</div><div class="tr-scroll"></div></div>
-      <div class="tr-note hidden" id="trNote">
-        <div class="tr-note-bar">
-          <button class="tr-ib" id="trNoteOut" title="缩小字号" aria-label="缩小字号">−</button>
-          <button class="tr-ib" id="trNoteIn" title="放大字号" aria-label="放大字号">＋</button>
-          <span class="tr-zoomv" id="trNoteZoomV">100%</span>
-          <span class="tr-spacer"></span>
-          <button class="tr-ib tr-note-exit" id="trNoteExit" title="退出笔记模式（Esc）">✕ 退出</button>
-        </div>
-        <div class="tr-note-grid">
-        <div class="tr-note-l"><div class="tr-note-h">中文全文（只读）<span id="trNotePages"></span></div><div class="tr-note-body md-render" id="trNoteBody"></div></div>
-        <div class="tr-note-r">
-          <input id="trNoteTitle" class="tr-note-title" placeholder="笔记名">
-          <div class="tr-note-hint"><span id="trNoteBind">阅读笔记</span> · 自动保存<span id="trNoteState"></span></div>
-          <textarea id="trNoteSrc" class="tr-note-src" spellcheck="true" placeholder="在这里随记随写…"></textarea>
-        </div>
-        </div>
-      </div>
+      <div class="tr-pane" id="trPaneA" data-pane="a"><div class="tr-scroll"></div></div>
     </div>
     <div class="tr-pen hidden" id="trPen">
       <b>颜色</b>
@@ -89,11 +76,10 @@ async function trUpload(files){
 function trMsg(t){ const el=$("trMsg"); if(el) el.textContent = t || ""; }
 
 async function trOpen(pid){
-  TR.pid = pid; TR.dual = false; TR.note = null;
+  TR.pid = pid; TR.note = null;
   trView("read");
   trSegActive("read");
   $("trPen")?.classList.add("hidden"); TR.hlOn = false;
-  trDualOff();
   TR.job = null; TR.words = {}; TR.prog = 0; trStopPoll();
   trMeta();
   await trReader(pid);
@@ -102,18 +88,26 @@ async function trOpen(pid){
 
 /* ---------------- 元数据 ---------------- */
 async function trMeta(){
-  const set = (id, v)=> $(id).textContent = (v && String(v).trim()) ? v : "暂无信息";
-  const meta = $("trMeta");
+  const set = (id, v)=> { const el = $(id); if(el) el.textContent = (v && String(v).trim()) ? v : "暂无信息"; };
   if(!TR.pid) return;
-  meta.classList.add("busy");
   try{
     const d = await api(`/api/papermeta?id=${encodeURIComponent(TR.pid)}`);
     if(d.error) throw new Error(d.error);
     TR.meta = d;
     set("trDoi", d.doi); set("trTitle", d.title); set("trDate", d.published); set("trKw", d.keywords);
     $("trTitle").title = d.title || "";
-  }catch(e){ meta.classList.add("err"); trMsg("元数据读取失败：" + e.message); }
-  meta.classList.remove("busy");
+    trStrip();
+  }catch(e){ trMsg("元数据读取失败：" + e.message); }
+}
+function trStrip(){
+  /* 顶部细条：题目 + 日期/DOI/关键词数；完整四项点「详情 ▾」展开 */
+  const m = TR.meta || {}, t = $("trStripTitle"), c = $("trStripMeta"), more = $("trStripMore");
+  if(!t) return;
+  t.textContent = m.title || (TR.pid ? "（这篇没解析出题目）" : "还没有打开论文");
+  t.title = m.title || "";
+  const kw = String(m.keywords || "").split(/[;,、]/).filter(x => x.trim()).length;
+  c.textContent = [m.published, m.doi ? "DOI " + m.doi : "", kw ? `关键词 ${kw}` : ""].filter(Boolean).join(" · ");
+  more.classList.toggle("hidden", !TR.pid);
 }
 
 /* ---------------- 阅读器（pdf.js，一个 pane 一套） ---------------- */
@@ -121,21 +115,27 @@ function trWorker(){
   if(window.pdfjsLib && !window.pdfjsLib.GlobalWorkerOptions.workerSrc)
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.js";
 }
-function trPaneEl(key){ return key === "b" ? $("trPaneB") : $("trPaneA"); }
+function trPaneEl(key){ return $("trPaneA"); }
 function trScrollEl(key){ return trPaneEl(key)?.querySelector(".tr-scroll"); }
 
 async function trReader(pid){
+  /* 单栏：English 原文 */
   if(!window.pdfjsLib){ trMsg("pdf.js 没加载"); return; }
   trWorker();
-  const url = `/api/pdf?id=${encodeURIComponent(pid)}`;
-  if(!TR.dual){                                   // 单栏：只留 A 栏（B 栏藏起来）
-    $("trStage").classList.remove("dual");
-    $("trStage").style.gridTemplateColumns = "";
-    $("trPaneB").classList.add("hidden");
-    $("trSplit").classList.add("hidden");
-    const box = trScrollEl("a"); if(box) box.innerHTML = "";
-    await trMount("a", url);
-  }
+  trView("read");
+  const box = trScrollEl("a"); if(box) box.innerHTML = "";
+  await trMount("a", `/api/pdf?id=${encodeURIComponent(pid)}`);
+}
+async function trShowZh(v){
+  /* 单栏：纯中文（BabelDOC 译文）—— 切过去保住读到哪 */
+  if(!TR.pid) return trMsg("先添加一篇 PDF");
+  if(!window.pdfjsLib){ trMsg("pdf.js 没加载"); return; }
+  trWorker();
+  const box = trScrollEl("a"), y = box ? box.scrollTop : 0;
+  trView("zh");
+  TR.monoUrl = trMonoUrl(v);
+  await trMount("a", TR.monoUrl);
+  if(box) box.scrollTop = y;
 }
 async function trMount(key, url){
   const box = trScrollEl(key); if(!box) return;
@@ -143,7 +143,7 @@ async function trMount(key, url){
   try{
     const pdf = await window.pdfjsLib.getDocument({url}).promise;
     TR.pdfs = TR.pdfs || {}; TR.pdfs[key] = pdf;
-    if(key === "a"){ TR.pages = pdf.numPages; $("trPick") && trFillPick(); }
+    TR.pages = pdf.numPages; $("trPick") && trFillPick();
     box.innerHTML = "";
     for(let n = 1; n <= pdf.numPages; n++){
       const page = await pdf.getPage(n);
@@ -161,6 +161,7 @@ async function trMount(key, url){
     trPageNo(key);
   }catch(e){
     box.innerHTML = `<div class="tr-load err">PDF 打不开：${esc(e.message)}</div>`;
+    if(/404|not found/i.test(String(e.message))) trMsg("还没有中文译文 —— 点「中文」它会先翻一遍（同一篇只翻一次）");
   }
 }
 function trPaintNear(key){
@@ -227,16 +228,13 @@ function trZen(on){
   st.classList.toggle("zen", show);
   TR.zen = show;
   $("trZenTop")?.classList.toggle("active", show);
-  trMsg(show ? "专注模式：中间那条线照样能拖；缩放用左上角那对加减号，Esc 退出"
-             : "");
-  if(show){ trPaintNear(TR.active === "b" ? "b" : "a"); trZoomLabel(); }
+  trMsg(show ? "专注模式：缩放用左上角那对加减号，Esc 退出" : "");
+  if(show){ trPaintNear("a"); trZoomLabel(); }
 }
 function trZoom(d){
   TR.scale = Math.min(TR_MAX, Math.max(TR_MIN, Math.round((TR.scale + d) * 100) / 100));
   trMsg(`缩放 ${Math.round(TR.scale*100)}%`);
-  if(TR.dual){ trMount("a", `/api/pdf?id=${encodeURIComponent(TR.pid)}`);
-               if(TR.monoUrl) trMount("b", TR.monoUrl); }
-  else trReader(TR.pid);
+  if(TR.pid) (TR.view === "zh" ? trShowZh() : trReader(TR.pid));
   trZoomLabel();
 }
 function trZoomLabel(){
@@ -245,34 +243,29 @@ function trZoomLabel(){
   const w = $("trZoomV");    if(w) w.textContent = t;      // 工具栏缩放组里那个
 }
 function trExitFull(){
-  /* ✕ / Esc 的统一出口：笔记模式先退回阅读器，再把全屏收掉 */
-  if(TR.view === "note") trBack();
+  /* ✕ / Esc 的统一出口：笔记模式先退回对话，再把全屏收掉 */
+  if(TR.noteMode) trExitNoteMode();
   trZen(false);
-}
-function trNoteZoom(d){
-  TR.noteScale = Math.min(1.8, Math.max(0.7, Math.round((TR.noteScale + d) * 10) / 10));
-  trNoteApply();
-}
-function trNoteApply(){
-  /* 笔记模式里没有 PDF 可缩放 —— 顶栏那对加减号管的是中文/笔记两栏的字号 */
-  const px = (13.5 * TR.noteScale).toFixed(1) + "px";
-  const b = $("trNoteBody"), s = $("trNoteSrc");
-  if(b) b.style.fontSize = px;
-  if(s) s.style.fontSize = px;
-  const v = $("trNoteZoomV"); if(v) v.textContent = Math.round(TR.noteScale*100) + "%";
 }
 
 /* ---------------- 荧光笔 ---------------- */
 const TR_COLORS = ["#FFE066", "#8BD498", "#7FC4F0", "#F0A9C0", "#F07C7C"];
-function trHlLoad(){
-  let raw = null;
-  try{ raw = JSON.parse(localStorage.getItem("rw-hl-" + TR.pid) || "null"); }catch(_){ raw = null; }
-  if(raw && raw.v === 2) TR.hl = raw.list || [];          // v1 的坐标是压着文字底线的（偏低），直接丢掉重画
-  else { TR.hl = []; if(raw) localStorage.removeItem("rw-hl-" + TR.pid); }
+async function trHlLoad(){
+  /* 先问服务端（助手要用），没有再用本机那份（离线时画得出来） */
+  let list = null;
+  try{
+    const d = await api(`/api/tr/hl?id=${encodeURIComponent(TR.pid)}&task=${encodeURIComponent(curTask||"")}`);
+    if(Array.isArray(d.list)) list = d.list;
+  }catch(_){}
+  if(!list || !list.length){
+    let raw = null;
+    try{ raw = JSON.parse(localStorage.getItem("rw-hl-" + TR.pid) || "null"); }catch(_){ raw = null; }
+    list = (raw && raw.v === 2) ? (raw.list || []) : [];
+  }
+  TR.hl = list || [];
   trPaintAllHls();
   trMsg(TR.hl.length ? `这份 PDF 上有 ${TR.hl.length} 处标注` : "");
 }
-function trHlSave(){ try{ localStorage.setItem("rw-hl-" + TR.pid, JSON.stringify({v:2, list:TR.hl})); }catch(_){} }
 function trPaintHls(n, el){
   const box = el.querySelector(".tr-hls"); if(!box) return;
   box.innerHTML = "";
@@ -316,56 +309,55 @@ function trHlOnMouseUp(e){
   if(!rects.length) return;
   const n = +pageEl.dataset.page;
   const th = TR.hlWidth;
-  rects.forEach(r=>{
+  const txt = (sel.toString() || "").replace(/\s+/g, " ").trim().slice(0, 400);   // 圈的是哪几个字 → 助手要用
+  rects.forEach((r, i)=>{
     TR.hl.push({p:n, x:Math.round(r.left - pr.left), y:Math.round(r.top - pr.top + r.height/2 - th/2),
-                w:Math.round(r.width), th, c:TR.hlColor});      // 按文字行的垂直中线居中（原来是压着底线，偏低）
+                w:Math.round(r.width), th, c:TR.hlColor, t: i === 0 ? txt : ""});   // 一段话占多行时文字只记在第一行
   });
   trHlSave(); trPaintHls(n, pageEl); sel.removeAllRanges();
-  trMsg(`已标注 ${TR.hl.length} 处（存在本机，这份 PDF 专属）`);
+  trMsg(`已标注 ${TR.hl.length} 处 —— 右侧助手能看到你圈的内容，直接问就行`);
 }
 
 /* ---------------- 中英互译（BabelDOC 后台任务） ---------------- */
 async function trTranslate(){
   if(!TR.pid) return trMsg("先添加一篇 PDF");
   if(TR.job && TR.job.state === "running") return;
-  const b = $("trBtnT");
-  b.disabled = true;
+  const b = $("trBtnZh");
+  trSegActive("zh");
+  if(b){ b.disabled = true; }
   trMsg("启动翻译…（同一篇只翻一次，第二次秒开）");
   try{
     const r = await api("/api/trans/start", {id: TR.pid, task_id: curTask, pages: TR.testPages || ""});
     if(r.error) throw new Error(r.error);
     TR.job = r;
-    if(r.state === "done" || r.cached) return trDualOpen();
+    if(r.state === "done" || r.cached){ if(b) b.disabled = false; return trShowZh(r.pages_done || 0); }
     trStartPoll();
-  }catch(e){ trMsg("翻译启动失败：" + e.message); b.disabled = false; }
+  }catch(e){ trMsg("翻译启动失败：" + e.message); if(b) b.disabled = false; }
 }
 function trStartPoll(){
   trStopPoll();
+  const lbl = (t, off)=>{ const zb = $("trBtnZh"); if(zb){ zb.textContent = t || "中文"; zb.disabled = !!off; } };
   TR.poll = setInterval(async ()=>{
     try{
       const s = await api(`/api/trans/status?id=${encodeURIComponent(TR.pid)}`);
       TR.job = s;
       if(s.state === "running" || s.state === "partial"){
         const el = Math.round((Date.now() - (TR.t0 || (TR.t0 = Date.now()))) / 1000);
-        $("trBtnT").textContent = "🌐 翻译中…";
+        lbl("翻译中…", true);
         const done = s.pages_done || 0;
         trMsg(`${s.msg || "正在翻译"}　已用 ${Math.floor(el/60)}分${el%60}秒（${TR.pages||"整篇"} 页大约十几分钟，可以先干别的）`);
-        if(done > 0 && done !== TR.prog){          // 翻好一批就先给一批：第一页好了就先把第一页摆出来
+        if(done > 0 && done !== TR.prog){          // 翻好一批就在「中文」里先看这一批
           TR.prog = done;
-          if(!TR.dual) trDualOpen(done); else trReloadB(done);
+          trShowZh(done);
           trMsg(`已翻好第 1-${done} 页（共 ${s.total_pages||TR.pages||"?"} 页），后面还在翻…`);
         }
-        if(s.state === "partial"){                 // 后面失败了：已有的照看，别把已经翻好的藏起来
-          trStopPoll(); TR.t0 = 0; $("trBtnT").textContent = "🌐 中英互译"; $("trBtnT").disabled = false;
-          if(!TR.dual && done > 0) trDualOpen(done);
+        if(s.state === "partial"){                 // 后面失败了：已翻好的照看
+          trStopPoll(); TR.t0 = 0; lbl("中文", false);
           trMsg(`翻到第 ${done} 页时中断：${s.msg || ""}（已翻好的还在，日志：${s.log || ""}）`);
         }
       }
-      if(s.state === "done"){ trStopPoll(); TR.t0 = 0; $("trBtnT").textContent = "🌐 中英互译";
-                              $("trBtnT").disabled = false;
-                              if(TR.dual) trReloadB(s.pages_done || 0); else trDualOpen(s.pages_done || 0); }
-      if(s.state === "error"){ trStopPoll(); TR.t0 = 0; $("trBtnT").textContent = "🌐 中英互译";
-                              $("trBtnT").disabled = false;
+      if(s.state === "done"){ trStopPoll(); TR.t0 = 0; lbl("中文", false); trShowZh(s.pages_done || 0); }
+      if(s.state === "error"){ trStopPoll(); TR.t0 = 0; lbl("中文", false);
                               trMsg("翻译失败：" + (s.msg||"") + (s.log ? `（日志：${s.log}）` : "")); }
     }catch(_){}
   }, 2500);
@@ -375,73 +367,56 @@ function trStopPoll(){ if(TR.poll){ clearInterval(TR.poll); TR.poll = 0; } }
 function trMonoUrl(v){
   return `/api/trans/file?id=${encodeURIComponent(TR.pid)}&task=${encodeURIComponent(curTask||"")}&kind=mono&v=${v||0}`;
 }
-async function trReloadB(v){
-  /* 译文又翻好一批：只换右栏，且保住用户读到哪 */
-  const b = trScrollEl("b"), y = b ? b.scrollTop : 0;
-  TR.monoUrl = trMonoUrl(v);
-  await trMount("b", TR.monoUrl);
-  if(b) b.scrollTop = y;
-}
-function trDualOpen(v){
-  TR.dual = true;
-  trView("dual");
-  trSegActive("dual");
-  $("trStage").classList.add("dual");
-  $("trPaneB").classList.remove("hidden");
-  $("trSplit").classList.remove("hidden");
-  TR.monoUrl = trMonoUrl(v);
-  const box = trScrollEl("b"); if(box) box.innerHTML = "";
-  if(!trScrollEl("a")?.querySelector(".tr-page")) trMount("a", `/api/pdf?id=${encodeURIComponent(TR.pid)}`);
-  trMount("b", TR.monoUrl);
-  trMsg("左原文 / 右中文 —— 中间那条线可以拖；上面的缩放/页码对着「当前栏」生效");
-}
-
-/* ---------------- 笔记模式 ---------------- */
-function trDedent(md){
-  /* PDF 抽出来的正文常带缩进 —— markdown 会把 ≥4 空格的整段当代码块渲染成黑框，先去掉行首空白 */
-  return (md || "").split("\n").map(l => l.replace(/^[ \t]+/, "")).join("\n");
-}
-function trSegActive(v){
-  /* 原文 / 中英互译 / 笔记模式 三个视图键的选中态只有这一处说了算 */
-  $("trBtnBack")?.classList.toggle("active", v === "read");
-  $("trBtnT")?.classList.toggle("active", v === "dual");
-  $("trBtnN")?.classList.toggle("active", v === "note");
-}
-function trView(v){
-  /* 阅读器 / 双栏 / 笔记 三个视图的可见性只有这一处说了算 —— 免得异步加载回来把当前视图盖掉 */
-  TR.view = v;
-  $("trNote")?.classList.toggle("hidden", v !== "note");
-  $("trDrop")?.classList.toggle("hidden", v !== "empty");
-  /* 笔记模式 = 全屏（和专注模式共用同一个 fixed 舞台）；离开笔记模式时自动收掉全屏 */
-  const st = $("trStage");
-  if(st){
-    st.classList.toggle("note", v === "note");
-    if(v === "note"){ st.classList.add("zen"); TR.zen = true; TR.noteZen = true; }
-    else if(TR.noteZen){ st.classList.remove("zen"); TR.zen = false; TR.noteZen = false; }
-  }
+/* ---------------- 笔记模式（右栏 agent 对话框换成笔记窄栏） ---------------- */
+function trNoteColumnHTML(){
+  const pname = (TR.meta && TR.meta.title) ? trShort(TR.meta.title, 16) : (TR.pid || "").slice(0, 8);
+  return `<div class="tr-nc" id="trNoteCol">
+    <div class="tr-nc-h"><b>阅读笔记</b><span class="tr-nc-bind" id="trNoteBind">已绑论文：${esc(pname)} · 自动保存</span></div>
+    <input id="trNoteTitle" class="tr-nc-title" placeholder="笔记名">
+    <div class="tr-nc-hint"><span id="trNoteState"></span></div>
+    <textarea id="trNoteSrc" class="tr-nc-src" spellcheck="true" placeholder="在这里随记随写…Ctrl+滚轮不改字号；点「助手模式」回到对话"></textarea>
+  </div>`;
 }
 async function trNoteMode(){
-  /* 笔记模式：左边 3/4 中文全文（只读），右边 1/4 「阅读笔记」随记随写。
-     笔记是**绑论文**的（论文又绑项目）：同一篇论文只会有一篇，再点就是打开它。空白起步，不塞论文正文。 */
+  /* 笔记模式：右栏 agent 对话框整列换成「阅读笔记」窄栏；笔记绑论文，一篇一篇 */
   if(!TR.pid) return trMsg("先添加一篇 PDF");
+  if(TR.noteMode) return trExitNoteMode();
   trMsg("正在打开这篇论文的「阅读笔记」…");
   try{
     const r = await api("/api/paper/note", {id: TR.pid, task_id: curTask});
     if(r.error) throw new Error(r.error);
-    TR.note = r.note; TR.noteText = r.text || "";
-    trDualOff();
-    trView("note");
-    trSegActive("note");
-    $("trNoteTitle").value = TR.note.title || "阅读笔记";
-    $("trNoteSrc").value = TR.note.content || "";                 // 空白：他自己写
-    trNoteApply();
-    $("trNoteBody").innerHTML = r.text ? renderMarkdown(trDedent(r.text))
-                                       : `<div class="tr-load">还没有中文全文 —— 先点上面「🌐 中英互译」，翻好一段这里就有一段。</div>`;
-    $("trNotePages").textContent = r.pages ? ` · ${r.pages} 页` : "";
-    const pname = (TR.meta && TR.meta.title) ? trShort(TR.meta.title) : (TR.pid || "").slice(0, 8);
-    $("trNoteBind").textContent = `已绑定论文：${pname}${curTask ? " · 项目" : ""} · 自动保存`;
-    trMsg(`「阅读笔记」已绑到这篇论文；左边中文、右边随记随写，顶栏加减号调字号、✕ 退出（Esc）${r.pages ? "" : "（暂无中文全文）"}`);
+    TR.note = r.note; TR.noteMode = true;
+    trPaintNoteColumn();
+    trMsg("「阅读笔记」已绑到这篇论文 —— 右栏随记随写、自动存；点「🤖 助手模式」或 Esc 回到对话");
   }catch(e){ trMsg("笔记打开失败：" + e.message + (/(not found|404)/i.test(e.message) ? "（服务端是旧版本，重启一次）" : "")); }
+}
+function trPaintNoteColumn(){
+  /* 右栏渲染笔记窄栏（renderWorkflow 重画时 wfAgentPaint 也走这里） */
+  const host = document.getElementById("wfAgent"); if(!host || !TR.noteMode) return;
+  host.innerHTML = trNoteColumnHTML();
+  $("trNoteTitle").value = (TR.note && TR.note.title) || "阅读笔记";
+  $("trNoteSrc").value = (TR.note && TR.note.content) || "";
+  trNoteBind();
+  const b = $("trBtnN"); if(b){ b.textContent = "🤖 助手模式"; b.classList.add("active"); }
+}
+function trExitNoteMode(){
+  TR.noteMode = false;
+  const b = $("trBtnN"); if(b){ b.textContent = "📝 笔记模式"; b.classList.remove("active"); }
+  if(typeof wfAgentPaint === "function"){
+    const page = document.getElementById("wfPage");
+    if(page) wfAgentPaint(page, window.wfStep || "notes");
+  }
+}
+function trSegActive(v){
+  /* English / 中文 两键的选中态只有这一处说了算 */
+  $("trBtnEn")?.classList.toggle("active", v === "read");
+  $("trBtnZh")?.classList.toggle("active", v === "zh");
+}
+function trView(v){
+  /* 只有一个阅读栏：视图只管「有东西 / 没东西」和分段控件的显隐 */
+  TR.view = v;
+  $("trDrop")?.classList.toggle("hidden", v !== "empty");
+  $("trSeg")?.classList.toggle("hidden", v === "empty");
 }
 function trShort(s, n){ s = String(s || ""); return s.length > n ? s.slice(0, n) + "…" : s; }
 function trNoteBind(){
@@ -460,25 +435,7 @@ function trNoteBind(){
   const later = ()=>{ clearTimeout(t0); t0 = setTimeout(save, 700); };
   t.oninput = later; s.oninput = later;
 }
-function trDualOff(){
-  TR.dual = false;
-  $("trStage").classList.remove("dual");
-  $("trStage").style.gridTemplateColumns = "";
-  $("trPaneB").classList.add("hidden");
-  $("trSplit").classList.add("hidden");
-  $("trPaneA").classList.remove("act"); $("trPaneB").classList.remove("act");
-}
-function trBack(){
-  trStopPoll();
-  trDualOff();
-  trView("read");
-  trSegActive("read");
-  TR.hlOn = false; $("trPen")?.classList.add("hidden");
-  $("trBtnT").textContent = "🌐 中英互译"; $("trBtnT").disabled = false;
-  if(TR.pid){ $("trDrop")?.classList.add("hidden"); trReader(TR.pid); } else $("trDrop")?.classList.remove("hidden");
-}
-
-/* ---------------- 交互绑定 ---------------- */
+/* ---------------- 交互绑定 ---------------- *//* ---------------- 交互绑定 ---------------- */
 async function trFillPick(){
   const sel = $("trPick"); if(!sel || !curTask) return;
   try{
@@ -497,10 +454,11 @@ function trBind(){
   $("trIn").onclick = ()=>trZoom(+0.15);
   $("trOut").onclick = ()=>trZoom(-0.15);
   $("trPenTop").onclick = ()=>trPenPanel();
-  $("trBtnT").onclick = ()=>trTranslate();
+  $("trBtnEn").onclick = ()=>{ if(!TR.pid) return trMsg("先添加一篇 PDF"); trSegActive("read"); trReader(TR.pid); };
+  $("trBtnZh").onclick = ()=>trTranslate();
   $("trBtnN").onclick = ()=>trNoteMode();
-  $("trBtnBack").onclick = ()=>trBack();
-  trPenInit(); trNoteBind(); trFillPick(); trZoomLabel();
+  $("trStripMore").onclick = ()=>$("trDetail")?.classList.toggle("hidden");
+  trPenInit(); trFillPick(); trZoomLabel();
   if(!TR.hlBound){ TR.hlBound = 1;                     // 文档级监听只挂一次（renderWorkflow 会反复调 trBind）
     document.addEventListener("mouseup", (e)=>{ if($("trStage")?.contains(e.target)) trHlOnMouseUp(e); });
     document.addEventListener("keydown", (e)=>{ if(e.key === "Escape"){ trPenPanel(false); trExitFull(); } });
@@ -513,34 +471,13 @@ function trBind(){
     if(t==="drop"){ depth = 0; st.classList.remove("dragging"); trUpload(e.dataTransfer?.files); }
     else if(--depth <= 0){ depth = 0; st.classList.remove("dragging"); } }));
   st.addEventListener("drop",(e)=>{ e.preventDefault(); trUpload(e.dataTransfer?.files); });
-  // 两栏之间的分隔线
-  const sp = $("trSplit"); let dragging = false;
-  sp.addEventListener("pointerdown",(e)=>{ dragging = true; sp.setPointerCapture(e.pointerId); e.preventDefault(); });
-  sp.addEventListener("pointermove",(e)=>{
-    if(!dragging) return;
-    const box = $("trStage"), r = box.getBoundingClientRect();
-    const pct = Math.min(0.85, Math.max(0.15, (e.clientX - r.left) / r.width));
-    box.style.gridTemplateColumns = `${pct*100}% 6px ${(1-pct)*100}%`;
-  });
-  ["pointerup","pointercancel"].forEach(t=>sp.addEventListener(t,()=>{ dragging = false; }));
   $("trZenTop").onclick = () => trZen();
   $("trZenExit").onclick = () => trExitFull();
   $("trZenIn").onclick = () => trZoom(0.15);
   $("trZenOut").onclick = () => trZoom(-0.15);
-  $("trNoteIn").onclick = () => trNoteZoom(0.1);
-  $("trNoteOut").onclick = () => trNoteZoom(-0.1);
-  $("trNoteExit").onclick = () => trExitFull();
   // 缩放只认左上角那对加减号：触屏捏合（浏览器报成 ctrl+wheel）/ Ctrl+滚轮 一律吞掉，
   // 不吞的话浏览器本体缩放会把 PDF 文字层带偏（文字层是按缩放比例铺的绝对定位）
   $("trStage").addEventListener("wheel",(e)=>{ if(e.ctrlKey) e.preventDefault(); },{passive:false});
-  // 点哪一栏，工具栏就管哪一栏
-  $("trStage").addEventListener("mousedown",(e)=>{
-    const p = e.target.closest(".tr-pane"); if(!p) return;
-    TR.active = p.dataset.pane;
-    $("trPaneA").classList.toggle("act", TR.active === "a");
-    $("trPaneB").classList.toggle("act", TR.active === "b");
-    trPageNo(TR.active);
-  });
 }
 
 

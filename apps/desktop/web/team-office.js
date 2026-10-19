@@ -113,6 +113,10 @@ class OfficeWalker {
 }
 
 const OFFICE_CORR_SPOTS = [[.05, .5], [.30, .5], [.52, .5], [.74, .5], [.90, .5]];
+const OFFICE_SKINS = ["#E8C7A8", "#DDB28C", "#C99A76", "#B98560"];   // 肤色四档
+const offSkin = (m) => OFFICE_SKINS[Math.abs(offHash(m.assistant_id || m.name || "x")) % OFFICE_SKINS.length];
+const offHair = (m) => Math.abs(offHash((m.assistant_id || m.name || "x") + "#h")) % 3;
+function offHash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
 
 /* 摆桌子（固定位置）+ 把每个人放到自己桌前 */
 function officeSit() {
@@ -122,18 +126,23 @@ function officeSit() {
     const desks = [...floor.querySelectorAll(".tof-desk")];
     const figs = [...floor.querySelectorAll(".tof-fig")];
     const W = floor.clientWidth, H = floor.clientHeight;
-    const n = desks.length, rows = Math.max(1, Math.ceil(n / 2));
+    const n = desks.length;
+    // 尺寸全从 CSS 读（--ds 改桌子宽度 → em 跟着变），这里只算「半宽/半高」这类偏移
+    const em = parseFloat(getComputedStyle(floor).fontSize) || 8.0;
+    const DW = 10 * em, DH = 4.78 * em, FW = 2.83 * em, FH = 4.57 * em;
+    // 2×2 格点：每间房 4 个工位，桌子中心落在格子中心，按人数从左上往右填
+    const PAD_T = 54, PAD_B = 26;                 // 房间标题 / 底部流水条占掉的高度
+    const gw = W / 2, gh = Math.max(1, (H - PAD_T - PAD_B) / 2);
     desks.forEach((d, i) => {
       const col = i % 2, row = Math.floor(i / 2);
-      const x = Math.round(W * (n === 1 ? .5 : (col ? .66 : .34)) - 23);
-      const y = Math.round(H * (rows === 1 ? .30 : (row ? .60 : .20)) - 11);
-      d.style.left = Math.max(2, x) + "px";
-      d.style.top = Math.max(2, y) + "px";
+      const cx = gw * (col + .5), cy = PAD_T + gh * (row + .5);
+      d.style.left = Math.max(2, Math.round(cx - DW / 2)) + "px";
+      d.style.top = Math.max(2, Math.round(cy - DH / 2)) + "px";
     });
     figs.forEach((el, i) => {
       const d = desks[i] || desks[desks.length - 1];
       const home = d
-        ? { x: parseFloat(d.style.left) + 23 - 6, y: parseFloat(d.style.top) + 22 - 6 }
+        ? { x: parseFloat(d.style.left) + DW / 2 - FW / 2, y: parseFloat(d.style.top) + DH - FH * .28 }
         : { x: W * .5, y: H * .5 };
       el._desk = d;
       officeWalkers.push(new OfficeWalker(el, floor, home, el.dataset.status));
@@ -159,13 +168,16 @@ function officeSit() {
 
 /* ---------- 渲染 ---------- */
 function officeRoom(p, colorOf) {
-  const members = [p.leader, ...(p.members || [])].filter(Boolean).slice(0, 8);
+  const members = [p.leader, ...(p.members || [])].filter(Boolean).slice(0, 4);   // 2×2 格点 = 4 个工位
   const running = (p.members || []).some((m) => m.status === "running" || m.status === "queued");
-  const figs = members.map((m) => `<div class="tof-fig" data-status="${offEsc(m.status || "idle")}" style="--c:${colorOf(m)}">
+  const figs = members.map((m) => `<div class="tof-fig" data-status="${offEsc(m.status || "idle")}"
+      data-hair="${offHair(m)}" style="--c:${colorOf(m)};--skin:${offSkin(m)}">
       <span class="in"><i class="h"></i><i class="b"></i><i class="a1"></i><i class="a2"></i><i class="l1"></i><i class="l2"></i></span></div>`).join("");
-  const desks = members.map(() => `<div class="tof-desk"></div>`).join("");
+  const desks = members.map(() => `<div class="tof-desk">
+      <span class="mon"></span><span class="kb"></span><span class="cup"></span><span class="pp"></span>
+    </div>`).join("");
   const ev = (p.events || [])[0];
-  return `<div class="tof-room ${p.id === officeSel ? "sel" : ""}" data-office="${offEsc(p.id)}">
+  return `<div class="tof-room ${p.kind === "temp" ? "temp " : ""}${p.id === officeSel ? "sel" : ""}" data-office="${offEsc(p.id)}">
     <div class="nm">${offEsc(p.name)}</div>
     <div class="kind ${p.kind === "temp" ? "t" : ""}">${p.kind === "temp" ? "加急" : "常驻"} · ${members.length} 人</div>
     <div class="st ${running ? "run" : ""}"><span class="dot"></span>${running ? "在跑" : "待命"}</div>
@@ -180,8 +192,11 @@ function officePanel(p, colorOf) {
   const row = (m, isLead) => {
     const c = colorOf(m);
     const st = m.status || "idle";
+    const av = isLead
+      ? `<div class="av av-lead" title="智研管家 · 项目 Leader"><img src="/mark.png" alt="智研"></div>`   // 项目级 leader = 智研 Q 版小人
+      : `<div class="av" style="${offTint(c)}" title="${offEsc(m.name || "")}">${offEsc(m.avatar || (m.name || "?").slice(0, 1))}</div>`;
     return `<div class="tof-mrow">
-      <div class="av" style="${offTint(c)}">${offEsc(m.avatar || (m.name || "?").slice(0, 1))}</div>
+      ${av}
       <div class="mc"><b>${offEsc(m.name)}<u>${offEsc((m.assistant_id || m.id || "").slice(-4))}</u></b>
         <i>${offEsc(m.prompt || (m.model ? "模型 " + m.model : "跟随当前模型"))}</i></div>
       <span class="pill ${st === "running" || st === "queued" ? "run" : ""}">${isLead ? "Leader" : (OFFICE_CN[st] || st)}</span>
@@ -262,7 +277,7 @@ async function renderTeamOffice(m) {
         <div class="tof-row top" style="grid-template-columns:repeat(${Math.max(1, fixed.length)},1fr)">${fixed.map((p) => officeRoom(p, colorOf)).join("")}</div>
         <div class="tof-corr">
           <span>走 廊</span><i class="cl"></i>
-          <div class="tof-fig butler" data-status="running" style="--c:var(--accent)">
+          <div class="tof-fig butler" data-status="running" data-hair="0" style="--c:var(--accent);--skin:${OFFICE_SKINS[0]}">
             <span class="in"><i class="h"></i><i class="b"></i><i class="a1"></i><i class="a2"></i><i class="l1"></i><i class="l2"></i></span></div>
         </div>
         <div class="tof-row bottom">${temp.map((p) => officeRoom(p, colorOf)).join("")}

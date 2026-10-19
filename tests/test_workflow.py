@@ -57,6 +57,59 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(again["built_at"], built["built_at"])
         self.assertIn("took_ms", again)
 
+    def test_safe_path_allows_project_files_blocks_outside(self) -> None:
+        """格式转换/预览读写文件都走 _safe_path：项目位置（用户自选的桌面目录）要放行，外部目录仍然拒。"""
+        import workflow_converters as C
+        from unittest import mock
+        base = Path(self.td.name) / "proj"
+        (base / "论文正文").mkdir(parents=True)
+        f = base / "论文正文" / "a.md"
+        f.write_text("hi", encoding="utf-8")
+        self.db.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?", (str(base), self.task))
+        self.db.db.commit()
+        with mock.patch.object(C.paths, "DB_PATH", Path(self.td.name) / "wb.sqlite3"):
+            self.assertEqual(C._safe_path(str(f)), f.resolve())                 # 项目文件能打开
+            with self.assertRaises(ValueError):
+                C._safe_path(str(Path(self.td.name) / "outside.txt"))          # 白名单外照样拒
+
+    def test_idea_input_and_verdict_round_trip(self) -> None:
+        """创新点审查：上区原文存得进读得回，下区判定取最近一条 idea_review 笔记。"""
+        self.assertEqual(self.db.idea_input(self.task), "")
+        self.db.idea_input_save(self.task, "O3 型 NFM 的 Cu/Mg 共掺做成近零应变，先靠 ML 排序筛元素")
+        self.assertIn("近零应变", self.db.idea_input(self.task))
+        self.assertEqual(self.db.idea_verdict(self.task), {})            # 还没出过判定
+        n = self.db.add_note(self.task, "创新点审查 · 测试", "# 判定\n- 判定：**Accept**")
+        v = self.db.idea_verdict(self.task)
+        self.assertEqual(v["id"], n["id"])
+        self.assertIn("Accept", v["markdown"])
+
+    def test_tr_highlights_reach_agent_context(self) -> None:
+        """荧光笔标注：存得进读得回；给 agent 的上下文带页码 + 圈中的原文，同一句占多行只算一次。"""
+        items = [{"p": 3, "x": 1, "y": 2, "w": 3, "th": 14, "c": "#FFE066", "t": "Mg 与 Cu 共掺把体积应变压到 1.6%"},
+                 {"p": 3, "x": 1, "y": 9, "w": 3, "th": 14, "c": "#FFE066", "t": ""},        # 同一段话的第二行
+                 {"p": 5, "x": 1, "y": 2, "w": 3, "th": 14, "c": "#7FC4F0", "t": "离子半径与 M–O 键强贡献了 62%"}]
+        self.assertEqual(self.db.tr_hl_save("pid-1", self.task, items), 3)
+        self.assertEqual(len(self.db.tr_hl("pid-1", self.task)), 3)
+        ctx = self.db.tr_hl_context(self.task)
+        self.assertIn("第 3 页", ctx)
+        self.assertIn("1.6%", ctx)
+        self.assertIn("第 5 页", ctx)
+        self.assertEqual(ctx.count("1.6%"), 1)                  # 多行框同一句话只算一次
+        self.assertEqual(self.db.tr_hl_context("没有这个项目"), "")
+
+    def test_kb_graph_is_compiled_once_then_cached(self) -> None:
+        """知识星图也是编译产物：第一次进知识库算一次落库，平时读这份；rebuild=True 才重编译。"""
+        tid = self.db.create_task("知识星图项目", "问题", "体系", "")
+        g1 = self.db.kb_graph(tid)
+        self.assertTrue(g1["built_at"])                              # 第一次进来就编译并落库
+        again = self.db.kb_graph(tid)
+        self.assertEqual(again["built_at"], g1["built_at"])           # 第二次读缓存，不重算
+        self.assertEqual(len(again["nodes"]), len(g1["nodes"]))
+        import time as _t
+        _t.sleep(0.01)
+        rebuilt = self.db.kb_graph(tid, rebuild=True)
+        self.assertNotEqual(rebuilt["built_at"], g1["built_at"])      # 只有「重算星图」才重编译
+
     def test_rss_fixed_sources_dedupe_and_filters(self) -> None:
         """情报日报：来源固定 5 个（seed 幂等）、网址校验、按 link 去重、三条件筛选。"""
         import rss as rss_mod
@@ -116,11 +169,17 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual((again["paper_id"], again["content"]), (pid, "我的批注"))
 
     def test_calendar_and_models_and_notes(self) -> None:
-        ev = self.db.add_event("组会汇报", "2026-10-04", self.task, "meeting")
-        self.assertEqual(self.db.events("2026-10")[0]["title"], "组会汇报")
+        ev = self.db.add_event("组会汇报", "2026-10-04", self.task, "meeting", time="14:00")
+        self.assertEqual(ev["time"], "14:00")
+        self.assertEqual(self.db.add_event("晚饭", "2026-10-04", self.task, time="9:5")["time"], "09:05")   # 钟点归一
+        self.assertEqual([e["title"] for e in self.db.events("2026-10")], ["晚饭", "组会汇报"])             # 按钟点排
+        self.assertEqual(self.db.add_event("没定时间", "2026-10-04")["time"], "")                            # 空时间照收
+        legacy = self.db.add_event("16:30 组会", "2026-10-04")                                             # 钟点写在标题里也拆出来
+        self.assertEqual((legacy["title"], legacy["time"]), ("组会", "16:30"))
         with self.assertRaises(ValueError):
             self.db.add_event("坏日期", "10/04/2026")
-        self.db.delete_event(ev["id"])
+        for e in self.db.events():
+            self.db.delete_event(e["id"])
         self.assertEqual(self.db.events(), [])
 
         m1 = self.db.add_model("A", "https://api.deepseek.com/v1", "deepseek-chat", "sk-x", activate=True)
