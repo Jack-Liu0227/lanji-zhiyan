@@ -50,7 +50,12 @@ def _stored_key(value: Any) -> str:
 def _reveal_key(row: dict[str, Any]) -> dict[str, Any]:
     """出库 → 明文（给 chat/search 用；给前端前 server.py 还会再打码成 ***）。"""
     if row.get("api_key"):
-        row["api_key"] = securestore.unprotect(row["api_key"])
+        try:
+            row["api_key"] = securestore.unprotect(row["api_key"])
+        except Exception:
+            row["api_key"] = ""
+            row["key_invalid"] = True
+            row["key_error"] = "模型密钥解密失败（跨机器/Windows账户部署需重新填写），请在「模型」页重新配置 API Key"
     return row
 
 
@@ -716,7 +721,13 @@ class WorkflowDB(ResearchDB):
 
     # ---------- 助手（我的 / 公开；点进去设提示词） ----------
     def assistants(self) -> list[dict[str, Any]]:
-        rows = self.db.execute("SELECT * FROM assistants ORDER BY source='builtin', sort_order, created_at").fetchall()
+        rows = self.db.execute("""
+            SELECT * FROM assistants
+            ORDER BY
+                CASE WHEN id='builtin-steward' THEN 0 ELSE 1 END,
+                sort_order,
+                created_at
+        """).fetchall()
         return [dict(r) for r in rows]
 
     def selectable_assistants(self) -> list[dict[str, Any]]:
@@ -890,8 +901,23 @@ class WorkflowDB(ResearchDB):
         files = [r["source_path"] for r in self.db.execute("SELECT source_path FROM papers WHERE task_id=?", (task_id,))]
         self.db.execute("DELETE FROM paper_pages WHERE paper_id IN (SELECT id FROM papers WHERE task_id=?)", (task_id,))
         self.db.execute("DELETE FROM evidence WHERE paper_id IN (SELECT id FROM papers WHERE task_id=?)", (task_id,))
-        for table in ("papers", "artifacts", "runs", "calendar_events", "notes", "steps", "search_cache", "chat", "paper_graph", "kb_graph"):
-            self.db.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
+        tables_to_clean = (
+            "papers", "artifacts", "runs", "calendar_events", "notes", "steps",
+            "search_cache", "chat", "paper_graph", "kb_graph", "project_memory",
+            "md_notes", "dl_queue", "team_tasks", "team_events",
+            "project_workflow_layouts", "zotero_bindings", "zotero_item_links",
+            "task_attempts", "audit_events", "project_todos", "background_jobs",
+            "idea_input", "tr_hl",
+        )
+        for table in tables_to_clean:
+            try:
+                self.db.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
+            except Exception:
+                pass
+        try:
+            self.db.execute("UPDATE chats SET task_id='' WHERE task_id=?", (task_id,))
+        except Exception:
+            pass
         self.db.execute("DELETE FROM research_tasks WHERE id=?", (task_id,))
         self.db.commit()
         removed = 0
@@ -1217,8 +1243,9 @@ class WorkflowDB(ResearchDB):
         return g
 
     def kb_graph(self, task_id: str, rebuild: bool = False) -> dict[str, Any]:
-        """知识星图（编译产物）：第一次进「知识库」时算一次落库，之后只读这份，不实时重算。
-        rebuild=True（点了「重算星图」）才重新扫库编译。"""
+        """知识星图（编译产物）：若实际论文数与缓存不一致，自动重新编译；
+        rebuild=True（点了「重算星图」）也重新扫库编译。"""
+        p_count = self.db.execute("SELECT COUNT(*) FROM papers WHERE task_id=?", (task_id,)).fetchone()[0]
         if not rebuild:
             row = self.db.execute("SELECT json, built_at FROM kb_graph WHERE task_id=?", (task_id,)).fetchone()
             if row:
@@ -1226,8 +1253,10 @@ class WorkflowDB(ResearchDB):
                     g = json.loads(row["json"] or "{}")
                 except ValueError:
                     g = {}
-                g["built_at"] = row["built_at"]
-                return g
+                cached_papers = sum(1 for node in g.get("nodes", []) if node.get("kind") == "paper")
+                if cached_papers == p_count and (not p_count or g.get("nodes")):
+                    g["built_at"] = row["built_at"]
+                    return g
         import starmap
         g = starmap.graph(self.db, task_id)
         g["built_at"] = now()
@@ -1816,7 +1845,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                "跨项目的事让用户回首页 Agent（智研管家）做。\n"
                f"当前项目：{task['title']}\n研究问题：{task['question']}\n"
                f"关键词 / 材料体系：{task['material_system']}\n项目 ID：{task_id}\n产出目录：{db.out_dir(task_id)}")
-    if aid:                           # Also applies to each team's selected assistant.
+    if aid and aid != "builtin-steward":                           # Also applies to each team's selected assistant.
         try:
             asst = db.require_assistant(aid)
         except Exception:
@@ -1847,8 +1876,14 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     tool_specs = list({t["function"]["name"]: t for t in tool_specs}.values())
     allowed_names = {t.get("function", {}).get("name") for t in tool_specs}
     integration_names = {t.get("function", {}).get("name") for t in agent_integrations.tool_specs()}
+    base_sys = system
+    if not base_sys:
+        st = db.assistant("builtin-steward")
+        base_sys = (st.get("rules") or "").strip() if st else ""
+        if not base_sys:
+            base_sys = AGENT_SYSTEM
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system or AGENT_SYSTEM},
+        {"role": "system", "content": base_sys},
         {"role": "system", "content": ctx},
         *history, {"role": "user", "content": text},
     ]

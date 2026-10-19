@@ -168,7 +168,7 @@ class AgentSettingsWebTest(unittest.TestCase):
                 assistant_id: body.assistant_id, session_id: 'session-' + body.assistant_id,
                 region: body.region, qr_url: 'https://accounts.feishu.cn/device?user_code=TEST',
                 qr_svg: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCI+PHJlY3Qgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIiBmaWxsPSIjMDAwIi8+PC9zdmc+',
-                interval: 30, expires_in: 60, status: 'pending'
+                interval: 1, expires_in: 60, status: 'pending'
               };
               if (path.endsWith('/poll')) return {status: 'pending', interval: 30, expires_in: 60};
               return {status: 'cancelled'};
@@ -182,6 +182,9 @@ class AgentSettingsWebTest(unittest.TestCase):
         page.locator("#fs-device-begin").click()
         page.wait_for_selector("#fs-device-qr img")
         self.assertIn(first, page.evaluate("__registrationCalls.find(c => c.path.endsWith('/begin')).body.assistant_id"))
+        page.wait_for_function("window.__registrationCalls.some(c => c.path.endsWith('/poll'))")
+        poll = page.evaluate("__registrationCalls.find(c => c.path.endsWith('/poll'))")
+        self.assertEqual(poll["body"], {"assistant_id": first, "session_id": "session-" + first})
 
         page.locator("#int-assistant").select_option(second)
         page.wait_for_function("document.querySelector('#fs-device-qr')?.innerText.includes('点击')")

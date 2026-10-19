@@ -40,3 +40,368 @@ html[data-theme=light] .kb-dark-only { color: #16202b; }
 html[data-theme=light] .kb-dark-only p { color: #5d6b7c; }
 html[data-theme=light] .kb-dark-only button { border-color: rgba(23, 107, 135, .5); background: rgba(23, 107, 135, .08); color: #176b87; }
 html[data-theme=light] .kb-dark-only button:hover { background: rgba(23, 107, 135, .16); }
+
+/* Zotero 条目详情风格展示（仿照 Zotero 右侧侧边栏面板） */
+.zt-inspector {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.zt-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 14px 20px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, .18) transparent;
+}
+
+.zt-title-wrap {
+  padding: 4px 6px 10px;
+}
+
+.zt-paper-title {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.45;
+  font-weight: 600;
+  color: #f1f5f9;
+  letter-spacing: 0.01em;
+}
+
+.zt-type-badge {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  margin-left: 8px;
+  font-weight: 500;
+}
+
+/* 顶部快捷操作栏 */
+.zt-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 6px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 8px;
+}
+
+.zt-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #e2e8f0;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.zt-tool-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.zt-tool-btn.primary {
+  background: rgba(232, 200, 132, 0.15);
+  border-color: rgba(232, 200, 132, 0.4);
+  color: #f3dcae;
+}
+
+.zt-tool-btn.primary:hover {
+  background: rgba(232, 200, 132, 0.25);
+}
+
+.zt-tool-btn.zotero {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+}
+
+.zt-tool-btn.zotero:hover {
+  background: rgba(239, 68, 68, 0.22);
+}
+
+/* 折叠卡片 */
+.zt-card {
+  margin-bottom: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.025);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.2s ease;
+}
+
+.zt-card:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.zt-card-head {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: #cbd5e1;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  user-select: none;
+}
+
+.zt-card-head .zt-caret {
+  display: inline-block;
+  font-size: 9px;
+  color: #94a3b8;
+  margin-right: 6px;
+  transition: transform 0.2s ease;
+}
+
+.zt-card.collapsed .zt-caret {
+  transform: rotate(-90deg);
+}
+
+.zt-card.collapsed .zt-card-head {
+  border-bottom: none;
+}
+
+.zt-card.collapsed .zt-card-body {
+  display: none;
+}
+
+.zt-card-head .zt-icon {
+  margin-right: 6px;
+  font-size: 13px;
+}
+
+.zt-card-head b {
+  flex: 1;
+}
+
+.zt-card-head .zt-sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: #64748b;
+}
+
+.zt-card-body {
+  padding: 8px 10px;
+}
+
+/* Zotero 两列网格 */
+.zt-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.zt-row {
+  display: flex;
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 2px 0;
+}
+
+.zt-k {
+  width: 76px;
+  flex-shrink: 0;
+  text-align: right;
+  padding-right: 12px;
+  color: #94a3b8;
+  user-select: none;
+  font-weight: 400;
+}
+
+.zt-v {
+  flex: 1;
+  color: #f1f5f9;
+  word-break: break-word;
+  user-select: text;
+}
+
+.zt-v a {
+  color: #60a5fa;
+  text-decoration: none;
+}
+
+.zt-v a:hover {
+  text-decoration: underline;
+}
+
+.zt-badge-if {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  background: rgba(168, 85, 247, 0.18);
+  color: #d8b4fe;
+  border: 1px solid rgba(168, 85, 247, 0.4);
+}
+
+.zt-author-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.5px 0;
+}
+
+.zt-author-name {
+  color: #f1f5f9;
+}
+
+.zt-author-role {
+  font-size: 10.5px;
+  color: #64748b;
+  margin-left: 8px;
+}
+
+.zt-abstract-text {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #cbd5e1;
+  white-space: pre-wrap;
+  user-select: text;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 2px 4px;
+  scrollbar-width: thin;
+}
+
+.zt-att-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  margin-bottom: 5px;
+  font-size: 12px;
+}
+
+.zt-att-item:last-child {
+  margin-bottom: 0;
+}
+
+.zt-att-icon {
+  font-size: 14px;
+  color: #e2e8f0;
+}
+
+.zt-att-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.zt-att-name {
+  font-weight: 500;
+  color: #e2e8f0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zt-att-path {
+  font-size: 10.5px;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zt-att-act {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  color: #cbd5e1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.zt-att-act:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.zt-tags-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.zt-tag-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+}
+
+.zt-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 10px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  font-size: 11.5px;
+  color: #93c5fd;
+}
+
+.zt-status-bar.success {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.25);
+  color: #6ee7b7;
+}
+
+.zt-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(147, 197, 253, 0.3);
+  border-top-color: #93c5fd;
+  border-radius: 50%;
+  animation: ztSpin 0.8s linear infinite;
+}
+
+@keyframes ztSpin {
+  to { transform: rotate(360deg); }
+}
+
+.zt-toast {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(232, 200, 132, 0.4);
+  color: #f3dcae;
+  font-size: 12px;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+  pointer-events: none;
+  animation: fadeUp 0.3s ease;
+  z-index: 100;
+}

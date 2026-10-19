@@ -157,7 +157,7 @@ def _run_one(row: dict[str, Any]) -> None:
     with workflow.WorkflowDB(_db_path()) as db:
         db.team_task_mark(row["id"], "running", started_at=_now())
         db.team_member_update(row["member_id"], status="running")
-        db.team_event_add(row["id"], t_id, "start", "开始执行")
+        db.team_event_add(row["id"], t_id, "start", f"「{row['member_name']}」开始执行「{row['title']}」")
         mem = db.team_member(row["member_id"]) or {}
         brief = (mem.get("prompt") or "").strip()
         step = mem.get("step") or ""
@@ -173,14 +173,15 @@ def _run_one(row: dict[str, Any]) -> None:
         t = ev.get("type")
         c_db = active_db[0] if active_db else None
         if t == "tool_call":
-            _ev(row, "tool", "调用 %s" % ev.get("name"), db=c_db)
+            _ev(row, "tool", f"「{row['member_name']}」调用 {ev.get('name')}", db=c_db)
         elif t == "tool_result":
-            _ev(row, "tool", ("%s：%s" % (ev.get("name"), ev.get("summary"))) if ev.get("ok") else ("失败：" + str(ev.get("summary"))), db=c_db)
+            summary = ev.get("summary") or ""
+            _ev(row, "tool", (f"「{row['member_name']}」{ev.get('name')}：{summary}") if ev.get("ok") else (f"「{row['member_name']}」调用失败：{summary}"), db=c_db)
         elif t == "assistant" and ev.get("content"):
             outs.append(ev["content"])
-            _ev(row, "assistant", str(ev["content"])[:400], db=c_db)
+            _ev(row, "assistant", f"「{row['member_name']}」发言：{str(ev['content'])[:360]}", db=c_db)
         elif t == "usage":
-            _ev(row, "note", "tokens %s" % ev.get("total"), db=c_db)
+            _ev(row, "note", f"「{row['member_name']}」tokens {ev.get('total')}", db=c_db)
 
     try:
         with workflow.WorkflowDB(_db_path()) as db:
@@ -201,13 +202,13 @@ def _run_one(row: dict[str, Any]) -> None:
             db.team_task_mark(row["id"], "done", ended_at=_now(),
                               output_path=str(path), result=text[:500])
             db.team_member_update(row["member_id"], status="done", note="最近完成：" + row["title"])
-            db.team_event_add(row["id"], t_id, "done", "完成 → %s" % path.name)
+            db.team_event_add(row["id"], t_id, "done", f"「{row['member_name']}」完成「{row['title']}」→ {path.name}")
     except Exception as exc:
         with workflow.WorkflowDB(_db_path()) as db:
             db.team_task_mark(row["id"], "failed", ended_at=_now(),
                               reason="%s: %s" % (type(exc).__name__, exc))
             db.team_member_update(row["member_id"], status="failed")
-            db.team_event_add(row["id"], t_id, "fail", "%s: %s" % (type(exc).__name__, exc))
+            db.team_event_add(row["id"], t_id, "fail", f"「{row['member_name']}」执行失败「{row['title']}」: {type(exc).__name__}: {exc}")
 
 
 def _ev(row: dict[str, Any], kind: str, text: str, db: Any = None) -> None:
@@ -560,8 +561,14 @@ def teams(project_id: str | None = None) -> dict[str, Any]:
             ev = [{"text": r["text"], "kind": r["kind"], "at": r["created_at"]}
                   for r in db.db.execute("SELECT text,kind,created_at FROM team_events"
                                          " WHERE task_id=? ORDER BY created_at DESC LIMIT 4", (x["id"],))]
+            active_row = db.db.execute(
+                "SELECT id,member_id,member_name,title,status,created_at FROM team_tasks "
+                "WHERE task_id=? AND status IN ('running','queued') ORDER BY status='running' DESC, created_at DESC LIMIT 1",
+                (x["id"],)
+            ).fetchone()
+            active_task = dict(active_row) if active_row else None
             out.append({**x, "members": ms, "leader": next((m for m in rows if m["role"] == "leader"), None),
-                        "picks": len(ms), "events": ev})
+                        "picks": len(ms), "events": ev, "active_task": active_task})
         return {"teams": out, "max": MAX_TEAMS, "max_fixed": MAX_FIXED, "max_temp": MAX_TEMP,
                 "fixed": len([x for x in out if x["kind"] == "fixed"]),
                 "temp": len([x for x in out if x["kind"] == "temp"])}

@@ -170,19 +170,29 @@ function officeSit() {
 function officeRoom(p, colorOf) {
   const members = [p.leader, ...(p.members || [])].filter(Boolean).slice(0, 4);   // 2×2 格点 = 4 个工位
   const running = (p.members || []).some((m) => m.status === "running" || m.status === "queued");
-  const figs = members.map((m) => `<div class="tof-fig" data-status="${offEsc(m.status || "idle")}"
-      data-hair="${offHair(m)}" style="--c:${colorOf(m)};--skin:${offSkin(m)}">
+  const figs = members.map((m) => `<div class="tof-fig ${m.status === "running" || m.status === "queued" ? "sel act-run" : ""}" data-status="${offEsc(m.status || "idle")}"
+      data-hair="${offHair(m)}" style="--c:${colorOf(m)};--skin:${offSkin(m)}" title="${offEsc(m.name)} · ${OFFICE_CN[m.status] || m.status}">
+      <span class="tag"><i class="tag-dot" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:${m.status==='running'?'var(--accent,#4ade80)':m.status==='queued'?'#eab308':'var(--muted)'};margin-right:3px;vertical-align:middle"></i>${offEsc(m.name)}</span>
       <span class="in"><i class="h"></i><i class="b"></i><i class="a1"></i><i class="a2"></i><i class="l1"></i><i class="l2"></i></span></div>`).join("");
-  const desks = members.map(() => `<div class="tof-desk">
+  const desks = members.map((m) => `<div class="tof-desk" title="${offEsc(m.name)} 的工位">
       <span class="mon"></span><span class="kb"></span><span class="cup"></span><span class="pp"></span>
     </div>`).join("");
   const ev = (p.events || [])[0];
+  let actHtml = "这间还没派过活";
+  if (p.active_task) {
+    const actM = p.active_task.member_name || "成员";
+    const actT = p.active_task.title || "任务";
+    const actSt = p.active_task.status === "running" ? "在跑" : "排队";
+    actHtml = `⚡ <b>「${offEsc(actM)}」</b>${actSt}「${offEsc(actT)}」`;
+  } else if (ev) {
+    actHtml = offEsc(offAgo(ev.at)) + " · " + offEsc(ev.text || "");
+  }
   return `<div class="tof-room ${p.kind === "temp" ? "temp " : ""}${p.id === officeSel ? "sel" : ""}" data-office="${offEsc(p.id)}">
     <div class="nm">${offEsc(p.name)}</div>
     <div class="kind ${p.kind === "temp" ? "t" : ""}">${p.kind === "temp" ? "加急" : "常驻"} · ${members.length} 人</div>
     <div class="st ${running ? "run" : ""}"><span class="dot"></span>${running ? "在跑" : "待命"}</div>
     <div class="tof-floor">${desks}${figs}</div>
-    <div class="act"><span>${ev ? offEsc(offAgo(ev.at)) + " · " + offEsc(ev.text || "") : "这间还没派过活"}</span></div>
+    <div class="act"><span>${actHtml}</span></div>
   </div>`;
 }
 
@@ -192,8 +202,9 @@ function officePanel(p, colorOf) {
   const row = (m, isLead) => {
     const c = colorOf(m);
     const st = m.status || "idle";
-    const av = isLead
-      ? `<div class="av av-lead" title="智研管家 · 项目 Leader"><img src="/mark.png" alt="智研"></div>`   // 项目级 leader = 智研 Q 版小人
+    const isSteward = isLead && (m.name === "智研管家" || m.assistant_id === "builtin-steward");
+    const av = isSteward
+      ? `<div class="av av-lead" title="智研管家 · 自动统筹"><img src="/mark.png" alt="智研"></div>`
       : `<div class="av" style="${offTint(c)}" title="${offEsc(m.name || "")}">${offEsc(m.avatar || (m.name || "?").slice(0, 1))}</div>`;
     return `<div class="tof-mrow">
       ${av}
@@ -206,10 +217,10 @@ function officePanel(p, colorOf) {
     <div class="k"><span>人员结构</span><span>${ms.length} / ${Math.max(ms.length, 4)} 在编</span></div>
     <h2>${offEsc(p.name)}</h2>
     <div class="sub">${p.kind === "temp"
-      ? "加急 · 智研管家为「" + offEsc(p.purpose || "某件事") + "」组建，交完归还位子"
-      : "常驻 · 不属于哪件事，项目在它就在"}</div>
+      ? "加急 · 为「" + offEsc(p.purpose || "某项工作") + "」组建，按需灵活协同"
+      : "常驻 · 课题常设模块，按工作流组合推进"}</div>
     <div class="gh"><span>统 筹</span><span>状态</span></div>
-    ${lead ? row(lead, true) : `<p class="hint" style="padding:8px 0">这间还没有 Leader（智研管家会在下次派活时补上）。</p>`}
+    ${lead ? row(lead, true) : `<p class="hint" style="padding:8px 0">这间还没有指定 Leader（可在「修改编制」中指定任意成员为 Leader）。</p>`}
     <div class="gh"><span>成 员</span><span>颜色即身份</span></div>
     ${ms.length ? ms.map((m) => row(m, false)).join("")
       : `<p class="hint" style="padding:8px 0">一个人都没有 —— 点「修改编制」从专家里拉人。</p>`}

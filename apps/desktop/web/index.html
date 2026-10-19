@@ -11,6 +11,7 @@ document.title = "览籍智研 · v" + (new URLSearchParams(location.search).get
 document.documentElement.dataset.theme = localStorage.getItem("rw-theme") || "dark";
 </script>
 <link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/kanban.css">
 </head>
 <body>
 <div class="app-shell">
@@ -52,12 +53,16 @@ document.documentElement.dataset.theme = localStorage.getItem("rw-theme") || "da
   <div class="modal-dialog modal-wide">
     <div class="modal-head"><h3>从 Zotero 取文献</h3><button class="modal-close" id="btnZotClose">✕</button></div>
     <div class="modal-body">
-      <p class="modal-desc" id="zotStatus">正在连接 Zotero…</p>
+      <p class="modal-desc" id="zotStatus">正在连接 Zotero 本地库…</p>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-        <select id="zotCollection" class="control" style="max-width:260px"></select>
-        <input id="zotQuery" class="control" placeholder="搜索标题 / 作者 / 标签" style="max-width:260px">
-        <button class="btn ghost" id="zotSearch">搜索</button>
-        <button class="btn btn-primary" id="zotToProject" title="把当前分类的题录 + 本机 PDF 直接放进这个项目的「下载精读」队列：不联网、不下载、不复制文件">导入项目队列</button>
+        <select id="zotCollection" class="control" style="max-width:220px" title="选择 Zotero 收藏夹 / 分类"></select>
+        <input id="zotQuery" class="control" placeholder="按标题 / 作者 / 标签检索文献…" style="max-width:240px">
+        <button class="btn ghost" id="zotSearch">检索</button>
+        <label style="display:flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;margin-left:4px">
+          <input type="checkbox" id="zotSelectAll"> <span>全选本页</span>
+        </label>
+        <span style="flex:1"></span>
+        <button class="btn btn-primary" id="zotToProject" title="把所选文献或全部分类导入当前项目，并自动生成知识星图">导入项目文献库</button>
         <span class="hint" id="zotCount"></span>
       </div>
       <div id="zotList" class="md-note-list" style="max-height:44vh;overflow:auto"></div>
@@ -128,5 +133,6 @@ document.documentElement.dataset.theme = localStorage.getItem("rw-theme") || "da
 <script src="/integrations-settings.js"></script>
 <script src="/platform-nav.js"></script>
 <script src="/project-space.js"></script>
+<script src="/kanban-view.js"></script>
 </body>
 </html>
