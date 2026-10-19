@@ -124,14 +124,20 @@ def _validate_dependencies(db: Any, task_id: str, depends_on: list[str]) -> None
         raise ValueError("依赖任务不存在：" + ", ".join(missing))
 
 
-def _dependencies_ready(row: dict[str, Any], tasks: dict[str, dict[str, Any]]) -> bool:
+def _dependency_state(row: dict[str, Any], tasks: dict[str, dict[str, Any]]) -> str:
     for dependency in _task_ids(row.get("depends_on")):
         state = tasks.get(dependency)
-        if not state or state.get("status") != "done":
-            return False
+        if not state or state.get("status") in ("failed", "canceled", "blocked"):
+            return "blocked"
+        if state.get("status") != "done":
+            return "waiting"
         if state.get("reviewer_id") and state.get("review_status") != "approved":
-            return False
-    return True
+            return "waiting"
+    return "ready"
+
+
+def _dependencies_ready(row: dict[str, Any], tasks: dict[str, dict[str, Any]]) -> bool:
+    return _dependency_state(row, tasks) == "ready"
 
 
 def assign(task_id: str, member: str, prompt: str, title: str = "", trigger: str = "leader",
@@ -365,8 +371,19 @@ def tick() -> int:
         db.db.commit()
         all_tasks = db.team_tasks(None, None)
         tasks_by_id = {task["id"]: task for task in all_tasks}
-        rows = [task for task in all_tasks
-                if task["status"] == "queued" and _dependencies_ready(task, tasks_by_id)]
+        rows = []
+        for task in all_tasks:
+            if task["status"] != "queued":
+                continue
+            state = _dependency_state(task, tasks_by_id)
+            if state == "blocked":
+                reason = "依赖任务已失败或取消：" + ", ".join(_task_ids(task.get("depends_on")))
+                db.team_task_mark(task["id"], "blocked", reason=reason,
+                                  checkpoint={"phase": "blocked", "reason": reason})
+                db.team_member_update(task["member_id"], status="blocked", note=reason[:120])
+                db.team_event_add(task["id"], task["task_id"], "blocked", reason)
+            elif state == "ready":
+                rows.append(task)
     rows.sort(key=lambda r: r["created_at"])
     for row in rows:
         if row["id"] in RUNNING:

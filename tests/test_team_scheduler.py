@@ -72,6 +72,17 @@ class TeamSchedulerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "output_contract"):
             team.assign(self.project, self.worker["id"], "bad contract", output_contract=["summary"])
 
+    def test_failed_dependency_blocks_downstream_task(self) -> None:
+        first = team.assign(self.project, self.worker["id"], "collect sources")
+        second = team.assign(self.project, self.worker["id"], "summarize sources",
+                             depends_on=[first["id"]])
+        with workflow.WorkflowDB(self.path) as db:
+            db.team_task_mark(first["id"], "failed", reason="upstream failure")
+        self.assertEqual(team.tick(), 0)
+        blocked = self._status(second["id"])
+        self.assertEqual(blocked["status"], "blocked")
+        self.assertIn(first["id"], blocked["reason"])
+
     def test_reviewer_gate_requeues_on_rejection_and_completes_on_approval(self) -> None:
         row = team.assign(
             self.project,
