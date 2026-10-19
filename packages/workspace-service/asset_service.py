@@ -210,7 +210,7 @@ def search(db, query: str, *, project_id: str = "", limit: int = 50) -> list[dic
     try:
         rows = conn.execute("""SELECT a.*, snippet(asset_fts, 3, '<mark>', '</mark>', ' … ', 24) AS snippet
             FROM asset_fts JOIN assets a ON a.id=asset_fts.asset_id
-            WHERE asset_fts MATCH ?""" + where + " ORDER BY a.updated_at DESC LIMIT ?", args).fetchall()
+            WHERE a.status='active' AND asset_fts MATCH ?""" + where + " ORDER BY a.updated_at DESC LIMIT ?", args).fetchall()
     except Exception:
         rows = []
     # unicode61 does not split CJK text into word tokens, so retain a LIKE
@@ -224,7 +224,7 @@ def search(db, query: str, *, project_id: str = "", limit: int = 50) -> list[dic
         like_args.append(max(1, min(int(limit), 200)))
         rows = conn.execute("""SELECT a.*, substr(f.body, 1, 180) AS snippet
             FROM asset_fts f JOIN assets a ON a.id=f.asset_id
-            WHERE (f.title LIKE ? OR f.body LIKE ?)""" + project_where +
+            WHERE a.status='active' AND (f.title LIKE ? OR f.body LIKE ?)""" + project_where +
             " ORDER BY a.updated_at DESC LIMIT ?", like_args).fetchall()
     return [dict(row) for row in rows]
 

@@ -74,6 +74,29 @@ class AssetGraphTest(unittest.TestCase):
         self.db.save_md_note(editable["id"], "编辑笔记", "解绑", None, "")
         self.assertEqual(asset_service.relations(self.db, editable_asset["id"]), [])
 
+        moved_project = self.db.create_task(
+            "第二项目", "question", "material", str(Path(self.tmp.name) / "second")
+        )
+        moved = self.db.save_md_note("", "迁移笔记", "迁移前", self.project)
+        old_path = Path(moved["canonical_path"])
+        moved = self.db.save_md_note(moved["id"], "迁移笔记", "迁移后", moved_project)
+        new_path = Path(moved["canonical_path"])
+        self.assertNotEqual(old_path, new_path)
+        self.assertFalse(old_path.exists())
+        self.assertTrue(new_path.exists())
+        self.assertEqual(self.db.db.execute(
+            "SELECT COUNT(*) AS n FROM assets WHERE json_extract(metadata, '$.legacy_id')=?",
+            (moved["id"],)).fetchone()["n"], 1)
+
+        deleted_path = Path(self.db.save_md_note("", "待删", "删除我", self.project)["canonical_path"])
+        deleted_id = deleted_path.stem
+        self.db.delete_md_note(deleted_id)
+        self.assertFalse(deleted_path.exists())
+        deleted_asset = next(item for item in asset_service.list_assets(self.db, self.project, "note")
+                             if item["canonical_uri"] == str(deleted_path.resolve()))
+        self.assertEqual(deleted_asset["status"], "archived")
+        self.assertEqual(asset_service.search(self.db, "删除我", project_id=self.project), [])
+
     def test_workflow_run_idempotency_and_node(self):
         first = run_service.start(self.db, self.project, "paper_read", idempotency_key="paper-1")
         again = run_service.start(self.db, self.project, "paper_read", idempotency_key="paper-1")

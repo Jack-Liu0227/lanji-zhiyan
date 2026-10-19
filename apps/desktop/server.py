@@ -1181,8 +1181,10 @@ class Handler(BaseHTTPRequestHandler):
             with WorkflowDB(DB_PATH) as db:
                 if path == "/api/mdnotes/save":
                     tid = data.get("task_id")
+                    pid = data.get("paper_id")
                     return self._json({"note": db.save_md_note(data.get("id", ""), data.get("title", ""),
-                                                               data.get("content", ""), None if tid is None else str(tid))})
+                                                               data.get("content", ""), None if tid is None else str(tid),
+                                                               None if pid is None else str(pid))})
 
                 if path.startswith("/api/assistant/") or path == "/api/chat/assistant":
                     b = data or {}
@@ -1326,7 +1328,8 @@ class Handler(BaseHTTPRequestHandler):
                             return self._json({"deleted": wdb.schedule_run_delete(data.get("ids") or [])})
                     return self._json({"error": "未知的定时任务操作"}, 404)
                 if path == "/api/mdnotes/delete":
-                    db.delete_md_note(data.get("id", ""))
+                    with WorkflowDB(DB_PATH) as note_db:
+                        note_db.delete_md_note(data.get("id", ""))
                     return self._json({"deleted": True})
                 if path == "/api/trans/start":
                     tid = (data.get("task_id") or "").strip()

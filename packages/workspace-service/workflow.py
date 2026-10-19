@@ -391,6 +391,8 @@ class WorkflowDB(ResearchDB):
         """task_id / paper_id 传 None 保持原绑定不变；传 "" 就是解绑。"""
         t = now()
         title = title.strip() or "未命名笔记"
+        previous = self.md_note(nid) if nid and self.db.execute(
+            "SELECT 1 FROM md_notes WHERE id=?", (nid,)).fetchone() else None
         if nid and self.db.execute("SELECT 1 FROM md_notes WHERE id=?", (nid,)).fetchone():
             self.db.execute("UPDATE md_notes SET title=?, content=?, task_id=COALESCE(?, task_id),"
                             " paper_id=COALESCE(?, paper_id), updated_at=? WHERE id=?",
@@ -406,15 +408,46 @@ class WorkflowDB(ResearchDB):
         # Markdown notes now have a canonical, atomically-written file mirror.
         # The database row remains for backward-compatible queries and indexing.
         import asset_service
-        folder = self.pdir(note["task_id"], "笔记") if note["task_id"] else NOTES
-        path = folder / f"{nid}.md"
+        old_path = self._md_note_path(previous) if previous else None
+        path = self._md_note_path(note)
+        self._rehome_md_note_asset(previous, note, old_path, path)
         asset_service.atomic_write_text(path, note["content"])
+        if old_path and old_path != path and old_path.is_file():
+            old_path.unlink()
         asset_service.register_file(self, path, project_id=note["task_id"], kind="note",
                                     title=note["title"], source="md_notes", body=note["content"],
                                     metadata={"paper_id": note["paper_id"], "legacy_id": nid})
         self._link_note_paper_asset(note["task_id"], note["paper_id"], path)
         note["canonical_path"] = str(path)
         return note
+
+    def _md_note_path(self, note: dict[str, Any] | None) -> Path | None:
+        if not note:
+            return None
+        folder = self.pdir(note["task_id"], "笔记") if note["task_id"] else NOTES
+        return folder / f"{note['id']}.md"
+
+    def _rehome_md_note_asset(self, previous: dict[str, Any] | None, note: dict[str, Any],
+                              old_path: Path | None, new_path: Path) -> None:
+        """Keep one note asset when its project binding changes."""
+        if not previous or not old_path or old_path == new_path:
+            return
+        import asset_service
+        old_row = self.db.execute("SELECT id FROM assets WHERE canonical_uri=?",
+                                  (str(old_path.resolve()),)).fetchone()
+        if not old_row:
+            matches = asset_service.find_by_metadata(self, kind="note", key="legacy_id", value=note["id"])
+            old_row = matches[0] if matches else None
+        if not old_row:
+            return
+        conflict = self.db.execute("SELECT id FROM assets WHERE canonical_uri=?",
+                                   (str(new_path.resolve()),)).fetchone()
+        if conflict and conflict["id"] != old_row["id"]:
+            return
+        stamp = now()
+        self.db.execute("UPDATE assets SET canonical_uri=?, project_id=?, title=?, updated_at=? WHERE id=?",
+                        (str(new_path.resolve()), note["task_id"], note["title"], stamp, old_row["id"]))
+        self.db.commit()
 
     def _link_note_paper_asset(self, task_id: str, paper_id: str, note_path: str | Path) -> None:
         """Keep the canonical note -> paper edge in sync with legacy bindings."""
@@ -438,8 +471,20 @@ class WorkflowDB(ResearchDB):
             self.db.commit()
 
     def delete_md_note(self, nid: str) -> None:
+        note = self.md_note(nid)
+        path = self._md_note_path(note)
+        import asset_service
+        assets = asset_service.find_by_metadata(self, kind="note", key="legacy_id", value=nid)
         self.db.execute("DELETE FROM md_notes WHERE id=?", (nid,))
+        for asset in assets:
+            self.db.execute("UPDATE assets SET status='archived', updated_at=? WHERE id=?",
+                            (now(), asset["id"]))
         self.db.commit()
+        if path and path.is_file():
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
     # ---------- 情报日报（RSS 来源 + 条目，都不绑项目）----------
     def rss_sources(self) -> list[dict[str, Any]]:
