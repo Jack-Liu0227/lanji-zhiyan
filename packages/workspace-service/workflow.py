@@ -402,7 +402,18 @@ class WorkflowDB(ResearchDB):
                 " VALUES (?,?,?,?,?,?,?)",
                 (nid, title, content, task_id or "", paper_id or "", t, t))
         self.db.commit()
-        return self.md_note(nid)
+        note = self.md_note(nid)
+        # Markdown notes now have a canonical, atomically-written file mirror.
+        # The database row remains for backward-compatible queries and indexing.
+        import asset_service
+        folder = self.pdir(note["task_id"], "笔记") if note["task_id"] else NOTES
+        path = folder / f"{nid}.md"
+        asset_service.atomic_write_text(path, note["content"])
+        asset_service.register_file(self, path, project_id=note["task_id"], kind="note",
+                                    title=note["title"], source="md_notes", body=note["content"],
+                                    metadata={"paper_id": note["paper_id"], "legacy_id": nid})
+        note["canonical_path"] = str(path)
+        return note
 
     def delete_md_note(self, nid: str) -> None:
         self.db.execute("DELETE FROM md_notes WHERE id=?", (nid,))
@@ -659,14 +670,24 @@ class WorkflowDB(ResearchDB):
     def team_task_add(self, task_id: str, member_id: str, member_name: str, title: str, prompt: str,
                       trigger: str = "leader", origin: str = "") -> dict[str, Any]:
         row = (uuid.uuid4().hex, task_id, member_id, member_name, title[:120], prompt, "queued",
-               now(), "", "", "", "", "", trigger, origin)
-        self.db.execute("INSERT INTO team_tasks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+               now(), "", "", "", "", "", trigger, origin, 0, "{}", "", "", "[]", "[]", "pending")
+        self.db.execute("""INSERT INTO team_tasks
+            (id,task_id,member_id,member_name,title,prompt,status,created_at,started_at,ended_at,
+             output_path,result,reason,trigger,origin,attempt,checkpoint,retry_at,run_id,input_assets,output_assets,review_status)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM team_tasks WHERE id=?", (row[0],)).fetchone())
 
     def team_task_mark(self, tid: str, status: str, **fields: Any) -> None:
         allow = {k: v for k, v in fields.items()
-                 if k in ("started_at", "ended_at", "output_path", "result", "reason")}
+                 if k in ("started_at", "ended_at", "output_path", "result", "reason", "attempt",
+                          "checkpoint", "retry_at", "run_id", "input_assets", "output_assets", "review_status")}
+        if isinstance(allow.get("checkpoint"), dict):
+            allow["checkpoint"] = json.dumps(allow["checkpoint"], ensure_ascii=False)
+        if isinstance(allow.get("input_assets"), list):
+            allow["input_assets"] = json.dumps(allow["input_assets"], ensure_ascii=False)
+        if isinstance(allow.get("output_assets"), list):
+            allow["output_assets"] = json.dumps(allow["output_assets"], ensure_ascii=False)
         allow["status"] = status
         sets = ", ".join("%s=?" % k for k in allow)
         self.db.execute("UPDATE team_tasks SET %s WHERE id=?" % sets, (*allow.values(), tid))
@@ -890,8 +911,45 @@ class WorkflowDB(ResearchDB):
         files = [r["source_path"] for r in self.db.execute("SELECT source_path FROM papers WHERE task_id=?", (task_id,))]
         self.db.execute("DELETE FROM paper_pages WHERE paper_id IN (SELECT id FROM papers WHERE task_id=?)", (task_id,))
         self.db.execute("DELETE FROM evidence WHERE paper_id IN (SELECT id FROM papers WHERE task_id=?)", (task_id,))
-        for table in ("papers", "artifacts", "runs", "calendar_events", "notes", "steps", "search_cache", "chat", "paper_graph", "kb_graph"):
-            self.db.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
+        tables_to_clean = (
+            "papers", "artifacts", "runs", "calendar_events", "notes", "steps",
+            "search_cache", "chat", "paper_graph", "kb_graph", "project_memory",
+            "md_notes", "dl_queue", "team_tasks", "team_events",
+            "project_workflow_layouts", "zotero_bindings", "zotero_item_links",
+            "task_attempts", "audit_events", "project_todos", "background_jobs",
+            "idea_input", "tr_hl",
+        )
+        for table in tables_to_clean:
+            try:
+                self.db.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
+            except Exception:
+                pass
+        # workflow_runs is keyed by project_id rather than task_id. Keep this
+        # explicit so project deletion cannot leave orphaned resumable runs.
+        try:
+            run_ids = [r["id"] for r in self.db.execute(
+                "SELECT id FROM workflow_runs WHERE project_id=?", (task_id,))]
+            if run_ids:
+                marks = ",".join("?" for _ in run_ids)
+                self.db.execute(f"DELETE FROM workflow_nodes WHERE run_id IN ({marks})", run_ids)
+                self.db.execute(f"DELETE FROM workflow_runs WHERE id IN ({marks})", run_ids)
+        except Exception:
+            pass
+        try:
+            asset_ids = [r["id"] for r in self.db.execute("SELECT id FROM assets WHERE project_id=?", (task_id,))]
+            if asset_ids:
+                marks = ",".join("?" for _ in asset_ids)
+                self.db.execute(f"DELETE FROM asset_fts WHERE asset_id IN ({marks})", asset_ids)
+                self.db.execute(f"DELETE FROM asset_provenance WHERE asset_id IN ({marks})", asset_ids)
+                self.db.execute(f"DELETE FROM asset_relations WHERE from_asset_id IN ({marks}) OR to_asset_id IN ({marks})", asset_ids * 2)
+                self.db.execute(f"DELETE FROM asset_revisions WHERE asset_id IN ({marks})", asset_ids)
+                self.db.execute(f"DELETE FROM assets WHERE id IN ({marks})", asset_ids)
+        except Exception:
+            pass
+        try:
+            self.db.execute("UPDATE chats SET task_id='' WHERE task_id=?", (task_id,))
+        except Exception:
+            pass
         self.db.execute("DELETE FROM research_tasks WHERE id=?", (task_id,))
         self.db.commit()
         removed = 0
@@ -1162,8 +1220,15 @@ class WorkflowDB(ResearchDB):
         nid = uuid.uuid4().hex
         self.db.execute("INSERT INTO notes VALUES (?,?,?,?,?,?)", (nid, task_id, paper_id, title.strip() or "未命名笔记", markdown, now()))
         self.db.commit()
-        (self.pdir(task_id, "笔记") / f"{nid}.md").write_text(markdown, encoding="utf-8")
-        return self.note(nid)
+        import asset_service
+        path = self.pdir(task_id, "笔记") / f"{nid}.md"
+        asset_service.atomic_write_text(path, markdown)
+        asset_service.register_file(self, path, project_id=task_id, kind="note",
+                                    title=title.strip() or "未命名笔记", source="workflow", body=markdown,
+                                    metadata={"paper_id": paper_id or "", "legacy_id": nid})
+        out = self.note(nid)
+        out["canonical_path"] = str(path)
+        return out
 
     def note(self, nid: str) -> dict[str, Any]:
         row = self.db.execute("SELECT * FROM notes WHERE id=?", (nid,)).fetchone()
@@ -1555,6 +1620,42 @@ _SUB_TOOL_NAMES = ("library_overview", "knowledge_query", "paper_search", "paper
 _SUB_TOOLS = [t for t in TOOL_SPECS if t.get("function", {}).get("name") in _SUB_TOOL_NAMES]
 
 
+TOOL_RISK = {
+    # Pure reads stay available to read-only assistants.
+    "library_overview": "read_only", "knowledge_query": "read_only",
+    "outline_read": "read_only", "map_read": "read_only", "map_sources": "read_only",
+    "doc_read": "read_only", "cite_read": "read_only", "read_attachment": "read_only",
+    "paper_search": "network_read", "search": "network_read",
+    "mail_accounts": "network_read", "mail_list": "network_read", "mail_read": "network_read",
+    "zotero_collections": "network_read",
+    "delegate": "local_execution", "format_convert": "local_execution",
+    "paper_download": "network_read", "download": "network_read",
+    "outline_write": "workspace_write", "map_write": "workspace_write", "doc_write": "workspace_write",
+    "cite_add": "workspace_write", "memory_save": "workspace_write", "notes": "workspace_write",
+    "notes_compose": "workspace_write", "idea_review": "workspace_write", "paper_read": "workspace_write",
+    "read": "workspace_write", "draft_write": "workspace_write", "draft_review": "workspace_write",
+    "calendar_add": "workspace_write", "team_assign": "workspace_write", "team_form": "workspace_write",
+    "team_board": "read_only", "mail_send": "external_write", "feishu_send": "external_write",
+    "zotero_write": "external_write", "zotero_sync": "external_write",
+}
+
+
+def tool_risk(name: str) -> str:
+    """Return a stable policy category for every tool, including future MCP tools."""
+    if name.startswith("mcp_"):
+        return "external_write"
+    return TOOL_RISK.get(name, "workspace_write")
+
+
+def enforce_tool_policy(name: str, args: dict[str, Any], permission: str) -> None:
+    """Apply policy at the execution boundary, not only by hiding tool schemas."""
+    risk = tool_risk(name)
+    if permission == "read_only" and risk != "read_only":
+        raise PermissionError(f"只读权限禁止 {risk} 工具：{name}")
+    if risk == "external_write" and permission != "full_access" and args.get("confirm") is not True:
+        raise PermissionError("远程写入或外发必须取得明确确认（confirm=true）")
+
+
 def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: Any = None,
               profile: dict[str, Any] | None = None, scope: str = "", parallel: int = 3) -> dict[str, Any]:
     """把子任务并行派给**独立上下文**的子 agent，只把摘要带回父对话。
@@ -1791,6 +1892,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         if bound and not db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (bound,)).fetchone():
             bound = ""                             # 项目被删了 → 退回随意对话
     ctx_id = bound or task_id                       # 工具按这个 id 干活：绑了项目就落在项目里
+    import run_service
+    tracked_run = run_service.start(db, ctx_id, "agent", idempotency_key="")
+    tracked_node = run_service.node_start(db, tracked_run["id"], scope or "agent")
     if chat_row and bound:                        # 绑了项目 → Partner Agent（对话历史独立，视野与产出跟项目走）
         pt = db.summary(bound)["task"]
         ctx = (f"你是《{pt['title']}》项目的 **Partner Agent**：这个对话绑在该项目上 —— 对话历史自己一份，"
@@ -1856,7 +1960,12 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     final = ""
     tokens = {"prompt": 0, "completion": 0, "total": 0, "exact": True}
     for step in range(max_steps):
-        msg = chat_raw(profile, messages, tools=tool_specs)
+        try:
+            msg = chat_raw(profile, messages, tools=tool_specs)
+        except Exception as exc:
+            run_service.finish_node(db, tracked_node["id"], "failed", error=str(exc))
+            run_service.finish(db, tracked_run["id"], "failed", error=str(exc))
+            raise
         use = msg.get("usage") or {}
         if use:
             # 每次回包发「这一次」的用量（可累加），不发累计值——否则存进事件流后回放会重复计数
@@ -1891,6 +2000,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             try:
                 if name not in allowed_names:
                     raise PermissionError("当前助手未获准使用此工具：" + name)
+                enforce_tool_policy(name, args, permission)
                 if name in integration_names:
                     result = agent_integrations.invoke(name, db, ctx_id, args, assistant_id=aid, permission=permission)
                 elif name == "skill_read" or name.startswith("mcp_"):
@@ -1928,7 +2038,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 db.db.execute("UPDATE chats SET title=? WHERE id=?", (text.strip().replace("\n", " ")[:24], task_id))
             db.db.commit()
         say({"type": "done", "content": final})
-    return {"reply": final, "events": events}
+    run_service.finish_node(db, tracked_node["id"], "succeeded")
+    run_service.finish(db, tracked_run["id"], "succeeded")
+    return {"reply": final, "events": events, "run_id": tracked_run["id"]}
 
 
 def _brief(name: str, result: Any) -> str:

@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -154,8 +155,18 @@ def retry(task_id_row: str) -> dict[str, Any]:
 # ---------------- 队列 worker（串行） ----------------
 def _run_one(row: dict[str, Any]) -> None:
     t_id = row["task_id"]
+    attempt = int(row.get("attempt") or 0) + 1
+    team_run_id = ""
     with workflow.WorkflowDB(_db_path()) as db:
-        db.team_task_mark(row["id"], "running", started_at=_now())
+        import asset_service
+        import run_service
+        tracked = run_service.start(db, t_id, "team_task",
+                                    idempotency_key=f"team-task:{row['id']}:{attempt}")
+        team_run_id = tracked["id"]
+        input_assets = [item["id"] for item in asset_service.list_assets(db, t_id, limit=40)]
+        db.team_task_mark(row["id"], "running", started_at=_now(), attempt=attempt,
+                          checkpoint={"phase": "started", "attempt": attempt}, run_id=team_run_id,
+                          input_assets=input_assets)
         db.team_member_update(row["member_id"], status="running")
         db.team_event_add(row["id"], t_id, "start", "开始执行")
         mem = db.team_member(row["member_id"]) or {}
@@ -192,20 +203,47 @@ def _run_one(row: dict[str, Any]) -> None:
                 active_db.clear()
         text = (out.get("reply") or "\n".join(outs) or "").strip()
         with workflow.WorkflowDB(_db_path()) as db:
+            import asset_service
+            import run_service
             folder = db.pdir(t_id, "其余") / "团队"
             folder.mkdir(parents=True, exist_ok=True)
             path = folder / ("%s-%s.md" % ((row["member_name"] or "member").replace("/", "_"),
                                            datetime.now().strftime("%Y%m%d-%H%M%S")))
-            path.write_text("> 团队任务「%s」· 成员 %s · %s\n\n%s\n" %
-                            (row["title"], row["member_name"], _now(), text or "（没有产出内容）"), encoding="utf-8")
+            content = "> 团队任务「%s」 · 成员 %s · %s\n\n%s\n" % (
+                row["title"], row["member_name"], _now(), text or "没有产出内容")
+            asset_service.atomic_write_text(path, content)
+            output = asset_service.register_file(
+                db, path, project_id=t_id, kind="team_output", title=row["title"],
+                source="team_worker", run_id=team_run_id, body=content,
+                metadata={"team_task_id": row["id"], "member_id": row["member_id"]})
+            raw_inputs = row.get("input_assets") or "[]"
+            input_ids = json.loads(raw_inputs) if isinstance(raw_inputs, str) else raw_inputs
+            for input_id in input_ids:
+                try:
+                    asset_service.link(db, output["id"], "derived_from", input_id,
+                                       {"team_task_id": row["id"]})
+                except (KeyError, ValueError):
+                    pass
+            asset_service.provenance(
+                db, output["id"], team_run_id, "team_task_complete",
+                actor=row["member_name"],
+                input_snapshot={"task_id": row["id"], "inputs": input_ids})
             db.team_task_mark(row["id"], "done", ended_at=_now(),
-                              output_path=str(path), result=text[:500])
+                              output_path=str(path), result=text[:500],
+                              checkpoint={"phase": "done", "attempt": attempt},
+                              output_assets=[output["id"]], review_status="pending")
+            run_service.finish(db, team_run_id, "succeeded")
             db.team_member_update(row["member_id"], status="done", note="最近完成：" + row["title"])
             db.team_event_add(row["id"], t_id, "done", "完成 → %s" % path.name)
     except Exception as exc:
         with workflow.WorkflowDB(_db_path()) as db:
+            if team_run_id:
+                import run_service
+                run_service.finish(db, team_run_id, "failed", error=str(exc))
             db.team_task_mark(row["id"], "failed", ended_at=_now(),
-                              reason="%s: %s" % (type(exc).__name__, exc))
+                              reason="%s: %s" % (type(exc).__name__, exc),
+                              checkpoint={"phase": "failed", "attempt": attempt},
+                              retry_at="")
             db.team_member_update(row["member_id"], status="failed")
             db.team_event_add(row["id"], t_id, "fail", "%s: %s" % (type(exc).__name__, exc))
 
@@ -225,6 +263,12 @@ def tick() -> int:
     """跑一轮队列（串行：一次一个）。返回本轮跑了几个。"""
     done = 0
     with workflow.WorkflowDB(_db_path()) as db:
+        # A process restart can leave a task marked running. Make it visible
+        # and retryable instead of silently blocking the queue forever.
+        db.db.execute("""UPDATE team_tasks SET status='queued', reason='服务重启后恢复',
+            checkpoint='{"phase":"recovered"}'
+            WHERE status='running' AND datetime(replace(started_at, 'T', ' ')) < datetime('now', '-15 minutes')""")
+        db.db.commit()
         rows = [t for t in db.team_tasks(None, 200) if t["status"] == "queued"]
     rows.sort(key=lambda r: r["created_at"])
     for row in rows:

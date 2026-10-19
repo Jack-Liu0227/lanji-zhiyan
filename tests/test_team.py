@@ -97,6 +97,13 @@ class TeamTest(unittest.TestCase):
         self.assertEqual(t["status"], "done")
         self.assertTrue(t["output_path"])
         self.assertTrue(pathlib.Path(t["output_path"]).is_file())            # 产物真落盘
+        with workflow.WorkflowDB(_p) as db:
+            out_assets = db.db.execute(
+                "SELECT id FROM assets WHERE canonical_uri=?",
+                (str(pathlib.Path(t["output_path"]).resolve()),),
+            ).fetchall()
+            self.assertEqual(len(out_assets), 1)
+            self.assertEqual(t["output_assets"], "[\"%s\"]" % out_assets[0][0])
         kinds = [e["kind"] for e in t["events"]]
         for k in ("assign", "start", "assistant", "done"):
             self.assertIn(k, kinds)                                          # 看板的事件流有料
