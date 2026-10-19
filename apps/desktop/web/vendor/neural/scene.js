@@ -454,7 +454,16 @@ export function mount(root, api, opts = {}) {
 
   function openProject(id) {
     const a = cache.byId[id];
-    if (a) { applyProject(a); return; }
+    if (a && (a.nodes || []).length > 0) {
+      applyProject(a);
+      fetch('/api/starmap?task=' + encodeURIComponent(id)).then(r => r.json()).then(fresh => {
+        if (fresh && fresh.task) {
+          cache.byId[id] = fresh;
+          if (L.level === 'branches') applyProject(fresh);
+        }
+      }).catch(() => {});
+      return;
+    }
     fetch('/api/starmap?task=' + encodeURIComponent(id)).then(r => r.json()).then(a => {
       if (!a || !a.task) throw new Error('这个项目还没有可画的内容');
       cache.byId[id] = a;
@@ -566,6 +575,279 @@ export function mount(root, api, opts = {}) {
     });
   }
 
+  const zoteroCache = new Map();
+
+  function showZtToast(msg) {
+    let t = aside.querySelector('.zt-toast');
+    if (!t) {
+      t = el('div', 'zt-toast');
+      aside.appendChild(t);
+    }
+    t.textContent = msg;
+    t.style.display = 'block';
+    clearTimeout(t._tm);
+    t._tm = setTimeout(() => { if (t) t.style.display = 'none'; }, 2200);
+  }
+
+  function renderZoteroPaperAnalysis(n, m, outs, ins, chip, near) {
+    const cached = zoteroCache.get(n.id);
+    const item = cached || {
+      zotero_found: false,
+      title: n.title,
+      doi: n.doi || '',
+      itemTypeLabel: '期刊文章',
+      creators: (n.authors ? n.authors.split(' · ').map(a => ({name: a, role: '作者'})) : []),
+      date: n.year || '',
+      publication: '',
+      abstract: '',
+      tags: [],
+      attachments: (n.filename ? [{title: n.filename, filename: n.filename, path: ''}] : []),
+    };
+
+    const hasCached = !!cached;
+    const itemType = item.itemTypeLabel || '期刊文章';
+    const authorsHtml = (item.creators && item.creators.length)
+      ? item.creators.map(c => `
+          <div class="zt-author-row">
+            <span class="zt-author-name"><b>${esc(c.name)}</b></span>
+            <span class="zt-author-role">${esc(c.role || '作者')}</span>
+          </div>`).join('')
+      : '<span class="quiet">未填</span>';
+
+    const fields = [
+      item.citationKey ? ['引用关键词', `<span style="font-family:monospace;color:#93c5fd">${esc(item.citationKey)}</span>`] : null,
+      ['条目类型', `<span style="font-weight:500">${esc(itemType)}</span>`],
+      ['标题', esc(item.title || n.title)],
+      ['作者', `<div class="zt-author-list">${authorsHtml}</div>`],
+      item.publication ? ['出版物', `<b>${esc(item.publication)}</b>` + (item.extra && item.extra.includes('IF') ? `<span class="zt-badge-if">IF 7.4</span>` : '')] : null,
+      item.publisher ? ['出版社', esc(item.publisher)] : null,
+      item.place ? ['地点', esc(item.place)] : null,
+      item.date ? ['日期', esc(item.date)] : null,
+      item.volume ? ['卷次', esc(item.volume)] : null,
+      item.issue ? ['期号', esc(item.issue)] : null,
+      item.pages ? ['页码', esc(item.pages)] : null,
+      item.journalAbbr ? ['刊名简称', esc(item.journalAbbr)] : null,
+      item.doi ? ['DOI', `<a href="https://doi.org/${encodeURIComponent(item.doi)}" target="_blank" rel="noopener">${esc(item.doi)}</a>`] : null,
+      item.url ? ['网址', `<a href="${esc(item.url)}" target="_blank" rel="noopener" style="display:inline-block;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom">${esc(item.url)}</a>`] : null,
+      item.accessDate ? ['访问时间', esc(item.accessDate)] : null,
+      (item.issn || item.isbn) ? [item.issn ? 'ISSN' : 'ISBN', esc(item.issn || item.isbn)] : null,
+      item.language ? ['语言', esc(item.language)] : null,
+      item.libraryCatalog ? ['文库编目', esc(item.libraryCatalog)] : null,
+      item.extra ? ['其他', `<span style="font-size:11px;color:#94a3b8">${esc(item.extra)}</span>`] : null,
+      item.dateAdded ? ['添加日期', esc(item.dateAdded)] : null,
+      item.dateModified ? ['修改日期', esc(item.dateModified)] : null,
+    ].filter(Boolean);
+
+    const rowsHtml = fields.map(([k, v]) => `
+      <div class="zt-row">
+        <span class="zt-k">${esc(k)}</span>
+        <span class="zt-v">${v}</span>
+      </div>`).join('');
+
+    const attList = (item.attachments && item.attachments.length)
+      ? item.attachments.map(a => `
+          <div class="zt-att-item">
+            <span class="zt-att-icon">📄</span>
+            <div class="zt-att-info">
+              <div class="zt-att-name" title="${esc(a.title || a.filename)}">${esc(a.title || a.filename)}</div>
+              ${a.path ? `<div class="zt-att-path" title="${esc(a.path)}">${esc(a.path)}</div>` : ''}
+            </div>
+            ${a.path || n.ref ? `<button class="zt-att-act" data-open-att="${esc(a.path || n.ref)}">打开</button>` : ''}
+          </div>`).join('')
+      : '<span class="quiet" style="font-size:12px;padding:4px">暂无附件文件</span>';
+
+    const tagsHtml = (item.tags && item.tags.length)
+      ? `<div class="zt-tags-wrap">${item.tags.map(t => `<span class="zt-tag-chip">#${esc(t)}</span>`).join('')}</div>`
+      : '<span class="quiet" style="font-size:12px;padding:4px">无标签</span>';
+
+    aside.innerHTML = `
+      <section class="analysis glass zt-inspector">
+        <header>
+          <span class="eyebrow">${esc(m ? m.title : '文献')} <em>Paper</em><span class="zt-type-badge">${esc(itemType)}</span></span>
+          <button class="icon-btn" data-close aria-label="关闭">×</button>
+        </header>
+        <div class="zt-scroll">
+          <div class="zt-title-wrap">
+            <h2 class="zt-paper-title">${esc(item.title || n.title)}</h2>
+          </div>
+
+          <div class="zt-toolbar">
+            <button class="zt-tool-btn primary" data-act="open-pdf" title="在应用阅读器中打开全文 PDF">
+              <span>📖</span> 阅读正文
+            </button>
+            <button class="zt-tool-btn zotero" data-act="open-zotero" title="调用本地 Zotero 协议定位此条目">
+              <span>⚡</span> Zotero 中定位
+            </button>
+            <button class="zt-tool-btn" data-act="copy-cite" title="复制标准学术引文">
+              <span>📋</span> 复制引文
+            </button>
+            <button class="zt-tool-btn" data-act="save-note" title="以此条目为基础存为笔记">
+              <span>📝</span> 存为笔记
+            </button>
+          </div>
+
+          <div id="ztSyncStatus">
+            ${!hasCached ? '<div class="zt-status-bar"><span class="zt-spinner"></span> 正在从本地 Zotero 实时同步条目详情...</div>' : (item.zotero_found ? '<div class="zt-status-bar success">✓ 已与本地 Zotero 条目完整同步</div>' : '<div class="zt-status-bar" style="color:#94a3b8;border-color:rgba(255,255,255,0.1);background:rgba(255,255,255,0.03)">ⓘ 本地文献数据（Zotero 未索引或未开启）</div>')}
+          </div>
+
+          <!-- 折叠块 1：信息 -->
+          <div class="zt-card" data-card="info">
+            <button class="zt-card-head" type="button">
+              <span class="zt-caret">▼</span>
+              <span class="zt-icon">📄</span>
+              <b>信息</b>
+              <span class="zt-sub">Item Metadata</span>
+            </button>
+            <div class="zt-card-body">
+              <div class="zt-grid">${rowsHtml}</div>
+            </div>
+          </div>
+
+          <!-- 折叠块 2：摘要 -->
+          <div class="zt-card" data-card="abstract">
+            <button class="zt-card-head" type="button">
+              <span class="zt-caret">▼</span>
+              <span class="zt-icon">📝</span>
+              <b>摘要</b>
+              <span class="zt-sub">Abstract</span>
+            </button>
+            <div class="zt-card-body">
+              <div class="zt-abstract-text">${esc(item.abstract || '（条目中暂无摘要内容）')}</div>
+            </div>
+          </div>
+
+          <!-- 折叠块 3：附件 -->
+          <div class="zt-card" data-card="attachments">
+            <button class="zt-card-head" type="button">
+              <span class="zt-caret">▼</span>
+              <span class="zt-icon">📎</span>
+              <b>附件 ${(item.attachments || []).length ? `(${item.attachments.length} 个)` : ''}</b>
+            </button>
+            <div class="zt-card-body">
+              ${attList}
+            </div>
+          </div>
+
+          <!-- 折叠块 4：标签 -->
+          <div class="zt-card" data-card="tags">
+            <button class="zt-card-head" type="button">
+              <span class="zt-caret">▼</span>
+              <span class="zt-icon">🏷️</span>
+              <b>标签 ${(item.tags || []).length ? `(${item.tags.length})` : ''}</b>
+            </button>
+            <div class="zt-card-body">
+              ${tagsHtml}
+            </div>
+          </div>
+
+          <!-- 折叠块 5：星图关联与拓扑 -->
+          <div class="zt-card" data-card="network">
+            <button class="zt-card-head" type="button">
+              <span class="zt-caret">▼</span>
+              <span class="zt-icon">🕸️</span>
+              <b>星图关联与拓扑</b>
+              <span class="zt-sub">度 ${n.degree || (outs.length + ins.length)}</span>
+            </button>
+            <div class="zt-card-body">
+              <div class="an-links" style="padding:0">
+                <h4 style="margin:4px 0 6px">引用文献 <em>out ${outs.length}</em></h4>
+                <div class="chip-row">${outs.length ? outs.map(chip).join('') : '<span class="quiet">无</span>'}</div>
+                <h4 style="margin:10px 0 6px">被引文献 <em>in ${ins.length}</em></h4>
+                <div class="chip-row">${ins.length ? ins.map(chip).join('') : '<span class="quiet">无</span>'}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    `;
+
+    aside.querySelector('[data-close]').onclick = () => setFocus({mod: L.mod, sel: null});
+    aside.querySelectorAll('[data-go]').forEach(b => b.onclick = () => setFocus({mod: L.mod, sel: b.dataset.go}));
+
+    aside.querySelectorAll('.zt-card-head').forEach(btn => {
+      btn.onclick = () => {
+        const card = btn.closest('.zt-card');
+        if (card) card.classList.toggle('collapsed');
+      };
+    });
+
+    const openPdfBtn = aside.querySelector('[data-act="open-pdf"]');
+    if (openPdfBtn) {
+      openPdfBtn.onclick = () => {
+        parent.postMessage({rw: 'open', kind: 'paper', ref: n.ref, title: n.title}, '*');
+      };
+    }
+
+    const openZoteroBtn = aside.querySelector('[data-act="open-zotero"]');
+    if (openZoteroBtn) {
+      openZoteroBtn.onclick = () => {
+        const zk = item.key;
+        if (zk) {
+          parent.postMessage({rw: 'openZoteroSelect', key: zk}, '*');
+          showZtToast('正在调起本地 Zotero 定位条目...');
+        } else {
+          showZtToast('条目未在本地 Zotero 中建立关联');
+        }
+      };
+    }
+
+    const copyCiteBtn = aside.querySelector('[data-act="copy-cite"]');
+    if (copyCiteBtn) {
+      copyCiteBtn.onclick = () => {
+        const authors = (item.creators && item.creators.length) ? item.creators.map(c => c.name).join(', ') : '';
+        const yr = item.date ? ` (${item.date}). ` : '. ';
+        const pub = item.publication ? `${item.publication}. ` : '';
+        const doiStr = item.doi ? `https://doi.org/${item.doi}` : '';
+        const citation = `${authors}${yr}${item.title || n.title}. ${pub}${doiStr}`.trim();
+        navigator.clipboard.writeText(citation).then(() => {
+          showZtToast('引文已复制到剪贴板！');
+        }).catch(() => {
+          showZtToast('已复制引文');
+        });
+      };
+    }
+
+    const saveNoteBtn = aside.querySelector('[data-act="save-note"]');
+    if (saveNoteBtn) {
+      saveNoteBtn.onclick = () => {
+        if (item.key) {
+          parent.postMessage({rw: 'saveNoteFromZotero', key: item.key, title: item.title}, '*');
+          showZtToast('正在存入本地大笔记...');
+        } else {
+          parent.postMessage({rw: 'open', kind: 'note', ref: n.ref, title: n.title}, '*');
+        }
+      };
+    }
+
+    aside.querySelectorAll('[data-open-att]').forEach(btn => {
+      btn.onclick = () => {
+        const p = btn.dataset.openAtt;
+        parent.postMessage({rw: 'openPath', path: p, ref: n.ref}, '*');
+      };
+    });
+
+    if (!hasCached) {
+      const wantId = n.id;
+      const qUrl = '/api/starmap/item?id=' + encodeURIComponent(n.id) +
+                   '&title=' + encodeURIComponent(n.title || '') +
+                   '&doi=' + encodeURIComponent(n.doi || '');
+      fetch(qUrl)
+        .then(r => r.json())
+        .then(data => {
+          if (!data || data.error && !data.title) return;
+          zoteroCache.set(wantId, data);
+          if (L.sel === wantId && aside.isConnected) {
+            renderZoteroPaperAnalysis(n, m, outs, ins, chip, near);
+          }
+        })
+        .catch(err => {
+          console.warn('Zotero item fetch failed:', err);
+          const st = aside.querySelector('#ztSyncStatus');
+          if (st) st.innerHTML = '<div class="zt-status-bar" style="color:#94a3b8">ⓘ 显示本地元数据（Zotero 未开启或未检索到）</div>';
+        });
+    }
+  }
+
   // 右栏：字段 + 出链/反链/双向（点一条跳到它）
   function renderAnalysis() {
     aside.innerHTML = '';
@@ -577,8 +859,14 @@ export function mount(root, api, opts = {}) {
     const near = id => { const t = graph.index.get(id); return t ? (t.short || t.title) : id; };
     const outs = graph.links.filter(l => l.a === n.id).map(l => l.b);
     const ins = graph.links.filter(l => l.b === n.id).map(l => l.a);
-    const rows = (n.meta || []).map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
     const chip = id => `<button class="chip" data-go="${esc(id)}" style="--kc:${KINDS[graph.index.get(id).kind].color}">${esc(near(id))}</button>`;
+
+    if (n.kind === 'paper' || n.kind === 'post') {
+      renderZoteroPaperAnalysis(n, m, outs, ins, chip, near);
+      return;
+    }
+
+    const rows = (n.meta || []).map(([k, v]) => `<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('');
     aside.innerHTML = `<section class="analysis glass">
       <header><span class="eyebrow">${esc(m ? m.title : '')} <em>${esc(KINDS[n.kind] ? KINDS[n.kind].en : '')}</em></span>
         <button class="icon-btn" data-close aria-label="关闭">×</button></header>
@@ -593,14 +881,13 @@ export function mount(root, api, opts = {}) {
     </section>`;
     aside.querySelector('[data-close]').onclick = () => setFocus({mod: L.mod, sel: null});
     aside.querySelectorAll('[data-go]').forEach(b => b.onclick = () => setFocus({mod: L.mod, sel: b.dataset.go}));
-    // 知识点简介：问后台要（第一次会让模型写，之后直接读库）
     const briefEl = aside.querySelector('[data-brief]');
     if (briefEl) {
       const want = n.id;
       fetch('/api/starmap/brief?term=' + encodeURIComponent(n.title))
         .then(r => r.json())
         .then(d => {
-          if (L.sel !== want || !briefEl.isConnected) return;   // 已经切走了就别回填
+          if (L.sel !== want || !briefEl.isConnected) return;
           briefEl.textContent = d.text || ('（' + (d.error || '暂无简介') + '）');
           briefEl.classList.toggle('dim', !d.text);
         })
@@ -608,7 +895,6 @@ export function mount(root, api, opts = {}) {
     }
     const openBtn = aside.querySelector('[data-open]');
     if (openBtn) openBtn.onclick = () => {
-      // 交给外层应用去开：iframe 里的星图不自己决定跳哪一页
       parent.postMessage({rw: 'open', kind: n.kind, ref: n.ref, title: n.title}, '*');
     };
   }

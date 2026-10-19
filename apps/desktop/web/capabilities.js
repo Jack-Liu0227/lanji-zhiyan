@@ -11,15 +11,69 @@
   const kinds = {skills: "skill", tools: "tool", mcp: "mcp"};
   const styles = document.createElement("style");
   styles.textContent = `
-    .cap-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
-    .cap-toolbar .control{min-width:150px;max-width:270px}.cap-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
-    .cap-grid .card{margin:0;min-width:0}.cap-grid h4{margin:0 0 8px;overflow-wrap:anywhere}.cap-grid p{white-space:pre-wrap;overflow-wrap:anywhere}
-    .cap-card-actions{display:flex;gap:7px;margin-top:14px;flex-wrap:wrap}
+    .cap-toolbar .control{min-width:150px;max-width:270px}
     .cap-matrix-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px}
     .cap-cats{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-    .cap-cat-pill{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s}
+    .cap-cat-pill{border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;color:var(--muted);transition:all .15s;display:inline-flex;align-items:center;gap:5px}
     .cap-cat-pill:hover{border-color:var(--accent);color:var(--fg)}
     .cap-cat-pill.on{background:color-mix(in srgb,var(--accent) 15%,transparent);border-color:var(--accent);color:var(--accent)}
+    .cap-cat-count{font-size:10.5px;padding:1px 6px;border-radius:999px;background:var(--panel2,rgba(255,255,255,0.06));opacity:.85}
+
+    /* List View Styles */
+    .cap-list{display:flex;flex-direction:column;gap:7px;margin-top:12px}
+    .cap-list-row{display:flex;align-items:center;gap:14px;padding:11px 16px;background:var(--panel,var(--bg));border:1px solid var(--line);border-radius:10px;cursor:pointer;transition:all .15s ease}
+    .cap-list-row:hover{background:color-mix(in srgb,var(--accent) 7%,var(--panel,var(--bg)));border-color:color-mix(in srgb,var(--accent) 45%,var(--line));box-shadow:0 3px 10px rgba(0,0,0,0.05);transform:translateY(-1px)}
+    .cap-row-icon{font-size:18px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:8px;background:var(--panel2,rgba(255,255,255,0.04));border:1px solid var(--line)}
+    .cap-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+    .cap-row-top{display:flex;align-items:center;gap:8px}
+    .cap-item-name{font-size:14px;font-weight:600;color:var(--fg);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .cap-scope-pill{font-size:11px;padding:1px 7px;border-radius:999px}
+    .cap-scope-pill.user{color:#38bdf8;border-color:color-mix(in srgb,#38bdf8 35%,transparent);background:color-mix(in srgb,#38bdf8 10%,transparent)}
+    .cap-scope-pill.proj{color:#a855f7;border-color:color-mix(in srgb,#a855f7 35%,transparent);background:color-mix(in srgb,#a855f7 10%,transparent)}
+    .cap-row-desc{font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4}
+    .cap-row-meta{flex-shrink:0;display:flex;align-items:center;gap:8px}
+    .cap-binding-badge{font-size:12px;padding:2px 8px;border-radius:6px;background:var(--panel2,rgba(255,255,255,0.04));border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+    .cap-row-actions{flex-shrink:0;display:flex;align-items:center;gap:6px}
+    .cap-btn-sm{padding:4px 10px;font-size:12px;border-radius:6px;line-height:1.4;white-space:nowrap}
+
+    /* Detail View Styles */
+    .cap-detail-nav-card{margin-bottom:12px;padding:12px 18px}
+    .cap-detail-nav{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px}
+    .cap-detail-nav-left{display:flex;align-items:center;gap:12px}
+    .cap-btn-back{font-weight:600;display:inline-flex;align-items:center;gap:6px}
+    .cap-breadcrumbs{display:flex;align-items:center;gap:8px;font-size:14px}
+    .cap-breadcrumbs .sep{color:var(--muted);opacity:.6}
+    .cap-detail-nav-right{display:flex;align-items:center;gap:8px}
+
+    .cap-detail-card{padding:22px;border-radius:12px;background:var(--panel,var(--bg));border:1px solid var(--line)}
+    .cap-detail-header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px;padding-bottom:16px;border-bottom:1px solid var(--line)}
+    .cap-detail-title-group{display:flex;align-items:center;gap:14px}
+    .cap-detail-icon{font-size:30px;width:50px;height:50px;display:flex;align-items:center;justify-content:center;border-radius:12px;background:var(--panel2,rgba(255,255,255,0.05));border:1px solid var(--line)}
+    .cap-detail-title{margin:0;font-size:20px;font-weight:700;letter-spacing:-0.01em;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+    .cap-detail-tags{display:flex;gap:8px;align-items:center;margin-top:6px}
+
+    .cap-detail-path-box{display:flex;align-items:center;gap:10px;background:var(--panel2,rgba(255,255,255,0.03));padding:10px 14px;border-radius:8px;border:1px solid var(--line);margin:16px 0}
+    .cap-detail-path-box code{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted)}
+
+    .cap-detail-section{margin-top:20px}
+    .cap-section-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px}
+    .cap-section-title{font-size:14px;font-weight:700;margin:0;color:var(--fg)}
+    .cap-detail-desc{font-size:13.5px;line-height:1.65;color:var(--fg);background:var(--panel2,rgba(255,255,255,0.03));padding:14px 16px;border-radius:8px;border:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere}
+
+    .cap-detail-assistants-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin-top:8px}
+    .cap-detail-as-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2,var(--bg));cursor:pointer;transition:all .15s}
+    .cap-detail-as-item:hover{border-color:var(--accent)}
+    .cap-detail-as-item.checked{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--panel2,var(--bg)))}
+    .cap-detail-as-item input{width:16px;height:16px;cursor:pointer}
+    .cap-as-name{font-size:13px;font-weight:500;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+    .cap-file-tabs{display:flex;gap:4px}
+    .cap-file-tabs .btn.active{background:color-mix(in srgb,var(--accent) 18%,transparent);border-color:var(--accent);color:var(--accent);font-weight:600}
+    .cap-code-view{background:var(--panel2,#121316);border:1px solid var(--line);border-radius:8px;padding:14px 16px;max-height:480px;overflow:auto}
+    .cap-code-view pre{margin:0;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12.5px;line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--fg)}
+    .cap-detail-editor{width:100%;min-height:360px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;line-height:1.6;resize:vertical;border-radius:8px;padding:12px;box-sizing:border-box}
+
+    /* Existing Matrix & Dialog Styles */
     .cap-th-corner{display:flex;align-items:center;justify-content:space-between;gap:8px}
     .cap-th-col{display:flex;flex-direction:column;align-items:center;gap:4px;white-space:nowrap;padding:4px 0}
     .cap-row-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -39,7 +93,7 @@
     .cap-dialog-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:14px}.cap-dialog h3{margin:0;overflow-wrap:anywhere}
     .cap-dialog textarea{width:100%;min-height:390px;resize:vertical;font-family:Consolas,monospace;line-height:1.6}.cap-dialog pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:58vh;overflow:auto}
     .cap-field{display:grid;gap:6px;margin:12px 0}.cap-error{color:var(--danger,#bd3f34);white-space:pre-wrap}.cap-hint{margin:12px 0;overflow-wrap:anywhere}
-    @media(max-width:650px){.cap-overlay{padding:6px}.cap-dialog{padding:14px;max-height:96vh}.cap-dialog textarea{min-height:300px}.cap-grid{grid-template-columns:1fr}}
+    @media(max-width:650px){.cap-overlay{padding:6px}.cap-dialog{padding:14px;max-height:96vh}.cap-dialog textarea{min-height:300px}.cap-list-row{flex-direction:column;align-items:flex-start}.cap-row-meta,.cap-row-actions{width:100%;justify-content:space-between}}
   `;
   document.head.appendChild(styles);
 
@@ -84,6 +138,7 @@
   }
   async function update() {
     cache.delete(projectId);
+    skillFileCache.clear();
     await load();
   }
   function checked(meta, aid, kind, itemId) {
@@ -93,6 +148,11 @@
     return global ? Boolean(global.enabled) : meta.default_enabled !== false;
   }
   let currentCategory = "all";
+  let selectedId = null;
+  let detailTab = "preview";
+  let currentSection = "";
+  const skillFileCache = new Map();
+
   function itemCategory(item) {
     const text = ((item.label || "") + " " + (item.description || item.desc || "") + " " + (item.id || item.name || "")).toLowerCase();
     if (/arxiv|pubmed|scholar|search|cite|lit|bib|paper|检索|文献|引文|阅读|深度阅读/.test(text)) return "literature";
@@ -102,13 +162,40 @@
     return "general";
   }
   const CATEGORIES = [
-    {id: "all", label: "全部"},
-    {id: "literature", label: "🔎 文献检索"},
-    {id: "writing", label: "✍️ 论文写作"},
-    {id: "workspace", label: "📚 知识与工作区"},
-    {id: "integration", label: "🔌 协同集成"},
-    {id: "general", label: "⚙️ 基础通用"}
+    {id: "all", label: "全部", icon: "📋"},
+    {id: "literature", label: "文献检索", icon: "🔎"},
+    {id: "writing", label: "论文写作", icon: "✍️"},
+    {id: "workspace", label: "知识与工作区", icon: "📚"},
+    {id: "integration", label: "协同集成", icon: "🔌"},
+    {id: "general", label: "基础通用", icon: "⚙️"}
   ];
+
+  function categoryIcon(item) {
+    const cat = itemCategory(item);
+    const map = {literature: "🔎", writing: "✍️", workspace: "📚", integration: "🔌", general: "⚙️"};
+    return map[cat] || "⚡";
+  }
+  function categoryLabel(item) {
+    const cat = typeof item === "string" ? item : itemCategory(item);
+    const found = CATEGORIES.find(c => c.id === cat);
+    return found ? found.label : "基础通用";
+  }
+  function categoryCount(meta, catId) {
+    const list = meta[setSec] || [];
+    if (catId === "all") return list.length;
+    return list.filter(item => itemCategory(item) === catId).length;
+  }
+  function bindingBadgeText(meta, item) {
+    const kind = kinds[setSec];
+    const assistants = meta.assistants || [];
+    let count = 0;
+    assistants.forEach(a => {
+      if (checked(meta, a.id, kind, item.id)) count++;
+    });
+    if (count === 0) return `<span class="cap-binding-badge" style="opacity:.6">未授权专家</span>`;
+    if (count === assistants.length) return `<span class="cap-binding-badge" style="color:var(--accent);border-color:color-mix(in srgb,var(--accent) 30%,transparent)">全部专家 (${count})</span>`;
+    return `<span class="cap-binding-badge">${count}/${assistants.length} 位专家</span>`;
+  }
 
   function filtered(meta) {
     const needle = search.trim().toLocaleLowerCase();
@@ -128,7 +215,7 @@
       <div class="cap-matrix-header">
         <p class="hint" style="margin:0">勾选立即保存；支持横向/纵向/全局一键全开全关。滚轮可横纵平滑滑动，表头与能力列常驻固定。</p>
         <div class="cap-cats">
-          ${CATEGORIES.map(c => `<button class="cap-cat-pill ${currentCategory === c.id ? "on" : ""}" data-cap-cat="${c.id}">${c.label}</button>`).join("")}
+          ${CATEGORIES.map(c => `<button class="cap-cat-pill ${currentCategory === c.id ? "on" : ""}" data-cap-cat="${c.id}">${c.icon} ${c.label}</button>`).join("")}
         </div>
       </div>
       <div class="cap-table" id="capTableWrap">
@@ -177,20 +264,408 @@
         </table>
       </div>`;
   }
-  function drawCards(meta, items) {
-    if (!items.length) return `<div class="card"><h4>没有找到${labels[setSec]}</h4><p class="hint">${setSec === "skills" ? "将技能放入下方 .agents/skills 目录中的 SKILL.md；然后刷新。" : "请调整搜索条件或添加配置。"}</p></div>`;
-    return `<div class="cap-grid">${items.map(item => `<div class="card"><h4>${e(item.label || item.name)}</h4><span class="pill">${e(item.scope || item.transport || "内置工具")}</span>${setSec === "mcp" ? `<span class="pill">${item.enabled ? "启用" : "停用"}</span>` : ""}<p class="hint">${e(item.description || item.desc || "暂无说明")}</p>${item.path ? `<p class="hint">${e(item.path)}</p>` : ""}<div class="cap-card-actions">${setSec === "mcp" ? `<button class="btn" data-cap-connect="${e(item.id)}">连接 / 拉取工具</button><button class="btn ghost" data-cap-mcp-preview="${e(item.id)}">工具预览 (${item.tools.length})</button>` : `<button class="btn ghost" data-cap-preview="${e(item.id)}">预览 / 编辑</button>`}</div></div>`).join("")}</div>`;
+  function drawListView(meta, items) {
+    const section = setSec;
+    if (!items.length) {
+      return `<div class="card" style="text-align:center;padding:36px;color:var(--muted)"><h4>没有找到匹配的${labels[section]}</h4><p class="hint">可调整搜索词或切换上方的分类筛选。</p></div>`;
+    }
+    return `<div class="cap-list">
+      ${items.map(item => `
+        <div class="cap-list-row" data-cap-row="${e(item.id)}" title="点击查看详情">
+          <div class="cap-row-icon" title="${e(categoryLabel(item))}">${categoryIcon(item)}</div>
+          <div class="cap-row-main">
+            <div class="cap-row-top">
+              <span class="cap-item-name" title="${e(item.label || item.name)}">${e(item.label || item.name)}</span>
+              <span class="pill cap-scope-pill ${item.scope === 'project' ? 'proj' : 'user'}">${item.scope === 'project' ? '项目' : '全局'}</span>
+              ${section === 'mcp' ? `<span class="pill ${item.enabled ? 'on' : 'off'}">${item.enabled ? '启用' : '停用'}</span>` : ''}
+            </div>
+            <div class="cap-row-desc" title="${e(item.description || item.desc || '')}">${e(item.description || item.desc || '暂无说明')}</div>
+          </div>
+          <div class="cap-row-meta">
+            ${bindingBadgeText(meta, item)}
+          </div>
+          <div class="cap-row-actions">
+            <button class="btn ghost cap-btn-sm" data-cap-detail="${e(item.id)}" title="进入详情页">详情 →</button>
+            <button class="btn ghost cap-btn-sm" data-cap-preview="${e(item.id)}" title="快速弹窗预览/编辑">预览/编辑</button>
+          </div>
+        </div>
+      `).join("")}
+    </div>`;
   }
+
+  function drawDetailView(meta, item, items) {
+    const section = setSec;
+    const kind = kinds[section];
+    const assistants = [{id: "*", name: "默认 / 未绑定专家"}, ...meta.assistants];
+    const currentIndex = items.findIndex(it => it.id === item.id);
+    const hasPrev = currentIndex > 0;
+    const hasNext = currentIndex >= 0 && currentIndex < items.length - 1;
+    const prevId = hasPrev ? items[currentIndex - 1].id : "";
+    const nextId = hasNext ? items[currentIndex + 1].id : "";
+
+    return `
+      <div class="card cap-detail-nav-card">
+        <div class="cap-detail-nav">
+          <div class="cap-detail-nav-left">
+            <button class="btn ghost cap-btn-back" id="cap-back-list">← 返回技能列表</button>
+            <div class="cap-breadcrumbs">
+              <span class="muted">${labels[section]}</span>
+              <span class="sep">/</span>
+              <strong>${e(item.label || item.name)}</strong>
+            </div>
+          </div>
+          <div class="cap-detail-nav-right">
+            <button class="btn ghost cap-btn-sm" id="cap-prev-item" data-target="${e(prevId)}" ${hasPrev ? "" : "disabled"} title="查看上一个技能">← 上一项</button>
+            <span class="hint" style="font-size:12px">${currentIndex >= 0 ? currentIndex + 1 : 1} / ${items.length}</span>
+            <button class="btn ghost cap-btn-sm" id="cap-next-item" data-target="${e(nextId)}" ${hasNext ? "" : "disabled"} title="查看下一个技能">下一项 →</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card cap-detail-card">
+        <div class="cap-detail-header">
+          <div class="cap-detail-title-group">
+            <div class="cap-detail-icon">${categoryIcon(item)}</div>
+            <div>
+              <h3 class="cap-detail-title">${e(item.label || item.name)}</h3>
+              <div class="cap-detail-tags">
+                <span class="pill cap-scope-pill ${item.scope === 'project' ? 'proj' : 'user'}">
+                  ${item.scope === 'project' ? '项目技能 (.agents/skills)' : '全局用户技能 (~/.agents/skills)'}
+                </span>
+                <span class="pill">${categoryLabel(item)}</span>
+                ${section === 'mcp' ? `<span class="pill ${item.enabled ? 'on' : 'off'}">${item.enabled ? '已启用' : '已停用'}</span>` : ''}
+              </div>
+            </div>
+          </div>
+          <div class="cap-detail-head-actions">
+            <button class="btn ghost cap-btn-sm" data-cap-preview="${e(item.id)}" title="弹窗形式预览与编辑">弹窗编辑</button>
+          </div>
+        </div>
+
+        ${item.path ? `
+        <div class="cap-detail-path-box">
+          <span class="hint" style="font-weight:600;white-space:nowrap">文件路径：</span>
+          <code id="cap-path-text" title="${e(item.path)}">${e(item.path)}</code>
+          <button class="btn ghost cap-btn-sm" id="cap-copy-path">复制路径</button>
+        </div>` : ''}
+
+        <div class="cap-detail-section">
+          <h4 class="cap-section-title">功能说明</h4>
+          <div class="cap-detail-desc">${e(item.description || item.desc || "暂无说明")}</div>
+        </div>
+
+        <div class="cap-detail-section">
+          <div class="cap-section-head">
+            <div>
+              <h4 class="cap-section-title">专家启用授权</h4>
+              <p class="hint" style="margin:2px 0 0">指定哪些助手在工作流与对话中可以使用此能力。勾选立即保存。</p>
+            </div>
+            <div class="cap-bulk-btns">
+              <button class="cap-btn-mini on" id="cap-detail-all-on">全部启用</button>
+              <button class="cap-btn-mini off" id="cap-detail-all-off">全部停用</button>
+            </div>
+          </div>
+          <div class="cap-detail-assistants-grid">
+            ${assistants.map(a => `
+              <label class="cap-detail-as-item ${checked(meta, a.id, kind, item.id) ? 'checked' : ''}">
+                <input type="checkbox" data-detail-binding data-assistant="${e(a.id)}" data-item="${e(item.id)}" data-kind="${kind}" ${checked(meta, a.id, kind, item.id) ? 'checked' : ''}>
+                <span class="cap-as-name">${e(a.name)}${a.id === '*' ? '（默认）' : ''}</span>
+              </label>
+            `).join("")}
+          </div>
+        </div>
+
+        ${section === 'skills' ? `
+        <div class="cap-detail-section">
+          <div class="cap-section-head">
+            <h4 class="cap-section-title">SKILL.md 规则定义</h4>
+            <div class="cap-file-tabs">
+              <button class="btn ghost cap-btn-sm ${detailTab === 'preview' ? 'active' : ''}" id="cap-tab-preview">文档预览</button>
+              <button class="btn ghost cap-btn-sm ${detailTab === 'edit' ? 'active' : ''}" id="cap-tab-edit">编辑源码</button>
+            </div>
+          </div>
+          <div id="cap-file-container">
+            <p class="hint">正在加载 SKILL.md 内容…</p>
+          </div>
+        </div>` : ''}
+
+        ${section === 'tools' ? `
+        <div class="cap-detail-section">
+          <div class="cap-section-head">
+            <h4 class="cap-section-title">参数定义 (JSON Schema)</h4>
+          </div>
+          <pre class="cap-code-view"><code>${e(JSON.stringify(item.parameters, null, 2))}</code></pre>
+        </div>` : ''}
+
+        ${section === 'mcp' ? `
+        <div class="cap-detail-section">
+          <div class="cap-section-head">
+            <h4 class="cap-section-title">已发现工具 (${item.tools.length})</h4>
+            <button class="btn cap-btn-sm" data-cap-connect="${e(item.id)}">连接 / 拉取工具</button>
+          </div>
+          <div class="cap-list" style="margin-top:8px">
+            ${item.tools.length ? item.tools.map(t => `
+              <div class="cap-list-row" style="cursor:default">
+                <div class="cap-row-main">
+                  <div class="cap-row-top"><strong>${e(t.name)}</strong></div>
+                  <div class="cap-row-desc">${e(t.description || "暂无说明")}</div>
+                </div>
+              </div>
+            `).join("") : `<p class="hint">尚未发现工具，请点击“连接 / 拉取工具”拉取可用工具。</p>`}
+          </div>
+        </div>` : ''}
+      </div>
+    `;
+  }
+
   function paint(host, meta) {
     const section = setSec;
+    if (section !== currentSection) {
+      currentSection = section;
+      selectedId = null;
+    }
     const selected = document.activeElement?.id === "cap-search";
     const position = selected ? document.activeElement.selectionStart : 0;
     const items = filtered(meta);
-    host.innerHTML = `<div class="card"><h3>${labels[section]} <span class="pill">${items.length} / ${(meta[section] || []).length}</span></h3><div class="cap-toolbar"><select class="control" id="cap-project" aria-label="项目技能作用域"><option value="">用户技能（全局）</option>${(S.tasks || []).map(task => `<option value="${e(task.id)}" ${task.id === projectId ? "selected" : ""}>${e(task.title)}</option>`).join("")}</select><input class="control" id="cap-search" value="${e(search)}" placeholder="搜索名称、说明" aria-label="搜索能力"><button class="btn ${view === "list" ? "" : "ghost"}" data-cap-view="list">列表</button><button class="btn ${view === "matrix" ? "" : "ghost"}" data-cap-view="matrix">专家启用矩阵</button><button class="btn ghost" id="cap-refresh">刷新</button>${section === "mcp" ? `<button class="btn" id="cap-mcp-json">JSON 编辑 / 密钥</button>` : ""}</div><p class="hint">${section === "skills" ? "默认读取用户 ~/.agents/skills，选择项目后叠加项目 .agents/skills；同名项目技能优先。预览编辑会直接写入显示的 SKILL.md。" : section === "tools" ? "Tools 与 MCP 独立管理。可以编辑内置工具的显示名称及给模型的说明；工具实现与参数结构只读。" : "保存 JSON 不启动进程。仅点击连接或专家实际调用已发现工具时执行本地命令/联网；请只使用可信 MCP。"}</p>${section === "mcp" ? `<p class="hint">凭据保护：${e(meta.storage_security)}。环境变量、请求头、命令参数和密钥默认隐藏。</p>` : ""}</div>${view === "matrix" ? drawMatrix(meta, items) : drawCards(meta, items)}${section === "skills" ? `<div class="card cap-hint"><h4>技能搜索目录（后者优先）</h4>${meta.skill_roots.map(root => `<p class="hint"><code>${e(root.path)}</code> · ${e(root.scope)} · ${root.exists ? "存在" : "尚未创建"}</p>`).join("")}</div>` : ""}<p class="cap-error" data-error role="alert"></p>`;
-    host.querySelector("#cap-project").onchange = event => { projectId = event.target.value; load(); };
+
+    // If an item is selected and we're in list view, render the detail view
+    if (view === "list" && selectedId) {
+      const selectedItem = (meta[section] || []).find(it => it.id === selectedId);
+      if (selectedItem) {
+        host.innerHTML = drawDetailView(meta, selectedItem, items) + `<p class="cap-error" data-error role="alert"></p>`;
+
+        // Wire detail view events
+        host.querySelector("#cap-back-list").onclick = () => {
+          selectedId = null;
+          paint(host, meta);
+        };
+        const prevBtn = host.querySelector("#cap-prev-item");
+        if (prevBtn && prevBtn.dataset.target) {
+          prevBtn.onclick = () => {
+            selectedId = prevBtn.dataset.target;
+            paint(host, meta);
+          };
+        }
+        const nextBtn = host.querySelector("#cap-next-item");
+        if (nextBtn && nextBtn.dataset.target) {
+          nextBtn.onclick = () => {
+            selectedId = nextBtn.dataset.target;
+            paint(host, meta);
+          };
+        }
+        const copyBtn = host.querySelector("#cap-copy-path");
+        if (copyBtn && selectedItem.path) {
+          copyBtn.onclick = () => {
+            navigator.clipboard.writeText(selectedItem.path).then(() => {
+              notify("路径已复制到剪贴板");
+            }).catch(() => {
+              notify("复制失败，请手动复制", "error");
+            });
+          };
+        }
+        host.querySelectorAll("[data-cap-preview]").forEach(button => button.onclick = () => {
+          if (section === "skills") editSkill(selectedItem).catch(error => fail(host, error));
+          else editTool(selectedItem);
+        });
+
+        // Assistant toggles
+        host.querySelectorAll("[data-detail-binding]").forEach(input => input.onchange = async () => {
+          const next = input.checked;
+          const aid = input.dataset.assistant;
+          const kind = input.dataset.kind;
+          const itemId = input.dataset.item;
+          input.disabled = true;
+          try {
+            const binding = {assistant_id: aid, kind, item_id: itemId, enabled: next};
+            await api("/api/capabilities/binding", {...context(), ...binding});
+            meta.bindings = meta.bindings.filter(x => !(x.assistant_id === aid && x.kind === kind && x.item_id === itemId));
+            meta.bindings.push(binding);
+            input.disabled = false;
+            input.closest(".cap-detail-as-item")?.classList.toggle("checked", next);
+            notify(next ? "已开启该专家授权" : "已停用该专家授权");
+          } catch (err) {
+            input.checked = !next;
+            input.disabled = false;
+            fail(host, err);
+          }
+        });
+
+        const detailAllOn = host.querySelector("#cap-detail-all-on");
+        if (detailAllOn) detailAllOn.onclick = async () => {
+          const kind = kinds[section];
+          const assistants = [{id: "*"}, ...meta.assistants];
+          const updates = assistants.map(a => ({assistant_id: a.id, kind, item_id: selectedItem.id, enabled: true}));
+          try {
+            await api("/api/capabilities/bindings", {...context(), bindings: updates});
+            updates.forEach(u => {
+              meta.bindings = meta.bindings.filter(x => !(x.assistant_id === u.assistant_id && x.kind === u.kind && x.item_id === u.item_id));
+              meta.bindings.push(u);
+            });
+            paint(host, meta);
+            notify("已对所有专家开启授权");
+          } catch (err) { fail(host, err); }
+        };
+
+        const detailAllOff = host.querySelector("#cap-detail-all-off");
+        if (detailAllOff) detailAllOff.onclick = async () => {
+          const kind = kinds[section];
+          const assistants = [{id: "*"}, ...meta.assistants];
+          const updates = assistants.map(a => ({assistant_id: a.id, kind, item_id: selectedItem.id, enabled: false}));
+          try {
+            await api("/api/capabilities/bindings", {...context(), bindings: updates});
+            updates.forEach(u => {
+              meta.bindings = meta.bindings.filter(x => !(x.assistant_id === u.assistant_id && x.kind === u.kind && x.item_id === u.item_id));
+              meta.bindings.push(u);
+            });
+            paint(host, meta);
+            notify("已对所有专家停用授权");
+          } catch (err) { fail(host, err); }
+        };
+
+        // File loader for SKILL.md
+        if (section === "skills") {
+          const container = host.querySelector("#cap-file-container");
+          const tabPreview = host.querySelector("#cap-tab-preview");
+          const tabEdit = host.querySelector("#cap-tab-edit");
+
+          function renderFileBody(content) {
+            if (!container) return;
+            if (detailTab === "preview") {
+              container.innerHTML = `<div class="cap-code-view"><pre><code>${e(content)}</code></pre></div>`;
+            } else {
+              container.innerHTML = `
+                <textarea class="control cap-detail-editor" id="cap-edit-area" spellcheck="false" aria-label="技能文件内容">${e(content)}</textarea>
+                <div class="cap-card-actions" style="margin-top:10px">
+                  <button class="btn btn-primary" id="cap-file-save">保存到技能文件</button>
+                  <button class="btn ghost" id="cap-file-cancel">放弃修改</button>
+                </div>
+              `;
+              const saveBtn = container.querySelector("#cap-file-save");
+              const cancelBtn = container.querySelector("#cap-file-cancel");
+              const editArea = container.querySelector("#cap-edit-area");
+              if (saveBtn) {
+                saveBtn.onclick = async () => {
+                  saveBtn.disabled = true;
+                  saveBtn.textContent = "保存中…";
+                  try {
+                    await api("/api/capabilities/skill", {...context(), id: selectedItem.id, content: editArea.value});
+                    skillFileCache.set(projectId + ":" + selectedItem.id, editArea.value);
+                    notify("技能文件已保存");
+                    detailTab = "preview";
+                    tabPreview?.classList.add("active");
+                    tabEdit?.classList.remove("active");
+                    renderFileBody(editArea.value);
+                    await update();
+                  } catch (err) {
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = "保存到技能文件";
+                    fail(host, err);
+                  }
+                };
+              }
+              if (cancelBtn) {
+                cancelBtn.onclick = () => {
+                  detailTab = "preview";
+                  tabPreview?.classList.add("active");
+                  tabEdit?.classList.remove("active");
+                  renderFileBody(content);
+                };
+              }
+            }
+          }
+
+          if (tabPreview) tabPreview.onclick = () => {
+            detailTab = "preview";
+            tabPreview.classList.add("active");
+            tabEdit?.classList.remove("active");
+            const cacheKey = projectId + ":" + selectedItem.id;
+            renderFileBody(skillFileCache.get(cacheKey) || "");
+          };
+          if (tabEdit) tabEdit.onclick = () => {
+            detailTab = "edit";
+            tabEdit.classList.add("active");
+            tabPreview?.classList.remove("active");
+            const cacheKey = projectId + ":" + selectedItem.id;
+            renderFileBody(skillFileCache.get(cacheKey) || "");
+          };
+
+          const cacheKey = projectId + ":" + selectedItem.id;
+          if (skillFileCache.has(cacheKey)) {
+            renderFileBody(skillFileCache.get(cacheKey));
+          } else {
+            api("/api/capabilities/skill?" + new URLSearchParams({...context(), id: selectedItem.id})).then(result => {
+              skillFileCache.set(cacheKey, result.content || "");
+              renderFileBody(result.content || "");
+            }).catch(err => {
+              if (container) container.innerHTML = `<p class="cap-error">${e(err.message || String(err))}</p>`;
+            });
+          }
+        }
+
+        return;
+      }
+      // If item not found, reset selectedId
+      selectedId = null;
+    }
+
+    // Default: List or Matrix view
+    host.innerHTML = `
+      <div class="card">
+        <h3>${labels[section]} <span class="pill">${items.length} / ${(meta[section] || []).length}</span></h3>
+        <div class="cap-toolbar">
+          <select class="control" id="cap-project" aria-label="项目技能作用域">
+            <option value="">用户技能（全局）</option>
+            ${(S.tasks || []).map(task => `<option value="${e(task.id)}" ${task.id === projectId ? "selected" : ""}>${e(task.title)}</option>`).join("")}
+          </select>
+          <input class="control" id="cap-search" value="${e(search)}" placeholder="搜索名称、说明" aria-label="搜索能力">
+          <button class="btn ${view === "list" ? "" : "ghost"}" data-cap-view="list">列表</button>
+          <button class="btn ${view === "matrix" ? "" : "ghost"}" data-cap-view="matrix">专家启用矩阵</button>
+          <button class="btn ghost" id="cap-refresh">刷新</button>
+          ${section === "mcp" ? `<button class="btn" id="cap-mcp-json">JSON 编辑 / 密钥</button>` : ""}
+        </div>
+        <p class="hint">
+          ${section === "skills" ? "默认读取用户 ~/.agents/skills，选择项目后叠加项目 .agents/skills；同名项目技能优先。点击技能列表项进入详情并可编辑 SKILL.md。" : section === "tools" ? "Tools 与 MCP 独立管理。可以编辑内置工具的显示名称及给模型的说明；工具实现与参数结构只读。" : "保存 JSON 不启动进程。仅点击连接或专家实际调用已发现工具时执行本地命令/联网；请只使用可信 MCP。"}
+        </p>
+        ${section === "skills" ? `
+        <div class="cap-cats" style="margin-top:12px">
+          ${CATEGORIES.map(c => `
+            <button class="cap-cat-pill ${currentCategory === c.id ? "on" : ""}" data-cap-cat="${c.id}">
+              ${c.icon} ${c.label} <span class="cap-cat-count">${categoryCount(meta, c.id)}</span>
+            </button>
+          `).join("")}
+        </div>` : ""}
+        ${section === "mcp" ? `<p class="hint">凭据保护：${e(meta.storage_security)}。环境变量、请求头、命令参数和密钥默认隐藏。</p>` : ""}
+      </div>
+      ${view === "matrix" ? drawMatrix(meta, items) : drawListView(meta, items)}
+      ${section === "skills" ? `
+      <div class="card cap-hint" style="margin-top:14px">
+        <h4 style="margin:0 0 8px">技能搜索目录（后者优先）</h4>
+        ${meta.skill_roots.map(root => `<p class="hint" style="margin:4px 0"><code>${e(root.path)}</code> · ${e(root.scope)} · ${root.exists ? "存在" : "尚未创建"}</p>`).join("")}
+      </div>` : ""}
+      <p class="cap-error" data-error role="alert"></p>
+    `;
+
+    host.querySelector("#cap-project").onchange = event => { projectId = event.target.value; selectedId = null; load(); };
     host.querySelector("#cap-search").oninput = event => { search = event.target.value; paint(host, meta); };
-    host.querySelectorAll("[data-cap-view]").forEach(button => button.onclick = () => { view = button.dataset.capView; paint(host, meta); });
+    host.querySelectorAll("[data-cap-view]").forEach(button => button.onclick = () => { view = button.dataset.capView; selectedId = null; paint(host, meta); });
     host.querySelectorAll("[data-cap-cat]").forEach(b => b.onclick = () => { currentCategory = b.dataset.capCat; paint(host, meta); });
+
+    // List row click to enter detail view
+    host.querySelectorAll("[data-cap-row]").forEach(row => {
+      row.onclick = event => {
+        if (event.target.closest("button") || event.target.closest("input")) return;
+        selectedId = row.dataset.capRow;
+        paint(host, meta);
+      };
+    });
+    host.querySelectorAll("[data-cap-detail]").forEach(button => {
+      button.onclick = event => {
+        event.stopPropagation();
+        selectedId = button.dataset.capDetail;
+        paint(host, meta);
+      };
+    });
+
     const matAllOn = host.querySelector("#cap-mat-all-on");
     if (matAllOn) matAllOn.onclick = async () => {
       const list = filtered(meta);

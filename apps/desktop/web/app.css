@@ -1317,9 +1317,10 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
   border-radius:.22em;background:#191D22}
 .tof-fig::after{content:"";position:absolute;left:.33em;top:4.13em;width:2.17em;height:.65em;border-radius:50%;
   background:rgba(0,0,0,.62);filter:blur(.28em)}
-.tof-fig .tag{position:absolute;left:50%;top:-2.2em;transform:translateX(-50%);font:600 .48em/1 ui-monospace,monospace;
-  color:var(--muted);background:color-mix(in srgb,var(--bg) 65%,transparent);border-radius:.22em;padding:.1em .2em}
-.tof-fig:not(.sel) .tag{display:none}
+.tof-fig .tag{position:absolute;left:50%;top:-2.2em;transform:translateX(-50%);font:600 11px/1.2 system-ui,-apple-system,sans-serif;
+  color:var(--text);background:color-mix(in srgb,var(--bg) 88%,transparent);border:1px solid var(--line);border-radius:4px;padding:2px 6px;white-space:nowrap;pointer-events:none;z-index:10;box-shadow:0 2px 6px rgba(0,0,0,.35)}
+.tof-fig .tag .tag-dot{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:3px;vertical-align:middle}
+.tof-fig:not(.sel) .tag{display:block}
 
 /* 走动：腿两拍交替、臂反相 */
 .tof-fig.walking .l1{animation:tof-step .58s steps(2,end) infinite}
@@ -1426,3 +1427,17 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .iw-mine:focus{outline:none;border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
 .iw-verdict{flex:1;min-height:0;overflow:auto;padding:14px 20px;font-size:13.5px;line-height:1.9}
 .iw-verdict .ol-empty{margin:0}
+
+/* ===== 能力与技能卡片统一尺寸与按钮绝对底端对齐 ===== */
+.cap-grid{display:grid !important;grid-template-columns:repeat(auto-fill,320px) !important;gap:16px !important;justify-content:start !important}
+.cap-grid .card,.cap-grid .card.cap-item-card{margin:0 !important;width:320px !important;height:270px !important;min-height:270px !important;max-height:270px !important;box-sizing:border-box !important;display:flex !important;flex-direction:column !important;justify-content:space-between !important;padding:16px !important;border-radius:12px !important;background:var(--panel,var(--bg)) !important;border:1px solid var(--line) !important}
+.cap-card-header{flex:0 0 auto !important;margin-bottom:6px !important}
+.cap-card-title-row{display:flex !important;align-items:center !important;justify-content:space-between !important;gap:8px !important}
+.cap-card-title-row h4{margin:0 !important;font-size:14px !important;font-weight:700 !important;white-space:nowrap !important;overflow:hidden !important;text-overflow:ellipsis !important;flex:1 !important}
+.cap-card-body{flex:1 1 auto !important;min-height:0 !important;display:flex !important;flex-direction:column !important;gap:6px !important;overflow:hidden !important;margin:4px 0 !important}
+.cap-card-desc{flex:1 1 auto !important;min-height:0 !important;overflow-y:auto !important;max-height:110px !important;line-height:1.5 !important;font-size:12px !important;white-space:pre-wrap !important;overflow-wrap:anywhere !important;scrollbar-width:thin !important;padding-right:4px !important;margin:0 !important;color:var(--muted) !important}
+.cap-card-desc::-webkit-scrollbar{width:4px}
+.cap-card-desc::-webkit-scrollbar-thumb{background:var(--line);border-radius:2px}
+.cap-card-path{flex:0 0 auto !important;font-size:11px !important;max-height:32px !important;overflow-y:auto !important;scrollbar-width:thin !important;white-space:nowrap !important;text-overflow:ellipsis !important;margin:0 !important;opacity:.7 !important}
+.cap-card-actions{flex:0 0 auto !important;margin-top:auto !important;padding-top:10px !important;height:34px !important;display:flex !important;align-items:center !important;gap:8px !important}
+@media(max-width:650px){.cap-grid{grid-template-columns:1fr !important}.cap-grid .card,.cap-grid .card.cap-item-card{width:100% !important}}

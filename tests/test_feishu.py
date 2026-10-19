@@ -91,6 +91,34 @@ class FeishuDeviceFlowTests(unittest.TestCase):
         self.assertEqual(saved["device_code"], device_code)
         self.assertEqual(saved["session_id"], result["session_id"])
 
+    def test_begin_accepts_official_open_domain_launcher_urls(self):
+        cases = (
+            ("feishu", "https://open.feishu.cn/page/launcher?user_code=ABCD"),
+            ("lark", "https://open.larksuite.com/page/launcher?user_code=EFGH"),
+        )
+        for region, qr_url in cases:
+            with self.subTest(region=region):
+                with patch.object(feishu.urllib.request, "urlopen", return_value=FakeResponse({
+                    "device_code": "server-only-" + region,
+                    "verification_uri_complete": qr_url,
+                })):
+                    result = self.route("begin", {"assistant_id": "assistant-a", "region": region})
+                self.assertEqual(result["qr_url"].split("?")[0], qr_url.split("?")[0])
+                self.assertTrue(result["qr_data_uri"].startswith("data:image/svg+xml;base64,"))
+
+    def test_begin_rejects_wrong_region_or_untrusted_qr_hosts(self):
+        for region, qr_url in (
+            ("feishu", "https://open.larksuite.com/page/launcher?user_code=ABCD"),
+            ("lark", "https://open.feishu.cn/page/launcher?user_code=ABCD"),
+            ("feishu", "https://example.com/page/launcher?user_code=ABCD"),
+        ):
+            with self.subTest(region=region, qr_url=qr_url):
+                with patch.object(feishu.urllib.request, "urlopen", return_value=FakeResponse({
+                    "device_code": "server-only", "verification_uri_complete": qr_url,
+                })):
+                    with self.assertRaisesRegex(ValueError, "不受信任的扫码地址"):
+                        self.route("begin", {"assistant_id": "assistant-a", "region": region})
+
     def test_poll_rejects_missing_or_wrong_session_without_upstream_call(self):
         with patch.object(feishu.urllib.request, "urlopen", return_value=FakeResponse({
             "device_code": "only-on-server", "verification_uri_complete": "https://accounts.feishu.cn/device",

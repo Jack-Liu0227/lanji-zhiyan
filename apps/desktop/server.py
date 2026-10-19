@@ -480,7 +480,7 @@ class Handler(BaseHTTPRequestHandler):
         prefixes = (
             "/api/agent-settings", "/api/capabilities", "/api/workflow/layouts", "/api/feishu/", "/api/zotero/web/",
             "/api/projects", "/api/papers/", "/api/chats", "/api/assistants", "/api/teams/", "/api/runs/",
-            "/api/mcp/", "/api/audit/", "/api/easyscholar/", "/api/zotero/mcp/", "/api/todos", "/api/space/",
+            "/api/mcp/", "/api/audit/", "/api/easyscholar/", "/api/zotero/mcp/", "/api/todos", "/api/kanban", "/api/space/",
         )
         if not path.startswith(prefixes):
             return False
@@ -827,6 +827,91 @@ class Handler(BaseHTTPRequestHandler):
                 term = (q.get("term") or [""])[0]
                 with WorkflowDB(DB_PATH) as db:
                     return self._json(starmap.brief(db.db, term, db.active_model()))
+            if path == "/api/starmap/item":
+                pid = (q.get("id") or [""])[0]
+                title = (q.get("title") or [""])[0]
+                doi = (q.get("doi") or [""])[0]
+                key = (q.get("key") or [""])[0]
+                filename = ""
+                db_row = None
+                if pid:
+                    with WorkflowDB(DB_PATH) as db:
+                        db_row = db.db.execute(
+                            "SELECT p.id, p.task_id, p.filename, p.source_path, p.pages, "
+                            "m.title, m.authors, m.doi, m.year "
+                            "FROM papers p LEFT JOIN paper_meta m ON m.paper_id=p.id "
+                            "WHERE p.id=?", (pid,)).fetchone()
+                if db_row:
+                    filename = db_row["filename"] or ""
+                    if not title:
+                        title = db_row["title"] or filename
+                    if not doi:
+                        doi = db_row["doi"] or ""
+
+                res = {}
+                try:
+                    res = zotero.get_item_details(key=key, title=title, doi=doi, filename=filename)
+                except Exception as exc:
+                    res = {"zotero_found": False, "error": str(exc)}
+
+                if not res or not res.get("zotero_found"):
+                    authors_list = []
+                    if db_row and db_row["authors"]:
+                        for a in (db_row["authors"]).split(" · "):
+                            if a.strip():
+                                authors_list.append({"name": a.strip(), "role": "作者"})
+                    att = []
+                    if db_row and db_row["source_path"]:
+                        att.append({
+                            "title": db_row["filename"] or "PDF 全文",
+                            "filename": db_row["filename"] or "",
+                            "path": db_row["source_path"] or "",
+                            "contentType": "application/pdf"
+                        })
+                    res = {
+                        "zotero_found": False,
+                        "key": key or "",
+                        "itemType": "journalArticle",
+                        "itemTypeLabel": "文献",
+                        "title": title or (db_row["title"] if db_row else "") or (db_row["filename"] if db_row else "未命名论文"),
+                        "citationKey": "",
+                        "creators": authors_list,
+                        "publication": "",
+                        "journalAbbr": "",
+                        "publisher": "",
+                        "place": "",
+                        "date": (db_row["year"] if db_row else "") or "",
+                        "volume": "",
+                        "issue": "",
+                        "pages": f"{db_row['pages']} 页" if (db_row and db_row["pages"]) else "",
+                        "doi": doi or (db_row["doi"] if db_row else "") or "",
+                        "url": (f"https://doi.org/{doi}" if doi else ""),
+                        "accessDate": "",
+                        "issn": "",
+                        "isbn": "",
+                        "language": "en",
+                        "libraryCatalog": "本地文献库",
+                        "extra": "",
+                        "dateAdded": "",
+                        "dateModified": "",
+                        "abstract": "",
+                        "tags": [],
+                        "attachments": att,
+                        "zotero_select_url": "",
+                    }
+                return self._json(res)
+            if path == "/api/zotero/select":
+                key = (q.get("key") or [""])[0]
+                if not key:
+                    return self._json({"error": "缺少 key"}, 400)
+                try:
+                    if sys.platform == "win32":
+                        os.startfile(f"zotero://select/items/0_{key}")
+                    else:
+                        subprocess.Popen(["xdg-open" if sys.platform != "darwin" else "open", f"zotero://select/items/0_{key}"])
+                    return self._json({"ok": True})
+                except Exception as exc:
+                    return self._json({"error": f"唤起失败：{exc}"}, 500)
             if path == "/api/litgraph":
                 tid = (q.get("task") or [""])[0]
                 with WorkflowDB(DB_PATH) as db:
@@ -834,13 +919,6 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/state":
                 with WorkflowDB(DB_PATH) as db:
                     all_tasks = db.tasks()
-                    if not all_tasks:
-                        db.create_task(
-                            "锂金属固态电池界面反应动力学与多尺度演化研究",
-                            "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
-                            "固态锂电池, 复合固态电解质, 锂金属负极",
-                        )
-                        all_tasks = db.tasks()
                     active = db.active_model()
                     return self._json({
                         "tasks": [{**dict(t), "stage_now": db.stage_now(t["id"], t["stage"])} for t in all_tasks],
@@ -921,10 +999,15 @@ class Handler(BaseHTTPRequestHandler):
                                    "snapshots": [{"at": s.parent.name + " " + s.name, "bytes": s.stat().st_size}
                                                  for s in fileguard.snapshots(p)]})
             if path == "/api/paper/open":                 # 星图/文献双击：用系统默认程序打开这篇论文的 PDF
-                with WorkflowDB(DB_PATH) as db:
-                    row = db.db.execute("SELECT source_path FROM papers WHERE id=?",
-                                        (q.get("id", [""])[0],)).fetchone()
-                p = Path(row["source_path"]) if row else None
+                p = None
+                p_arg = (q.get("path") or [""])[0]
+                if p_arg:
+                    p = Path(p_arg)
+                else:
+                    with WorkflowDB(DB_PATH) as db:
+                        row = db.db.execute("SELECT source_path FROM papers WHERE id=?",
+                                            (q.get("id", [""])[0],)).fetchone()
+                    p = Path(row["source_path"]) if row else None
                 if not p or not p.is_file():
                     return self._json({"error": "找不到这篇论文的 PDF 文件（可能已移走）"}, 404)
                 return self._json(fileguard.open_document(p))
@@ -991,6 +1074,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"notes": db.md_notes()})
             if path == "/api/zotero/status":            # Zotero 本机只读接入（笔记页用）
                 return self._json(zotero.status(q.get("base", [""])[0] or None))
+            if path == "/api/zotero/launch":            # 自动唤起本机 Zotero 进程
+                return self._json(zotero.launch_zotero())
             if path == "/api/zotero/collections":
                 try:
                     return self._json(zotero.collections(q.get("base", [""])[0] or None))
@@ -1374,6 +1459,8 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json(papertran.reading_note(db, tid, (data.get("id") or "").strip(), out))
                 if path == "/api/rss/refresh":
                     return self._json(rss.refresh(db))
+                if path == "/api/zotero/launch":
+                    return self._json(zotero.launch_zotero())
                 if path == "/api/task/create":
                     base = (data.get("base_dir") or "").strip()
                     tid = db.create_task(data.get("title", ""), data.get("question", ""),
@@ -1696,12 +1783,16 @@ def main() -> int:
         print(f"览籍智研已在运行：{url}")
     else:
         with WorkflowDB(DB_PATH) as _db:
-            if not _db.tasks():
-                _db.create_task(
-                    "锂金属固态电池界面反应动力学与多尺度演化研究",
-                    "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
-                    "固态锂电池, 复合固态电解质, 锂金属负极",
-                )
+            import service_settings
+            sys_cfg = service_settings.read(_db, "system")
+            if not sys_cfg.get("demo_seeded"):
+                if not _db.tasks():
+                    _db.create_task(
+                        "锂金属固态电池界面反应动力学与多尺度演化研究",
+                        "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
+                        "固态锂电池, 复合固态电解质, 锂金属负极",
+                    )
+                service_settings.write(_db, "system", {**sys_cfg, "demo_seeded": True})
         import mail
         mail.encrypt_legacy()          # 老 mail.json 里的明文授权码 → DPAPI 密文（幂等，干净时是空转）
         srv = Server(("127.0.0.1", port), Handler)

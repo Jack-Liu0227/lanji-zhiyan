@@ -135,6 +135,9 @@ def graph(conn, task_id: str = "") -> dict[str, Any]:
         nodes.append({
             "id": n["id"], "kind": "paper", "m": "works", "title": n["title"],
             "short": _short(n["title"]), "ref": n["id"],
+            "doi": n.get("doi") or "", "year": n.get("year") or "",
+            "authors": n.get("authors") or "", "filename": n.get("filename") or "",
+            "degree": n.get("degree") or 0,
             "meta": [["年份", n["year"] or "—"], ["度", n["degree"]], ["DOI", "有" if n["doi"] else "无"]],
         })
         docs.append((n["id"], n["title"]))

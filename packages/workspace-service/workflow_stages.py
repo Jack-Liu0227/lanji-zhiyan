@@ -133,8 +133,9 @@ def stage_download_selected(db: WorkflowDB, task_id: str, result_ids: list[str])
 
 
 def stage_zotero_import(db: WorkflowDB, task_id: str, collection: str = "",
-                        keys: list[str] | None = None) -> dict[str, Any]:
-    """Zotero 分类（或点选的几条）→ 直接进「下载精读」队列。
+                        keys: list[str] | None = None,
+                        collections: list[str] | None = None) -> dict[str, Any]:
+    """Zotero 分类（支持单个或多个 collection 接管，或点选的几条）→ 直接进「下载精读」队列。
 
     题录用 Zotero 的（零错误、不花 LLM），PDF 用本机附件直读，不检索、不联网下载、不复制文件。
     Zotero 里没 PDF 附件的条目照样进队列，标成「待手动」，不假装成功。
@@ -144,13 +145,26 @@ def stage_zotero_import(db: WorkflowDB, task_id: str, collection: str = "",
     if keys:
         rows = [zotero.item(k) for k in keys]
     else:
-        rows, start = [], 0
-        while True:
-            page = zotero.items(collection=collection, start=start, limit=zotero.MAX_LIMIT)
-            rows += [r for r in page["items"] if r["type"] not in ("attachment", "note", "annotation")]
-            start += page["returned"]
-            if not page["hasMore"] or not page["returned"]:
-                break
+        coll_list = []
+        if collections:
+            coll_list = [c.strip() for c in collections if c.strip()]
+        elif collection:
+            coll_list = [c.strip() for c in collection.split(",") if c.strip()]
+        if not coll_list:
+            coll_list = [""]
+
+        rows, seen_keys = [], set()
+        for col in coll_list:
+            start = 0
+            while True:
+                page = zotero.items(collection=col, start=start, limit=zotero.MAX_LIMIT)
+                for r in page["items"]:
+                    if r["type"] not in ("attachment", "note", "annotation") and r["key"] not in seen_keys:
+                        seen_keys.add(r["key"])
+                        rows.append(r)
+                start += page["returned"]
+                if not page["hasMore"] or not page["returned"]:
+                    break
     done = manual = 0
     for it in rows:
         rid = db.cache_result(task_id, {
@@ -172,6 +186,12 @@ def stage_zotero_import(db: WorkflowDB, task_id: str, collection: str = "",
             continue
         db.set_queue(task_id, rid, "downloaded", path, "")
         done += 1
+    if done:
+        try:
+            db.build_paper_graph(task_id)
+            db.kb_graph(task_id, rebuild=True)
+        except Exception:
+            pass
     db.log_step(task_id, "download", "done",
                 f"Zotero 导入 {len(rows)} 条：入库 {done} 篇，无附件 {manual} 条")
     return {"total": len(rows), "downloaded": done, "manual": manual, "items": db.queue(task_id)}

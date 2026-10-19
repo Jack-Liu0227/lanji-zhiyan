@@ -7,6 +7,7 @@ function render(){
   else if(r==="agent") renderAgent(m);
   else if(r==="workflow") renderWorkflow(m);
   else if(r==="tasks") renderTasks(m);
+  else if(r==="kanban") renderKanban(m);
   else if(r==="space") renderSpace(m);
   else if(r==="calendar") renderCalendar(m);
   else if(r==="mail") renderMail(m);
@@ -25,7 +26,7 @@ function needTask(){
     curTask = S.tasks[0].id;
     localStorage.setItem("rw-task", curTask);
   }
-  if(!curTask) return `<div class="card"><h3>还没有选项目</h3><div class="hint">工作流、Agent、文献都挂在项目上。先去「项目」页建一个，或一键初始化示例科研课题。</div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn" onclick="openTab('tasks')">去建项目</button><button class="btn ghost" id="btnInitDefaultTask" onclick="initDefaultProject()">一键初始化示例科研项目</button></div></div>`;
+  if(!curTask) return `<div class="card"><h3>当前暂无项目</h3><div class="hint">工作流与文献均可绑定到独立项目上。你可以点击下方按钮新建项目，也可以在「项目」页自由管理。</div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn btn-primary" onclick="openTab('tasks')">＋ 新建项目</button></div></div>`;
   return "";
 }
 
@@ -556,7 +557,7 @@ function renderAgent(m){
             <div class="at-tools-r">
               <label class="at-sel" title="这个对话用哪个专家（在「专家」页增删改）">${boundA?esc(boundA.avatar||"👨‍🔬"):`<img src="${Q_AV}" alt="" width="16" height="16" style="object-fit:contain;vertical-align:-3px">`}<select id="assist">
                 <option value="">智研管家（全局）</option>
-                ${(S.assistants||[]).filter(a=>a.enabled!==0).map(a=>`<option value="${a.id}" ${cur&&cur.assistant_id===a.id?"selected":""}>${esc(a.name)}</option>`).join("")}</select></label>
+                ${(S.assistants||[]).filter(a=>a.enabled!==0 && a.id!=="builtin-steward").map(a=>`<option value="${a.id}" ${cur&&cur.assistant_id===a.id?"selected":""}>${esc(a.name)}</option>`).join("")}</select></label>
               <button class="send-btn" id="send" title="发送" aria-label="发送">↑</button>
             </div>
           </div>
