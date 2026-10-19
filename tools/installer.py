@@ -10,11 +10,8 @@
         layout.json    布局版本
 
 重新打包（改完程序代码后，在仓库根目录跑）：
-    "%LOCALAPPDATA%\\Programs\\Python\\Python310\\python.exe" -m PyInstaller --noconfirm --clean \
-        --onefile --console --name ResearchWorkbench-Setup --icon tools\\build\\icon.ico \
-        --add-data "dist\\ResearchWorkbench;ResearchWorkbench" \
-        --hidden-import win32com.client tools\installer.py
-生成 dist\\ResearchWorkbench-Setup.exe，改名成「览籍智研-安装程序.exe」发人即可。
+    "%LOCALAPPDATA%\\Programs\\Python\\Python310\\python.exe" -m PyInstaller tools\\installer.spec --noconfirm --clean
+生成 dist\\ResearchWorkbench-Setup.exe，改名成「览籍智研-<版本>-安装程序.exe」发人即可。
 """
 import os
 import shutil

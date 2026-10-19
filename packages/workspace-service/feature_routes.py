@@ -1,4 +1,4 @@
-"""v1.3.0 业务扩展路由网关：easyScholar 分区、Zotero MCP、项目待办 (TODO)、项目空间搜索与笔记预览。"""
+"""业务扩展路由：easyScholar 分区、Zotero MCP、项目待办 (TODO)、项目空间搜索与笔记预览。"""
 from __future__ import annotations
 
 from typing import Any

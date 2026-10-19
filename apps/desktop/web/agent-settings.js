@@ -267,7 +267,7 @@
       await load();
       const all = (await api("/api/teams?project=" + encodeURIComponent(curTask || ""))).teams || [];
       if (!all.some(t => t.id === teamScope)) teamScope = all[0]?.id || "";
-      if (!teamScope) { container.innerHTML = `<div class="card"><h3>团队配置</h3><button class="btn" id="ag-team-empty">新建团队</button></div>`; el("ag-team-empty").onclick = () => teamEditor(); return; }
+      if (!teamScope) { container.innerHTML = `<div class="card"><h3>团队配置</h3><button class="btn" id="ag-team-new">新建团队</button></div>`; el("ag-team-new").onclick = () => teamEditor(); return; }
       const data = await api(endpoint + "team-detail?id=" + encodeURIComponent(teamScope) + (teamSession ? "&session_id=" + encodeURIComponent(teamSession) : ""));
       if (!container.isConnected || route() !== expectedRoute || epoch !== viewEpoch) return;
       const t = data.team || all.find(x => x.id === teamScope) || {}, running = data.running;

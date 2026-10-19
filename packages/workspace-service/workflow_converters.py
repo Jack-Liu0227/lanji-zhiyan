@@ -10,11 +10,14 @@ import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import fileguard
 import paths
 from workflow_documents import doc_read, doc_path
+
+if TYPE_CHECKING:
+    from workflow import WorkflowDB
 
 
 HERE = Path(__file__).resolve().parent

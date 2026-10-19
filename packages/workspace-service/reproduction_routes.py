@@ -187,26 +187,6 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, Any], d
         enabled = bool(body.get("enabled", True))
         return capabilities.bind(db, aid, kind, item_id, enabled)
 
-    if method == "POST" and path == "/api/mcp/config":
-        import capabilities
-        return capabilities.mcp_save(db, body)
-
-    if method == "POST" and path == "/api/mcp/discover":
-        import capabilities
-        sid = str(body.get("server_id") or body.get("id") or "")
-        return capabilities.mcp_discover(db, sid)
-
-    if method == "POST" and path == "/api/mcp/reveal":
-        import capabilities
-        sid = str(body.get("server_id") or body.get("id") or "")
-        return capabilities.mcp_reveal(db, sid)
-
-    if method == "POST" and path == "/api/mcp/revoke":
-        import capabilities
-        server = str(body.get("server") or body.get("server_id") or "")
-        tool = str(body.get("tool") or "")
-        return capabilities.mcp_revoke(db, server, tool)
-
     # 审计
     if method == "GET" and path == "/api/audit/events":
         proj = str((query.get("project_id") or [""])[0] if isinstance(query.get("project_id"), list) else query.get("project_id") or "")

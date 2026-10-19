@@ -1,12 +1,11 @@
 // 主题色自检：node web/theme.test.mjs
-// 从 index.html 里抠出主题函数块，用假的 document/localStorage 跑真值检验。
+// 从 notes-and-settings.js 里抠出主题函数块，用假的 document/localStorage 跑真值检验。
 // 颜色数学（HSL 往返、对比度、明暗推导）最容易悄悄坏，所以留这一个可跑的检查。
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 
-const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
-const js = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]).sort((a, b) => b.length - a.length)[0];   // 取最大的那块（头里还有一个构建戳小脚本）
-const block = js.slice(js.indexOf("const DEFAULT_THEME"), js.indexOf("function bindSwatches"));
+const source = readFileSync(new URL("./notes-and-settings.js", import.meta.url), "utf8");
+const block = source.slice(source.indexOf("const DEFAULT_THEME"), source.indexOf("function bindSwatches"));
 
 const shim = `
 const store = {};

@@ -560,5 +560,27 @@ class DeepreadTest(unittest.TestCase):
         self.assertIsNone(workflow.deepread_state("no-such-task"))
 
 
+class ModelInvokerTest(unittest.TestCase):
+    def test_custom_handler_registration(self):
+        called_args = []
+
+        def mock_handler(profile, messages, tools=None, **kwargs):
+            called_args.append((profile, messages, tools, kwargs))
+            return {"content": "mocked response", "tool_calls": []}
+
+        workflow.ModelInvoker.register(mock_handler)
+        try:
+            res = workflow.ModelInvoker.call(
+                {"model": "test-m"}, [{"role": "user", "content": "hi"}], temperature=0.7
+            )
+            self.assertEqual(res["content"], "mocked response")
+            self.assertEqual(len(called_args), 1)
+            self.assertEqual(called_args[0][0]["model"], "test-m")
+            self.assertEqual(called_args[0][3]["temperature"], 0.7)
+        finally:
+            workflow.ModelInvoker.unregister()
+        self.assertIsNone(workflow.ModelInvoker._handler)
+
+
 if __name__ == "__main__":
     unittest.main()

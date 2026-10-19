@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from research_core import ResearchDB
+from run_manager import RunManager
 
 
 class ReliabilityTest(unittest.TestCase):
@@ -66,6 +67,45 @@ class ReliabilityTest(unittest.TestCase):
         self.assertEqual(len(events_proj), 1)
         self.assertEqual(events_proj[0]["tool"], "paper_search")
         self.assertEqual(events_proj[0]["duration_ms"], 45)
+
+
+class RunManagerTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="rw-test-run-manager-")
+        self.db_path = Path(self.tmp.name) / "test_run_manager.sqlite3"
+        self.db = ResearchDB(self.db_path)
+
+    def tearDown(self):
+        self.db.close()
+        self.tmp.cleanup()
+
+    def test_background_jobs_persistence_and_run_manager(self):
+        job = self.db.create_background_job("bg-123", task_id="proj-1", status="running", progress=0.1, last_event_id=5)
+        self.assertEqual(job["id"], "bg-123")
+        self.assertEqual(job["status"], "running")
+        self.assertEqual(job["last_event_id"], 5)
+
+        updated = self.db.update_background_job("bg-123", status="suspended", progress=0.5, last_event_id=10)
+        self.assertEqual(updated["status"], "suspended")
+        self.assertEqual(updated["progress"], 0.5)
+        self.assertEqual(updated["last_event_id"], 10)
+
+        manager = RunManager.get_instance()
+        run = manager.create_run(task_id="proj-1", idempotency_key="idemp-bg-test", db=self.db)
+        self.assertTrue(run.run_id)
+
+        bg_job = self.db.get_background_job(run.run_id)
+        self.assertIsNotNone(bg_job)
+        self.assertEqual(bg_job["status"], "running")
+
+        event = run.emit({"type": "info", "message": "processing step 1"}, db=self.db)
+        self.assertEqual(event["event_id"], 1)
+        self.assertEqual(self.db.get_background_job(run.run_id)["last_event_id"], 1)
+
+        run.emit({"type": "done", "content": "finished"}, db=self.db)
+        done = self.db.get_background_job(run.run_id)
+        self.assertEqual(done["status"], "done")
+        self.assertEqual(done["progress"], 1.0)
 
 
 if __name__ == "__main__":

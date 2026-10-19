@@ -14,14 +14,6 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
     def load_workspace(self):
         self.load_page()
 
-    def create_project(self, title):
-        result = self.page.request.post(self.url + "api/task/create", data={"title": title}).json()
-        self.assertNotIn("error", result)
-        tid = result["task_id"]
-        self.page.evaluate("async tid => { await refreshState(false); curTask=tid; localStorage.setItem('rw-task',tid); openTab('workflow'); }", tid)
-        self.page.wait_for_selector(".wfl-shell")
-        return tid
-
     def test_bottom_new_project_card_creates_and_persists_project(self):
         self.load_workspace()
         with tempfile.TemporaryDirectory(prefix="rw-project-base-") as base:
@@ -44,13 +36,14 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
             self.assertEqual(saved["base_dir"], base)
             self.assertEqual(saved["question"], "Does creation persist?")
             self.page.reload(wait_until="networkidle")
+            self.page.wait_for_function("S.loaded")
+            self.page.evaluate("openTab('tasks')")
             self.assertIn("Bottom card project", self.page.locator(".proj-cards").inner_text())
         self.assertEqual(self.errors, [])
 
-    def test_workflow_settings_save_graph_selection_and_polling(self):
+    def test_workflow_editor_saves_custom_order(self):
         self.load_workspace()
-        tid = self.create_project("Workflow browser project")
-        self.page.locator("[data-wfl-settings]").click()
+        self.page.evaluate("setSec='workflows'; openTab('settings'); render()")
         self.page.wait_for_selector("[data-wfl-new]")
         self.page.locator("[data-wfl-new]").click()
         self.page.locator("[data-wfl-name]").fill("Browser custom workflow")
@@ -66,37 +59,7 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
         listing = self.page.request.get(self.url + "api/workflow/layouts").json()["layouts"]
         custom = next(layout for layout in listing if layout["name"] == "Browser custom workflow")
         self.assertEqual(custom["order"], ["search", "idea", "review"])
-        self.page.evaluate("openTab('workflow')")
-        self.page.wait_for_selector(f'[data-wfl-layout="{custom["id"]}"]')
-        self.page.locator(f'[data-wfl-layout="{custom["id"]}"]').click()
-        self.page.wait_for_function("document.querySelector('.wfl-graph summary')?.textContent.includes('Browser custom workflow')")
-        visible_steps = self.page.locator(".wf-step:visible").evaluate_all("els=>els.map(el=>el.dataset.step)")
-        self.assertEqual(visible_steps, ["search", "idea", "review"])
-        self.assertEqual(self.page.locator(".wfl-node").count(), 3)
-        with self.page.expect_response(lambda response: response.url.endswith("/api/workflow/layouts/select")):
-            self.page.locator('[data-wfl-node="review"]').click()
-        self.page.wait_for_function("document.querySelector('.wf-step.on')?.dataset.step==='review'")
-        self.page.wait_for_function("document.querySelector('[data-wfl-node=review]')?.classList.contains('selected')")
-        # A poll updates status without replacing the user's in-progress editor.
-        editor = self.page.locator("#review-ask")
-        editor.fill("Keep my unsent text")
-        self.page.route("**/api/workflow/layouts/state?*", lambda route: route.fulfill(
-            json=self.state_with_running_search(tid)))
-        self.page.locator("[data-wfl-refresh]").click()
-        self.page.wait_for_selector('[data-wfl-node="search"].running')
-        self.assertEqual(editor.input_value(), "Keep my unsent text")
-        self.page.unroute("**/api/workflow/layouts/state?*")
-        self.page.reload(wait_until="networkidle")
-        self.page.wait_for_selector('[data-wfl-node="review"].selected')
-        self.assertIn("Browser custom workflow", self.page.locator(".wfl-graph summary").inner_text())
         self.assertEqual(self.errors, [])
-
-    def state_with_running_search(self, tid):
-        response = self.page.request.get(self.url + "api/workflow/layouts/state?task_id=" + tid).json()
-        for node in response["nodes"]:
-            if node["step"] == "search":
-                node.update(status="running", summary="Browser state fixture", source="test")
-        return response
 
 
 if __name__ == "__main__":

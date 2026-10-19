@@ -2,6 +2,18 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 2026-10-20 · 0.1.0 发布前清理
+
+- 路由模块去版本号：`v130_routes.py` → `feature_routes.py`，同步 server 与测试。
+- 测试按领域拆分：easyScholar、项目 TODO、项目空间、Zotero MCP、扩展路由各自独立；`ManagedConnection`、`ModelInvoker`、`RunManager` 归回对应测试文件。
+- 工具脚本统一 ASCII 命名：`build-app.bat` / `check.bat` / `start.bat` / `lanji-zhiyan.spec` / `installer.spec`。
+- 删除死资源 `vendor/kb3d.js`；移除重复的 `docs/` 受跟踪文件，唯一诊断文档并入 `doc/`。
+- 删除 `reproduction_routes.py` 中已被 capabilities 取代且调用不存在函数的 `/api/mcp/*` 旧路由。
+- 修复浏览器回归测试的过期选择器；`theme.test.mjs` 改为从拆分后的 `notes-and-settings.js` 取主题代码，`ids.test.mjs` 扫描全部前端 JS。
+- 版本号统一：新增 `VERSION`，窗口标题显示应用版本 + 构建戳。
+
+**验**：`python -m pytest tests -q` 249 项全绿；`node apps/desktop/web/theme.test.mjs`、`node apps/desktop/web/ids.test.mjs` 通过。
+
 ## 待发 PR（本轮：清废旧代码 pass 2 —— 死 import / 死 CSS / 死图 / 拆模块漏的 import）
 
 **判据不变：只删「全仓 0 引用」的；名字可能被字符串/反射拿的一律留着。**

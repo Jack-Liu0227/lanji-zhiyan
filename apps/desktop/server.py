@@ -49,13 +49,13 @@ import feishu
 import zotero_sync
 import agent_integrations
 import reproduction_routes
-import v130_routes
+import feature_routes
 from run_manager import RunManager
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
-                      TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
+                      USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
-                      outline_read, outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
-                      cite_read, cite_add, conv_files, conv_run, conv_compile, conv_open,
+                      outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
+                      cite_read, conv_files, conv_run, conv_compile, conv_open,
                       en_state, en_run, _safe_path,
                       stage_download_selected, stage_zotero_import, test_provider,
                       deepread_kick, deepread_state, deepread_stop)
@@ -82,6 +82,10 @@ team.DB_PATH = DB_PATH              # 团队共用同一个库
 UPLOADS = paths.UPLOADS
 PORT = 8765
 APP_TITLE = "览籍智研"      # 窗口标题前缀（web/index.html 会追加 " · v<构建戳>"）
+try:
+    APP_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() or "0.1.0"
+except OSError:
+    APP_VERSION = "0.1.0"
 STAMP = 0                       # web/index.html 的时间戳；无边框窗口靠它认「自己那扇窗」
 
 
@@ -160,7 +164,7 @@ def _win_hwnd() -> int:
     只按标题认的话「窄栏/最大化」可能打到那扇带黑标题栏的兜底窗上（实测踩到过两扇同时在）。"""
     import ctypes
     from ctypes import wintypes
-    same = [(h, t) for h, t in _app_windows() if f"v{STAMP}" in t]
+    same = [(h, t) for h, t in _app_windows() if str(STAMP) in t]
     if not same:
         return 0
     me = os.getpid()
@@ -277,7 +281,7 @@ def _webview_window(url: str, stamp: int) -> bool:
     threading.Thread(target=_watch_restore, daemon=True).start()
     try:
         webview.create_window(
-            f"{APP_TITLE} · v{stamp}", url + "&pw=1",
+            f"{APP_TITLE} · v{APP_VERSION} · {stamp}", url + "&pw=1",
             frameless=True, easy_drag=False,      # 拖动靠 .pywebview-drag-region（顶栏），不是抓哪儿拖哪儿
             x=int(x / s), y=int(y / s), width=int(w / s), height=int(h / s),
             min_size=(int(420 / s), int(380 / s)), background_color="#0b0f14")   # 逻辑像素！专注模式的「窄栏」只有 580 物理，按 DPI 反算，否则会把窗口钳在 ~690 宽
@@ -480,7 +484,7 @@ class Handler(BaseHTTPRequestHandler):
         prefixes = (
             "/api/agent-settings", "/api/capabilities", "/api/workflow/layouts", "/api/feishu/", "/api/zotero/web/",
             "/api/projects", "/api/papers/", "/api/chats", "/api/assistants", "/api/teams/", "/api/runs/",
-            "/api/mcp/", "/api/audit/", "/api/easyscholar/", "/api/zotero/mcp/", "/api/todos", "/api/kanban", "/api/space/",
+            "/api/audit/", "/api/easyscholar/", "/api/zotero/mcp/", "/api/todos", "/api/kanban", "/api/space/",
         )
         if not path.startswith(prefixes):
             return False
@@ -489,7 +493,7 @@ class Handler(BaseHTTPRequestHandler):
             return False
         try:
             with WorkflowDB(DB_PATH) as db:
-                for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync, reproduction_routes, v130_routes):
+                for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync, reproduction_routes, feature_routes):
                     result = extension.route(method, path, body, query, db)
                     if result is not None:
                         # These explicit user actions may reveal credentials; never put them in general state.
@@ -1802,7 +1806,7 @@ def main() -> int:
         print(f"览籍智研已启动：{url}")
     if "--no-open" not in sys.argv:
         # 已经有「这一版」的窗口 → 把它从最小化恢复并置前，不再开新的
-        same = [h for h, title in _app_windows() if f"v{stamp}" in title]
+        same = [h for h, title in _app_windows() if str(stamp) in title]
         if same:
             for h in same:
                 _front(h)

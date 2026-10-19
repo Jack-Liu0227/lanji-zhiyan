@@ -5,11 +5,14 @@ from __future__ import annotations
 import re
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import paths
 from workflow_prompts import READ_SYSTEM
 from workflow_search import download_pdf, enrich_oa, search
+
+if TYPE_CHECKING:
+    from workflow import WorkflowDB
 
 PAPERS = paths.PAPERS
 NOTES = paths.NOTES
@@ -239,7 +242,6 @@ def deepread_kick(db_path: str, task_id: str) -> dict[str, Any]:
         return {"started": False, "reason": "这个项目已经在精读了"}
     DEEPREAD[task_id] = {"total": 0, "done": 0, "failed": 0, "skipped": [],
                          "current": "准备中", "phase": "running", "stop": False, "errors": []}
-    import threading
     threading.Thread(target=_deepread_worker, args=(db_path, task_id), daemon=True).start()
     return {"started": True}
 
