@@ -151,6 +151,22 @@ class AssetGraphTest(unittest.TestCase):
                                      {"project_id": self.project, "include_files": False}, {}, self.db)
         self.assertEqual(route["project_id"], self.project)
 
+    def test_rebuild_prefers_existing_note_mirror_over_db_uri(self):
+        note_id = "legacy-file-note"
+        mirror = self.db.pdir(self.project, "笔记") / f"{note_id}.md"
+        mirror.parent.mkdir(parents=True, exist_ok=True)
+        mirror.write_text("# file-backed legacy note\n", encoding="utf-8")
+        self.db.db.execute(
+            "INSERT INTO notes (id,task_id,paper_id,title,markdown,created_at) VALUES (?,?,?,?,?,?)",
+            (note_id, self.project, "", "Legacy mirror", "database copy", "2026-01-01"),
+        )
+        self.db.db.commit()
+        asset_service.rebuild_project_index(self.db, self.project, include_files=True)
+        active = [item for item in asset_service.list_assets(self.db, self.project, "note")
+                  if item["status"] == "active" and item["metadata"].find(note_id) >= 0]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["canonical_uri"], str(mirror.resolve()))
+
     def test_delete_project_removes_project_runs(self):
         run = run_service.start(self.db, self.project, "cleanup-check")
         self.assertIsNotNone(run_service.get(self.db, run["id"]))

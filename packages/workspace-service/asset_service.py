@@ -271,6 +271,41 @@ def _virtual_asset(db, *, project_id: str, kind: str, legacy_id: str, title: str
     return get(db, asset["id"]) or asset
 
 
+def _legacy_note_asset(db, row: dict[str, Any], project_id: str, table: str) -> dict[str, Any]:
+    """Prefer the real Markdown mirror when rebuilding a legacy note."""
+    legacy_id = str(row["id"])
+    title = str(row.get("title") or "项目笔记")
+    body = str(row.get("markdown") if table == "notes" else row.get("content") or "")
+    if project_id:
+        path = db.pdir(project_id, "笔记") / f"{legacy_id}.md"
+    else:
+        try:
+            from paths import NOTES
+            path = NOTES / f"{legacy_id}.md"
+        except ImportError:
+            path = None
+    if path and path.is_file():
+        try:
+            body = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            pass
+        asset = register_file(db, path, project_id=project_id, kind="note", title=title,
+                              source="legacy_rebuild", body=body,
+                              metadata={"paper_id": row.get("paper_id") or "",
+                                        "legacy_id": legacy_id, "table": table})
+        # Older rebuilds used a db:// URI for the same note. Retain it for
+        # provenance, but keep only the file-backed asset active.
+        old_uri = f"db://{table}/{legacy_id}"
+        db.db.execute("UPDATE assets SET status='archived', updated_at=? "
+                      "WHERE canonical_uri=? AND id<>?", (_now(db), old_uri, asset["id"]))
+        db.db.commit()
+        return asset
+    return _virtual_asset(db, project_id=project_id, kind="note", legacy_id=legacy_id,
+                          title=title, body=body,
+                          metadata={"paper_id": row.get("paper_id") or "", "table": table},
+                          uri_prefix=table)
+
+
 def rebuild_project_index(db, project_id: str, *, include_files: bool = True) -> dict[str, Any]:
     """Idempotently project legacy rows and known project files into the asset graph.
 
@@ -329,11 +364,7 @@ def rebuild_project_index(db, project_id: str, *, include_files: bool = True) ->
 
     for note in conn.execute("SELECT * FROM notes WHERE task_id=?", (project_id,)).fetchall():
         row = dict(note)
-        asset = _virtual_asset(db, project_id=project_id, kind="note", legacy_id=str(row["id"]),
-                               title=str(row.get("title") or "项目笔记"),
-                               body=str(row.get("markdown") or ""),
-                               metadata={"paper_id": row.get("paper_id") or "", "table": "notes"},
-                               uri_prefix="notes")
+        asset = _legacy_note_asset(db, row, project_id, "notes")
         if paper_assets.get(row.get("paper_id")):
             link(db, asset["id"], "derived_from", paper_assets[row["paper_id"]],
                  {"paper_id": row["paper_id"]})
@@ -341,11 +372,7 @@ def rebuild_project_index(db, project_id: str, *, include_files: bool = True) ->
 
     for note in conn.execute("SELECT * FROM md_notes WHERE task_id=?", (project_id,)).fetchall():
         row = dict(note)
-        asset = _virtual_asset(db, project_id=project_id, kind="note", legacy_id=str(row["id"]),
-                               title=str(row.get("title") or "项目笔记"),
-                               body=str(row.get("content") or ""),
-                               metadata={"paper_id": row.get("paper_id") or "", "table": "md_notes"},
-                               uri_prefix="md_notes")
+        asset = _legacy_note_asset(db, row, project_id, "md_notes")
         if paper_assets.get(row.get("paper_id")):
             link(db, asset["id"], "derived_from", paper_assets[row["paper_id"]],
                  {"paper_id": row["paper_id"]})
