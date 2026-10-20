@@ -323,16 +323,20 @@ def _webview_window(url: str, stamp: int) -> bool:
 def _show_pinned(win: Any) -> None:
     """先把窗口钉准再露脸。以前是 show 之后每 100ms 才钉一次，肉眼能看到
     2465×1543 → 2488×1600 的一下跳；现在 hidden=True 起来，钉完再 show()。
-    露脸之后仍留 _fit_after 兜底：WinForms 的 AutoScaleMode.Dpi 会在 show 后再重排一次。"""
-    h = 0                                  # func 线程可能比窗口本体早一步 → 等一下再认窗口
-    for _ in range(50):
-        h = _win_hwnd()
+    露脸之后仍留 _fit_after 兜底：WinForms 的 AutoScaleMode.Dpi 会在 show 后再重排一次，
+    而隐藏态量到的 GetClientRect 不可靠，所以钉不准也不能让后面的兜底线程不启动。"""
+    try:
+        h = 0                              # func 线程可能比窗口本体早一步 → 等一下再认窗口
+        for _ in range(50):
+            h = _win_hwnd()
+            if h:
+                break
+            time.sleep(0.02)
         if h:
-            break
-        time.sleep(0.02)
-    if h:
-        _resizable(h)                      # 先补缩放边框（会把客户区缩掉 20px），再按客户区钉
-        _fit(h, True)
+            _resizable(h)                  # 先补缩放边框（会把客户区缩掉 20px），再按客户区钉
+            _fit(h, True)
+    except Exception:
+        pass                               # 隐藏态钉歪了没事，_fit_after 会重钉
     try:
         win.show()
     except Exception:
@@ -383,13 +387,15 @@ def _fit_after() -> None:
     检查一次，偏了就再钉一次；钉住了就不再碰（避免反复重排把页面刷花）。
     **补边框要排在任何钉框之前**：_resizable 会把客户区缩掉 20px，先钉后补边框等于白跳一下。"""
     framed = False
+    first = True
     for _ in range(40):
         h = _win_hwnd()
         if h:
             if not framed:
                 framed = _resizable(h)
-            if not _at_work_area(h):
-                _fit(h, True)
+            if first or not _at_work_area(h):
+                _fit(h, True)              # 拿到窗口后先无条件钉一次：隐藏态那次钉的不作数
+            first = False
         time.sleep(0.1)
 
 
