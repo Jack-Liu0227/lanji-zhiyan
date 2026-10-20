@@ -235,6 +235,20 @@ GRANT = os.environ.get("RW_GRANT", "")          # 窗口宿主（Medium）起的
 GRANT_KEY = os.environ.get("RW_GRANT_KEY", "")
 
 
+def _grant_post(path: str, payload: dict) -> bool:
+    """走宿主（Medium）那条本机随机端口通道；没通道（同进程模式）返回 False 让调用方自己动手。"""
+    if not GRANT:
+        return False
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request("http://" + GRANT + path, data=body,
+                                 headers={"Content-Type": "application/json", "X-RW-Key": GRANT_KEY})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return bool(json.loads(r.read() or b"{}").get("ok"))
+    except (OSError, ValueError):
+        return False
+
+
 def grant_dir(path: str | os.PathLike[str]) -> bool:
     """让窗口宿主代建目录并标成 Low，再返回。
 
@@ -247,14 +261,30 @@ def grant_dir(path: str | os.PathLike[str]) -> bool:
     if not GRANT:
         target.mkdir(parents=True, exist_ok=True)
         return True
-    payload = json.dumps({"path": str(target)}).encode()
-    req = urllib.request.Request("http://" + GRANT + "/grant", data=payload,
-                                 headers={"Content-Type": "application/json", "X-RW-Key": GRANT_KEY})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return bool(json.loads(r.read() or b"{}").get("ok"))
-    except (OSError, ValueError):
+    return _grant_post("/grant", {"path": str(target)})
+
+
+def host_open(target: str | os.PathLike[str]) -> bool:
+    """用系统默认程序打开文档/目录 —— **必须由宿主做**。
+
+    Low 进程里 ShellExecute 对文档和目录直接返回 SE_ERR_ACCESSDENIED(5)（实测），
+    只有 http/https 这类协议还能交出去。所以沙箱里请宿主（Medium）代开。
+    """
+    if not GRANT:
+        os.startfile(str(target))            # noqa: S606 —— 同进程模式（服务本身就是宿主）
+        return True
+    return _grant_post("/open", {"target": str(target)})
+
+
+def host_app(name: str) -> bool:
+    """请宿主起一个外部 GUI 程序（只认白名单名字，宿主自己解路径）。
+
+    为什么不能自己 Popen：Low 起的子进程继承 Low 令牌，Zotero 这类程序写自己的数据目录
+    会被内核拒（实测子进程 IL = Low）。
+    """
+    if not GRANT:
         return False
+    return _grant_post("/app", {"name": str(name)})
 
 
 def resolve_allowed(path: str, extra_roots: list[Path] | None = None, *, must_be_file: bool = False,
@@ -281,7 +311,11 @@ def resolve_allowed(path: str, extra_roots: list[Path] | None = None, *, must_be
 def mark_write_roots_low(verbose: bool = False) -> dict[str, str]:
     """把「允许 Low 子进程写」的目录标成低完整性：data/ 与每个用户项目目录。
     Low 进程（xelatex / babeldoc）只有在这里才写得进去，其它地方内核直接拒。
-    幂等；失败只报不抛（不能让权限搞挂启动）。"""
+    幂等；失败只报不抛（不能让权限搞挂启动）。
+
+    **在沙箱服务里得请宿主标**：Low 进程对 Medium 目录跑 icacls 是 rc=5（实测），
+    只有宿主（Medium）改得动。所以有通道就逐目录转过去，没有通道（同进程模式）才自己标。
+    """
     import lowbox
     if not lowbox.available():
         return {}
@@ -289,7 +323,7 @@ def mark_write_roots_low(verbose: bool = False) -> dict[str, str]:
     for root in [HOME, DATA, *project_roots()]:      # HOME 一起标：user/ executors/ cache/ 都得让沙箱里的服务端写得进
         try:
             if root and Path(root).is_dir():
-                ok = lowbox.mark_low(root, recursive=True)
+                ok = _grant_post("/grant", {"path": str(root)}) if GRANT else lowbox.mark_low(root, recursive=True)
                 out[str(root)] = "low" if ok else "failed"
                 if verbose:
                     print("mark_low", root, out[str(root)])

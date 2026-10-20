@@ -62,7 +62,7 @@ async function mdNarrow(){
   mdNarrowOn = !mdNarrowOn;
   const b = $("btnMdNarrow");
   try{
-    await api("/api/win/" + (mdNarrowOn ? "narrow" : "wide"), {});
+    await winCommand(mdNarrowOn ? "narrow" : "wide");
     $("mdView")?.classList.toggle("narrow", mdNarrowOn);
     document.body.classList.toggle("md-narrow", mdNarrowOn);       // 外壳（侧栏/标签/状态栏）也收掉
     if(b) b.textContent = mdNarrowOn ? "▯ 铺满" : "▯ 窄栏";

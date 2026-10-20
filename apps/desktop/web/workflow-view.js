@@ -693,6 +693,7 @@ const PANELS = {
 let wfStep=localStorage.getItem("rw-wf-step")||"idea";
 let wfMin=localStorage.getItem("rw-wf-min")==="1";
 let wfMsgs=[], wfEvents=[];   // 右栏「本步助手」的历史与事件
+let wfProj = null;            // 项目的用量（不含本步，后端算）—— 对话页聊过的也算进来
 
 /* ==== 三栏工作台：左十步 / 中展示区+确认交付 / 右本步助手 ==== */
 /* 每一步一个助手：emoji + 名字 + 一句话职责 + 聊天挂在哪个 scoped 端点 */
@@ -771,10 +772,11 @@ async function wfAgentPaint(m, step){
   host.innerHTML = wfAgentHTML(step);
   const a = WF_AGENT[step] || WF_AGENT.idea;
   const box = $("wv-msgs"); if(!box) return;
-  wfMsgs = []; wfEvents = [];
+  wfMsgs = []; wfEvents = []; wfProj = null;
   try{
     const d = await api(`/api/step/messages?id=${encodeURIComponent(curTask)}&step=${encodeURIComponent(step)}`);
     wfMsgs = d.messages || [];
+    wfProj = d.project || null;
   }catch(e){}
   wfEvents = wfMsgs.flatMap(mv => mv.events || []);
   wfPaintMsgs(step);
@@ -844,18 +846,21 @@ function wfPaintMsgs(step){
   box.scrollTop = box.scrollHeight;
 }
 function wfPaintStats(){
-  const turns = wfMsgs.filter(x=>x.role==="user").length;
+  // 数字 = 项目里其它地方的用量 + 本步自己的（对话页聊过的也算进项目口径，
+  // 否则只在「对话」页聊过的项目，这一步一路 0 —— 看着像没记录）
+  const base = wfProj || {turns:0, calls:0, tokens:0, tools:[], outs:[]};
+  const turns = (base.turns||0) + wfMsgs.filter(x=>x.role==="user").length;
   const calls = wfEvents.filter(e=>e.type==="tool_call");
-  const tok = wfEvents.filter(e=>e.type==="usage").reduce((n,e)=>n+(e.total||0),0);
+  const tok = (base.tokens||0) + wfEvents.filter(e=>e.type==="usage").reduce((n,e)=>n+(e.total||0),0);
   const set = (id,v)=>{ const el=$(id); if(el) el.textContent = v; };
-  set("wv-turns", turns); set("wv-calls", calls.length);
-  set("wv-st-turns", turns); set("wv-st-calls", calls.length); set("wv-st-tok", tok.toLocaleString());
+  set("wv-turns", turns); set("wv-calls", (base.calls||0) + calls.length);
+  set("wv-st-turns", turns); set("wv-st-calls", (base.calls||0) + calls.length); set("wv-st-tok", tok.toLocaleString());
   const log = (id, rows, empty)=>{ const el=$(id); if(!el) return;
     el.innerHTML = rows.length ? rows.slice(-20).map(r=>`<div title="${esc(r)}">${esc(r)}</div>`).join("")
                                : `<div class="none">${esc(empty)}</div>`;
     el.scrollTop = el.scrollHeight; };
-  log("wv-tools", calls.map(e=>e.name), "还没有工具调用");
-  log("wv-outs", wfEvents.filter(e=>e.type==="tool_result"&&e.path).map(e=>e.path), "还没有产出");
+  log("wv-tools", [...(base.tools||[]), ...calls.map(e=>e.name)], "还没有工具调用");
+  log("wv-outs", [...(base.outs||[]), ...wfEvents.filter(e=>e.type==="tool_result"&&e.path).map(e=>e.path)], "还没有产出");
 }
 async function wfSend(m, step){
   const ta = $("wv-ask"), btn = $("wv-send"), box = $("wv-msgs");

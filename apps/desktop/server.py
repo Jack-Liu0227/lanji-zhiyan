@@ -257,8 +257,12 @@ def _resizable(h: int) -> bool:
 
 
 def _win(action: str) -> dict[str, Any]:
-    """无边框窗口右上角那三个按钮。WinForms 没有标题栏了，就用 Win32 直接下命令
-    （跟 _front/_maximize 一样从别的线程调就行，不需要 pywebview 的界面线程）。"""
+    """无边框窗口右上角那三个按钮。
+
+    注意**必须由宿主进程调**：HTTP 服务跑在 Low IL 沙箱子进程里，UIPI 会静默丢掉它对
+    中完整性窗口的 ShowWindow / WM_CLOSE（最大化的 SetWindowPos 不受 UIPI 限制，所以
+    只有最小化和关闭会「点了没反应」）。前端因此优先走 js_api（=宿主进程），HTTP 只当兜底。
+    """
     import ctypes
     from ctypes import wintypes
     u = ctypes.windll.user32
@@ -288,6 +292,20 @@ def _win(action: str) -> dict[str, Any]:
     return {"ok": action}
 
 
+class _WinBridge:
+    """暴露给页面的 window.pywebview.api.win(action)。
+
+    存在的唯一理由：最小化/关闭只能在宿主进程里下命令（见 _win 的说明），
+    HTTP 那条路（Low IL 沙箱）会被 UIPI 拦掉。
+    """
+
+    def win(self, action: str) -> dict[str, Any]:
+        try:
+            return _win(str(action))
+        except Exception as exc:
+            return {"error": str(exc)}
+
+
 def _webview_window(url: str, stamp: int) -> bool:
     """自己的无边框窗口（WebView2 / pywebview）。起来就阻塞到关窗、返回 True；
     起不来（没装 pywebview / WebView2 运行时）返回 False，调用方退回 Edge --app。"""
@@ -309,6 +327,7 @@ def _webview_window(url: str, stamp: int) -> bool:
             f"{APP_TITLE} · v{stamp}", url + "&pw=1",
             hidden=True,                          # 先藏着，_show_pinned() 钉准客户区再露脸（否则能看到尺寸跳一下）
             frameless=True, easy_drag=False,      # 拖动靠 .pywebview-drag-region（顶栏），不是抓哪儿拖哪儿
+            js_api=_WinBridge(),                  # 最小化/关闭绕开 Low IL 服务，直接在宿主进程里动手
             x=int(x / s), y=int(y / s), width=int(w / s), height=int(h / s),
             min_size=(int(420 / s), int(380 / s)), background_color="#0b0f14")   # 逻辑像素！专注模式的「窄栏」只有 580 物理，按 DPI 反算，否则会把窗口钳在 ~690 宽
             # 窗口底色 = 深色主题的 --bg（原来是开始卡片的 #F9FCFE，卡片一删，那一下就变成白闪）
@@ -1025,7 +1044,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/step/messages":               # 三栏页：右栏「本步助手」的历史（按 scope 取）
                 with WorkflowDB(DB_PATH) as db:
                     step = (q.get("step") or ["idea"])[0]
-                    return self._json({"step": step, "messages": db.messages(q["id"][0], step)})
+                    tid = q["id"][0]
+                    return self._json({"step": step, "messages": db.messages(tid, step),
+                                       "project": db.usage_stats(tid, exclude_scope=step)})
             if path == "/api/doc/state":                  # 确认大纲 / 论文撰写 / 稿件审查 共用的「左边那份文件」
                 step = (q.get("step") or ["outline"])[0]
                 with WorkflowDB(DB_PATH) as db:
@@ -1870,7 +1891,10 @@ def _start_inproc(port: int, url: str) -> None:
     mail.encrypt_legacy()              # 老 mail.json 里的明文授权码 → DPAPI 密文（幂等，干净时是空转）
     # 低完整性写边界：把 data/ 和项目目录标成 Low（Low 子进程只能写这些地方）。
     # 放到后台线程，几百篇 PDF 的 /T 也不至于让启动卡住；幂等，每次启动跑一遍没代价。
-    threading.Thread(target=paths.mark_write_roots_low, daemon=True).start()
+    # **必须由宿主（Medium）来标**：icacls 改完整性级别要目标对象的 WRITE_DAC，
+    # 沙箱里的 Low 进程对 Medium 目录没有这个权力，只会静默失败（结果就是项目目录一直写不进）。
+    if not os.environ.get("RW_LOW_SERVER"):
+        threading.Thread(target=paths.mark_write_roots_low, daemon=True).start()
     srv = Server(("127.0.0.1", port), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     schedule.start()           # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
@@ -1878,8 +1902,23 @@ def _start_inproc(port: int, url: str) -> None:
     print(f"览籍智研已启动：{url}")
 
 
+def _host_open(target: str) -> bool:
+    """宿主（Medium）里用 ShellExecute 打开文档/目录/链接。
+
+    只有宿主能做：Low 进程对文档/目录直接拿 SE_ERR_ACCESSDENIED(5)（实测），
+    http/https 与自定义协议倒是能交出去。
+    """
+    import ctypes
+    from ctypes import wintypes
+    sh = ctypes.windll.shell32
+    sh.ShellExecuteW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                 wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_int]
+    sh.ShellExecuteW.restype = ctypes.c_void_p
+    return int(sh.ShellExecuteW(None, "open", str(target), None, None, 1) or 0) > 32
+
+
 def _start_grant_helper():
-    """窗口宿主（Medium）上的小帮手：代沙箱里的服务端建目录、标 Low。
+    """窗口宿主（Medium）上的小帮手：代沙箱里的服务端建目录、标 Low、开文档、起外部程序。
     只监听 127.0.0.1 的随机端口，只认带随机 key 的 POST —— key 只进沙箱子进程的环境变量。"""
     import http.server
     import secrets
@@ -1892,15 +1931,27 @@ def _start_grant_helper():
 
         def do_POST(self):
             ok = False
-            if self.path == "/grant" and self.headers.get("X-RW-Key") == key:
+            if self.headers.get("X-RW-Key") == key:
                 try:
                     n = int(self.headers.get("Content-Length") or 0)
-                    target = Path(str(json.loads(self.rfile.read(n) or b"{}").get("path") or ""))
-                    if target.is_absolute():
-                        target.mkdir(parents=True, exist_ok=True)
-                        import lowbox
-                        ok = lowbox.mark_low(target)
-                except (OSError, ValueError):
+                    data = json.loads(self.rfile.read(n) or b"{}")
+                    if self.path == "/grant":
+                        target = Path(str(data.get("path") or ""))
+                        if target.is_absolute():
+                            target.mkdir(parents=True, exist_ok=True)
+                            import lowbox
+                            ok = lowbox.mark_low(target)
+                    elif self.path == "/open":          # 文档/目录只有 Medium 开得动
+                        target = str(data.get("target") or "")
+                        ok = bool(target) and _host_open(target)
+                    elif self.path == "/app":           # 外部 GUI 程序：名字白名单，路径宿主自己解
+                        if data.get("name") == "zotero":
+                            import zotero
+                            exe = zotero.find_zotero_executable()
+                            if exe:
+                                subprocess.Popen([exe], creationflags=subprocess.DETACHED_PROCESS)
+                                ok = True
+                except (OSError, ValueError, KeyError):
                     ok = False
             body = json.dumps({"ok": ok}).encode()
             self.send_response(200 if ok else 403)
@@ -1930,6 +1981,11 @@ def _spawn_low_server(port: int):
     else:
         cmd = [sys.executable, str(Path(__file__).resolve()), "--port", str(port), "--no-open"]
     env = dict(os.environ, RW_LOW_SERVER="1")
+    # 先把 data/ 与项目目录标 Low **再由宿主起沙箱**：Low 自己 icacls 是 rc=5（实测），
+    # 新装的库/项目目录会一路写不进去（首启建库就失败）。
+    paths.mark_write_roots_low()
+    # TEMP 指进 Low 目录：Low 服务自己（以及它 Popen 出来的工具）都写不进 Medium 的 %TEMP%
+    env = lowbox.sandbox_env(env, paths.LOWTMP)
     grant = _start_grant_helper()              # 先起代建通道，再把端口/key 传给子进程
     env["RW_GRANT"] = f"127.0.0.1:{grant[0]}"
     env["RW_GRANT_KEY"] = grant[1]
@@ -2001,6 +2057,9 @@ def main() -> int:
         else:
             import atexit
             atexit.register(_stop_low_server)
+            # 授权目录标 Low 只能 Medium 干（子进程对 Medium 目录没有 WRITE_DAC），所以在这边标。
+            # 已经存在的项目目录（老项目、别人机器上带过来的）都在这一趟里补标。
+            threading.Thread(target=paths.mark_write_roots_low, daemon=True).start()
             print(f"览籍智研已启动（服务跑在低完整性沙箱里）：{url}")
     if "--no-open" not in sys.argv:
         # 自己的无边框窗口；起不来（没装 pywebview / WebView2 运行时）才退回系统浏览器。

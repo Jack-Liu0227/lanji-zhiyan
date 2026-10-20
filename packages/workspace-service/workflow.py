@@ -610,6 +610,39 @@ class WorkflowDB(ResearchDB):
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
+    def usage_stats(self, task_id: str, exclude_scope: str = "") -> dict[str, Any]:
+        """项目口径的用量汇总（对话轮数 / 工具次数 / token / 工具名 / 产出路径）。
+
+        为什么按项目而不是按步骤：这个项目的对话是在「对话」页聊的（scope=''），
+        那一步的步骤页自己没有历史 —— 右栏就一路 0。排除当前步骤，前端再把本步的实时数加上去，
+        这样发送过程中数字也能跟着走。
+        """
+        rows = self.db.execute("SELECT role, content, events, scope FROM chat WHERE task_id=?",
+                               (task_id,)).fetchall()
+        turns = calls = tokens = 0
+        tools: list[str] = []
+        outs: list[str] = []
+        for r in rows:
+            if exclude_scope and (r["scope"] or "") == exclude_scope:
+                continue
+            if r["role"] == "user":
+                turns += 1
+            try:
+                events = json.loads(r["events"] or "[]")
+            except ValueError:
+                continue
+            for e in events:
+                kind = e.get("type")
+                if kind == "tool_call":
+                    calls += 1
+                    tools.append(str(e.get("name") or "工具"))
+                elif kind == "usage":
+                    tokens += int(e.get("total") or 0)
+                elif kind == "tool_result" and e.get("path"):
+                    outs.append(str(e["path"]))
+        return {"turns": turns, "calls": calls, "tokens": tokens,
+                "tools": tools[-20:], "outs": outs[-20:]}
+
     # ---------- 定时任务（规则 + 每次运行一条记录） ----------
     def schedules(self) -> list[dict[str, Any]]:
         return [dict(r) for r in self.db.execute("SELECT * FROM schedules ORDER BY created_at").fetchall()]
@@ -1599,13 +1632,54 @@ def chat_raw(profile: dict[str, Any], messages: list[dict[str, Any]], tools: lis
                       "total": int(usage.get("total_tokens") or 0), "exact": bool(usage)}}
 
 
+def _json_in(text: str) -> Any | None:
+    """从模型回包里抠出第一个完整 JSON（对象或数组）。
+
+    比「贪婪正则 + json.loads」结实一点：模型常先讲一段话，或者把 JSON 截断在半路，
+    贪婪匹配会把后面的文字一起吞进去、然后 json.loads 直接抛。这里做括号配平，只取成对的那一截。
+    """
+    raw = re.sub(r"^```(?:json)?\s*|```$", "", (text or "").strip(), flags=re.I).strip()
+    for opener, closer in (("{", "}"), ("[", "]")):
+        start = raw.find(opener)
+        if start < 0:
+            continue
+        depth, in_str, esc = 0, False, False
+        for i in range(start, len(raw)):
+            ch = raw[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == opener:
+                depth += 1
+            elif ch == closer:
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(raw[start:i + 1])
+                    except ValueError:
+                        break
+    return None
+
+
 def chat_json(profile: dict[str, Any], messages: list[dict[str, str]], **kw: Any) -> Any:
+    """要模型回 JSON。本地小模型偶尔先讲一段人话、或者把 JSON 截断 —— 再要一次，只这一次。"""
     raw = chat(profile, messages, **kw)
-    raw = re.sub(r"^```(?:json)?\s*|```$", "", raw.strip(), flags=re.I).strip()
-    match = re.search(r"[\[{].*[\]}]", raw, re.S)
-    if not match:
-        raise RuntimeError(f"模型没有返回 JSON：{raw[:200]}")
-    return json.loads(match.group(0))
+    got = _json_in(raw)
+    if got is None:
+        retry = messages + [{"role": "user",
+                             "content": "只输出 JSON 本体：不要解释、不要前后缀、不要代码块围栏。"}]
+        raw2 = chat(profile, retry, **kw)
+        got = _json_in(raw2)
+        if got is None:
+            raise RuntimeError(f"模型没有返回 JSON：{raw2[:200]}")
+    return got
 
 
 def discover_models(base_url: str, api_key: str = "", timeout: int = 25) -> list[dict[str, str]]:

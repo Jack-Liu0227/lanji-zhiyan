@@ -212,6 +212,12 @@ function renderSidebar(){
 const FRAMELESS = new URLSearchParams(location.search).has("pw");
 let winZoom = true;                    // 窗口现在是不是铺满工作区 → 决定右上那个键画「最大化」还是「还原」
 let winStateAsked = false;
+function winCommand(action){
+  // 所有窗口命令都优先走 pywebview js_api（=宿主进程）。HTTP 服务跑在 Low IL 沙箱里，
+  // UIPI 会静默拦掉它对中完整性窗口的 ShowWindow / SetWindowPos / WM_CLOSE（全是「点了没反应」）。
+  const py = window.pywebview && window.pywebview.api;
+  return Promise.resolve(py && py.win ? py.win(action) : api("/api/win/" + action, {}));
+}
 function renderTopbar(){
   $("topbar").innerHTML = `
     <span class="date">${clock()}</span>
@@ -223,9 +229,9 @@ function renderTopbar(){
     </span>`:""}`;
   $("topbar").querySelectorAll("[data-w]").forEach(b=>{
     b.onmousedown = e => e.stopPropagation();          // 别让标题栏拖动吃掉按钮
-    b.onclick = () => api("/api/win/"+b.dataset.w, {}).then(r=>{
-      if(r && typeof r.zoomed === "boolean") winSet(r.zoomed);
-    }).catch(()=>{});
+    b.onclick = () => winCommand(b.dataset.w)
+      .then(r=>{ if(r && typeof r.zoomed === "boolean") winSet(r.zoomed); })
+      .catch(()=>{});
   });
   if(FRAMELESS && !winStateAsked){                     // 起来先问一次真实状态（还原回来可能不是铺满）
     winStateAsked = true;

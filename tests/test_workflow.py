@@ -641,3 +641,19 @@ class ModelInvokerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ChatJsonTest(unittest.TestCase):
+    """模型先讲人话 / 把 JSON 截断 → 不能直接炸；截断要判成「没有 JSON」，好走一次重试。"""
+
+    def test_从讲话后面抠出JSON(self):
+        import workflow
+        got = workflow._json_in('好的，我分析一下。\n判定如下：\n{"verdict": "可行", "score": 7}\n以上。')
+        self.assertEqual(got, {"verdict": "可行", "score": 7})
+
+    def test_截断的JSON判为没有(self):
+        import workflow
+        self.assertIsNone(workflow._json_in('{"verdict": "可行", "score":'))
+
+    def test_数组(self):
+        import workflow
+        self.assertEqual(workflow._json_in("```json\n[1, 2, 3]\n```"), [1, 2, 3])
