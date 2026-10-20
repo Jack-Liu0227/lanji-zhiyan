@@ -689,7 +689,7 @@ const PANELS = {
 };   // 有专门功能区的步骤；其余留白卡
 let wfStep=localStorage.getItem("rw-wf-step")||"idea";
 let wfMin=localStorage.getItem("rw-wf-min")==="1";
-let wfMsgs=[], wfEvents=[];   // 右栏「本步助手」的历史与事件
+let wfMsgs=[], wfEvents=[], wfSteps=[];   // 右栏「本步助手」的历史与事件 + 项目各步的执行日志（计划卡要说上一步）
 
 /* ==== 三栏工作台：左十步 / 中展示区+确认交付 / 右本步助手 ==== */
 /* 每一步一个助手：emoji + 名字 + 一句话职责 + 聊天挂在哪个 scoped 端点 */
@@ -717,6 +717,20 @@ const WF_AGENT = {
 };
 /* 这五步的面板本来就自带对话 —— 三栏页里对话统一收到右栏，面板里那份藏掉，避免两个聊天 */
 const WF_OWN_CHAT = new Set(["idea", "map", "outline", "write", "review"]);
+/* 进入某一步时右栏先亮出来的「这一步打算怎么做」—— 用户点「同意」才真正开跑。
+   只写这一步的固定套路，具体条件都留给用户在对话里补，别在这里编数据。 */
+const WF_PLAN = {
+  idea: ["把你说的创新点拆成「问题 / 做法 / 凭什么新」三块", "对着现有文献和项目记忆，指出哪一块站不住", "出一版判定：能做 / 要收窄 / 换角度"],
+  search: ["把你的目标翻成检索式（关键词 + 同义词 + 排除词）", "按年限 / 来源 / 是否 OA 粗筛，重复的和跑题的剔掉", "能拿到 OA 直链的一并补上，入库到左边列表"],
+  download: ["先看队列里哪些还没全文", "有 OA 直链的直接下，没有的标成「待手动下载」给你链接", "下完逐页精读，结论写进项目笔记"],
+  notes: ["按你给的口径定术语表（保留排版 / 只译正文 / 双语对照）", "逐段译，公式、图注、参考文献格式不动", "术语前后不一致的地方回头统一一遍"],
+  outline: ["按题目 + 研究问题出「大标题 → 小标题 → 一句说明」", "每节标出要引哪几篇、哪个数据还缺", "定稿写进「框架.md」，左边立刻换新版"],
+  map: ["把已精读的论文按大纲挂到对应节点", "同一节点下把互相打架的结论标出来", "缺文献的节点留空提示，别硬凑"],
+  write: ["按框架逐节写正文，先写有数据的节", "缺数据的位置写「待补」，不编数字", "写完回头对一遍引用，正文编号和文献表对齐"],
+  review: ["以审稿人视角先挑大问题（逻辑 / 证据 / 创新性）", "再看小节：统计口径、图注、引用是否站得住", "按严重程度列问题清单，给改法"],
+  entrans: ["定目标期刊口径（美式拼写、时态、缩写首次展开）", "术语表先统一，再逐节译，图表标题一起译", "译完自查一遍中式表达"],
+  convert: ["确认要哪种格式：docx / md / html，样式跟模板走", "图片路径、编号、参考文献一起处理", "文件落到项目产出目录，左边可预览"]
+};
 
 function wfAgentHTML(step){
   const a = WF_AGENT[step] || WF_AGENT.idea;
@@ -772,13 +786,35 @@ async function wfAgentPaint(m, step){
 }
 
 let wfView = "conversation";
+const stageName = s => (STAGE[s]||s).slice((STAGE[s]||"").indexOf(" ")+1);
+/* 右栏空态 = 这个助手的「进度同步 + 本步计划」：确认交付跳过来时用户先看到它，点同意才开跑 */
+function wfPlanHTML(step){
+  const a = WF_AGENT[step] || WF_AGENT.idea;
+  const i = WF_ORDER.indexOf(step), prev = i > 0 ? WF_ORDER[i-1] : "";
+  const last = prev ? (wfSteps||[]).filter(s=>s.stage===prev).slice(-1)[0] : null;
+  const sync = !prev ? "这是第一步，没有上一步要等。"
+    : last && last.status==="done"
+      ? `上一步「${esc(stageName(prev))}」你已经确认交付了${last.summary?` — ${esc(last.summary)}`:""}。`
+      : `上一步「${esc(stageName(prev))}」还没确认交付${last&&last.summary?`（最近一条：${esc(last.summary)}）`:""}，我按现有产出接着往下做。`;
+  const plan = (WF_PLAN[step]||[a.sub]);
+  return `<div class="wf-plan">
+    <div class="wf-plan-h"><span class="wf-av">${a.emoji}</span><b>${esc(a.name)}</b><span class="wf-plan-tag">已同步进度</span></div>
+    <p class="wf-plan-sync">${sync}</p>
+    <p class="wf-plan-q">这一步我打算这么做，你看行不行：</p>
+    <ol>${plan.map(x=>`<li>${esc(x)}</li>`).join("")}</ol>
+    <div class="wf-plan-b"><button class="btn" id="wvPlanOk">同意，按这个开始</button>
+      <button class="btn ghost" id="wvPlanNo">先说要改什么</button></div></div>`;
+}
 function wfPaintMsgs(step){
   const box = $("wv-msgs"); if(!box) return;
   if(wfView === "trajectory"){ box.innerHTML = ""; renderTrajectory(box, wfEvents); return; }
   if(!wfMsgs.length){
-    const a = WF_AGENT[step] || WF_AGENT.idea;
-    box.innerHTML = `<div class="wf-empty"><span>${a.emoji}</span><b>这是「${esc(STAGE[step].slice(STAGE[step].indexOf(" ")+1))}」的助手</b>
-      <p>${esc(a.sub)}。在下面说一句就能开始，产出会出现在中间。</p></div>`;
+    box.innerHTML = wfPlanHTML(step);
+    const ok = $("wvPlanOk"), no = $("wvPlanNo"), ta = $("wv-ask");
+    if(ok) ok.onclick = ()=>{ ok.disabled = no.disabled = true;
+      if(ta) ta.value = "同意这个计划，按它开始。";
+      wfSend(null, step); };
+    if(no) no.onclick = ()=>{ if(ta) ta.focus(); };
     return;
   }
   box.innerHTML = "";
@@ -891,10 +927,16 @@ function renderWorkflow(m){
     const i = WF_ORDER.indexOf(wfStep); if(i > 0) m.querySelector(`.wf-step[data-step="${WF_ORDER[i-1]}"]`)?.click();
   };
   const deliver = $("wfDeliver"); if(deliver) deliver.onclick = async ()=>{
-    deliver.disabled = true; const old = deliver.textContent; deliver.textContent = "确认中…";
-    try{ await api("/api/step/done", {task_id:curTask, step:wfStep}); }
-    catch(e){ alert("确认失败：" + e.message); }
-    finally{ deliver.disabled = false; deliver.textContent = old; await loadTaskState(); }
+    deliver.disabled = true; const old = deliver.textContent;
+    try{ await api("/api/step/done", {task_id:curTask, step:wfStep}); }catch(e){ deliver.disabled=false; return alert("确认失败：" + e.message); }
+    // 先让按钮绿一下（「点下去有反应」），再跳下一步；跳完 restoring 文字
+    deliver.classList.add("ok"); deliver.textContent = "已交付 ✓";
+    await loadTaskState();
+    await new Promise(r => setTimeout(r, 450));
+    const i = WF_ORDER.indexOf(wfStep), next = WF_ORDER[i+1];
+    deliver.classList.remove("ok"); deliver.textContent = next ? old : "已到最后一步 ✓";
+    deliver.disabled = false;
+    if(next) m.querySelector(`.wf-step[data-step="${next}"]`)?.click();   // 顺带把右栏换成下一步的进度同步 + 计划
   };
   bindStep();
   wfAgentPaint(m, wfStep);
@@ -1148,6 +1190,7 @@ function wsBind(m){
 
 async function loadTaskState(){
   try{ const d=await api(`/api/task?id=${encodeURIComponent(curTask)}`);
+    wfSteps = d.steps || [];                    // 计划卡要用上一步的确认状态和摘要
     const sm=d.stage_map||{}; Object.keys(STAGE).forEach(s=>{ const el=$("st-"+s); if(el&&sm[s]) el.className="pill ok"; });
     // 左栏十步：已完成的亮、没开始的暗、当前步主色
     document.querySelectorAll(".wf-step[data-step]").forEach(b=>{
@@ -1156,6 +1199,8 @@ async function loadTaskState(){
       b.classList.toggle("todo", !st && s!==wfStep);
       if(st==="failed") b.classList.add("fail");
     });
+    // 右栏还是空态（计划卡）→ 重画一次，把刚拿到的「上一步」写进去
+    if(!wfMsgs.length && $("wv-msgs") && wfView==="conversation") wfPaintMsgs(wfStep);
   }catch(e){}
 }
 /* ---------------- 项目 ---------------- */

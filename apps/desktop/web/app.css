@@ -74,6 +74,7 @@ kbd{border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:10.
 .btn{background:var(--accent);color:var(--accent-ink);border:0;border-radius:7px;padding:6px 11px;cursor:pointer;font-weight:600}
 .btn.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
 .btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.ok{background:var(--ok);color:#fff;box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
 
 .tabsbar{height:36px;flex:none;display:flex;align-items:center;gap:4px;padding:0 8px;border-bottom:1px solid var(--line);background:var(--panel2);overflow-x:auto}
 .tab{display:flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid transparent;border-radius:7px;background:none;color:var(--muted);cursor:pointer;white-space:nowrap}
@@ -816,6 +817,18 @@ html[data-theme="light"] .quick-add .quick-time{color-scheme:light}
 .wf-empty span{font-size:26px}
 .wf-empty b{display:block;margin:8px 0 4px;font-size:13px;color:var(--fg)}
 .wf-empty p{font-size:11.5px;line-height:1.65;margin:0}
+/* 右栏空态：进度同步 + 本步计划 + 同意（替代原来的空态说明） */
+.wf-plan{margin:auto 0;width:100%;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;background:var(--panel2);padding:11px 12px}
+.wf-plan-h{display:flex;align-items:center;gap:7px;margin-bottom:7px}
+.wf-plan-h .wf-av{width:22px;height:22px;font-size:12px;line-height:22px;text-align:center;border-radius:50%;background:color-mix(in srgb,var(--accent) 15%,var(--panel));border:1px solid color-mix(in srgb,var(--accent) 32%,var(--line))}
+.wf-plan-h b{font-size:12.5px;color:var(--fg)}
+.wf-plan-tag{margin-left:auto;font-size:10px;color:var(--ok);border:1px solid color-mix(in srgb,var(--ok) 45%,transparent);border-radius:999px;padding:1px 7px;white-space:nowrap}
+.wf-plan-sync{margin:0 0 6px;font-size:11.5px;line-height:1.6;color:var(--muted)}
+.wf-plan-q{margin:0 0 4px;font-size:11.5px;color:var(--fg)}
+.wf-plan ol{margin:0 0 10px;padding-left:18px;font-size:11.5px;line-height:1.75;color:var(--muted)}
+.wf-plan ol li::marker{color:var(--accent)}
+.wf-plan-b{display:flex;gap:8px;flex-wrap:wrap}
+.wf-plan-b .btn{font-size:12px;padding:5px 12px}
 .steps{display:flex;flex-direction:column;gap:6px}
 
 /* ===== 论文搜索（照科研工作台 literature.tsx 的「联网检索」）===== */
