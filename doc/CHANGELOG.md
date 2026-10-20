@@ -2,6 +2,27 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 待发 PR（本轮：修 3 条 flaky 测试 —— 根因是新项目默认工作流会随机变成「文献精读」）
+
+**现象**：`tests/test_workflow_layout.py` 里的 `test_definition_and_project_selection_survive_reopen` /
+`test_team_queue_and_scoped_chat_supply_actual_evidence` / `test_evidence_compares_actual_times_not_iso_wall_clock_strings`
+单跑、全跑、连跑结果都不一样（OK / 1F1E / 1F2E 随机），在 origin/main 上也一样。
+
+**根因（不是测试的问题，是产品的问题）**：`workflow_layout.ensure_schema` 播种三套内置模板时逐条调 `now()`，
+而 `now()` 在 Windows 上是系统时钟打点——同一时钟刻度里连调三次会给**完全相同的字符串**（实测三次全同）。
+于是 `ORDER BY created_at,id` 退化成按 id 排序：`builtin.workflow.reading` < `builtin.workflow.research`，
+**新项目默认打开的工作流有 18/20 的概率是「文献精读」**（没有 outline/review 节点），依赖默认布局的那三条测试就随机红。
+
+**改法**（都在 `packages/workspace-service/workflow_layout.py`，共享层改一次）：
+1. 播种时取一次基准时间，逐条 `+index µs` → 列表顺序 = 声明顺序，不受时钟粒度影响；
+2. `state()` 在项目没选过布局时的兜底从 `layouts[0]` 改成**明确指向 `builtin.workflow.research`**
+   （新增 `DEFAULT_LAYOUT_ID` 常量）—— 老库时间戳已经打平的情况也一起修好。
+
+**验证**：新增 `test_seed_order_is_stable_and_default_layout_is_the_full_workflow`（播种首条必须是 research +
+把三条时间戳强行打平后默认布局仍是 research 且节点里有 review）；
+`tests.test_workflow_layout` 单跑 **8 次全绿**；全量 265 项**连跑两次都 OK（skipped=8）**。
+真库实测：默认布局 = `builtin.workflow.research`「完整科研工作流」10 个节点，模板顺序 research → reading → writing。
+
 ## 2026-10-20 · 0.1.0 发布前清理
 
 - 路由模块去版本号：`v130_routes.py` → `feature_routes.py`，同步 server 与测试。
