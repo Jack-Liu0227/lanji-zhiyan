@@ -41,7 +41,7 @@ async function initDefaultProject(){
     localStorage.setItem("rw-task", curTask);
     await refreshState(false);
     render();
-  }catch(e){ alert("初始化项目失败: " + e.message); }
+  }catch(e){ uiNotify("初始化项目失败: " + e.message); }
 }
 
 
@@ -244,7 +244,7 @@ async function renderTeam(m){
     try {
       await api("/api/team/chat/session", {scope: teamScope, create: true});
     } catch(err) {
-      try { await api("/api/agent-settings/team-session", {team_id: teamScope, create: true}); } catch(e2) { alert(e2.message); }
+      try { await api("/api/agent-settings/team-session", {team_id: teamScope, create: true}); } catch(e2) { uiNotify(e2.message); }
     }
     teamData = null; render();
   };
@@ -253,7 +253,7 @@ async function renderTeam(m){
     try {
       await api("/api/team/chat/session", {scope: teamScope, session_id: sid});
     } catch(err) {
-      try { await api("/api/agent-settings/team-session", {team_id: teamScope, session_id: sid}); } catch(e2) { alert(e2.message); }
+      try { await api("/api/agent-settings/team-session", {team_id: teamScope, session_id: sid}); } catch(e2) { uiNotify(e2.message); }
     }
     teamData = null; render();
   });
@@ -263,15 +263,15 @@ async function renderTeam(m){
     render();
   };
   const st = $("tcStop");
-  if(st) st.onclick = async ()=>{ try{ await api("/api/team/chat/stop", {scope:teamScope}); }catch(e){ alert(e.message); } setTimeout(()=>{ teamData=null; render(); }, 600); };
+  if(st) st.onclick = async ()=>{ try{ await api("/api/team/chat/stop", {scope:teamScope}); }catch(e){ uiNotify(e.message); } setTimeout(()=>{ teamData=null; render(); }, 600); };
   const rf = $("tcRefresh"); if(rf) rf.onclick = ()=>{ teamData=null; render(); };
   const say = async ()=>{
     const t = $("tcSay"); const text = (t.value||"").trim();
     if(!text) return;
-    if(!picks.length) return alert("先在「设置 / 团队配置」中添加专家成员。");
+    if(!picks.length) return uiNotify("先在「设置 / 团队配置」中添加专家成员。");
     t.value = "";
     try{ await api("/api/team/chat/say", {scope:teamScope, text}); }
-    catch(e){ return alert("发送失败：" + e.message); }
+    catch(e){ return uiNotify("发送失败：" + e.message); }
     teamData = null; render();
   };
   if($("tcSend")) $("tcSend").onclick = say;
@@ -321,7 +321,7 @@ function renderAssistants(m){
         rules: $("as-rules").value.trim() };
       let r;
       try{ r = await api("/api/assistant/save", body); }
-      catch(e){ return alert("保存失败：" + e.message); }
+      catch(e){ return uiNotify("保存失败：" + e.message); }
       await refreshState(false);
       asEdit.id = r.assistant.id;            // 新建时服务端才给 id
       asView = "all"; render();
@@ -354,7 +354,7 @@ function renderAssistants(m){
       await api("/api/assistant/batch-toggle", {ids: targetIds, enabled: 1});
       await refreshState(false);
       render();
-    }catch(err){ alert("批量启用失败：" + err.message); }
+    }catch(err){ uiNotify("批量启用失败：" + err.message); }
   };
   if(btnAllOff) btnAllOff.onclick = async ()=>{
     const targetIds = list.map(x=>x.id);
@@ -363,7 +363,7 @@ function renderAssistants(m){
       await api("/api/assistant/batch-toggle", {ids: targetIds, enabled: 0});
       await refreshState(false);
       render();
-    }catch(err){ alert("批量停用失败：" + err.message); }
+    }catch(err){ uiNotify("批量停用失败：" + err.message); }
   };
   m.querySelectorAll("[data-as-v]").forEach(b=>b.onclick=()=>{ asView=b.dataset.asV; render(); });
   m.querySelectorAll("[data-as-open]").forEach(b=>b.onclick=(e)=>{
@@ -384,7 +384,7 @@ function renderAssistants(m){
       a.enabled = next;
       await refreshState(false);
       render();
-    }catch(err){ alert("切换状态失败：" + err.message); }
+    }catch(err){ uiNotify("切换状态失败：" + err.message); }
   });
   m.querySelectorAll("[data-as-chat]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); useAssistant(b.dataset.asChat); });
   m.querySelectorAll("[data-as-dup]").forEach(b=>b.onclick=(e)=>{ e.stopPropagation(); duplicateAssistant((S.assistants||[]).find(x=>x.id===b.dataset.asDup)); });
@@ -402,9 +402,9 @@ async function duplicateAssistant(a){
 }
 async function deleteAssistant(id, name){
   const a = (S.assistants||[]).find(x=>x.id===id);
-  if(a && a.source === "builtin") return alert("公开专家不能删除 —— 可以「复制为我的」再改。");
-  if(!confirm(`删除专家「${name}」？（已经用它的对话不受影响）`)) return;
-  try{ await api("/api/assistant/delete", {id}); }catch(e){ return alert("删除失败：" + e.message); }
+  if(a && a.source === "builtin") return uiNotify("公开专家不能删除 —— 可以「复制为我的」再改。");
+  if(!await uiConfirm(`删除专家「${name}」？（已经用它的对话不受影响）`)) return;
+  try{ await api("/api/assistant/delete", {id}); }catch(e){ return uiNotify("删除失败：" + e.message); }
   await refreshState(false); asView = "mine"; render();
 }
 async function useAssistant(id){                       // 用它对话：绑到当前对话（没有就新建一个），切到 Agent 页
@@ -414,7 +414,7 @@ async function useAssistant(id){                       // 用它对话：绑到�
   }
   let cid = curChat;
   if(!cid){ const r = await api("/api/chat/create", {}); cid = r.id || (r.chat && r.chat.id); }
-  try{ await api("/api/chat/assistant", {id: cid, assistant_id: id}); }catch(e){ return alert("绑定失败：" + e.message); }
+  try{ await api("/api/chat/assistant", {id: cid, assistant_id: id}); }catch(e){ return uiNotify("绑定失败：" + e.message); }
   curChat = cid; localStorage.setItem("rw-chat", cid);
   await refreshState(false); openTab("agent");
 }
@@ -574,7 +574,7 @@ function renderAgent(m){
     const commit = async ()=>{
       const v = (inp.value||"").trim();
       if(v && v !== cur.title){
-        try{ await api("/api/chat/rename", {id:cur.id, title:v}); }catch(e){ alert("改名失败："+e.message); }
+        try{ await api("/api/chat/rename", {id:cur.id, title:v}); }catch(e){ uiNotify("改名失败："+e.message); }
         await refreshState(false);
       }
       render();
@@ -588,8 +588,8 @@ function renderAgent(m){
   m.querySelectorAll("[data-sel]").forEach(b=>b.onchange=()=>{ b.checked?ahSel.add(b.dataset.sel):ahSel.delete(b.dataset.sel); render(); });
   m.querySelectorAll("[data-del]").forEach(b=>b.onclick=async(e)=>{
     e.stopPropagation(); const t=(S.chats||[]).find(x=>x.id===b.dataset.del);
-    if(!confirm(`删除对话「${t?t.title:""}」？这段对话的记忆（消息）会一起删掉，不可撤销。`)) return;
-    try{ await api("/api/chat/delete",{id:b.dataset.del}); }catch(err){ return alert("删除失败："+err.message); }
+    if(!await uiConfirm(`删除对话「${t?t.title:""}」？这段对话的记忆（消息）会一起删掉，不可撤销。`)) return;
+    try{ await api("/api/chat/delete",{id:b.dataset.del}); }catch(err){ return uiNotify("删除失败："+err.message); }
     ahSel.delete(b.dataset.del);
     if(curChat===b.dataset.del){ curChat=null; localStorage.removeItem("rw-chat"); }
     await refreshState(false); render();
@@ -603,7 +603,7 @@ function renderAgent(m){
   if(allBox) allBox.onchange = ()=>{ ahSel.clear(); if(allBox.checked) (S.chats||[]).forEach(t=>ahSel.add(t.id)); render(); };
   const delSel = $("ah-del-sel");
   if(delSel) delSel.onclick = async ()=>{
-    if(!confirm(`删除选中的 ${ahSel.size} 个对话？它们的对话记忆会一起删，不可撤销。`)) return;
+    if(!await uiConfirm(`删除选中的 ${ahSel.size} 个对话？它们的对话记忆会一起删，不可撤销。`)) return;
     for(const id of [...ahSel]){ try{ await api("/api/chat/delete",{id}); }catch(e){} if(curChat===id){ curChat=null; localStorage.removeItem("rw-chat"); } }
     ahSel.clear(); await refreshState(false); render();
   };
@@ -611,7 +611,7 @@ function renderAgent(m){
   m.querySelectorAll("[data-v]").forEach(b=>b.onclick=()=>{ agentView=b.dataset.v; renderAgent(m); });
   $("at-profile").onclick = ()=> openTab("settings");      // 模型配置已并入设置页
   $("outpick").onclick = async ()=>{                        // 空 dir = 服务端弹原生「选择文件夹」
-    if(!curChat) return alert("先新建一个对话");
+    if(!curChat) return uiNotify("先新建一个对话");
     const btn=$("outpick"), txt=$("outdir-txt"), old=txt.textContent;
     btn.disabled=true; txt.textContent="选择中…";
     try{
@@ -622,19 +622,19 @@ function renderAgent(m){
         txt.textContent = outName(r.chat.out_dir);
         await refreshState(false); paintStats(); render();
       }
-    }catch(e){ txt.textContent = old; alert("选择文件夹失败："+e.message); }
+    }catch(e){ txt.textContent = old; uiNotify("选择文件夹失败："+e.message); }
     btn.disabled=false;
   };
   $("modpick").onchange = async (e)=>{ if(!e.target.value) return; await api("/api/models/active",{id:e.target.value}); await refreshState(false); render(); };
      $("assist").onchange = async (e)=>{
-       if(!curChat){ alert("先新建一个对话，再选助手。"); return; }
-       try{ await api("/api/chat/assistant", {id:curChat, assistant_id:e.target.value}); }catch(err){ return alert("绑定失败："+err.message); }
+       if(!curChat){ uiNotify("先新建一个对话，再选助手。"); return; }
+       try{ await api("/api/chat/assistant", {id:curChat, assistant_id:e.target.value}); }catch(err){ return uiNotify("绑定失败："+err.message); }
        await refreshState(false); render();
      };
   const pb = $("projbind");
   if(pb) pb.onchange = async ()=>{
     if(!curChat){ const r = await api("/api/chat/create", {}); curChat = r.id || (r.chat&&r.chat.id); localStorage.setItem("rw-chat", curChat); }
-    try{ await api("/api/chat/bind", {id:curChat, task_id:pb.value}); }catch(e){ return alert("绑定失败："+e.message); }
+    try{ await api("/api/chat/bind", {id:curChat, task_id:pb.value}); }catch(e){ return uiNotify("绑定失败："+e.message); }
     await refreshState(false); render();
   };
   // 输入区（我们自己的：＋ 菜单 / 拖放 / 粘贴 / 自动长高）
@@ -765,23 +765,23 @@ function setAtts(){
 async function addFiles(files){
   if(!files || !files.length) return;
   for(const f of files){
-    if(!curTask && /\.pdf$/i.test(f.name)){ alert("先选或建一个项目 —— PDF 要入当前项目的文献库，Agent 才读得到"); return; }
+    if(!curTask && /\.pdf$/i.test(f.name)){ uiNotify("先选或建一个项目 —— PDF 要入当前项目的文献库，Agent 才读得到"); return; }
     try{
       const r = await fetch(`/api/upload?name=${encodeURIComponent(f.name)}&task_id=${encodeURIComponent(curTask||"")}`,
                             {method:"POST", headers:{"Content-Type":"application/octet-stream"}, body:f});
       const a = await r.json(); if(a.error) throw new Error(a.error);
       atts.push(a);
-    }catch(e){ alert("附加失败："+e.message); }
+    }catch(e){ uiNotify("附加失败："+e.message); }
   }
   setAtts();
 }
 
-function pick(mode){
+async function pick(mode){
   const mm=$("attmenu"); if(mm) mm.style.display="none";
   if(mode==="url"){
-    const u = prompt("要附加的链接（http / https）：");
+    const u = await uiPrompt("要附加的链接（http / https）：");
     if(!u) return;
-    if(!/^https?:\/\//i.test(u)) return alert("只认 http / https 链接");
+    if(!/^https?:\/\//i.test(u)) return uiNotify("只认 http / https 链接");
     atts.push({name:u.replace(/^https?:\/\//i,"").slice(0,60), url:u, size:0}); setAtts(); return;
   }
   if(mode==="paste") return void pasteImage();
@@ -796,9 +796,9 @@ async function pasteImage(){
     const items = await navigator.clipboard.read(); const blobs = [];
     for(const it of items) for(const t of it.types) if(t.startsWith("image/"))
       blobs.push(new File([await it.getType(t)], `粘贴图片.${t.split("/")[1]}`, {type:t}));
-    if(!blobs.length) return alert("剪贴板里没有图片");
+    if(!blobs.length) return uiNotify("剪贴板里没有图片");
     await addFiles(blobs);
-  }catch(e){ alert("拿不到剪贴板（浏览器没放权），直接在输入框里 Ctrl+V 粘贴图片即可"); }
+  }catch(e){ uiNotify("拿不到剪贴板（浏览器没放权），直接在输入框里 Ctrl+V 粘贴图片即可"); }
 }
 
 function wireDrop(el){                            // 照 use-composer-drop：进出计数 + dropEffect=copy
@@ -854,7 +854,7 @@ async function send(){
       const r = await api("/api/chat/create", {title:""});
       curChat = r.chat.id; localStorage.setItem("rw-chat", curChat);
       await refreshState(false); render();        // 侧栏与抬头立刻换成这条新对话
-    }catch(e){ return alert("新建对话失败：" + e.message); }
+    }catch(e){ return uiNotify("新建对话失败：" + e.message); }
   }
   const msg = atts.length ? (text?text+"\n\n":"") + "[附件]\n" + atts.map(a=> a.url ? `- ${a.url}`
       : `- ${a.name}${a.paper_id?`（已入库 PDF，paper_id=${a.paper_id}，${a.pages} 页）`:`（本地文件：${a.path}）`}`).join("\n") : text;

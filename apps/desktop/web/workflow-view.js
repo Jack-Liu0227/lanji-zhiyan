@@ -379,13 +379,13 @@ async function docAddFiles(k, files){
   const st = docState(k);
   if(!files || !files.length) return;
   for(const f of files){
-    if(!curTask && /\.pdf$/i.test(f.name)){ alert("先选或建一个项目 —— PDF 要入当前项目的文献库，agent 才读得到"); return; }
+    if(!curTask && /\.pdf$/i.test(f.name)){ uiNotify("先选或建一个项目 —— PDF 要入当前项目的文献库，agent 才读得到"); return; }
     try{
       const r = await fetch(`/api/upload?name=${encodeURIComponent(f.name)}&task_id=${encodeURIComponent(curTask || "")}`,
                             { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: f });
       const a = await r.json(); if(a.error) throw new Error(a.error);
       st.atts.push(a);
-    }catch(e){ alert("附加失败：" + e.message); }
+    }catch(e){ uiNotify("附加失败：" + e.message); }
   }
   docSetAtts(k);
 }
@@ -634,7 +634,7 @@ async function enRun(){
   try{
     const r = await api("/api/en/run", { task_id: curTask, text, name: EN.name || "正文.md", style: $("en-style")?.value || "formal" });
     if(r.error) throw new Error(r.error);
-    if(!$("en-out").value.trim() || confirm("右边已经有译文了：覆盖它吗？")) $("en-out").value = r.text || "";
+    if(!$("en-out").value.trim() || await uiConfirm("右边已经有译文了：覆盖它吗？")) $("en-out").value = r.text || "";
     EN.path = r.path || EN.path; $("en-outname").textContent = r.name || "";
     enMsg(`${r.name} · ${r.chars} 字 · ${r.sections} 个标题 · ${r.chunks} 片 · ${(r.ms / 1000).toFixed(1)} 秒`, 12000);
     await enFill();
@@ -945,7 +945,7 @@ function renderWorkflow(m){
   };
   const deliver = $("wfDeliver"); if(deliver) deliver.onclick = async ()=>{
     deliver.disabled = true; const old = deliver.textContent;
-    try{ await api("/api/step/done", {task_id:curTask, step:wfStep}); }catch(e){ deliver.disabled=false; return alert("确认失败：" + e.message); }
+    try{ await api("/api/step/done", {task_id:curTask, step:wfStep}); }catch(e){ deliver.disabled=false; return uiNotify("确认失败：" + e.message); }
     // 先让按钮绿一下（「点下去有反应」），再跳下一步；跳完 restoring 文字
     deliver.classList.add("ok"); deliver.textContent = "已交付 ✓";
     await loadTaskState();
@@ -1086,14 +1086,14 @@ function startDlPoll(){
   }, 1500);
 }
 async function wsEnterDownload(){
-  if(!wsPicked.size) return alert("先在论文搜索里勾选论文");
+  if(!wsPicked.size) return uiNotify("先在论文搜索里勾选论文");
   const ids = [...wsPicked];
   wfStep = "download"; localStorage.setItem("rw-wf-step", wfStep);      // 直接跳到「下载精读」
   dlBusy = true;
   render();
   api("/api/workflow/download",{task_id:curTask, result_ids:ids})
     .then(r=>{ dlBusy=false; const t=$("dlTip"); if(t && r) t.textContent = `自动下载 ${r.downloaded}/${r.selected} 篇，待手动 ${r.manual} 篇`; })
-    .catch(e=>{ dlBusy=false; alert("自动下载失败：" + e.message); });
+    .catch(e=>{ dlBusy=false; uiNotify("自动下载失败：" + e.message); });
   startDlPoll();
 }
 let dlReadBusy = false, dlReadTick = null;
@@ -1102,15 +1102,15 @@ async function dlRead(){                       // 后台精读：起完就返回
   const btn = $("dlRead"); if(!btn) return;
   if(dlReadBusy){
     try{ await api("/api/deepread/stop",{task_id:curTask}); btn.textContent = "正在停…（当前这篇读完就停）"; }
-    catch(e){ alert("停止失败：" + e.message); }
+    catch(e){ uiNotify("停止失败：" + e.message); }
     return;
   }
   try{
     const r = await api("/api/workflow/deepread",{task_id:curTask});
-    if(!r.started){ alert(r.reason || "这个项目已经在精读了"); return; }
+    if(!r.started){ uiNotify(r.reason || "这个项目已经在精读了"); return; }
     dlReadBusy = true; btn.classList.add("stop"); btn.textContent = "停止精读";
     dlReadTick = setInterval(dlReadPoll, 2000);
-  }catch(err){ alert("精读失败：" + err.message); }
+  }catch(err){ uiNotify("精读失败：" + err.message); }
 }
 async function dlReadPoll(){
   try{
@@ -1127,7 +1127,7 @@ async function dlReadPoll(){
       b2.textContent = st.phase === "done" ? "精读完了（去看笔记）" : (st.phase === "stopped" ? "已停止" : "精读失败");
       setTimeout(()=>{ const b3 = $("dlRead"); if(b3 && !dlReadBusy) b3.textContent = "一键精读"; }, 5000);
     }
-    if(st.phase === "failed" && st.error) alert("精读失败：" + st.error);
+    if(st.phase === "failed" && st.error) uiNotify("精读失败：" + st.error);
   }catch(e){ /* 轮询失败就等下一次 */ }
 }
 function wsCard(r, mode){
@@ -1263,8 +1263,8 @@ function renderTasks(m){
   m.querySelectorAll("[data-del]").forEach(b=>b.onclick=async (e)=>{    // 删除项目（连带数据，先确认）
     e.stopPropagation();
     const t = S.tasks.find(x=>x.id===b.dataset.del);
-    if(!confirm(`删除项目「${t?t.title:""}」？\n它的文献、证据、笔记、会话、日程、步骤都会一起删掉，不可撤销。`)) return;
-    try{ await api("/api/task/delete",{id:b.dataset.del}); }catch(err){ return alert("删除失败："+err.message); }
+    if(!await uiConfirm(`删除项目「${t?t.title:""}」？\n它的文献、证据、笔记、会话、日程、步骤都会一起删掉，不可撤销。`)) return;
+    try{ await api("/api/task/delete",{id:b.dataset.del}); }catch(err){ return uiNotify("删除失败："+err.message); }
     if(curTask===b.dataset.del){ curTask=null; localStorage.removeItem("rw-task"); }
     await refreshState(false); render();
   });
@@ -1276,17 +1276,17 @@ function renderTasks(m){
       const r = await api("/api/folder/pick?title=" + encodeURIComponent("选择项目位置") +
                           "&initial=" + encodeURIComponent(tDir||""), {method:"GET"});
       if(r && r.dir){ tDir = r.dir; $("t-dir").textContent = tDir; $("t-dir-box").classList.add("set"); }
-    }catch(e){ alert("打开文件夹选择框失败：" + e.message); }
+    }catch(e){ uiNotify("打开文件夹选择框失败：" + e.message); }
     btn.disabled = false; btn.textContent = old;
   };
   $("t-go").onclick = async ()=>{
     const title=$("t-title").value.trim(); const question=$("t-q").value.trim();
-    if(!title) return alert("标题必填");
+    if(!title) return uiNotify("标题必填");
     const r = await api("/api/task/create",{title,question,material_system:$("t-kw").value.trim(),base_dir:tDir});
     curTask = r.task_id; localStorage.setItem("rw-task",curTask);
     tDir = "";
     await refreshState(false); render();
-    if(r.dirs && r.dirs.length) alert(`项目已创建，并在项目位置里建好：\n${r.dirs.join(" / ")}\n（每个子文件夹里都写了 README.md）`);
+    if(r.dirs && r.dirs.length) uiNotify(`项目已创建，并在项目位置里建好：\n${r.dirs.join(" / ")}\n（每个子文件夹里都写了 README.md）`);
   };
 }
 
@@ -1408,7 +1408,7 @@ function renderCalendar(m){
   m.querySelectorAll("[data-cal-pref]").forEach(i=>i.onchange=()=>{ calPrefs[i.dataset.calPref]=i.checked; render(); });
   m.querySelectorAll(".cal-cell").forEach(c=>c.onclick=()=>{ const k=c.dataset.date; if(k===calSel) return; calSel=k; const n=new Date(k+"T00:00:00"); calY=n.getFullYear(); calM=n.getMonth(); render(); });
   m.querySelectorAll("[data-chk]").forEach(i=>i.onchange=async()=>{ await api("/api/calendar/toggle",{id:i.dataset.chk,done:i.checked}); await refreshState(); });
-  m.querySelectorAll("[data-del]").forEach(b=>b.onclick=async(ev)=>{ ev.stopPropagation(); if(!confirm("删除这一条？")) return; await api("/api/calendar/delete",{id:b.dataset.del}); await refreshState(); });
+  m.querySelectorAll("[data-del]").forEach(b=>b.onclick=async(ev)=>{ ev.stopPropagation(); if(!await uiConfirm("删除这一条？")) return; await api("/api/calendar/delete",{id:b.dataset.del}); await refreshState(); });
   const add = async()=>{ const v=$("todayInput").value.trim(); if(!v) return;
     await api("/api/calendar/add",{title:v,date:calSel,task_id:curTask||null,kind:"todo",time:$("todayTime").value});
     $("todayInput").value=""; $("todayTime").value=""; await refreshState(); };

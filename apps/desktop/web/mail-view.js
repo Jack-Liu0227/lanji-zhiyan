@@ -494,7 +494,7 @@ a { color: #176b87; }
   async function markAllMailSeen() {
     if (!mailCur.accountId) return toast('请先选择邮箱账户', 'error');
     const scope = mailCur.search ? `当前文件夹（搜索结果不会影响批量范围）` : (mailCur.folderName || mailCur.folder);
-    if (!confirm(`确认将「${scope}」中的全部未读邮件标记为已读？`)) return;
+    if (!await uiConfirm(`确认将「${scope}」中的全部未读邮件标记为已读？`)) return;
     const button = $('btnMailMarkAllRead');
     if (button) button.disabled = true;
     try {
@@ -528,7 +528,7 @@ a { color: #176b87; }
 
   async function removeMailMessage() {
     if (!mailDetail) return;
-    if (!confirm('确认删除这封邮件？删除后无法恢复。')) return;
+    if (!await uiConfirm('确认删除这封邮件？删除后无法恢复。')) return;
     const uid = mailDetail.uid;
     try {
       await api(`/api/mail/accounts/${mailCur.accountId}/messages/${uid}?folder=${encodeURIComponent(mailCur.folder)}`, { method: 'DELETE' });
@@ -852,7 +852,7 @@ a { color: #176b87; }
       if (del) {
         const acc = mailAccounts.find((a) => a.id === del.dataset.maDel);
         if (!acc) return;
-        if (!confirm(`确认删除邮箱账户「${acc.label || acc.email}」？\n（仅从本软件移除，不会影响邮箱里的邮件）`)) return;
+        if (!await uiConfirm(`确认删除邮箱账户「${acc.label || acc.email}」？\n（仅从本软件移除，不会影响邮箱里的邮件）`)) return;
         try {
           await api('/api/mail/accounts/' + acc.id, { method: 'DELETE' });
           await loadMailAccounts();

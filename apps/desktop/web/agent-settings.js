@@ -50,8 +50,8 @@
   function policies(prefix) {
     return {model_id:el(prefix + "-model").value,reasoning:el(prefix + "-reasoning").value,permission:el(prefix + "-permission").value};
   }
-  function risk(oldValue, nextValue) {
-    return nextValue !== "full_access" || oldValue === "full_access" || confirm("危险：Full Access 允许文件/数据库修改、邮件外发和第三方写入，无需逐次确认。确认仅为可信助手开启？");
+  async function risk(oldValue, nextValue) {
+    return nextValue !== "full_access" || oldValue === "full_access" || await uiConfirm("危险：Full Access 允许文件/数据库修改、邮件外发和第三方写入，无需逐次确认。确认仅为可信助手开启？");
   }
 
   async function providerEditor(provider = null) {
@@ -134,14 +134,14 @@
         <h4 style="margin-top:24px">已配置的 Provider · ${registry.providers.length}</h4><div class="ag-grid">${registry.providers.map(p => `<article class="card"><div class="ag-head"><b>${h(p.name)}</b><span class="pill">${p.models.length} 模型</span></div><p class="ag-meta">${h(p.base_url)}<br>${h(p.api)} · Key ${p.key_invalid ? `<span style="color:var(--err,#bd3f34);font-weight:600">⚠️ 解密失败（请重填）</span>` : (p.key_present ? "已保存" : "未设置")}</p><div class="ag-row"><button class="btn" data-ag-provider="${h(p.id)}">查看 / 编辑</button><button class="btn ghost" data-ag-provider-del="${h(p.id)}">移除</button></div></article>`).join("")}</div>`;
       el("ag-provider-add").onclick = () => {
         const id = el("ag-provider-select").value;
-        if (!id) return alert("请先选择 Provider。");
+        if (!id) return uiNotify("请先选择 Provider。");
         const configured = registry.providers.find(p => p.id === id);
         const c = registry.catalog.find(p => p.id === id);
         providerEditor(configured || (c ? {...c,api:c.supported ? c.api : "openai-completions",models:[]} : null));
       };
       container.querySelectorAll("[data-ag-provider]").forEach(b => b.onclick = () => providerEditor(registry.providers.find(p => p.id === b.dataset.agProvider)));
-      container.querySelectorAll("[data-ag-provider-del]").forEach(b => b.onclick = async () => { if (!confirm("移除此 Provider 和已采用模型？助手中原来的模型绑定将需要重新选择。")) return; try { await request("provider-delete",{id:b.dataset.agProviderDel}); await saved(); render(); } catch(e) { alert(e.message); } });
-      container.querySelectorAll("[data-ag-active]").forEach(b => b.onclick = async () => { try { await api("/api/models/active",{id:b.dataset.agActive}); await saved(); render(); } catch(e) { alert(e.message); } });
+      container.querySelectorAll("[data-ag-provider-del]").forEach(b => b.onclick = async () => { if (!await uiConfirm("移除此 Provider 和已采用模型？助手中原来的模型绑定将需要重新选择。")) return; try { await request("provider-delete",{id:b.dataset.agProviderDel}); await saved(); render(); } catch(e) { uiNotify(e.message); } });
+      container.querySelectorAll("[data-ag-active]").forEach(b => b.onclick = async () => { try { await api("/api/models/active",{id:b.dataset.agActive}); await saved(); render(); } catch(e) { uiNotify(e.message); } });
     } catch(e) { error(container,e); }
   };
 
@@ -151,7 +151,7 @@
     const d = modal(a.id ? "编辑助手" : "新建助手", `<div class="ag-form"><label><span>名称</span><input class="control" id="ag-a-name" value="${h(a.name)}"></label><label><span>头像</span><input class="control" id="ag-a-avatar" value="${h(a.avatar)}"></label><label class="ag-wide"><span>描述</span><input class="control" id="ag-a-desc" value="${h(a.description)}"></label>${policyFields(a,"ag-a")}<label class="ag-wide"><span>规则（进入系统提示）</span><textarea class="control" rows="7" id="ag-a-rules">${h(a.rules)}</textarea></label><label class="ag-wide"><span>推荐问题（一行一条）</span><textarea class="control" rows="3" id="ag-a-prompts">${h(prompts.join("\n"))}</textarea></label><label class="ag-wide ag-row"><span><input type="checkbox" id="ag-a-enabled" ${a.enabled !== 0 ? "checked" : ""}>启用公开助手（我的助手始终可选）</span></label><button class="btn btn-primary" id="ag-a-save">保存助手</button></div>`);
     el("ag-a-save").onclick = async () => {
       try {
-        const policy = policies("ag-a"); if (!risk(a.permission,policy.permission)) return;
+        const policy = policies("ag-a"); if (!(await risk(a.permission,policy.permission))) return;
         const r = await request("assistant-save",{id:a.id,name:el("ag-a-name").value.trim() || "新助手",avatar:el("ag-a-avatar").value,description:el("ag-a-desc").value,rules:el("ag-a-rules").value,prompts:el("ag-a-prompts").value.split("\n").filter(Boolean),enabled:el("ag-a-enabled").checked,...policy});
         assistantId = r.assistant.id; await saved(); d.close(); render();
       } catch(e) { error(d.querySelector("[role=status]"),e); }
@@ -174,10 +174,10 @@
         duplicate.onclick = () => assistantEditor({...a,id:"",source:"user",name:a.name + "（我的）",enabled:1}); actions.append(duplicate);
         if (a.source === "user") {
           const remove = document.createElement("button"); remove.className = "btn ghost"; remove.textContent = "删除助手";
-          remove.onclick = async () => { if (!confirm("删除此助手？已有会话和历史消息仍保留。")) return; try { await api("/api/assistant/delete",{id:a.id}); assistantId = null; await saved(); render(); } catch(e) { alert(e.message); } }; actions.append(remove);
+          remove.onclick = async () => { if (!await uiConfirm("删除此助手？已有会话和历史消息仍保留。")) return; try { await api("/api/assistant/delete",{id:a.id}); assistantId = null; await saved(); render(); } catch(e) { uiNotify(e.message); } }; actions.append(remove);
         }
-        el("ag-a-chat").onclick = async () => { try { const r = await api("/api/chat/create",{title:a.name}); curChat = r.id || r.chat?.id; await useAssistant(a.id === "builtin-steward" ? "" : a.id); } catch(e) { alert(e.message); } };
-        if (el("ag-a-toggle")) el("ag-a-toggle").onclick = async () => { try { await request("assistant-save",{id:a.id,enabled:!a.enabled}); await saved(); render(); } catch(e) { alert(e.message); } };
+        el("ag-a-chat").onclick = async () => { try { const r = await api("/api/chat/create",{title:a.name}); curChat = r.id || r.chat?.id; await useAssistant(a.id === "builtin-steward" ? "" : a.id); } catch(e) { uiNotify(e.message); } };
+        if (el("ag-a-toggle")) el("ag-a-toggle").onclick = async () => { try { await request("assistant-save",{id:a.id,enabled:!a.enabled}); await saved(); render(); } catch(e) { uiNotify(e.message); } };
         container.querySelectorAll("[data-ag-history]").forEach(b => b.onclick = async () => { curChat = b.dataset.agHistory; localStorage.setItem("rw-chat",curChat); await refreshState(false); openTab("agent"); });
         document.dispatchEvent(new CustomEvent("rw:assistant-detail",{detail:{assistant:a,container}}));
         return;
@@ -199,7 +199,7 @@
           await api("/api/assistant/batch-toggle", {ids, enabled: 1});
           await saved();
           render();
-        } catch(err) { alert("批量启用失败：" + err.message); }
+        } catch(err) { uiNotify("批量启用失败：" + err.message); }
       };
       if (bOff) bOff.onclick = async () => {
         const ids = list.map(x => x.id);
@@ -208,7 +208,7 @@
           await api("/api/assistant/batch-toggle", {ids, enabled: 0});
           await saved();
           render();
-        } catch(err) { alert("批量停用失败：" + err.message); }
+        } catch(err) { uiNotify("批量停用失败：" + err.message); }
       };
       container.querySelectorAll("[data-ag-as-filter]").forEach(b => b.onclick = () => { assistantFilter = b.dataset.agAsFilter; render(); });
       container.querySelectorAll("[data-ag-assistant]").forEach(b => b.onclick = () => { assistantId = b.dataset.agAssistant; render(); });
@@ -223,7 +223,7 @@
           a.enabled = next;
           await saved();
           render();
-        } catch(err) { alert("切换状态失败：" + err.message); }
+        } catch(err) { uiNotify("切换状态失败：" + err.message); }
       });
       container.querySelectorAll("[data-ag-chat-as]").forEach(b => b.onclick = async (e) => {
         e.stopPropagation();
@@ -239,7 +239,7 @@
             curChat = cid; localStorage.setItem("rw-chat", cid);
             await refreshState(false);
             openTab("agent");
-          } catch(err) { alert("开启对话失败：" + err.message); }
+          } catch(err) { uiNotify("开启对话失败：" + err.message); }
         }
       });
     } catch(e) { error(container,e); }
@@ -250,7 +250,7 @@
     const d = modal(member.id ? "编辑团队角色" : "添加团队成员", `<div class="ag-form"><label><span>专家</span><select class="control" id="ag-m-assistant"><option value="">使用自定义角色</option>${pool.map(a => `<option value="${h(a.id)}" ${a.id === member.assistant_id ? "selected" : ""}>${h(a.name)}</option>`).join("")}</select></label><label><span>角色名称</span><input class="control" id="ag-m-name" value="${h(member.name)}"></label>${policyFields(member,"ag-m")}<label class="ag-wide"><span>团队内职责（叠加专家规则）</span><textarea class="control" id="ag-m-prompt" rows="5">${h(member.prompt)}</textarea></label><button class="btn btn-primary" id="ag-m-save">保存角色</button>${member.id && member.role !== "leader" ? `<button class="btn" id="ag-m-leader">设为 Leader</button><button class="btn ghost" id="ag-m-remove">移出团队</button>` : ""}</div>`);
     el("ag-m-assistant").onchange = () => { const a = pool.find(x => x.id === el("ag-m-assistant").value); if (a) { el("ag-m-name").value = a.name; el("ag-m-prompt").value = a.rules || ""; } };
     el("ag-m-save").onclick = async () => {
-      try { const policy = policies("ag-m"); if (!risk(member.permission,policy.permission)) return; await request("member-save",{team_id:tid,member_id:member.id,assistant_id:el("ag-m-assistant").value,name:el("ag-m-name").value,prompt:el("ag-m-prompt").value,...policy}); d.close(); teamList = null; render(); } catch(e) { error(d.querySelector("[role=status]"),e); }
+      try { const policy = policies("ag-m"); if (!(await risk(member.permission,policy.permission))) return; await request("member-save",{team_id:tid,member_id:member.id,assistant_id:el("ag-m-assistant").value,name:el("ag-m-name").value,prompt:el("ag-m-prompt").value,...policy}); d.close(); teamList = null; render(); } catch(e) { error(d.querySelector("[role=status]"),e); }
     };
     if (el("ag-m-leader")) el("ag-m-leader").onclick = async () => { try { await request("leader",{team_id:tid,member_id:member.id}); d.close(); render(); } catch(e) { error(d.querySelector("[role=status]"),e); } };
     if (el("ag-m-remove")) el("ag-m-remove").onclick = async () => { try { await api("/api/team/chat/remove",{member_id:member.id}); d.close(); render(); } catch(e) { error(d.querySelector("[role=status]"),e); } };
@@ -276,13 +276,13 @@
       el("ag-team-back").onclick = () => { window.__teamMode = ""; render(); };
       el("ag-team-new").onclick = () => teamEditor();
       el("ag-team-edit").onclick = () => teamEditor(t);
-      if (el("ag-team-dissolve")) el("ag-team-dissolve").onclick = async () => { if (!confirm("解散这个机动团队？")) return; try { await api("/api/teams/dissolve",{id:teamScope}); teamScope = ""; render(); } catch(e) { alert(e.message); } };
+      if (el("ag-team-dissolve")) el("ag-team-dissolve").onclick = async () => { if (!await uiConfirm("解散这个机动团队？")) return; try { await api("/api/teams/dissolve",{id:teamScope}); teamScope = ""; render(); } catch(e) { uiNotify(e.message); } };
       el("ag-team-go-chat").onclick = () => { window.__teamMode = "chat"; render(); };
       el("ag-member-new").onclick = () => memberEditor(teamScope);
       container.querySelectorAll("[data-ag-team]").forEach(b => b.onclick = () => { teamScope = b.dataset.agTeam; teamSession = ""; localStorage.setItem("rw-team-chat",teamScope); render(); });
       container.querySelectorAll("[data-ag-member]").forEach(b => b.onclick = () => memberEditor(teamScope,data.members.find(m => m.id === b.dataset.agMember)));
-      el("ag-team-session").onchange = async e => { try { teamSession = e.target.value; await request("team-session",{team_id:teamScope,session_id:teamSession}); render(); } catch(e) { alert(e.message); } };
-      el("ag-session-new").onclick = async () => { try { const r = await request("team-session",{team_id:teamScope,create:true}); teamSession = r.session.id; render(); } catch(e) { alert(e.message); } };
+      el("ag-team-session").onchange = async e => { try { teamSession = e.target.value; await request("team-session",{team_id:teamScope,session_id:teamSession}); render(); } catch(e) { uiNotify(e.message); } };
+      el("ag-session-new").onclick = async () => { try { const r = await request("team-session",{team_id:teamScope,create:true}); teamSession = r.session.id; render(); } catch(e) { uiNotify(e.message); } };
     } catch(e) { error(container,e); }
   };
 
@@ -302,7 +302,7 @@
     if (model && chat) {
       const bound = S.assistants.find(a => a.id === chat.assistant_id);
       model.innerHTML = modelOptions(chat.model_id || bound?.model_id || "");
-      model.onchange = async () => { try { await request("runtime-save",{id:curChat,model_id:model.value}); await refreshState(false); } catch(e) { alert(e.message); } };
+      model.onchange = async () => { try { await request("runtime-save",{id:curChat,model_id:model.value}); await refreshState(false); } catch(e) { uiNotify(e.message); } };
     }
     const row = container.querySelector(".at-tools-l");
     if (row && chat) {
@@ -311,8 +311,8 @@
       controls.innerHTML = `<label class="at-sel" title="当前会话推理强度">⚡<span class="k">推理</span><select id="ag-chat-reasoning">${options(efforts,chat.reasoning !== "auto" ? chat.reasoning : bound.reasoning || "auto",effortLabels)}</select></label><label class="at-sel" title="当前会话权限（Full Access 有风险）">🛡<span class="k">权限</span><select id="ag-chat-permission">${options(permissions,chat.permission !== "auto" ? chat.permission : bound.permission || "auto",permissionLabels)}</select></label>`;
       row.append(controls);
       for (const key of ["reasoning","permission"]) el("ag-chat-" + key).onchange = async e => {
-        if (key === "permission" && !risk(chat.permission,e.target.value)) { e.target.value = chat.permission || "auto"; return; }
-        try { await request("runtime-save",{id:curChat,[key]:e.target.value}); await refreshState(false); } catch(err) { alert(err.message); }
+        if (key === "permission" && !(await risk(chat.permission,e.target.value))) { e.target.value = chat.permission || "auto"; return; }
+        try { await request("runtime-save",{id:curChat,[key]:e.target.value}); await refreshState(false); } catch(err) { uiNotify(err.message); }
       };
       const hint = container.querySelector(".at-hint"); if (hint) hint.textContent = "Enter 发送 · Shift + Enter 换行 · 推理和权限默认由 Agent 决定；Full Access 会放开写入与外发确认，请谨慎启用。";
     }

@@ -98,6 +98,22 @@ class UploadOriginGateTest(unittest.TestCase):
         self.assertIn(self._post("none", None), (200, 400))
 
 
+class NoNativeDialogsTest(unittest.TestCase):
+    """全站弹窗都走 uiNotify / uiConfirm / uiPrompt（屏幕正中的自有卡片）。
+    浏览器自带的 alert/confirm 会弹在浏览器自己的位置、样式不跟主题走 —— 2026-10-20 全部替换掉了。"""
+
+    def test_没有裸的_alert_confirm_prompt(self) -> None:
+        bad = []
+        for f in sorted(WEB.glob("*.js")):
+            for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                if line.strip().startswith("//") or "uiNotify" in line:
+                    continue
+                if re.search(r"(?<![\w.$])alert\(", line) or re.search(r"(?<![\w.$])confirm\(", line) \
+                        or re.search(r"(?<![\w.$])prompt\(", line):
+                    bad.append("%s:%d %s" % (f.name, i, line.strip()[:90]))
+        self.assertEqual(bad, [], "这些地方还在用浏览器原生弹窗：\n" + "\n".join(bad))
+
+
 class MainScriptSyntaxTest(unittest.TestCase):
     """web/index.html 里那块主脚本必须过 node --check。
     2026-10-12 踩过：加一个 class 时多带了一个反引号，模板串提前闭合，整页只剩一句 SyntaxError 白屏 ——

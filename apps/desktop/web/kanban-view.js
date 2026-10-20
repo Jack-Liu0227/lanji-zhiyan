@@ -446,7 +446,7 @@
     container.querySelector('#kbBtnImportWf')?.addEventListener('click', async () => {
       const tid = window.curTask || (d.task ? d.task.id : '');
       if (!tid) {
-        alert('请先创建或选择一个项目！');
+        uiNotify('请先创建或选择一个项目！');
         return;
       }
       try {
@@ -454,7 +454,7 @@
         await fetchKanbanData(tid);
         renderBoard(container);
       } catch (err) {
-        alert('导入工作流失败: ' + err.message);
+        uiNotify('导入工作流失败: ' + err.message);
       }
     });
 
@@ -501,7 +501,7 @@
         } else if (act === 'edit') {
           openTaskModal(t, kbState.data);
         } else if (act === 'del') {
-          if (confirm(`确定要删除任务「${t.title}」吗？`)) {
+          if (await uiConfirm(`确定要删除任务「${t.title}」吗？`)) {
             await window.api('/api/todos/delete', { id: todoId });
             await fetchKanbanData(window.curTask);
             renderBoard(container);
@@ -646,7 +646,7 @@
     modal.querySelector('#btnKbModalSave').onclick = async () => {
       const title = modal.querySelector('#kbTaskTitle').value.trim();
       if (!title) {
-        alert('请输入任务标题！');
+        uiNotify('请输入任务标题！');
         return;
       }
       const description = modal.querySelector('#kbTaskDesc').value.trim();
@@ -683,7 +683,7 @@
         const main = document.getElementById('main');
         if (main) renderBoard(main);
       } catch (err) {
-        alert('保存失败: ' + err.message);
+        uiNotify('保存失败: ' + err.message);
       }
     };
   }

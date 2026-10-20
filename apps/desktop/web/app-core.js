@@ -37,12 +37,12 @@ function paintProfilePreview(){
 }
 function readAvatarFile(file, cb){
   if(!file) return;
-  if(!/^image\//.test(file.type || "")){ alert("这不是图片文件"); return; }
+  if(!/^image\//.test(file.type || "")){ uiNotify("这不是图片文件"); return; }
   const fr = new FileReader();
-  fr.onerror = ()=>alert("读文件失败");
+  fr.onerror = ()=>uiNotify("读文件失败");
   fr.onload = ()=>{
     const im = new Image();
-    im.onerror = ()=>alert("这张图片读不了（格式可能不支持）");
+    im.onerror = ()=>uiNotify("这张图片读不了（格式可能不支持）");
     im.onload = ()=>{
       try{
         const S = 128, side = Math.min(im.width, im.height);
@@ -50,7 +50,7 @@ function readAvatarFile(file, cb){
         const g = c.getContext("2d");
         g.drawImage(im, (im.width-side)/2, (im.height-side)/2, side, side, 0, 0, S, S);
         cb(c.toDataURL("image/jpeg", 0.86));
-      }catch(e){ alert("这张图片处理失败：" + e.message); }
+      }catch(e){ uiNotify("这张图片处理失败：" + e.message); }
     };
     im.src = fr.result;
   };
@@ -262,4 +262,81 @@ function renderStatus(){
     <span>模型 ${S.active?esc(S.active.name):"未配置"}</span>
     <span>工具 ${S.tools.length}</span>
     <span>当前项目 ${t?esc(t.title):"—"}</span>`;
+}
+
+/* ---------------- 弹出卡片：确认 / 提示 / 输入 ----------------
+   全站别再用浏览器自带的 confirm/alert：样式跟界面脱节、还卡在浏览器自己的位置。
+   这里统一渲染成屏幕正中的卡片，用同一套 .modal 皮肤（见 app.css）。 */
+function uiNotify(text, ms = 3400) {
+  const t = String(text ?? "");
+  const bad = /失败|错误|不能|不允许|⚠|出错|拒绝/.test(t);
+  let box = document.getElementById("uiToast");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "uiToast";
+    box.onclick = () => box.remove();
+    document.body.appendChild(box);
+  }
+  box.className = "ui-toast" + (bad ? " bad" : "");
+  box.textContent = t;
+  clearTimeout(uiNotify._t);
+  uiNotify._t = setTimeout(() => box.remove(), ms);
+}
+                     // 全站 uiNotify(...) 一次性接到居中卡片（同步，不打断流程）
+
+function uiConfirm(text, opts = {}) {
+  return new Promise(resolve => {
+    const wrap = document.createElement("div");
+    wrap.className = "modal";
+    wrap.innerHTML = `
+      <div class="modal-mask"></div>
+      <div class="modal-dialog" style="width:${opts.width || 400}px">
+        <div class="modal-head"><h3>${esc(opts.title || "确认操作")}</h3></div>
+        <div class="modal-body"><p class="modal-text">${esc(text)}</p></div>
+        <div class="modal-foot">
+          <button class="btn ghost" data-no>${esc(opts.cancel || "取消")}</button>
+          <button class="btn ${opts.danger === false ? "" : "danger"}" data-ok>${esc(opts.ok || "确定")}</button>
+        </div>
+      </div>`;
+    const done = v => { wrap.remove(); document.removeEventListener("keydown", key, true); resolve(v); };
+    const key = e => {
+      if (e.key === "Escape") { e.preventDefault(); done(false); }
+      if (e.key === "Enter") { e.preventDefault(); done(true); }
+    };
+    wrap.querySelector("[data-ok]").onclick = () => done(true);
+    wrap.querySelector("[data-no]").onclick = () => done(false);
+    wrap.querySelector(".modal-mask").onclick = () => done(false);
+    document.addEventListener("keydown", key, true);
+    document.body.appendChild(wrap);
+    wrap.querySelector("[data-ok]").focus();
+  });
+}
+
+function uiPrompt(text, def = "") {
+  return new Promise(resolve => {
+    const wrap = document.createElement("div");
+    wrap.className = "modal";
+    wrap.innerHTML = `
+      <div class="modal-mask"></div>
+      <div class="modal-dialog" style="width:440px">
+        <div class="modal-head"><h3>${esc(text)}</h3></div>
+        <div class="modal-body"><input class="ui-input" id="uiPromptIn" value="${esc(def)}"></div>
+        <div class="modal-foot">
+          <button class="btn ghost" data-no>取消</button>
+          <button class="btn" data-ok>确定</button>
+        </div>
+      </div>`;
+    const done = v => { wrap.remove(); document.removeEventListener("keydown", key, true); resolve(v); };
+    const inp = wrap.querySelector("#uiPromptIn");
+    const key = e => {
+      if (e.key === "Escape") { e.preventDefault(); done(null); }
+      if (e.key === "Enter") { e.preventDefault(); done(inp.value); }
+    };
+    wrap.querySelector("[data-ok]").onclick = () => done(inp.value);
+    wrap.querySelector("[data-no]").onclick = () => done(null);
+    wrap.querySelector(".modal-mask").onclick = () => done(null);
+    document.addEventListener("keydown", key, true);
+    document.body.appendChild(wrap);
+    inp.focus(); inp.select();
+  });
 }
