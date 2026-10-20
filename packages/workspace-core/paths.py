@@ -26,6 +26,7 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.request
 import time
 from pathlib import Path
 
@@ -228,6 +229,32 @@ def allowed_roots() -> list[Path]:
     白名单只在这里定义一次 —— 别的地方要判，一律调 resolve_allowed()。"""
     roots = [DATA, UPLOADS, PAPERS, NOTES, OUT, *project_roots()]
     return [r.resolve() for r in roots if r and r.exists()]
+
+
+GRANT = os.environ.get("RW_GRANT", "")          # 窗口宿主（Medium）起的代建/授权通道
+GRANT_KEY = os.environ.get("RW_GRANT_KEY", "")
+
+
+def grant_dir(path: str | os.PathLike[str]) -> bool:
+    """让窗口宿主代建目录并标成 Low，再返回。
+
+    为什么需要：服务端跑在低完整性（Low IL）里，用户新选的目录（比如桌面）是 Medium ——
+    内核不允许 Low 在 Medium 目录下 mkdir，报 `[WinError 5] 拒绝访问`。
+    自己标 Low 也不行（改 ACL 要对象的 WRITE_DAC，同样是往上写）。所以只能请 Medium 那边动手。
+    通道：宿主在 127.0.0.1 的随机端口上，只认带随机 key 的请求；没通道（同进程模式）就直接建。
+    """
+    target = Path(str(path)).expanduser()
+    if not GRANT:
+        target.mkdir(parents=True, exist_ok=True)
+        return True
+    payload = json.dumps({"path": str(target)}).encode()
+    req = urllib.request.Request("http://" + GRANT + "/grant", data=payload,
+                                 headers={"Content-Type": "application/json", "X-RW-Key": GRANT_KEY})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return bool(json.loads(r.read() or b"{}").get("ok"))
+    except (OSError, ValueError):
+        return False
 
 
 def resolve_allowed(path: str, extra_roots: list[Path] | None = None, *, must_be_file: bool = False,

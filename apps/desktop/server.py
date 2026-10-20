@@ -1539,6 +1539,8 @@ class Handler(BaseHTTPRequestHandler):
                     base = (data.get("base_dir") or "").strip()
                     tid = db.create_task(data.get("title", ""), data.get("question", ""),
                                          data.get("material_system") or data.get("material", ""), base)
+                    if base:
+                        paths.grant_dir(base)      # 桌面这类 Medium 目录：请宿主代建并标 Low，否则沙箱里 mkdir 不放
                     made = make_project_tree(base, db.summary(tid)["task"]) if base else []
                     return self._json({"task_id": tid, "base_dir": base, "dirs": made})
                 if path == "/api/task/delete":
@@ -1593,6 +1595,8 @@ class Handler(BaseHTTPRequestHandler):
                             return self._json(got, 500)
                         if not picked:
                             picked = got.get("dir", "")
+                            if picked:
+                                paths.grant_dir(picked)     # 用户选的产出目录也交给宿主建/标 Low
                         if not picked:
                             return self._json({"cancelled": True})
                     return self._json({"chat": db.update_chat(cid, out_dir=picked)})
@@ -1874,6 +1878,42 @@ def _start_inproc(port: int, url: str) -> None:
     print(f"览籍智研已启动：{url}")
 
 
+def _start_grant_helper():
+    """窗口宿主（Medium）上的小帮手：代沙箱里的服务端建目录、标 Low。
+    只监听 127.0.0.1 的随机端口，只认带随机 key 的 POST —— key 只进沙箱子进程的环境变量。"""
+    import http.server
+    import secrets
+
+    key = secrets.token_hex(16)
+
+    class Grant(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_a):        # 别往 stderr 刷行
+            pass
+
+        def do_POST(self):
+            ok = False
+            if self.path == "/grant" and self.headers.get("X-RW-Key") == key:
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    target = Path(str(json.loads(self.rfile.read(n) or b"{}").get("path") or ""))
+                    if target.is_absolute():
+                        target.mkdir(parents=True, exist_ok=True)
+                        import lowbox
+                        ok = lowbox.mark_low(target)
+                except (OSError, ValueError):
+                    ok = False
+            body = json.dumps({"ok": ok}).encode()
+            self.send_response(200 if ok else 403)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Grant)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv.server_address[1], key
+
+
 _LOW_SERVER = None            # 低完整性服务端子进程（沙箱模式）；None = 同进程服务（老行为）
 
 
@@ -1890,6 +1930,9 @@ def _spawn_low_server(port: int):
     else:
         cmd = [sys.executable, str(Path(__file__).resolve()), "--port", str(port), "--no-open"]
     env = dict(os.environ, RW_LOW_SERVER="1")
+    grant = _start_grant_helper()              # 先起代建通道，再把端口/key 传给子进程
+    env["RW_GRANT"] = f"127.0.0.1:{grant[0]}"
+    env["RW_GRANT_KEY"] = grant[1]
     try:
         proc = lowbox.popen(cmd, cwd=str(Path(__file__).resolve().parent), env=env)
     except OSError:

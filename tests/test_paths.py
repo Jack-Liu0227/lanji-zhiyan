@@ -92,3 +92,17 @@ class PathsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class GrantDirTest(unittest.TestCase):
+    """Low IL 服务端写不进用户新选的中等完整性目录 → 得先请窗口宿主代建并标 Low。"""
+
+    def test_没有通道时自己建目录(self):
+        import paths
+        old = paths.GRANT
+        paths.GRANT = ""
+        try:
+            target = Path(tempfile.mkdtemp()) / "新项目"
+            self.assertTrue(paths.grant_dir(target))
+            self.assertTrue(target.is_dir())
+        finally:
+            paths.GRANT = old

@@ -58,6 +58,10 @@
    关窗时父进程 `_stop_low_server()` 一并收掉，不留僵尸。
    写白名单的目录（HOME、data/、各项目目录、对话产出目录）都标成 Low；其余一律 Medium → 服务端写不进。
    **仍未沙箱**：MCP 服务器子进程（各服务器要自己的 cache）。
+   **用户新选的目录走「代建通道」**：窗口宿主（Medium）在 `127.0.0.1` 随机端口上开一个小帮手，
+   只认带随机 key 的 `POST /grant`（key 只进沙箱子进程的环境变量，且被 `clean_env()` 剥离），
+   替服务端 `mkdir` 并标 Low。建项目、选对话产出目录都会先过这一道 ——
+   否则 Low 进程在桌面这种 Medium 目录下 `mkdir` 会被内核拒（`[WinError 5] 拒绝访问`）。
    **已知副作用**：Obsidian 库如果不在授权目录里，写回 frontmatter 会被内核拒 ——
    要么把库放进项目/数据目录，要么对它跑一次 `icacls "<库路径>" /setintegritylevel (OI)(CI)L /T`。
    回滚：`icacls <目录> /setintegritylevel M /T`。
