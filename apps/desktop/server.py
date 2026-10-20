@@ -1664,7 +1664,9 @@ class Handler(BaseHTTPRequestHandler):
                     extra = db.tr_hl_context(tid)
                 except Exception:
                     extra = ""
-                run_agent(db, tid, data.get("message", ""), emit, extra_context=extra)
+                # step 只用来给这个助手一个身份（前端在 body 里带上）；不参与下面的 log_step，那一步照旧只记 runners
+                run_agent(db, tid, data.get("message", ""), emit, extra_context=extra,
+                          step=step or str(data.get("step") or ""))
             if track:
                 db.log_step(tid, step, "failed" if had_error else "done",
                             "执行过程报告错误" if had_error else "执行完成")

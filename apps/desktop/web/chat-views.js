@@ -690,13 +690,13 @@ function renderTrajectory(box, evs = S.chatEvents){  // 轨迹：把 tool_call /
           ${r.summary?`<p class="tool-blk">Output</p><pre>${esc(r.summary)}</pre>`:""}</div></details>`;}).join("")}
   </div>`;
 }
-function appendOne(box,ev){
+function appendOne(box,ev,who){
   if(ev.replay && ev.type==="assistant" && (ev.events||[]).length){
     // 事件流里已经含这条回复的 assistant 文本事件；再按整条消息渲染一次就会重复一整行，
     // 所以嵌套事件里只要渲染出了 assistant 行，就不再画外层那一条。没有 assistant 事件的
     // 老消息（只有 usage / 空回复）照旧走下面整条渲染，内容不丢。
     const before = box.querySelectorAll(".msg-row.msg-assistant").length;
-    ev.events.forEach(e=>appendOne(box,e));
+    ev.events.forEach(e=>appendOne(box,e,who));
     if(box.querySelectorAll(".msg-row.msg-assistant").length > before) return;
   }
   const el=document.createElement("div");
@@ -708,8 +708,9 @@ function appendOne(box,ev){
   else if(ev.type==="assistant"){
     const cur = (S.chats||[]).find(t=>t.id===curChat);
     const boundA = (S.assistants||[]).find(a=>a.id === ((cur&&cur.assistant_id)||"")) || null;
-    const avHtml = faceOf(boundA, 22, true);
-    const aName = boundA ? boundA.name : "智研管家";
+    // who = 页面自己指定这一步是谁在答（科研平台十步各有自己的助手）；不给才回落到当前对话绑的专家/管家
+    const avHtml = who ? `<span class="msg-ava">${who.emoji||"🤖"}</span>` : faceOf(boundA, 22, true);
+    const aName = who ? who.name : (boundA ? boundA.name : "智研管家");
     el.className="msg-row msg-assistant";
     el.innerHTML=`<div class="msg-meta">${avHtml}<strong>${esc(aName)}</strong>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}<span class="msg-chip">${esc(assistantKey())}</span><span class="msg-chip">完成</span></div><div class="md">${md(ev.content||"…")}</div>`;
   }

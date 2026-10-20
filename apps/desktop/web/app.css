@@ -1,6 +1,7 @@
 /* 主题色由 JS 从「主色」推导（抄 zotero-lit-tool 的 deriveTheme），这里只留两档明暗底 */
 :root[data-theme=dark]{--bg:#0b0f14;--panel:#111821;--panel2:#0e141b;--line:#1e2833;--fg:#e6edf5;--muted:#8b9bb0;--ok:#4ade80;--warn:#fbbf24;--err:#f87171;--shadow:0 8px 30px rgba(0,0,0,.45);--accent:#2dd4bf;--accent-ink:#04211f;--side-bg:#0e141b}
-:root[data-theme=light]{--bg:#f6f8fa;--panel:#ffffff;--panel2:#f1f4f8;--line:#dfe5ec;--fg:#16202b;--muted:#5d6b7c;--ok:#159a5a;--warn:#b07d00;--err:#c04040;--shadow:0 8px 24px rgba(16,32,52,.10);--accent:#176b87;--accent-ink:#ffffff;--side-bg:#f1f4f8}
+:root[data-theme=light]{--bg:#f6f8fa;--panel:#ffffff;--panel2:#f1f4f8;--line:#dfe5ec;--fg:#16202b;--muted:#5d6b7c;--ok:#159a5a;--warn:#b07d00;--err:#c04040;--shadow:0 8px 24px rgba(16,32,52,.10);--accent:#176b87;--accent-ink:#ffffff;--side-bg:#f1f4f8;--bg-card:var(--panel);--bg-sub:var(--panel2);--border:var(--line)}
+/* 看板等旧样式写的是 --bg-card/--bg-sub/--border，深色下靠各自的暗色兜底值就成立，浅色必须显式接上主题，否则卡片全是深灰块 */
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
 body{font:var(--app-font-size,14px)/1.55 "Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--fg);overflow:hidden}

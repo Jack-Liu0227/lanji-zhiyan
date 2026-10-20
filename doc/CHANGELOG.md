@@ -2,6 +2,89 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 待发 PR（本轮：项目卡片进科研平台 + 看板浅色适配 + 看板标题行）
+
+只动前端 4 个文件，改完 **F5 就够**：`apps/desktop/web/` 下 `workflow-view.js`、`app.css`、`kanban.css`、`kanban-view.js`。
+
+**1. 「项目」卡片「进入 →」改落科研平台**
+原来跳 `openTab("space")`（项目空间），按他要求改成 `openTab("workflow")`：切当前项目 + 直接进十步工作流。
+整行点击语义不变（只切当前项目、不动页面），删除/新建逻辑没碰。
+
+**2. 看板浅色模式卡片全是灰黑块 —— 根因是主题变量名对不上**
+`kanban.css` 处处写 `var(--bg-card, 暗色兜底)` / `var(--bg-sub, …)` / `var(--border, …)`，而 `app.css` 两套主题只定义
+`--panel / --panel2 / --line`——这三个变量**全站从未定义过**，所以永远吃各自的深色兜底：深色看着正常，浅色就整片深灰。
+同病的还有 `project-space.js`、`notes-and-settings.js`、`agent-settings.js` 里同名变量（这轮未逐一改，接上别名后一起跟着好）。
+
+改法：
+- `app.css` 浅色根补 `--bg-card:var(--panel);--bg-sub:var(--panel2);--border:var(--line)`。
+  **深色根故意不补**：让深色继续走原兜底值，保证深色像素级不变。
+- `kanban.css` 里 `rgba(255,255,255,α)` 这类「白色微光」表面（进度条底、徽章底、分栏线、悬停态、空列虚线）
+  换成 `color-mix(in srgb, var(--fg) α%, transparent)`——跟着主题自动反色。
+- 语义色收成 `.kb-root` 上的 `--kb-sky / --kb-violet / --kb-rose / --kb-amber / --kb-green`：
+  深色 = 原来的粉彩，浅色 = 加深版（原色压在白底只有 1.3–2.3:1，等于看不清）。
+  卡片悬停阴影改用主题 `--shadow`（浅色下 40% 纯黑会糊成灰斑）。
+- `kanban-view.js` 内联的 `#f0f6fc / #8b949e / #38bdf8 / #8b5cf6 / #fb7185 / #10b981 / #f59e0b / #c4b5fd`
+  换成主题变量；第二视图（十步管道 / 排期）那两段标题原来是白字白底，浅色下等于没有。
+
+**3. 「📋 科研进度与计划看板」被挤成竖排**
+`.kb-main-title` 是 flex item 且默认 `flex-shrink:1`，被右边的项目下拉（256px）+ 阶段胶囊挤到 105px 宽，
+中文断成 3 行，标题块高 84px、概览区被撑到 235px。
+改法：`.kb-main-title{ flex:0 0 auto; white-space:nowrap }`——标题永不被挤扁，窄窗先让「按钮组」整块折到第二行。
+
+**4. 十步工作流每步输入框右下的「🤖 步骤名」胶囊删掉**
+`wfAgentHTML()` 里发送键左边那个 `<span class="at-sel">🤖 创新点审查</span>`（只读署名胶囊，不可点）整段移除，
+输入栏只剩 `＋` 和 `↑`。`.at-sel` 样式与其它页（项目/专家页的模型、署名、团队选择器）共用，未动。
+
+**5. 「专家」页第一张卡（智研管家）的 🤖 emoji 换成主页那套 Q 版小人**
+实际渲染专家页的是 `agent-settings.js` 的 `renderAssistants`（它覆盖了 `chat-views.js` 里的同名函数），
+卡片标题原来直接吐 `${h(a.avatar)}`。改成 `a.id === "builtin-steward"` 时出 `<img src="${Q_AV}">`（22×22，
+`object-fit:contain` + `vertical-align:-4px` 对标题基线），其余专家仍是自己的 emoji。
+`Q_AV`（`/vendor/img/agent-q.png`）是 `chat-views.js` 里既有的主形象常量，没有新增资源。
+`chat-views.js` 的 `asAvatarOf` 没动 —— 它还管着对话列表/消息的脸，改动面超范围。
+
+**6. 十步工作流的回复被签成「智研管家」—— 实际是拿错了身份来源**
+`appendOne()`（`chat-views.js`）渲染 `assistant` 行时，名字和头像取的是**当前打开的那个对话**绑的专家
+（`S.chats` 里 `curChat.assistant_id`），拿不到就回落「智研管家」+ Q 版小人。科研平台每一步的对话根本不在
+`curChat` 里，所以十步全被签成管家/上一个对话的专家——内容其实是各自步骤端点出的，只是署名错。
+改法：
+- `appendOne(box, ev, who)` 加第三个可选参数：传了就用手上的 `{emoji, name}`，不传仍走老逻辑
+  （智研管家页、专家页一个字不变）；`ev.replay` 递归子事件时把 `who` 一起传下去。
+- `workflow-view.js` 三处调用点传 `WF_AGENT[step]`：`wfPaintMsgs`（历史重放）、`wfSend` 流式 `appendOne(box, ev, a)`、以及 `done` 兜底那一行。
+- 后端没改：`/api/idea`、`/api/outline`、`/api/write` …本来就是分步端点，回复内容一直是本步的。
+
+**7. 回复正文里还自称「我是览籍智研」—— 根因在第一段 system，不在追加的那段**
+署名改对后他截图反馈：正文仍是「我是览籍智研，你的科研助手…」。`AGENT_SYSTEM`（`workflow_prompts.py`）第一行
+就把身份写死「你叫「览籍智研」…」，第二行还教「问你是谁就答：你是览籍智研」；`run_agent` 后面追加的
+【你的身份】对它无效——模型照第一行复述。
+改法（`workflow.py`，一处）：
+- 新增 `_system_for(who, system)`：`who` 非空且调用方没显式传 `system` 时，把 `AGENT_SYSTEM` 开头那两句
+  替换成「你叫「{who}」…」「问你是谁就答：你是{who}。」，其余规则原样保留；否则原样返回。
+- `messages[0]` 从 `system or AGENT_SYSTEM` 改走 `_system_for(who, system)`。
+- 前端 `wfSend` 的请求体现在带 `step`（`{task_id, message, step}`），后端 `/api/agent` 读它传给 `run_agent`
+  —— 这行和 `STEP_AGENT` 那段是本轮另一路（同工作区的会话）先落的，本条目只是把最后一环接上并验过。
+
+**验**（离线，不调模型：把 `workflow.chat_raw` 换成假函数，直接跑真 `run_agent` 抓 `messages[0]`）：
+十步逐个断言第一段 system 为「你叫「X」」且不含「览籍智研」；`step=""` 时仍是「你叫「览籍智研」」，通用对话没被误改。
+临时探针项目 `__身份探针__` 用完已删（`/api/task/delete` 返回 deleted=true，库里只剩他原有 3 个项目）。
+
+**验**：
+- 浅色（1440×900，浏览器实测计算样式）：`kb-header` / `kb-col` 底色 `rgb(255,255,255)`、`kb-card` `rgb(241,244,248)`；
+  全页扫描 **无** alpha>0.5 且亮度<0.35 的深色块、**无**文字对比度 <3:1 的元素（扫描按祖先链做 alpha 合成）。
+- 深色回归：`kb-header`/`kb-col` 仍是 `rgba(22,27,34,.7)`、`kb-card` 仍 `rgba(16,20,26,.85)`、列顶条仍 `#38bdf8`，
+  与改动前兜底值逐项相同。
+- 标题行：1440 / 1200 / 1024 / 900 四档宽度下都是单行 195×28，概览区高 235 → 193。
+- 十步联测：项目会话里逐一点 idea→search→download→notes→outline→map→write→review→entrans→convert
+  十个步骤，可见输入栏右下 `children` 只有 `send-btn`，`.at-sel` 一个不剩；`node --check workflow-view.js` 通过。
+- 专家页（真机 1440×900，起 `server.py --no-open` 验完就关）：`.ag-grid article.card` 第一张 `h4` 里是
+  `<img src="/vendor/img/agent-q.png">`，`naturalWidth=512` 已加载、渲染 22×22，第二张卡（Pony 模式）无 img 仍是 🐴。
+- 署名回归（真机、headless 起服验完就关）：创新点审查那一步的历史消息现在是
+  `🔍 创新点审查助手 researcher 完成`（emoji 头像，不再是小人图片）；`appendOne` 传十个 `WF_AGENT` 逐个探针，
+  依次得到 创新点审查助手 / 文献检索助手 / 入库助手 / 翻译助手 / 框架助手 / 谱系助手 / 写作助手 / 审查助手 / 中译英助手 / 格式助手。
+  智研管家页不传 `who`，行为不变。
+- 项目卡片跳转：改后服务返回的 `workflow-view.js` 已含 `openTab("workflow")`（曾 curl 核对）；
+  **点击端到端没跑**（核对时应用窗口已关、服务不在），待 F5 后点一次确认。
+- 截图（未入库）：`桌面\kanban-light.png`、`桌面\kanban-title.png`、`桌面\wf-composer.png`、`桌面\expert-steward.png`、`桌面\wf-step-agent.png`；卡片是注入的假数据，只为看配色。
+
 ## 待发 PR（本轮：品牌统一 —— 数据根改名 + 旧数据迁移，只取学长分支里的品牌那部分）
 
 学长 fork 上还有一条 `codex/asset-workflow-upgrade`，是**另一条历史**（`initial commit: 览籍智研 0.1.0` + 一个资产统一提交），

@@ -740,8 +740,7 @@ function wfAgentHTML(step){
         <textarea id="wv-ask" rows="1" placeholder="${esc(a.ph)}（Enter 发送，Shift+Enter 换行）"></textarea>
         <div class="at-tools">
           <div class="at-tools-l"><button class="icon-btn" id="wv-plus" title="把这台机器上的文件以路径形式附上">＋</button></div>
-          <div class="at-tools-r"><span class="at-sel" title="本步助手署名">🤖 ${esc(a.name.replace("助手", ""))}</span>
-            <button class="send-btn" id="wv-send" title="发送" aria-label="发送">↑</button></div></div></div>
+          <div class="at-tools-r"><button class="send-btn" id="wv-send" title="发送" aria-label="发送">↑</button></div></div></div>
       <p class="at-hint">${esc(a.hint)}</p></div>`;
 }
 
@@ -783,7 +782,8 @@ function wfPaintMsgs(step){
     return;
   }
   box.innerHTML = "";
-  wfMsgs.forEach(mv => appendOne(box, {type:mv.role, content:mv.content, events:mv.events, replay:true, at:mv.created_at}));
+  const who = WF_AGENT[step] || WF_AGENT.idea;          // 这一步的助手说话，不是智研管家
+  wfMsgs.forEach(mv => appendOne(box, {type:mv.role, content:mv.content, events:mv.events, replay:true, at:mv.created_at}, who));
   box.scrollTop = box.scrollHeight;
 }
 function wfPaintStats(){
@@ -813,7 +813,7 @@ async function wfSend(m, step){
   const evs = [];
   try{
     const res = await fetch(a.api, {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({task_id:curTask, message:text})});
+      body: JSON.stringify({task_id:curTask, message:text, step:step})});
     if(!res.ok || !res.body) throw new Error("HTTP "+res.status);
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "", final = "";
@@ -827,10 +827,10 @@ async function wfSend(m, step){
         let ev; try{ ev = JSON.parse(line.slice(6)); }catch{ continue; }
         if(ev.type === "done"){ final = ev.content || ""; continue; }
         if(ev.type === "user") continue;                 // 本地已经先画了，回声不再画、也不进事件流
-        appendOne(box, ev); evs.push(ev);
+        appendOne(box, ev, a); evs.push(ev);
       }
     }
-    if(final && !evs.some(e=>e.type==="assistant")){ appendOne(box, {type:"assistant", content:final}); evs.push({type:"content", content:final}); }
+    if(final && !evs.some(e=>e.type==="assistant")){ appendOne(box, {type:"assistant", content:final}, a); evs.push({type:"content", content:final}); }
   }catch(err){
     appendOne(box, {type:"error", message:"发送失败：" + err.message});
   }finally{
@@ -1196,8 +1196,8 @@ function renderTasks(m){
     const id=[...r.querySelectorAll("[data-go]")][0]?.dataset.go; if(!id) return;
     curTask = id; localStorage.setItem("rw-task",curTask); render();
   });
-  m.querySelectorAll("[data-go]").forEach(b=>b.onclick=(e)=>{          // 进入项目 → 切当前 + 跳工作流
-    e.stopPropagation(); curTask = b.dataset.go; localStorage.setItem("rw-task",curTask); openTab("space");
+  m.querySelectorAll("[data-go]").forEach(b=>b.onclick=(e)=>{          // 进入项目 → 切当前 + 进科研平台（十步工作流）
+    e.stopPropagation(); curTask = b.dataset.go; localStorage.setItem("rw-task",curTask); openTab("workflow");
   });
   m.querySelectorAll("[data-del]").forEach(b=>b.onclick=async (e)=>{    // 删除项目（连带数据，先确认）
     e.stopPropagation();
