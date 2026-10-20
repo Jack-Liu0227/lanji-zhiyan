@@ -30,6 +30,19 @@ class WorkflowTest(unittest.TestCase):
         self.db.close()
         self.td.cleanup()
 
+    def test_project_create_tool_registered_and_works(self) -> None:
+        """主 agent 必须能自己建项目：工具在 TOOL_SPECS 里，且真能建出来（带项目位置就建目录）。"""
+        names = [spec["function"]["name"] for spec in workflow.TOOL_SPECS]
+        self.assertIn("project_create", names)
+        base = str(Path(self.td.name) / "新项目")
+        out = workflow._tool_impl("project_create", self.db, "", {
+            "title": "钠电 O3 掺杂筛选", "question": "选哪种掺杂金属", "material_system": "NaNiFeMn", "base_dir": base})
+        self.assertTrue(out["project_id"])
+        self.assertEqual(self.db.summary(out["project_id"])["task"]["title"], "钠电 O3 掺杂筛选")
+        self.assertTrue((Path(base) / "文献库").is_dir())
+        with self.assertRaises(ValueError):
+            workflow._tool_impl("project_create", self.db, "", {"title": "  "})
+
     def test_project_tree_has_dated_chat_dir_and_final_artifacts(self) -> None:
         """项目位置里「对话」按日期分夹、「最终产物」装交付件；老的「最终成品」空壳自动改名。"""
         from datetime import datetime

@@ -1723,6 +1723,7 @@ TOOL_RISK = {
     "notes_compose": "workspace_write", "idea_review": "workspace_write", "paper_read": "workspace_write",
     "read": "workspace_write", "draft_write": "workspace_write", "draft_review": "workspace_write",
     "calendar_add": "workspace_write", "team_assign": "workspace_write", "team_form": "workspace_write",
+    "project_create": "workspace_write",
     "team_board": "read_only", "mail_send": "external_write", "feishu_send": "external_write",
     "zotero_write": "external_write", "zotero_sync": "external_write",
 }
@@ -1825,6 +1826,14 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         return _overview(db, task_id)
     if name == "knowledge_query":
         return _knowledge_query(db, task_id, args.get("query", ""))
+    if name == "project_create":
+        title = str(args.get("title") or "").strip()
+        if not title:
+            raise ValueError("新建项目至少要有标题")
+        base = str(args.get("base_dir") or "").strip()
+        tid = db.create_task(title, str(args.get("question") or ""), str(args.get("material_system") or ""), base)
+        made = make_project_tree(base, db.summary(tid)["task"]) if base else []
+        return {"project_id": tid, "title": title, "base_dir": base, "dirs": made}
     if name == "calendar_add":
         return db.add_event(args.get("title", ""), args.get("date", ""), task_id, args.get("kind", "milestone"),
                             time=args.get("time", ""))
@@ -1916,7 +1925,7 @@ def _global_brief(db: "WorkflowDB") -> str:
         except Exception:
             papers = notes = 0
         lines.append(f"  · {t['title']}｜阶段 {db.stage_now(tid, t['stage'])}｜文献 {papers}｜笔记 {notes}｜更新 {(t['updated_at'] or '')[:16]}")
-    out = ("\n【全局简报】共 %d 个项目：%s" % (len(lines), ("\n" + "\n".join(lines)) if lines else "（还没有项目，可以先用 create 项目的能力建一个）"))
+    out = ("\n【全局简报】共 %d 个项目：%s" % (len(lines), ("\n" + "\n".join(lines)) if lines else "（还没有项目 —— 用 project_create 工具新建一个再往下走）"))
     try:
         out += "\n【大笔记】%d 篇（笔记页那批）" % len(db.md_notes())
     except Exception:
@@ -2145,6 +2154,8 @@ def _brief(name: str, result: Any) -> str:
         return "已派给「%s」，排队等待执行" % result.get("member_name", "")
     if name == "team_form":
         return "已组队「%s」：%d 人（加急办公室）" % (result.get("name", ""), len(result.get("added") or []))
+    if name == "project_create":
+        return "已建项目「%s」· %s" % (result.get("title", ""), str(result.get("project_id", ""))[:8])
     if name == "paper_search":
         return f"检索到 {result.get('found')} 条，新增入库 {len(result.get('saved') or [])} 条"
     if name == "paper_download":

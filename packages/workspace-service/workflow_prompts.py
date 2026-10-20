@@ -114,13 +114,14 @@ OUTLINE_TEMPLATE = """# <题目：一句话说清做什么>
 
 AGENT_SYSTEM = """你叫「览籍智研」，是这个软件的主 Agent，也是一位做科研的研究生的科研助手（查文献、读论文、记笔记、写稿、跑数据都归你管）。
 用户怎么问「你是谁」就怎么答：你是览籍智研，他的科研助手。用中文工作，只通过工具动手，不编造数据。
-可用工具覆盖：创新点审查、论文搜索、OA 下载、逐页精读、知识库笔记、文章撰写、稿件审查、格式转换、日历、库内检索。
+可用工具覆盖：新建项目、创新点审查、论文搜索、OA 下载、逐页精读、知识库笔记、文章撰写、稿件审查、格式转换、日历、库内检索、团队派活。
 规则：
 1. 先调 library_overview 或 knowledge_query 了解现状，再决定下一步；用户没说清楚目标时先问一句，不要瞎跑。
 2. 工具返回的候选证据必须带页码与原文献；页码或原文对不上的条目一律不当结论。
 3. 只下载开放获取全文；没有 OA 链接就如实说明，不做替代下载。
 4. 每一步做完用一两句中文说明你做了什么、拿到什么、下一步建议。审查/撰写产出是草稿，不是结论。
-5. 一个目标尽量用最少的工具调用完成；任务完成后直接给结论。"""
+5. 一个目标尽量用最少的工具调用完成；任务完成后直接给结论。
+6. **用户说「新建项目 / 新建课题」就直接调 project_create**：标题、研究问题、材料体系能按他的话拟出来就先拟，别反问一串再等；建完把项目名和 project_id 告诉他，后面所有工具都用这个 id。"""
 
 _DELEGATE_SYSTEM = ("你是被派活的子 agent：只看得到这条任务本身，看不到父对话的历史。只做这一件事，"
                     "做完给一份不超过 300 字的摘要：结论 + 关键事实/数字 + 产物路径。不要复述任务、不要寒暄。")
@@ -323,6 +324,13 @@ TOOL_SPECS = [
     _schema("draft_review", "以审稿人视角审查稿件，给出结论/评分/问题清单/证据缺口。", {"draft": {"type": "string"}}),
     _schema("format_convert", "把稿件导出为 docx / md / html。", {"format": {"type": "string", "enum": ["docx", "md", "html"]}, "name": {"type": "string"}}, ["format"]),
     _schema("calendar_add", "在日历里加一条日程并关联当前任务。用户说了钟点就把 time 填上，别说「14:00 开会」这种把时间写进标题的写法。", {"title": {"type": "string", "description": "日程标题，不要带钟点"}, "date": {"type": "string", "description": "YYYY-MM-DD"}, "time": {"type": "string", "description": "24 小时制 HH:MM，例如 14:00；用户没给时间就留空"}, "kind": {"type": "string"}}, ["title", "date"]),
+    _schema("project_create", "新建一个科研项目（课题），返回 project_id。用户说「新建一个项目 / 课题」时用它；"
+            "建完把 project_id 记下来，后面的检索、下载、精读、加日程、派活都用这个 id。",
+            {"title": {"type": "string", "description": "项目标题，用户没给就按研究方向拟一个能改的"},
+             "question": {"type": "string", "description": "要回答的研究问题；不知道就留空"},
+             "material_system": {"type": "string", "description": "材料体系 / 关键词，逗号分隔；不知道就留空"},
+             "base_dir": {"type": "string", "description": "项目文件夹位置（绝对路径）；用户没指定就留空，文件落到工作区默认目录"}},
+            ["title"]),
     _schema("knowledge_query", "在本任务已入库的笔记与证据里做关键词检索。", {"query": {"type": "string"}}, ["query"]),
     _schema("team_board", "看团队看板：成员各自状态 + 最近派活与执行情况（谁在跑、谁完成了、失败原因）。",
             {"project": {"type": "string", "description": "项目名或 id；不填=当前项目"}}),
