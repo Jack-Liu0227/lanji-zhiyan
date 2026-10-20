@@ -610,39 +610,6 @@ class WorkflowDB(ResearchDB):
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
-    def usage_stats(self, task_id: str, exclude_scope: str = "") -> dict[str, Any]:
-        """项目口径的用量汇总（对话轮数 / 工具次数 / token / 工具名 / 产出路径）。
-
-        为什么按项目而不是按步骤：这个项目的对话是在「对话」页聊的（scope=''），
-        那一步的步骤页自己没有历史 —— 右栏就一路 0。排除当前步骤，前端再把本步的实时数加上去，
-        这样发送过程中数字也能跟着走。
-        """
-        rows = self.db.execute("SELECT role, content, events, scope FROM chat WHERE task_id=?",
-                               (task_id,)).fetchall()
-        turns = calls = tokens = 0
-        tools: list[str] = []
-        outs: list[str] = []
-        for r in rows:
-            if exclude_scope and (r["scope"] or "") == exclude_scope:
-                continue
-            if r["role"] == "user":
-                turns += 1
-            try:
-                events = json.loads(r["events"] or "[]")
-            except ValueError:
-                continue
-            for e in events:
-                kind = e.get("type")
-                if kind == "tool_call":
-                    calls += 1
-                    tools.append(str(e.get("name") or "工具"))
-                elif kind == "usage":
-                    tokens += int(e.get("total") or 0)
-                elif kind == "tool_result" and e.get("path"):
-                    outs.append(str(e["path"]))
-        return {"turns": turns, "calls": calls, "tokens": tokens,
-                "tools": tools[-20:], "outs": outs[-20:]}
-
     # ---------- 定时任务（规则 + 每次运行一条记录） ----------
     def schedules(self) -> list[dict[str, Any]]:
         return [dict(r) for r in self.db.execute("SELECT * FROM schedules ORDER BY created_at").fetchall()]
@@ -1553,8 +1520,17 @@ def open_url(req: Any, timeout: int = 30) -> Any:
 
 def chat(profile: dict[str, Any], messages: list[dict[str, str]], temperature: float = 0.2,
          timeout: int = 180, max_tokens: int = 4096) -> str:
-    """OpenAI 兼容 /chat/completions。没有配置模型时给出可执行的提示。"""
-    return chat_raw(profile, messages, temperature=temperature, timeout=timeout, max_tokens=max_tokens).get("content") or ""
+    """OpenAI 兼容 /chat/completions。没有配置模型时给出可执行的提示。
+
+    回空不一定是模型不会答：推理模型（deepseek-v4-flash 这类）的思维链也计入 max_tokens，
+    预算小的时候思考把额度吃光、正文就是空串（实测 3000 全是 reasoning、content_len=0，
+    finish_reason=length）。所以空回就翻倍预算再要来一次，只这一次。
+    """
+    out = chat_raw(profile, messages, temperature=temperature, timeout=timeout, max_tokens=max_tokens).get("content") or ""
+    if out.strip():
+        return out
+    return chat_raw(profile, messages, temperature=temperature, timeout=timeout,
+                    max_tokens=max_tokens * 2).get("content") or ""
 
 
 class ModelInvoker:
@@ -2115,7 +2091,8 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
 
 from workflow_documents import (
     doc_path, doc_read, doc_write,
-    outline_read, outline_write, doc_tools, map_tools, doc_seed, read_attachment, map_path, map_read, map_write, map_sources
+    outline_read, outline_write, doc_tools, map_tools, doc_seed, read_attachment, map_path, map_read, map_write, map_sources,
+    map_seed, project_outs,
 )
 from workflow_runners import (
     run_idea, run_map, run_outline, run_write, run_review, _wants_draft,
@@ -2188,29 +2165,33 @@ STEP_AGENT = {                       # 十步各有一个助手身份（跟前�
     "entrans": "中译英助手", "convert": "格式助手",
 }
 
+# 检索这一步跑完要主动收口（问用户还改不改检索式）。提示词已经要求了，这里再兜一层：
+# 模型偶尔只回一句「检索完了」就收尾，用户就不知道该不该继续调关键词。
+SEARCH_CLOSING = ("\n\n检索完毕。还要调整检索式吗——加点或减点关键词，"
+                  "或者按年份、期刊、只看开放获取再筛一遍？")
+
 
 def _plan_context(db: "WorkflowDB", tid: str, step: str) -> str:
     """写「本步计划」时给模型的料：项目底子 + 上一步的交付 + 库里已有啥。
-    上一步交付三处来源都带上（最后一条结论 / 文档正文 / 判定笔记），模型自己挑用得上的。"""
+
+    顺序就是发言顺序：**上一步的交付排在最前**（它才是这一步要同步的对象），
+    项目最初的创新点降到最后当背景 —— 以前把它排前面，每个助手都开口就复述创新点审查。
+    """
     task = (db.summary(tid) or {}).get("task") or {}
     parts = ["项目：%s\n研究问题：%s\n材料体系：%s" % (
         task.get("title") or "", task.get("question") or "（没填）", task.get("material_system") or "（没填）")]
-    mine = (db.idea_input(tid) or "").strip()
-    if mine:
-        parts.append("【用户写的创新点原文】\n" + mine[:1500])
-    v = db.idea_verdict(tid) or {}
-    if v.get("markdown"):
-        parts.append("【创新点审查的判定】\n" + v["markdown"][:1500])
     i = STAGES.index(step) if step in STAGES else 0
     prev = STAGES[i-1] if i else ""
     if prev:
+        label = STAGE_LABEL.get(prev, prev)
         pm = db.messages(tid, prev)
         if pm:
-            parts.append("【上一步「%s」最后的结论】\n%s" % (STAGE_LABEL.get(prev, prev), (pm[-1].get("content") or "")[:1500]))
+            parts.append("【上一步「%s」最后的结论 —— 你这一条要同步的就是它】\n%s"
+                         % (label, (pm[-1].get("content") or "")[:1500]))
         if prev in ("outline", "write", "review"):
             body = (doc_read(db, tid, prev) or {}).get("markdown") or ""
             if body:
-                parts.append("【上一步产出的正文】\n" + body[:3000])
+                parts.append("【上一步「%s」落下的正文】\n%s" % (label, body[:3000]))
         pl = db.papers_of(tid) or []
         if pl:
             parts.append("【项目文献库里已有的】\n" + "\n".join(
@@ -2218,6 +2199,15 @@ def _plan_context(db: "WorkflowDB", tid: str, step: str) -> str:
         ns = db.notes(tid) or []
         if ns:
             parts.append("【项目笔记】\n" + "\n".join("- %s" % (n.get("title") or "") for n in ns[:6]))
+    mine = (db.idea_input(tid) or "").strip()
+    v = db.idea_verdict(tid) or {}
+    if mine or v.get("markdown"):
+        bg = ["【背景：项目最初的创新点，只作背景，不要当成上一步来同步】"]
+        if mine:
+            bg.append("用户原文：" + mine[:600])
+        if v.get("markdown"):
+            bg.append("判定摘要：" + v["markdown"][:600])
+        parts.append("\n".join(bg))
     return "\n\n".join(parts)
 
 
@@ -2230,9 +2220,13 @@ def step_plan(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
             isinstance(e, dict) and e.get("type") == "plan" for e in (msgs[-1].get("events") or [])):
         return {"text": msgs[-1].get("content") or "", "cached": True}
     who, label = STEP_AGENT.get(step, ""), STAGE_LABEL.get(step, step)
+    i = STAGES.index(step) if step in STAGES else 0
+    prev_label = STAGE_LABEL.get(STAGES[i-1], STAGES[i-1]) if i else ""
+    sync_target = f"上一步「{prev_label}」" if prev_label else "项目最初的定义"
     system = (
         f"你在一套科研工作流里当「{who}」，现在轮到「{label}」这一步，只负责这一步的事。\n"
-        "用户刚确认完上一步的交付。先用一句话说清你从上一步同步到了什么（要点到具体结论或数字，别写空话），"
+        f"用户刚确认完{sync_target}。先用一句话说清你从{sync_target}同步到了什么"
+        "（要点到具体结论或数字，别写空话，**不要复述项目最初的创新点**，那是背景不是上一步），"
         "再用 3-5 条列出这一步的具体计划：要检索什么词 / 看哪些数据 / 改哪几节，都要写具体，"
         "不许写「进行分析」「进一步研究」这种空话；最后一句问他按这个来行不行。\n"
         "只写计划，不要执行任何操作、不要调用工具、不要寒暄、不要重复项目背景。")
@@ -2377,6 +2371,11 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     if who:      # 工作流里的每一步都是一个独立助手，别让它自称「览籍智研 / 智研管家 / Partner Agent」
         ctx += (f"\n\n【你的身份】这一步你是「{who}」，只负责这一步的事；上面提到的「览籍智研 / 智研管家 / Partner Agent」是"
                 f"整台机器和首页的称呼，不是你的自称。有人问「你是谁」，就答「我是{who}」，再用一句话说这一步负责什么。")
+    if step == "search":     # 检索完必须向用户收口 —— 只甩一串结果，用户不知道还能不能改检索式
+        ctx += ("\n\n【本步收口】检索（paper_search）跑完或改关键词重跑完，最后一段必须收口："
+                "这次命中多少条、其中多少条有开放获取全文、入库多少条，然后问一句"
+                "「还要调整检索式吗——加点或减点关键词，或者按年份、期刊、只看开放获取再筛一遍？」"
+                "不许只报个数就结束，也别替用户决定下一步。")
     if extra_context:
         ctx += "\n\n" + extra_context
     project_dir = str((db.summary(bound or task_id).get("task") or {}).get("base_dir") or "")
@@ -2409,7 +2408,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     events: list[dict[str, Any]] = []
     final = ""
     tokens = {"prompt": 0, "completion": 0, "total": 0, "exact": True}
-    for step in range(max_steps):
+    for turn in range(max_steps):   # 别用 step：它在上面是本步的名字（助手身份/收口规则都靠它）
         try:
             msg = chat_raw(profile, messages, tools=tool_specs)
         except Exception as exc:
@@ -2426,6 +2425,11 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             ev = {"type": "usage", **delta}
             say(ev); events.append(ev)
         calls = msg.get("tool_calls") or []
+        if (not calls and step == "search"
+                and any(e.get("type") == "tool_result" and e.get("name") == "paper_search" for e in events)
+                and "？" not in (msg.get("content") or "") and "?" not in (msg.get("content") or "")):
+            # 检索跑完了却没问「还改不改」→ 补一句（它自己问过就不重复问）
+            msg = {**msg, "content": (msg.get("content") or "").rstrip() + SEARCH_CLOSING}
         if msg.get("content"):
             say({"type": "assistant", "content": msg["content"], "step": step})
             events.append({"type": "assistant", "content": msg["content"]})

@@ -246,6 +246,20 @@ def deepread_kick(db_path: str, task_id: str) -> dict[str, Any]:
     return {"started": True}
 
 
+READ_NOTE_TITLE = "精读 · "
+MIN_READ_NOTE_CHARS = 300     # 只有标题的空笔记不算「读过了」（以前模型回空留下过这种）
+
+
+def read_done_filenames(db: Any, task_id: str) -> set[str]:
+    """已有实质内容的精读笔记覆盖的 PDF 文件名 —— 重跑时不重读，别重复烧 token。"""
+    done = set()
+    for n in db.notes(task_id):
+        title = n["title"] or ""
+        if title.startswith(READ_NOTE_TITLE) and len((n["markdown"] or "").strip()) >= MIN_READ_NOTE_CHARS:
+            done.add(title[len(READ_NOTE_TITLE):])
+    return done
+
+
 def _deepread_worker(db_path: str, task_id: str) -> None:
     st = DEEPREAD[task_id]
     try:
@@ -272,11 +286,15 @@ def _deepread_worker(db_path: str, task_id: str) -> None:
             papers = db.papers_of(task_id)
             if not papers:
                 raise ValueError("这个项目的「文献库」里没有可精读的 PDF —— 先搜一篇下下来，或把 PDF 丢进文献库")
+            read_ok = read_done_filenames(db, task_id)
             st["total"] = len(papers)
-            for i, p in enumerate(papers, 1):
+            st["done"] = sum(1 for p in papers if p["filename"] in read_ok)      # 已精读过的算完成，不重读
+            for p in papers:
                 if st.get("stop"):
                     st["phase"] = "stopped"
                     return
+                if p["filename"] in read_ok:
+                    continue                       # 已经有实质内容的精读笔记，重跑跳过
                 st["current"] = p["filename"][:46]
                 try:
                     stage_read(db, task_id, p["id"], should_stop=lambda: bool(st.get("stop")))
@@ -286,7 +304,7 @@ def _deepread_worker(db_path: str, task_id: str) -> None:
                 except Exception as exc:
                     st["failed"] += 1
                     st["errors"].append("%s: %s" % (p["filename"][:30], exc))
-                st["done"] = i
+                st["done"] += 1
             db.log_step(task_id, "notes", "done", "精读 %d 篇（失败 %d，跳过非论文 %d）" % (st["done"], st["failed"], len(skipped)))
             st["phase"] = "done"
     except Exception as exc:
@@ -318,12 +336,16 @@ def stage_read(db: WorkflowDB, task_id: str, paper_id: str, per_page: int = 6000
     for i, chunk in enumerate(chunks, 1):
         if should_stop and should_stop():      # 每段检查一次：停就立刻不读了
             raise DeepreadStopped()
-        parts.append(chat(profile, [
+        text = chat(profile, [
             {"role": "system", "content": READ_SYSTEM},
             {"role": "user", "content": f"论文：{paper['filename']}（第 {i}/{len(chunks)} 段）\n\n{chunk}"},
-        ], max_tokens=3000))
+        ], max_tokens=6000).strip()
+        if not text:
+            # 空回就别落一条只有标题的空笔记 —— 那会让「精读完了」变成假进度
+            raise RuntimeError(f"第 {i}/{len(chunks)} 段没有拿到内容，模型回空，这篇先算失败")
+        parts.append(text)
     md = f"# 精读 · {paper['filename']}\n\n" + "\n\n".join(parts)
-    note = db.add_note(task_id, f"精读 · {paper['filename']}", md, paper_id)
+    note = db.add_note(task_id, READ_NOTE_TITLE + paper["filename"], md, paper_id)
     db.log_step(task_id, "download", "done", f"精读完成：{paper['filename']}")
     return {"note_id": note["id"], "markdown": md, "chunks": len(chunks)}
 

@@ -860,8 +860,6 @@ html[data-theme="light"] .quick-add .quick-time{color-scheme:light}
 .ws-pick{align-self:center;display:flex;flex:none;cursor:pointer}
 .ws-pick input{width:16px;height:16px;accent-color:var(--accent);cursor:pointer;margin:0}
 .ws-pickinfo{font-size:12px;color:var(--muted);white-space:nowrap}
-#wsToDl{background:var(--accent);color:var(--accent-ink);border:0;font-weight:600}
-#wsToDl:disabled{opacity:.5;cursor:not-allowed}
 /* 下载精读：下载位置 + 两个计数 + 待手动下载清单 + 一键精读 */
 .dl-page{display:flex;flex-direction:column;height:100%;min-height:0;gap:10px;padding:14px 16px 0}
 .dl-loc{flex:none;border:1px solid var(--line);border-radius:10px;background:var(--panel2);padding:9px 12px}
@@ -876,6 +874,18 @@ html[data-theme="light"] .quick-add .quick-time{color-scheme:light}
 .dl-box>.h .hint{font-weight:400}
 .dl-foot{flex:none;display:flex;justify-content:flex-end;gap:10px;padding:0 0 14px}
 .dl-foot .btn{height:38px;padding:0 20px;background:var(--accent);color:var(--accent-ink);border:0;font-weight:600}
+/* 精读进度刻格：一格代表若干篇（篇数多就合并成 24 格），与「一键精读」同高同中线 */
+.dl-prog{flex:none;display:flex;align-items:center;gap:10px;height:38px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+.dl-prog[hidden]{display:none}
+.dl-prog .dots{display:flex;align-items:center;gap:3px}
+.dl-prog .dots i{width:7px;height:14px;border-radius:2px;background:var(--line)}
+.dl-prog .dots i.ok{background:color-mix(in srgb,var(--ok) 82%,transparent)}
+.dl-prog .dots i.cur{background:var(--accent);animation:dlpulse 1.4s ease-in-out infinite}
+.dl-prog .dots i.bad{background:color-mix(in srgb,var(--err) 75%,transparent)}
+@keyframes dlpulse{0%,100%{opacity:1}50%{opacity:.35}}
+.dl-prog .n{font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dl-prog .n b{font-weight:600}
+.dl-prog .bad-txt{font-size:11.5px;color:var(--err);white-space:nowrap}
 .ws-chip{flex:none;font-size:11px;border-radius:999px;padding:3px 9px;white-space:nowrap}
 .ws-chip.ok{color:var(--accent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent)}
 .ws-chip.need{color:var(--err);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--err) 45%,transparent)}
@@ -1161,7 +1171,7 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .mp-edge.on{stroke:var(--accent);stroke-width:2}
 .mp-edge.dash{stroke-dasharray:4 4}
 .mp-elabel{fill:var(--muted);font-size:10.5px}
-.mp-node{position:absolute;border-radius:10px;border:1px solid var(--line);background:var(--panel2);cursor:pointer;
+.mp-node{position:absolute;border-radius:10px;border:1px solid var(--line);background:var(--panel2);cursor:grab;user-select:none;touch-action:none;
   padding:8px 10px;box-sizing:border-box;overflow:hidden;transition:border-color .12s,transform .12s}
 .mp-node:hover{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
 .mp-node.on{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
@@ -1183,6 +1193,13 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .mp-card h4{margin:0 0 6px;font-size:13px}
 .mp-card p{margin:0 0 8px;font-size:12px;color:var(--muted);line-height:1.7;white-space:pre-wrap}
 .mp-card .row{display:flex;gap:8px;align-items:center}
+.mp-card .mp-f{display:flex;flex-direction:column;gap:3px;margin:0 0 8px;font-size:11.5px;color:var(--muted)}
+.mp-card .mp-f input,.mp-card .mp-f textarea,.mp-card .mp-f select{border:1px solid var(--line);border-radius:7px;
+  background:var(--panel2);color:var(--fg);padding:5px 8px;font-size:12.5px;font-family:inherit;resize:vertical}
+.mp-card .mp-f input:focus,.mp-card .mp-f textarea:focus{outline:1px solid var(--accent)}
+.mp-rel{margin:0 0 6px!important;font-size:11.5px}
+.mp-zoom{display:flex;gap:4px}
+.mp-zoom .btn{padding:2px 8px;font-size:12px}
 .mp-src{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px 0}
 .mp-chip{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 8px;background:var(--panel2)}
 /* ---- 子 agent 分行（委派：独立上下文、只读、只回摘要） ---- */

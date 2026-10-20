@@ -56,6 +56,7 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
                       outline_read, outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
+                      map_seed, project_outs,
                       cite_read, cite_add, conv_files, conv_run, conv_compile, conv_open,
                       en_state, en_run, _safe_path, step_plan,
                       stage_download_selected, stage_zotero_import, test_provider,
@@ -1047,8 +1048,7 @@ class Handler(BaseHTTPRequestHandler):
                 with WorkflowDB(DB_PATH) as db:
                     step = (q.get("step") or ["idea"])[0]
                     tid = q["id"][0]
-                    return self._json({"step": step, "messages": db.messages(tid, step),
-                                       "project": db.usage_stats(tid, exclude_scope=step)})
+                    return self._json({"step": step, "messages": db.messages(tid, step)})
             if path == "/api/doc/state":                  # 确认大纲 / 论文撰写 / 稿件审查 共用的「左边那份文件」
                 step = (q.get("step") or ["outline"])[0]
                 with WorkflowDB(DB_PATH) as db:
@@ -1064,6 +1064,10 @@ class Handler(BaseHTTPRequestHandler):
                                        "outline": doc_read(db, tid, "outline"),
                                        "sources": map_sources(db, tid),
                                        **map_read(db, tid)})
+            if path == "/api/step/outs":                   # 右栏「产出目录」：项目里落过盘的文件，新的在前
+                with WorkflowDB(DB_PATH) as db:
+                    tid = q["id"][0]
+                    return self._json({"out": str(db.out_dir(tid)), "outs": project_outs(db, tid)})
             if path == "/api/en/state":                   # 中译英：默认源（正文.md）+ 上次译文
                 with WorkflowDB(DB_PATH) as db:
                     return self._json(en_state(db, q["id"][0]))
@@ -1541,7 +1545,11 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/map/save":                # 谱系图整份覆盖写（手改 / 前端拖节点后落盘）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(map_write(db, (data.get("task_id") or "").strip(),
-                                                    data.get("data") or {}))
+                                                    data.get("data") or {},
+                                                    keep_positions=bool(data.get("keep_positions", False))))
+                if path == "/api/map/seed":                # 谱系图还没有 → 直接按大纲长出「章 → 节」，不用等用户开口
+                    with WorkflowDB(DB_PATH) as db:
+                        return self._json(map_seed(db, (data.get("task_id") or "").strip()))
                 if path == "/api/doc/save":                # 手动改/用回复落盘（三步共用）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(doc_write(db, (data.get("task_id") or "").strip(),
