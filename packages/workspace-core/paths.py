@@ -171,7 +171,8 @@ def ensure_layout() -> dict:
             LAYOUT_FILE.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     except (OSError, ValueError):
         pass
-    _harden(USER)
+    _harden(USER)          # 凭据：只有当前用户可读写
+    _harden(EXECUTORS)     # 模型能往这里写可执行文件：至少别让同机其他账号写
     return meta
 
 
@@ -187,6 +188,67 @@ def _harden(path: Path) -> None:
                         "/grant:r", f"{user}:(OI)(CI)F"],
                        capture_output=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
+        pass
+
+
+# ---------------------------------------------------------------- 文件白名单（唯一闸门）
+def project_roots() -> list[Path]:
+    """用户自己指定的目录：项目 base_dir + 对话的产出目录（chats.out_dir）。
+    这两类都是用户在原生选择器里亲手选的，所以算白名单里的根。"""
+    import sqlite3
+    out: list[Path] = []
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            for sql in ("SELECT base_dir FROM research_tasks WHERE base_dir<>''",
+                        "SELECT out_dir FROM chats WHERE out_dir<>''"):
+                try:
+                    out += [Path(r[0]) for r in conn.execute(sql)]
+                except sqlite3.Error:
+                    pass                       # 老库还没这列 → 跳过，别把白名单搞空
+        finally:
+            conn.close()
+    except Exception:
+        return out
+    return out
+
+
+def allowed_roots() -> list[Path]:
+    """允许碰的全部根：自己的数据根（data/ 里的 uploads、papers、notes、out）+ 用户建过的项目目录。
+    白名单只在这里定义一次 —— 别的地方要判，一律调 resolve_allowed()。"""
+    roots = [DATA, UPLOADS, PAPERS, NOTES, OUT, *project_roots()]
+    return [r.resolve() for r in roots if r and r.exists()]
+
+
+def resolve_allowed(path: str, extra_roots: list[Path] | None = None, *, must_be_file: bool = False,
+                    what: str = "文件") -> Path:
+    """文件闸门：必须绝对路径 + 必须落在白名单里。越界 → 记审计 + 抛一句人话。"""
+    if not str(path or "").strip():
+        raise ValueError("没给路径")
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        raise ValueError(f"{what}必须用绝对路径：{path}")
+    try:
+        p = p.resolve()
+    except OSError as exc:
+        raise ValueError(f"路径不可用：{exc}") from exc
+    roots = [*(extra_roots or []), *allowed_roots()]
+    if not any(p.is_relative_to(r) for r in roots):     # 前缀比较会让 data-evil/ 混进来，按层级判
+        _audit_deny(p, what)
+        raise ValueError(f"{what}不在允许范围里 —— 只能是程序自己的数据目录，或你建过的项目文件夹：{p}")
+    if must_be_file and not p.is_file():
+        raise ValueError(f"这不是一个文件：{p}")
+    return p
+
+
+def _audit_deny(p: Path, what: str) -> None:
+    """越界读写记一行（写 fileguard 那份 audit.jsonl；这里不能 import fileguard，会成环）。"""
+    try:
+        AUDIT.parent.mkdir(parents=True, exist_ok=True)
+        line = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "action": "deny", "path": str(p), "what": what}
+        with AUDIT.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError:
         pass
 
 

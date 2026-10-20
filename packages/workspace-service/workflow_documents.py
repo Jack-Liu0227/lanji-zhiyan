@@ -201,22 +201,12 @@ def doc_seed(db: "WorkflowDB", task_id: str, kind: str = "outline") -> dict[str,
 
 
 READ_MAX = 12000                                   # 附件一次最多读多少字（够 agent 判断，不炸上下文）
-_FILE_ROOTS = [DATA, DATA / "uploads", PAPERS, NOTES, OUT]
 
 
 def read_attachment(path: str, chars: int = 8000) -> dict[str, Any]:
-    """读用户上传/项目里的文件：PDF 用 pdfio 抓正文，其余按文本读。只允许 data/ 与项目目录里的文件。"""
-    if not path:
-        raise ValueError("没给路径")
-    p = Path(path).expanduser()
-    try:
-        p = p.resolve()
-    except OSError as exc:
-        raise ValueError(f"路径不可用：{exc}") from exc
-    roots = [r.resolve() for r in _FILE_ROOTS if r.exists()]
-    # 前缀比较（startswith）会让同级的 data-evil/ 混进来，必须按路径层级判断
-    if not p.is_file() or not any(p.is_relative_to(r) for r in roots):
-        raise ValueError(f"只读 data/ 与项目目录里的文件：{p}")
+    """读用户上传/项目里的文件：PDF 用 pdfio 抓正文，其余按文本读。
+    白名单不在这里再写一遍 —— 统一走 paths.resolve_allowed()（data/ + 用户建过的项目目录）。"""
+    p = paths.resolve_allowed(path, must_be_file=True, what="附件")
     cap = max(500, min(int(chars or 8000), READ_MAX))
     if p.suffix.lower() == ".pdf":
         text = pdfio.text(p)

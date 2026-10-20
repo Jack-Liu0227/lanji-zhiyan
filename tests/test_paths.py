@@ -71,6 +71,19 @@ class PathsTest(unittest.TestCase):
         self.assertFalse(legacy.is_dir(), "旧目录应已改名保留")
         self.assertFalse(self.paths.migrate_legacy(legacy)["done"], "第二次应跳过")
 
+    def test_文件闸门只放行自己的目录和用户选过的目录(self) -> None:
+        """resolve_allowed 是唯一白名单闸门：data/ 里的放行，系统目录/相对路径一律拒。"""
+        inside = self.paths.DATA / "probe.txt"
+        inside.parent.mkdir(parents=True, exist_ok=True)
+        inside.write_text("x", encoding="utf-8")
+        self.assertEqual(self.paths.resolve_allowed(str(inside)), inside.resolve())
+        for bad in ("C:/Windows/win.ini", "relative/path.txt", ""):
+            with self.assertRaises(ValueError):
+                self.paths.resolve_allowed(bad)
+        with self.assertRaises(ValueError):                 # 越界要记一条 deny 审计
+            self.paths.resolve_allowed("C:/Windows/system.ini")
+        self.assertIn("deny", self.paths.AUDIT.read_text(encoding="utf-8"))
+
     def test_env_override_wins(self) -> None:
         os.environ["RESEARCH_WORKBENCH_DB"] = str(self.home / "custom.sqlite3")
         paths = importlib.reload(self.paths)

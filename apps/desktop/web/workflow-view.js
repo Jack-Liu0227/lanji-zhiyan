@@ -534,8 +534,9 @@ async function cvCompile(){
 function cvBind(){
   if(!$("cvList")) return;
   $("cvRefresh").onclick = cvLoad;
-  $("cvSave").onclick = cvSave;
-  $("cvCompile").onclick = cvCompile;
+  // ask 模式下，写盘 / 编译前先问一句（all 模式直接放行，见 needPerm）
+  $("cvSave").onclick = async () => { if (await needPerm("把这份文件写进项目目录")) cvSave(); };
+  $("cvCompile").onclick = async () => { if (await needPerm("用 xelatex 编译这份 .tex 生成 PDF")) cvCompile(); };
   $("cvOpenExt").onclick = () => { if(cvCur.path || $("cvPdfName").textContent)
     api("/api/conv/open", { path: cvCur.path }).catch(()=>{}); };
   cvLoad();
@@ -656,7 +657,7 @@ function enBind(){
   $("en-file").onchange = (e) => { const f = e.target.files[0]; e.target.value = ""; enReadLocal(f); };
   $("en-pick").onchange = (e) => enPickFile(e.target.value);
   $("en-run").onclick = enRun;
-  $("en-save").onclick = enSave;
+  $("en-save").onclick = async () => { if (await needPerm("把译文写回项目目录")) enSave(); };
   $("en-reload").onclick = () => { $("en-in").value = ""; $("en-out").value = ""; enLoad(); };
   $("en-copy").onclick = async () => {
     try{ await navigator.clipboard.writeText($("en-out").value || ""); enMsg("已复制", 2500); }

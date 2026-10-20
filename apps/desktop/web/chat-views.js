@@ -651,8 +651,18 @@ function renderAgent(m){
     $("msgs").innerHTML = asEmpty(); bindChips();
     loadAgentMeta();
   } else {
-    loadChat();
+    loadChat().then(maybeAskPermission);          // 问候语渲染完再问权限（只问一次）
   }
+}
+
+/* 新用户第一次进来：问候后面问一句「允许所有 / 每次都要问」，存在后端，问过就不再问 */
+async function maybeAskPermission(){
+  if(((S.sec||{}).permission_mode)) return;
+  const all = await uiChoice("先定一下权限",
+    "我可以在你自己的项目文件夹里读写、编译 PDF、导出文件。你希望我怎么处理这些动作？\n\n允许所有：直接做，不再问。\n每次都要问：编译、写文件这类动作，每次先问你一句。",
+    "允许所有", "每次都要问");
+  await setPermissionMode(all ? "all" : "ask");
+  uiNotify(all ? "已设为「允许所有」。可在「设置 → 权限」里改。" : "已设为「每次都要问」。编译和写文件前都会先问你。");
 }
 async function loadChat(){
   try{

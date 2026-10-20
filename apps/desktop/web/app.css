@@ -1482,3 +1482,11 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
   white-space:pre-wrap;overflow-wrap:anywhere;cursor:pointer;animation:uiPop .16s ease-out}
 .ui-toast.bad{border-left-color:var(--err)}
 @keyframes uiPop{from{opacity:0;transform:translate(-50%,-46%) scale(.985)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+
+/* ===== 设置 → 权限：两档单选卡 ===== */
+.perm-opts{display:grid;gap:10px;margin-top:12px}
+.perm-opt{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:11px 13px;cursor:pointer;background:var(--panel2)}
+.perm-opt.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,var(--panel2))}
+.perm-opt input{margin-top:3px;accent-color:var(--accent)}
+.perm-opt b{font-size:13px}
+.perm-opt p{margin:3px 0 0;font-size:11.5px;line-height:1.6;color:var(--muted)}

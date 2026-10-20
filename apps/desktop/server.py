@@ -46,6 +46,7 @@ import capabilities
 import workflow_layout
 import folder_picker
 import feishu
+import service_settings as kv_store      # 轻量 KV：权限模式这类一台机器一份的开关
 import zotero_sync
 import agent_integrations
 import reproduction_routes
@@ -1016,6 +1017,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/chat":
                 with WorkflowDB(DB_PATH) as db:
                     return self._json({"messages": db.messages(q["id"][0])})
+            if path == "/api/security":                   # 权限模式：all=不再逐次问，ask=编译/写文件每次问
+                with WorkflowDB(DB_PATH) as db:
+                    return self._json({"permission_mode": str(kv_store.read(db, "security").get("permission_mode") or "")})
             if path == "/api/step/messages":               # 三栏页：右栏「本步助手」的历史（按 scope 取）
                 with WorkflowDB(DB_PATH) as db:
                     step = (q.get("step") or ["idea"])[0]
@@ -1552,6 +1556,12 @@ class Handler(BaseHTTPRequestHandler):
                                                "map", "write", "review", "entrans", "convert"):
                         return self._json({"error": "缺 task_id 或 step 不认识"}, 400)
                     return self._json(db.log_step(tid, step, "done", str(data.get("summary") or "用户确认交付")[:200]))
+                if path == "/api/security":
+                    mode = str(data.get("permission_mode") or "")
+                    if mode not in ("all", "ask"):
+                        return self._json({"error": "permission_mode 只能是 all 或 ask"}, 400)
+                    kv_store.write(db, "security", {**kv_store.read(db, "security"), "permission_mode": mode})
+                    return self._json({"ok": True, "permission_mode": mode})
                 if path == "/api/step/plan":                  # 三栏页右栏：本步助手看着上一步的交付现写「进度同步 + 计划」
                     tid = str(data.get("task_id") or "")
                     step = str(data.get("step") or "")

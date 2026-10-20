@@ -272,30 +272,9 @@ def conv_open(path: str) -> dict[str, Any]:
     return fileguard.open_document(p)
 
 
-def _project_roots() -> list[Path]:
-    """项目位置是用户自选的（桌面上也行），也得进白名单：一次 SELECT 拿到所有 base_dir。"""
-    import sqlite3
-    try:
-        conn = sqlite3.connect(str(paths.DB_PATH))
-        try:
-            return [Path(r[0]) for r in conn.execute("SELECT base_dir FROM research_tasks WHERE base_dir<>''")]
-        finally:
-            conn.close()
-    except Exception:
-        return []
-
-
 def _safe_path(path: str, extra_roots: list[Path] | None = None) -> Path:
-    """只允许项目目录 / data 目录里的文件（读写都走它）。"""
-    p = Path(path).expanduser()
-    if not p.is_absolute():
-        raise ValueError("必须是绝对路径")
-    p = p.resolve()
-    roots = [*(extra_roots or []), *_project_roots(), DATA, DATA / "uploads", PAPERS, NOTES, OUT]
-    roots = [r.resolve() for r in roots if r.exists()]
-    if not any(p.is_relative_to(r) for r in roots):        # 前缀比较会让 data-evil/ 混进来
-        raise ValueError(f"只允许项目目录与 data 目录里的文件：{p}")
-    return p
+    """只允许项目目录 / data 目录里的文件（读写都走它）。规则本体只有一份：paths.resolve_allowed()。"""
+    return paths.resolve_allowed(path, extra_roots)
 
 
 # ============================ 中译英（中文 markdown → 英文 markdown，左右对照）============================

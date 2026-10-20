@@ -1367,7 +1367,7 @@ function bindSwatches(host){
 }
 let setSec = "theme";                    // 设置左列分区（照工作流中间可选栏）
 let setMeta = null;                      // /api/settings/meta 缓存：tool 在 S.tools，skill / MCP 在这
-const SET_SECS = [["theme", "🎨", "主题色"], ["models", "🔌", "模型列表"], ["tools", "🧰", "Tool"], ["skills", "⚡", "Skill"], ["mcp", "🔗", "MCP"]];
+const SET_SECS = [["theme", "🎨", "主题色"], ["perm", "🛡", "权限"], ["models", "🔌", "模型列表"], ["tools", "🧰", "Tool"], ["skills", "⚡", "Skill"], ["mcp", "🔗", "MCP"]];
 function setPanel(){
   if(setSec === "theme") return `<div class="card"><h3>主题色</h3>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -1382,6 +1382,16 @@ function setPanel(){
     </div>
     <div class="hint" style="margin-top:8px">字体大小：</div>
     <div style="display:flex;gap:6px;margin-top:4px">${[["compact","紧凑"],["comfortable","标准"],["large","大"]].map(([k,l])=>`<button class="btn ghost" data-f="${k}">${l}</button>`).join("")}</div></div>`;
+  if(setSec === "perm") {
+    const mode = (S.sec||{}).permission_mode || "";
+    const opt = (k, t, d) => `<label class="perm-opt ${mode===k?"on":""}"><input type="radio" name="permmode" value="${k}" ${mode===k?"checked":""}><div><b>${t}</b><p>${d}</p></div></label>`;
+    return `<div class="card"><h3>权限模式</h3>
+      <div class="hint">我只能在程序自己的数据目录和你亲手选过的项目文件夹里读写；越界会直接拒绝并记一条审计。</div>
+      <div class="perm-opts">
+        ${opt("all", "允许所有", "在允许的目录里直接读写、编译、导出，不再逐次询问。")}
+        ${opt("ask", "每次都要问", "编译、写文件、导出前先问你一句「允许这一次吗」。")}
+      </div></div>`;
+  }
   if(setSec === "models") return `<div class="card"><h3>模型列表</h3>
       <div class="hint">可选模型、凭据、默认模型都在这里设置（原来侧栏的「模型」页）。</div></div><div id="set-models"></div>`;
   if(setSec === "tools") return `<div class="card"><h3>Agent 可用工具 <span class="pill">${(S.tools||[]).length}</span></h3>
@@ -1404,6 +1414,11 @@ function renderSettings(m){
       <div class="set-body" id="set-body">${setPanel()}</div></div>`;
   m.querySelectorAll("[data-set]").forEach(b=>b.onclick=()=>{ setSec = b.dataset.set; render(); });
   const ta = $("to-assist"); if(ta) ta.onclick = ()=>openTab("assistants");
+  if(setSec === "perm"){
+    m.querySelectorAll('input[name="permmode"]').forEach(r => r.onchange = async () => {
+      await setPermissionMode(r.value); render();
+    });
+  }
   if(setSec === "theme"){
     $("th").onclick = ()=>setTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
     bindSwatches($("presets"));
@@ -1448,6 +1463,7 @@ async function refreshState(rerender=true){
   { const pv = await api("/api/providers"); S.providers=pv.providers; S.wires=pv.wires; S.default=pv.default; }
   if(!S.tools.length) S.tools = (await api("/api/tools")).tools;
   S.loaded=true;
+  await loadSecurity();                                                        // 权限模式（all / ask）
   if(curTask && !S.tasks.some(t=>t.id===curTask)) curTask=null;
   if(!curTask && S.tasks.length){ curTask=S.tasks[0].id; localStorage.setItem("rw-task",curTask); }
   if(curChat && !S.chats.some(c=>c.id===curChat)){ curChat=null; localStorage.removeItem("rw-chat"); }

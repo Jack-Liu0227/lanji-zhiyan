@@ -341,6 +341,26 @@ function uiPrompt(text, def = "") {
   });
 }
 
+/* ---------------- 权限模式 ----------------
+   首次启动问一次「允许所有 / 每次都要问」；ask 模式下编译、写文件这类动作逐次确认。
+   存在后端 service_settings（一台机器一份），不是 localStorage —— 换浏览器/换窗口不会丢。 */
+async function loadSecurity() {
+  try { S.sec = await api("/api/security"); } catch (e) { S.sec = S.sec || {}; }
+  return S.sec || {};
+}
+function uiChoice(title, text, okLabel, cancelLabel) {
+  return uiConfirm(text, { title, ok: okLabel, cancel: cancelLabel, danger: false });
+}
+/* 需要许可时返回 true；mode=all 直接放行 */
+async function needPerm(what) {
+  if (((S.sec || {}).permission_mode) === "all") return true;
+  return await uiChoice("需要你的许可", `这一次要${what}。允许吗？（「设置 → 权限」里可以改成不再逐次询问）`, "允许这一次", "先不要");
+}
+async function setPermissionMode(mode) {
+  try { S.sec = await api("/api/security", { permission_mode: mode }); } catch (e) { uiNotify("保存失败：" + e.message); }
+  return S.sec;
+}
+
 /* ---------------- 模型 Key 守卫 ----------------
    新装用户没配 Key 时，发消息/翻译/出计划一律先拦下来，别让一轮请求打到后端再回一句报错。
    「编译 .tex」不走这里：那是本地 xelatex，不需要任何 Key。 */
