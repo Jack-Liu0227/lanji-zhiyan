@@ -67,6 +67,21 @@
 十步逐个断言第一段 system 为「你叫「X」」且不含「览籍智研」；`step=""` 时仍是「你叫「览籍智研」」，通用对话没被误改。
 临时探针项目 `__身份探针__` 用完已删（`/api/task/delete` 返回 deleted=true，库里只剩他原有 3 个项目）。
 
+**8. 从学长 fork 的 `xuezhang/asset-workflow` 挑回 main 真缺的两条路由**
+那条分支与 main **无共同祖先**（从他自己的 `initial commit: 览籍智研 0.1.0` 重开），main 领先 131 个提交，
+直接 `merge --allow-unrelated-histories` 会按它的树覆盖 main（还会删 `migrations/006_team_task_dag.sql`、
+`tests/test_team_scheduler.py`、两版 logo）。逐个文件比对后结论：**它没有任何 main 缺少的文件**（A=0），
+资产层/`/api/assets/rebuild` 等我们已有。唯一真缺的是两条 GET 路由——**main 的前端在调、后端却没实现**：
+- `GET /api/starmap/item?id=&title=&doi=&key=`：知识星图点开节点看条目详情（Zotero 有就回 Zotero，
+  没有就用本地 papers/paper_meta 拼一份 Zotero 形状的回包）。调用方 `web/vendor/neural/scene.js:831`。
+- `GET /api/zotero/select?key=`：唤起 Zotero 定位条目（`zotero://select/items/0_<key>`）。调用方 `web/starmap-view.js:26`。
+两条都按原样搬进 `apps/desktop/server.py`（插在 `/api/starmap/brief` 与 `/api/litgraph` 之间），
+main 现有实现一行未改。
+
+**验**：`py_compile` 通过；起 `server.py --no-open` 实测——`/api/zotero/select` 无 key 时按预期 `{"error":"缺少 key"}` 400，
+`/api/starmap/item?id=<真 paper id>` 返回 `zotero_found:false` + 标题/年份/页数/doi 完整；全量 270 项测试 OK（skipped=8）。
+没搬的：分支里 `workflow.py` 给解密失败的 key 补 `key_error/key_invalid` 提示（4 行）——`agent_settings.py` 已有同类提示，暂不动。
+
 **验**：
 - 浅色（1440×900，浏览器实测计算样式）：`kb-header` / `kb-col` 底色 `rgb(255,255,255)`、`kb-card` `rgb(241,244,248)`；
   全页扫描 **无** alpha>0.5 且亮度<0.35 的深色块、**无**文字对比度 <3:1 的元素（扫描按祖先链做 alpha 合成）。
