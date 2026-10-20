@@ -222,7 +222,7 @@ class ResearchDB:
         self.db.commit()
         return {"deleted": bool(row)}
 
-    def ingest_pdf(self, task_id: str, source: str | Path) -> dict[str, Any]:
+    def ingest_pdf(self, task_id: str, source: str | Path, *, deduplicate: bool = True) -> dict[str, Any]:
         path = Path(source).expanduser().resolve()
         if path.suffix.lower() != ".pdf":
             raise ValueError("only .pdf files are accepted")
@@ -231,7 +231,7 @@ class ResearchDB:
         if self.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone() is None:
             raise KeyError(task_id)
         sha = digest(path)
-        existing = self.db.execute("SELECT id FROM papers WHERE sha256=?", (sha,)).fetchone()
+        existing = self.db.execute("SELECT id FROM papers WHERE task_id=? AND sha256=?", (task_id, sha)).fetchone() if deduplicate else None
         if existing:
             return self.paper(existing["id"])
         pages = [(i + 1, t) for i, t in enumerate(pdfio.page_texts(path))]

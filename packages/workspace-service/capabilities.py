@@ -14,6 +14,7 @@ from pathlib import Path
 import queue
 import re
 import securestore              # DPAPI 凭据保护（见 workspace-core/securestore.py）
+import paths
 import shutil
 import subprocess
 import threading
@@ -65,7 +66,8 @@ def _project_dir(db, body: dict, query: dict) -> str:
 
 
 def skill_roots(project_dir: str = "") -> list[tuple[str, Path]]:
-    roots = [("user", Path.home() / ".agents" / "skills")]
+    roots = [("builtin", paths.APP / ".agents" / "skills"),
+             ("user", Path.home() / ".agents" / "skills")]
     if project_dir:
         roots.append(("project", Path(project_dir).expanduser().resolve() / ".agents" / "skills"))
     return roots
@@ -173,7 +175,7 @@ def filter_tools(db, assistant_id: str, tools: list[dict], project_dir: str = ""
         name = fn.get("name", "")
         if not enabled(db, assistant_id, "tool", name):
             continue
-        if name.startswith("mcp_"):
+        if name.startswith("mcp_") and name != "mcp_register":
             match = _cached_mcp_tool(db, name)
             if not match or not enabled(db, assistant_id, "mcp", match[0]):
                 continue
@@ -191,6 +193,35 @@ def skill_context(db, assistant_id: str, project_dir: str = "") -> str:
     return ("\n\n[Enabled skills]\nUse skill_read with the exact skill_id before applying a skill. "
             "Disabled skills are unavailable. Project skills override user skills with the same name.\n" +
             "\n".join(f"- {item['id']}: {item['description']}" for item in items))
+
+
+def steward_context(db, assistant_id: str, project_dir: str = "") -> str:
+    """Load the steward entrypoint for ordinary steward turns, honoring overrides."""
+    if assistant_id != "builtin-steward" or not enabled(db, assistant_id, "tool", "skill_read"):
+        return ""
+    if not enabled(db, assistant_id, "skill", "research-steward"):
+        return ""
+    if not any(item["id"] == "research-steward" for item in list_skills(project_dir)):
+        return ""
+    item = invoke_tool(db, assistant_id, "skill_read", {"skill_id": "research-steward"}, project_dir)
+    return "\n\n[Active skill: research-steward]\n" + item["content"]
+
+
+def install_steward_skill(project_dir: str | Path) -> None:
+    """Seed new projects from the maintained skill; preserve existing user edits."""
+    root = Path(project_dir).resolve()
+    source = paths.APP / ".agents" / "skills" / "research-steward"
+    target = root / ".agents" / "skills" / "research-steward"
+    if not target.resolve().is_relative_to(root):
+        raise ValueError("项目 Skill 路径越过项目文件夹")
+    for relative in ("SKILL.md", "references/actions.md", "references/zotero.md"):
+        dest = target / relative
+        if not dest.resolve().is_relative_to(root):
+            raise ValueError("项目 Skill 路径越过项目文件夹")
+        if (source / relative).is_file() and not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with dest.open("x", encoding="utf-8") as stream:
+                stream.write((source / relative).read_text(encoding="utf-8"))
 
 
 def _protect(data: dict) -> str:
@@ -606,8 +637,9 @@ def capability_tool_specs(db, assistant_id: str, project_dir: str = "") -> list[
     specs = mcp_tool_specs(db, assistant_id, project_dir)
     if any(enabled(db, assistant_id, "skill", item["id"]) for item in list_skills(project_dir)):
         specs.append({"type": "function", "function": {"name": "skill_read",
-                      "description": "Read the full instructions of an enabled skill listed in the system context.",
-                      "parameters": {"type": "object", "properties": {"skill_id": {"type": "string"}}, "required": ["skill_id"]}}})
+                      "description": "Read an enabled skill or one of its relative text resources.",
+                      "parameters": {"type": "object", "properties": {"skill_id": {"type": "string"},
+                          "resource": {"type": "string", "description": "Relative path inside the skill, default SKILL.md"}}, "required": ["skill_id"]}}})
     return filter_tools(db, assistant_id, specs, project_dir)
 
 
@@ -632,7 +664,16 @@ def invoke_tool(db, assistant_id: str, name: str, args: dict, project_dir: str =
         if not enabled(db, assistant_id, "tool", name) or not enabled(db, assistant_id, "skill", item_id):
             raise PermissionError("This skill is disabled for the assistant")
         item = _skill(item_id, project_dir)
-        return {**item, "content": Path(item["path"]).read_text(encoding="utf-8-sig")}
+        relative = str(args.get("resource") or "SKILL.md").replace("\\", "/")
+        if relative.startswith("/") or ":" in relative or any(p in ("", ".", "..") for p in relative.split("/")):
+            raise ValueError("Skill resource must be a relative path inside the skill")
+        root = Path(item["dir"])
+        target = (root / relative).resolve()
+        if not target.is_relative_to(root) or not target.is_file():
+            raise ValueError("Skill resource not found inside the skill")
+        if target.stat().st_size > MAX_SKILL_BYTES:
+            raise ValueError("Skill resource exceeds 1 MiB")
+        return {**item, "resource": relative, "content": target.read_text(encoding="utf-8-sig")}
     if name.startswith("mcp_"):
         return invoke_mcp_tool(db, assistant_id, name, args, project_dir)
     return None

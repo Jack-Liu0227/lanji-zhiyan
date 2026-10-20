@@ -314,7 +314,7 @@
         if (key === "permission" && !(await risk(chat.permission,e.target.value))) { e.target.value = chat.permission || "auto"; return; }
         try { await request("runtime-save",{id:curChat,[key]:e.target.value}); await refreshState(false); } catch(err) { uiNotify(err.message); }
       };
-      const hint = container.querySelector(".at-hint"); if (hint) hint.textContent = "Enter 发送 · Shift + Enter 换行 · 推理和权限默认由 Agent 决定；Full Access 会放开写入与外发确认，请谨慎启用。";
+      const hint = container.querySelector(".at-hint:not(.at-project-scope)"); if (hint) hint.textContent = "Enter 发送 · Shift + Enter 换行 · 推理和权限默认由 Agent 决定；Full Access 会放开写入与外发确认，请谨慎启用。";
     }
   };
   const originalSettings = renderSettings;

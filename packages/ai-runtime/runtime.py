@@ -135,7 +135,9 @@ def open_guarded_url(req: urllib.request.Request, timeout: int = 30) -> Any:
 def _call_wire_openai_completions(profile: dict[str, Any], messages: list[dict[str, Any]],
                                   tools: list[dict[str, Any]] | None = None,
                                   temperature: float = 0.2, timeout: int = 180,
-                                  max_tokens: int = 4096) -> dict[str, Any]:
+                                   max_tokens: int = 4096, on_delta: Callable[[str], None] | None = None,
+                                   cancel_check: Callable[[], bool] | None = None,
+                                   on_reasoning: Callable[[str], None] | None = None) -> dict[str, Any]:
     base_url = profile["base_url"].rstrip("/")
     api_key = profile.get("api_key", "")
     model = profile["model"]
@@ -151,6 +153,8 @@ def _call_wire_openai_completions(profile: dict[str, Any], messages: list[dict[s
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
+    if on_delta:
+        payload["stream"] = True
 
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -163,6 +167,49 @@ def _call_wire_openai_completions(profile: dict[str, Any], messages: list[dict[s
         method="POST",
     )
     with open_guarded_url(req, timeout=timeout) as res:
+        if on_delta:
+            content: list[str] = []
+            reasoning: list[str] = []
+            calls: dict[int, dict[str, Any]] = {}
+            usage: dict[str, Any] = {}
+            for raw in res:
+                if cancel_check and cancel_check():
+                    raise CancelledError("用户已中断运行")
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                body = line[5:].strip()
+                if body == "[DONE]":
+                    break
+                try:
+                    item = json.loads(body)
+                except ValueError:
+                    continue
+                usage = item.get("usage") or usage
+                for choice in item.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    thought = delta.get("reasoning_content") or delta.get("reasoning") or ""
+                    if isinstance(thought, str) and thought:
+                        reasoning.append(thought)
+                        if on_reasoning:
+                            on_reasoning(thought)
+                    piece = delta.get("content") or ""
+                    if piece:
+                        content.append(piece)
+                        on_delta(piece)
+                    for part in delta.get("tool_calls") or []:
+                        index = int(part.get("index") or 0)
+                        call = calls.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                        call["id"] += part.get("id") or ""
+                        func = part.get("function") or {}
+                        call["function"]["name"] += func.get("name") or ""
+                        call["function"]["arguments"] += func.get("arguments") or ""
+            return {"role": "assistant", "content": "".join(content).strip(),
+                    "reasoning": "".join(reasoning),
+                    "tool_calls": [calls[i] for i in sorted(calls)],
+                    "usage": {"prompt": int(usage.get("prompt_tokens") or 0),
+                              "completion": int(usage.get("completion_tokens") or 0),
+                              "total": int(usage.get("total_tokens") or 0), "exact": bool(usage)}}
         data = json.loads(res.read().decode("utf-8", "replace"))
 
     try:
@@ -174,6 +221,7 @@ def _call_wire_openai_completions(profile: dict[str, Any], messages: list[dict[s
     return {
         "role": "assistant",
         "content": (msg.get("content") or "").strip(),
+        "reasoning": msg.get("reasoning_content") or msg.get("reasoning") or "",
         "tool_calls": msg.get("tool_calls") or [],
         "usage": {
             "prompt": int(usage.get("prompt_tokens") or 0),
@@ -188,7 +236,9 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
          tools: list[dict[str, Any]] | None = None,
          temperature: float = 0.2, timeout: int = 180,
          max_tokens: int = 4096, retry_policy: RetryPolicy | None = None,
-         budget: Budget | None = None, cancel_check: Callable[[], bool] | None = None) -> dict[str, Any]:
+         budget: Budget | None = None, cancel_check: Callable[[], bool] | None = None,
+         on_delta: Callable[[str], None] | None = None,
+         on_reasoning: Callable[[str], None] | None = None) -> dict[str, Any]:
     if not profile or not profile.get("base_url") or not profile.get("model"):
         raise AIRuntimeError("No model configured: please configure a model profile.")
 
@@ -206,12 +256,27 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
     for attempt in range(policy.max_retries + 1):
         if cancel_check and cancel_check():
             raise CancelledError("Operation cancelled during execution")
+        streamed_any = False
+        def forward_delta(piece: str) -> None:
+            nonlocal streamed_any
+            streamed_any = True
+            if on_delta:
+                on_delta(piece)
+        def forward_reasoning(piece: str) -> None:
+            nonlocal streamed_any
+            streamed_any = True
+            if on_reasoning:
+                on_reasoning(piece)
         try:
             if api == "openai-completions":
-                result = _call_wire_openai_completions(profile, messages, tools, temperature, timeout, max_tokens)
+                result = _call_wire_openai_completions(profile, messages, tools, temperature, timeout,
+                                                        max_tokens, forward_delta if on_delta else None, cancel_check,
+                                                        forward_reasoning if on_reasoning else None)
             else:
                 from agent_protocols import complete
-                result = complete(profile, messages, tools, temperature, timeout, max_tokens)
+                result = complete(profile, messages, tools, temperature, timeout, max_tokens,
+                                  on_delta=forward_delta if on_delta else None, cancel_check=cancel_check,
+                                  on_reasoning=forward_reasoning if on_reasoning else None)
 
             duration_ms = int((time.monotonic() - t0) * 1000)
             use = result.get("usage") or {}
@@ -223,7 +288,7 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
         except urllib.error.HTTPError as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
             last_exc = exc
-            if exc.code in policy.retryable_codes and attempt < policy.max_retries:
+            if not streamed_any and exc.code in policy.retryable_codes and attempt < policy.max_retries:
                 time.sleep(policy.delay_for_attempt(attempt))
                 continue
             err_msg = f"HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:300]}"
@@ -233,7 +298,7 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
         except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
             last_exc = exc
-            if attempt < policy.max_retries:
+            if not streamed_any and attempt < policy.max_retries:
                 time.sleep(policy.delay_for_attempt(attempt))
                 continue
             err_msg = str(exc)

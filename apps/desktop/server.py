@@ -41,6 +41,7 @@ import workflow
 import schedule                  # 定时任务：只在应用活着时调度
 import team                      # 团队：Leader + 成员 + 派活队列
 import zotero                    # Zotero 本机 Local API 只读接入（笔记页；不碰 zotero.sqlite）
+import project_notes
 import agent_settings
 import capabilities
 import workflow_layout
@@ -1162,6 +1163,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/mdnotes":
                 with WorkflowDB(DB_PATH) as db:
                     return self._json({"notes": db.md_notes()})
+            if path == "/api/project/notes":
+                with WorkflowDB(DB_PATH) as db:
+                    return self._json(project_notes.dashboard(db, (q.get("project_id") or [""])[0]))
+            if path == "/api/project/note":
+                with WorkflowDB(DB_PATH) as db:
+                    return self._json(project_notes.read(db, (q.get("project_id") or [""])[0],
+                                                         (q.get("path") or [""])[0]))
             if path == "/api/zotero/status":            # Zotero 本机只读接入（笔记页用）
                 return self._json(zotero.status(q.get("base", [""])[0] or None))
             if path == "/api/zotero/collections":
@@ -1339,6 +1347,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
         if path == "/api/agent":
             return self._sse(data)
+        if path == "/api/agent/cancel":
+            with WorkflowDB(DB_PATH) as cancel_db:
+                return self._json({"cancelled": RunManager.get_instance().cancel_by_key(
+                    str(data.get("idempotency_key") or ""), db=cancel_db)})
         if path == "/api/idea":
             return self._sse(data, "idea")
         if path == "/api/map":
@@ -1470,9 +1482,15 @@ class Handler(BaseHTTPRequestHandler):
                             return self._json({"error": folder}, 400)
                         enabled = bool(data.get("enabled", True))
                         with WorkflowDB(DB_PATH) as wdb:
+                            assistant_id = str(data.get("assistant_id") or "")
+                            if enabled and (not assistant_id or not wdb.assistant(assistant_id)):
+                                return self._json({"error": "请选择一个已启用的执行专家"}, 400)
+                            if enabled and not wdb.base_dir(str(data.get("project_id") or "")):
+                                return self._json({"error": "请选择一个有文件夹的项目"}, 400)
                             row = wdb.schedule_save({"id": data.get("id"), "name": name,
                                                      "prompt": str(data.get("prompt") or "").strip(),
                                                      "project_id": str(data.get("project_id") or ""),
+                                                     "assistant_id": str(data.get("assistant_id") or ""),
                                                      "frequency": str(data.get("frequency") or "daily"),
                                                      "cron": str(data.get("cron") or "0 9 * * *"),
                                                      "output_dir": folder, "enabled": enabled,
@@ -1485,6 +1503,8 @@ class Handler(BaseHTTPRequestHandler):
                             if not row:
                                 return self._json({"error": "找不到这个定时任务"}, 404)
                             enabled = bool(data.get("enabled"))
+                            if enabled and (not row.get("assistant_id") or not wdb.assistant(row["assistant_id"])):
+                                return self._json({"error": "请先绑定一个已启用的专家"}, 400)
                             wdb.schedule_set_enabled(row["id"], enabled)
                             wdb.schedule_mark_run(row["id"], row["last_run_at"],
                                                   schedule.next_run_at(row["cron"]) if enabled else "")
@@ -1509,6 +1529,10 @@ class Handler(BaseHTTPRequestHandler):
                     with WorkflowDB(DB_PATH) as note_db:
                         note_db.delete_md_note(data.get("id", ""))
                     return self._json({"deleted": True})
+                if path == "/api/project/note/save":
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(project_notes.write(note_db, str(data.get("project_id") or ""),
+                                                              str(data.get("path") or ""), str(data.get("content") or "")))
                 if path == "/api/trans/start":
                     tid = (data.get("task_id") or "").strip()
                     pid = (data.get("id") or "").strip()
@@ -1568,12 +1592,16 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(rss.refresh(db))
                 if path == "/api/task/create":
                     base = (data.get("base_dir") or "").strip()
+                    if base:
+                        paths.validate_project_dir(base)
+                    if base and not paths.grant_dir(base):
+                        return self._json({"error": "项目目录尚未由文件夹选择器授权"}, 403)
                     tid = db.create_task(data.get("title", ""), data.get("question", ""),
                                          data.get("material_system") or data.get("material", ""), base)
-                    if base:
-                        paths.grant_dir(base)      # 桌面这类 Medium 目录：请宿主代建并标 Low，否则沙箱里 mkdir 不放
                     made = make_project_tree(base, db.summary(tid)["task"]) if base else []
-                    return self._json({"task_id": tid, "base_dir": base, "dirs": made})
+                    actual_base = str(db.base_dir(tid) or "")
+                    return self._json({"task_id": tid, "base_dir": actual_base,
+                                       "dirs": made or [name for name, _ in workflow.PROJ_DIRS]})
                 if path == "/api/task/delete":
                     return self._json(db.delete_task(data.get("id", "")))
                 if path == "/api/task/papergraph/build":          # 论文星图：点「生成」才编译一次，结果落库
@@ -1630,6 +1658,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"ok": True})
                 if path == "/api/chat/outdir":
                     cid = data.get("id", "")
+                    if db.chat(cid).get("task_id"):
+                        return self._json({"error": "已绑定项目的对话固定写入项目目录"}, 400)
                     picked = (data.get("dir") or "").strip()
                     if not picked:                       # 没给路径 = 弹本机原生选择框
                         got = self._pick_folder(db.chat(cid)["out_dir"])
@@ -1740,11 +1770,12 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- Agent 事件流（SSE，支持 HTTP/1.1 长连接、事件持久化与 Last-Event-ID 重放） ----------
     def _stream_run(self, run_id: str, after_id: int = 0) -> None:
         self.protocol_version = "HTTP/1.1"
+        self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Accel-Buffering", "no")
-        self.send_header("Connection", "keep-alive")
+        self.send_header("Connection", "close")
         self.end_headers()
 
         with WorkflowDB(DB_PATH) as db:
@@ -1821,11 +1852,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _sse(self, data: dict[str, Any], step: str = "") -> None:
         self.protocol_version = "HTTP/1.1"
+        self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Accel-Buffering", "no")
-        self.send_header("Connection", "keep-alive")
+        self.send_header("Connection", "close")
         self.end_headers()
 
         db = WorkflowDB(DB_PATH)
@@ -1880,22 +1912,26 @@ class Handler(BaseHTTPRequestHandler):
                 # 三块统计面板永远是 0 / 还没有。纯聊天（不绑项目）照旧 scope=''。
                 on_task = bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
                 run_agent(db, tid, data.get("message", ""), emit, extra_context=extra,
-                          step=wstep, scope=wstep if (wstep and on_task) else "")
+                          step=wstep, scope=wstep if (wstep and on_task) else "",
+                          cancel_check=lambda: run.cancel_requested)
             if track:
                 db.log_step(tid, step, "failed" if had_error else "done",
                             "执行过程报告错误" if had_error else "执行完成")
         except Exception as exc:
             if track:
                 db.log_step(tid, step, "failed", str(exc)[:300])
-            emit({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
-            emit({"type": "done", "content": ""})
+            if run.cancel_requested:
+                emit({"type": "cancelled", "message": "运行已中断"})
+            else:
+                emit({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
+                emit({"type": "done", "content": ""})
         finally:
             db.close()
 
 
     # ---------- 通用 Agent 对话（不绑项目） ----------
     def _pick_folder(self, initial: str = "", title: str = "选择产出文件夹") -> dict[str, Any]:
-        return folder_picker.pick_folder(initial, title)
+        return paths.host_pick_folder(initial, title)
 
 
 def _start_inproc(port: int, url: str) -> None:
@@ -1919,6 +1955,7 @@ def _start_inproc(port: int, url: str) -> None:
     srv = Server(("127.0.0.1", port), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     schedule.start()           # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
+    feishu.start_bridge(DB_PATH)
     team.start_worker()        # 团队派活队列（串行：一次跑一个成员）
     print(f"览籍智研已启动：{url}")
 
@@ -1945,6 +1982,18 @@ def _start_grant_helper():
     import secrets
 
     key = secrets.token_hex(16)
+    approved = {Path(paths.HOME).resolve(), *(root.resolve() for root in paths.project_roots())}
+    approved_lock = threading.Lock()
+
+    def can_grant(target: Path) -> bool:
+        try:
+            target = paths.validate_project_dir(target)
+        except ValueError:
+            return False
+        if target.is_relative_to(Path(paths.HOME).resolve()):
+            return True
+        with approved_lock:
+            return target in approved
 
     class Grant(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_a):        # 别往 stderr 刷行
@@ -1956,9 +2005,19 @@ def _start_grant_helper():
                 try:
                     n = int(self.headers.get("Content-Length") or 0)
                     data = json.loads(self.rfile.read(n) or b"{}")
-                    if self.path == "/grant":
+                    if self.path == "/pick":
+                        chosen = folder_picker.pick_folder(str(data.get("initial") or ""),
+                                                           str(data.get("title") or "选择文件夹"))
+                        picked = str(chosen.get("dir") or "")
+                        if picked:
+                            target = Path(picked).resolve()
+                            with approved_lock:
+                                approved.add(target)
+                        result = chosen
+                        ok = "error" not in chosen
+                    elif self.path == "/grant":
                         target = Path(str(data.get("path") or ""))
-                        if target.is_absolute():
+                        if target.is_absolute() and can_grant(target):
                             target.mkdir(parents=True, exist_ok=True)
                             import lowbox
                             ok = lowbox.mark_low(target)
@@ -1974,7 +2033,7 @@ def _start_grant_helper():
                                 ok = True
                 except (OSError, ValueError, KeyError):
                     ok = False
-            body = json.dumps({"ok": ok}).encode()
+            body = json.dumps(result if self.path == "/pick" and 'result' in locals() else {"ok": ok}).encode()
             self.send_response(200 if ok else 403)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

@@ -45,6 +45,24 @@ _SECRET_ENV = re.compile(
 
 
 # ---------------------------------------------------------------- 子进程环境
+_READ_ONLY_SOURCES: set[Path] = set()
+
+
+def protect_source(path: str | Path) -> None:
+    _READ_ONLY_SOURCES.add(Path(path).resolve())
+
+
+def assert_writable(path: str | Path) -> None:
+    target = Path(path).resolve()
+    paths.assert_not_zotero_write(target)
+    if target in _READ_ONLY_SOURCES:
+        raise ValueError("Zotero 原附件只读，请修改项目副本")
+    if target.is_file() and target.stat().st_nlink > 1:
+        for source in tuple(_READ_ONLY_SOURCES):
+            if source.is_file() and target.samefile(source):
+                raise ValueError("不能通过硬链接修改 Zotero 原附件，请使用普通文件副本")
+
+
 def clean_env(extra_path: str = "") -> dict[str, str]:
     """给外部工具（xelatex 等）用的环境：保留 PATH/HOME/TMP/代理，剥掉一切凭据类变量。"""
     env = {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k)}
@@ -78,6 +96,7 @@ def _slot(path: Path) -> Path:
 def before_write(path: object, note: str = "") -> Path | None:
     """覆盖写之前留一份旧内容。文件不存在/空 → 不存（没什么可丢的）。返回快照路径。"""
     p = Path(path)
+    assert_writable(p)
     try:
         if not p.is_file() or p.stat().st_size == 0:
             return None
@@ -103,6 +122,7 @@ def snapshots(path: object) -> list[Path]:
 def rollback(path: object) -> dict:
     """把文件恢复到最近一次快照。没有快照就拒绝（快照本身就是「曾经允许写」的凭证）。"""
     p = Path(path)
+    assert_writable(p)
     snaps = snapshots(p)
     if not snaps:
         raise ValueError(f"这个文件没有历史版本可回滚：{p}")

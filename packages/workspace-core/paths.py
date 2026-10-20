@@ -26,6 +26,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.request
 import time
 from pathlib import Path
@@ -247,6 +248,62 @@ def _grant_post(path: str, payload: dict) -> bool:
             return bool(json.loads(r.read() or b"{}").get("ok"))
     except (OSError, ValueError):
         return False
+
+
+def host_pick_folder(initial: str = "", title: str = "选择文件夹") -> dict:
+    """Let the window host choose and remember a directory before granting Low access."""
+    if not GRANT:
+        import folder_picker
+        return folder_picker.pick_folder(initial, title)
+    body = json.dumps({"initial": initial, "title": title}).encode()
+    req = urllib.request.Request("http://" + GRANT + "/pick", data=body,
+                                 headers={"Content-Type": "application/json", "X-RW-Key": GRANT_KEY})
+    try:
+        with urllib.request.urlopen(req, timeout=650) as response:
+            return json.loads(response.read() or b"{}")
+    except (OSError, ValueError) as exc:
+        return {"error": f"文件夹选择失败：{exc}"}
+
+
+def assert_not_zotero_write(path: str | os.PathLike[str]) -> None:
+    """Protect known Zotero storage and linked-attachment roots at write boundaries."""
+    target = Path(path).expanduser().resolve()
+    if "zotero" in {part.casefold() for part in target.parts} or target.name.casefold().startswith("zotero.sqlite"):
+        raise ValueError("Zotero 管理文件只读，请在独立项目中处理副本")
+    if any((folder / "zotero.sqlite").exists() for folder in (target, *target.parents)):
+        raise ValueError("Zotero 数据目录只读，请在独立项目中处理副本")
+    try:
+        import zotero
+    except ImportError:
+        return
+    roots = [zotero.find_zotero_data_dir(), *zotero.linked_attachment_roots()]
+    if any(target.is_relative_to(root.resolve()) for root in roots):
+        raise ValueError("Zotero 数据或链接附件目录只读，请在独立项目中处理副本")
+
+
+def validate_project_dir(path: str | os.PathLike[str]) -> Path:
+    """Reject broad or managed directories before creating or granting a project."""
+    target = Path(path).expanduser()
+    if not target.is_absolute():
+        raise ValueError("项目目录必须是绝对路径")
+    target = target.resolve()
+    if target == Path(target.anchor):
+        raise ValueError("不能把磁盘根目录设为项目目录")
+    app_home = HOME.resolve()
+    assert_not_zotero_write(target)
+    if target.is_relative_to(app_home):
+        return target
+    user_home = Path.home().resolve()
+    code_root = app_dir().resolve()
+    system_roots = [Path(os.environ.get("WINDIR", "C:/Windows")).resolve()]
+    system_roots += [Path(value).resolve() for name in ("ProgramFiles", "ProgramFiles(x86)")
+                     if (value := os.environ.get(name))]
+    protected = [user_home, code_root, Path(tempfile.gettempdir()).resolve(), *system_roots]
+    if any(target == item or item.is_relative_to(target) for item in protected):
+        raise ValueError("项目目录不能覆盖用户根目录、程序或系统目录")
+    if target.is_relative_to(code_root) or any(target.is_relative_to(item) for item in system_roots):
+        raise ValueError("项目目录不能位于程序或系统目录")
+    return target
 
 
 def grant_dir(path: str | os.PathLike[str]) -> bool:

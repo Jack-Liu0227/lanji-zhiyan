@@ -79,6 +79,14 @@ class RunManagerTest(unittest.TestCase):
         self.db.close()
         self.tmp.cleanup()
 
+    def test_cancel_arriving_before_run_creation_is_preserved(self):
+        manager = RunManager.get_instance()
+        key = "cancel-before-create-reliability"
+        self.assertTrue(manager.cancel_by_key(key, db=self.db))
+        run = manager.create_run(task_id="proj-1", idempotency_key=key, db=self.db)
+        self.assertTrue(run.cancel_requested)
+        self.assertEqual(run.status, "cancelled")
+
     def test_background_jobs_persistence_and_run_manager(self):
         job = self.db.create_background_job("bg-123", task_id="proj-1", status="running", progress=0.1, last_event_id=5)
         self.assertEqual(job["id"], "bg-123")

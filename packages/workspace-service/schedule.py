@@ -187,19 +187,14 @@ def output_dir_for(db: Any, sched: dict[str, Any]) -> Path:
     ok, folder = inspect_output_dir(sched.get("output_dir") or "定时任务")
     if not ok:
         raise ValueError(folder)
-    base = None
+    import project_notes
+    base = project_notes.project_root(db, sched["project_id"])
+    path = base / folder
     try:
-        base = db.base_dir(sched["project_id"])
-    except Exception:
-        base = None
-    root = base if base else (workflow.OUT / str(sched["project_id"] or "未绑定"))
-    path = root / folder
+        path.resolve().relative_to(base.resolve())
+    except ValueError:
+        raise ValueError("输出目录越出了项目目录") from None
     path.mkdir(parents=True, exist_ok=True)
-    if base:                        # 越界再验一次（base 是我们拼出来的，防符号链接绕出去）
-        try:
-            path.resolve().relative_to(base.resolve())
-        except ValueError:
-            raise ValueError("输出目录越出了项目目录") from None
     return path
 
 
@@ -243,12 +238,18 @@ def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None
     folder_ok, folder_why = inspect_output_dir(sched.get("output_dir") or "")
     if not folder_ok:
         return finish("blocked", reason=f"输出目录不可用：{folder_why}")
+    if not str(sched.get("assistant_id") or "").strip():
+        return finish("blocked", reason="未绑定专家：请在任务中选择一个已启用的专家")
 
     try:
         with workflow.WorkflowDB(_db_path()) as db:
+            assistant = db.assistant(str(sched["assistant_id"]))
+            if not assistant or not assistant.get("enabled"):
+                return finish("blocked", reason="绑定的专家不存在或已停用")
             folder = output_dir_for(db, sched)
             prompt = sched["prompt"]
-            out = workflow.run_agent(db, sched["project_id"], prompt, emit=emit, publish=False)
+            out = workflow.run_agent(db, sched["project_id"], prompt, emit=emit,
+                                     publish=False, assistant_id=sched["assistant_id"])
             text = str(out.get("reply") or "").strip() or "（模型没有返回内容）"
             stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
             path = folder / f"{_safe_name(sched['name'])[:60]}-{stamp}.md"

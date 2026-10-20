@@ -295,7 +295,7 @@
       <p class="hint">每个助手独立配置。可使用企业自建应用机器人，也可用群聊自定义机器人 Webhook。扫码绑定由飞书官方授权页完成，不会自动创建、发布或授予应用权限。</p>
       <label class="field"><span>配置哪个助手</span><select class="control" id="int-assistant">${optionRows(S.assistants || [], assistantId, "name")}</select></label>
       ${docs({"创建 / 管理飞书应用": result.docs.console, "官方 OAuth 授权说明": result.docs.oauth, "机器人消息权限": result.docs.bot, "自定义机器人说明": result.docs.webhook})}
-      <div class="integration-status">扫码授权：<b>${cfg.authorized ? "已完成" : "未完成"}</b>${cfg.expires_at ? ` · 用户令牌${cfg.expires_at * 1000 > Date.now() ? "有效" : "已过期，请重新扫码"}` : ""} · Webhook：${cfg.webhook_present ? "已配置" : "未配置"}<br><span class="hint">机器人发送使用应用租户令牌；用户扫码用于授权和绑定默认收件人。应用需启用机器人、发布、开放 im:message:send_as_bot，并确保机器人可以联系收件人。</span></div>
+       <div class="integration-status">扫码授权：<b>${cfg.authorized ? "已完成" : "未完成"}</b>${cfg.expires_at ? ` · 用户令牌${cfg.expires_at * 1000 > Date.now() ? "有效" : "已过期，请重新扫码"}` : ""} · Webhook：${cfg.webhook_present ? "已配置" : "未配置"} · 接收连接：${e(result.bridge?.status||"stopped")}<br><span class="hint">应用机器人需启用、发布，并授予发送消息与接收消息权限；接收事件使用飞书长连接。</span></div>
       ${registrationMarkup(cfg)}
       <div class="integration-grid">
         <label class="field"><span>App ID</span><input class="control" id="fs-app" value="${e(cfg.app_id)}" placeholder="cli_..."></label>
@@ -304,7 +304,10 @@
         <label class="field"><span>OAuth Scopes（空格分隔，需应用获批）</span><input class="control" id="fs-scopes" value="${e(cfg.scopes || "contact:user.base:readonly offline_access")}"></label>
         <label class="field"><span>默认收件人 / 群聊 ID（扫码后可自动绑定 open_id）</span><input class="control" id="fs-recipient" value="${e(cfg.receive_id)}"></label>
         <label class="field"><span>收件人类型</span><select class="control" id="fs-type">${["open_id", "chat_id", "user_id", "union_id", "email"].map(kind => `<option ${kind === (cfg.receive_id_type || "open_id") ? "selected" : ""}>${kind}</option>`).join("")}</select></label>
+         <label class="field"><span>接收任务的项目</span><select class="control" id="fs-project"><option value="">请选择项目</option>${optionRows(S.tasks||[],cfg.project_id||"","title")}</select></label>
+         <label class="field"><span>允许发送任务的用户 open_id</span><input class="control" id="fs-sender" value="${e(cfg.allowed_sender||"")}" placeholder="留空时使用扫码绑定的 open_id"></label>
       </div>
+       <label class="field"><input type="checkbox" id="fs-inbound" ${cfg.inbound_enabled?"checked":""}> 接收飞书消息并交给此专家执行项目任务</label>
       <details style="margin-top:15px"><summary>可选：群自定义机器人（不需要扫码；配置后优先使用）</summary><div class="integration-grid" style="margin-top:12px">
         <label class="field"><span>Webhook${cfg.webhook_present ? "（已保存，留空保留）" : ""}</span><input class="control" id="fs-webhook" type="password" autocomplete="off" placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."></label>
         <label class="field"><span>签名 Secret（如已开启签名校验）</span><input class="control" id="fs-sign" type="password" autocomplete="new-password"></label>
@@ -346,8 +349,10 @@
     field("fs-save").onclick = event => action(event.target, async () => {
       await api("/api/feishu/config", {assistant_id: assistantId, app_id: field("fs-app").value.trim(), app_secret: field("fs-secret").value.trim(),
         redirect_uri: field("fs-redirect").value.trim(), scopes: field("fs-scopes").value.trim(), receive_id: field("fs-recipient").value.trim(),
-        receive_id_type: field("fs-type").value, webhook_url: field("fs-clear-webhook").checked ? "" : field("fs-webhook").value.trim(),
-        sign_secret: field("fs-sign").value.trim(), enabled: field("fs-enabled").checked, clear_webhook: field("fs-clear-webhook").checked});
+         receive_id_type: field("fs-type").value, project_id: field("fs-project").value,
+         allowed_sender: field("fs-sender").value.trim(), inbound_enabled: field("fs-inbound").checked,
+         webhook: field("fs-clear-webhook").checked ? "" : field("fs-webhook").value.trim(),
+         signing_secret: field("fs-sign").value.trim(), enabled: field("fs-enabled").checked, clear_webhook: field("fs-clear-webhook").checked});
       await loadFeishu(); field("integration-result").textContent = "配置已保存。";
     });
     field("fs-auth").onclick = event => action(event.target, async () => {

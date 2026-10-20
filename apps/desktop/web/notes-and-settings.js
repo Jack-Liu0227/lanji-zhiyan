@@ -7,8 +7,23 @@ function markdownNoteClean(html){
 function renderMarkdown(value){
   const source = String(value||"");
   if(!window.marked || !window.marked.parse) return esc(source).replace(/\n/g,"<br />");
-  try{ return markdownNoteClean(window.marked.parse(source)); }
+  const previousSlots=markdownMathSlots;
+  markdownMathSlots=[];
+  try{
+    const root=document.createElement("div");
+    root.innerHTML=markdownNoteClean(window.marked.parse(source));
+    root.querySelectorAll("[data-rw-math]").forEach(node=>{
+      const math=markdownMathSlots[Number(node.dataset.rwMath)];
+      node.removeAttribute("data-rw-math");
+      if(!math) return;
+      if(!window.katex){ node.textContent=math.text; return; }
+      window.katex.render(math.text,node,{displayMode:math.display,throwOnError:false,
+        trust:false,maxExpand:1000,maxSize:20,output:"htmlAndMathml"});
+    });
+    return root.innerHTML;
+  }
   catch(e){ return esc(source).replace(/\n/g,"<br />"); }
+  finally{ markdownMathSlots=previousSlots; }
 }
 function mdActive(){ return mdNotes.find(n=>n.id===mdActiveId) || null; }
 const mdTaskName = (id)=> (S.tasks||[]).find(t=>t.id===id)?.title || "";
@@ -389,7 +404,7 @@ function schStatusPill(s){ return `<span class="pill ${s==="completed"?"ok":(s==
 function schWhen(iso){ return iso ? fmtDate(iso) : "—"; }
 function schEditSeed(row){
   return { id: row?.id||"", name: row?.name||"每日科研摘要", prompt: row?.prompt||"请根据项目中的最新文献与笔记，生成一份可核验的研究摘要。",
-    project_id: row?.project_id||curTask||"", frequency: row?.frequency||"daily", cron: row?.cron||"0 9 * * *",
+    project_id: row?.project_id||curTask||"", assistant_id: row?.assistant_id||"", frequency: row?.frequency||"daily", cron: row?.cron||"0 9 * * *",
     output_dir: row?.output_dir||"定时任务", enabled: row ? !!row.enabled : true };
 }
 function schEditorHTML(){
@@ -397,6 +412,8 @@ function schEditorHTML(){
   const e = schEdit;
   const projOpts = `<option value="">未绑定（运行会被阻断）</option>` +
     (S.tasks||[]).map(t=>`<option value="${t.id}" ${t.id===e.project_id?"selected":""}>${esc(t.title)}</option>`).join("");
+  const assistantOpts = `<option value="">请选择专家</option>` +
+    (S.assistants||[]).filter(a=>a.enabled).map(a=>`<option value="${esc(a.id)}" ${a.id===e.assistant_id?"selected":""}>${esc(a.name)}</option>`).join("");
   const freqOpts = Object.keys(schFreq).length ? Object.keys(schFreq) : Object.keys(SCH_PRESETS);
   return `<div class="card" style="margin-top:12px"><div class="sch-head">
     <div><p class="sch-eyebrow">${e.id?"EDIT SCHEDULE":"NEW SCHEDULE"}</p>
@@ -408,6 +425,7 @@ function schEditorHTML(){
       <label><span>频率</span><select id="schFreq">${freqOpts.map(k=>`<option value="${k}" ${k===e.frequency?"selected":""}>${esc(schFreqLabel(k))}</option>`).join("")}</select></label>
       <label><span>Cron（分 时 日 月 周）</span><input id="schCron" value="${esc(e.cron)}" style="font-family:ui-monospace,Consolas,monospace"></label>
       <label><span>项目</span><select id="schProj">${projOpts}</select></label>
+       <label><span>执行专家</span><select id="schAssistant">${assistantOpts}</select></label>
       <label><span>输出目录（项目目录内的相对路径）</span><input id="schOut" value="${esc(e.output_dir)}"></label>
       <label><span>启用</span><select id="schOn"><option value="1" ${e.enabled?"selected":""}>已启用</option><option value="0" ${e.enabled?"":"selected"}>已暂停</option></select></label>
       <label class="full"><span>Prompt（到点了让 Agent 做什么）</span><textarea id="schPrompt">${esc(e.prompt)}</textarea></label>
@@ -422,7 +440,7 @@ function schCardHTML(r){
     <div class="main"><div class="nmrow"><span class="nm">${esc(r.name)}</span>
       <span class="pill ${r.enabled?"ok":"warn"}">${r.enabled?"已启用":"已暂停"}</span>
       <span class="pill">${esc(schFreqLabel(r.frequency))} · ${esc(r.cron)}</span></div>
-      <div class="ln">${r.project_id?esc(schTaskName(r.project_id)||"已绑定项目"):"未绑定项目"} · 输出 ${esc(r.output_dir)}</div>
+       <div class="ln">${r.project_id?esc(schTaskName(r.project_id)||"已绑定项目"):"未绑定项目"} · ${esc((S.assistants||[]).find(a=>a.id===r.assistant_id)?.name||"未绑定专家")} · 输出 ${esc(r.output_dir)}</div>
       <div class="ln">${esc((r.prompt||"").replace(/\s+/g," ").slice(0,110))}</div>
       <div class="ln">下次 ${esc(next)} · 最近 ${esc(r.last_run_at?fmtDate(r.last_run_at):"尚未运行")}</div></div>
     <div class="acts">
@@ -484,7 +502,7 @@ async function renderSchedules(m){
       schEdit.frequency=k; if(c) schEdit.cron=c; };
     $("schSave").onclick = async ()=>{
       const body = { id: schEdit.id, name: nm(), prompt: $("schPrompt").value.trim(),
-        project_id: $("schProj").value, frequency: $("schFreq").value, cron: $("schCron").value.trim(),
+         project_id: $("schProj").value, assistant_id: $("schAssistant").value, frequency: $("schFreq").value, cron: $("schCron").value.trim(),
         output_dir: $("schOut").value.trim() || "定时任务", enabled: $("schOn").value === "1" };
       if(!body.prompt) return uiNotify("Prompt 必填");
       try{ await api("/api/schedule/save", body); schEdit=null; await schLoad();
@@ -1095,9 +1113,43 @@ async function renderSpace(m){
   }
 }
 
+let mdDashProject = "", mdDashGroup = "", mdDashPath = "";
+async function mdDashLoad(){
+  const host = $("mdDashboardBody"); if(!host) return;
+  if(!mdDashProject){ host.innerHTML = `<div class="hint">选择项目后浏览该项目中的 Markdown 笔记。</div>`; return; }
+  host.innerHTML = `<div class="hint">正在读取项目笔记…</div>`;
+  try{
+    const data = await api(`/api/project/notes?project_id=${encodeURIComponent(mdDashProject)}`);
+    const group = (data.groups||[]).find(g=>g.name===mdDashGroup);
+    if(!group){
+      host.innerHTML = `<div class="md-dash-grid">${data.groups.map(g=>`<button class="card md-dash-card" data-md-group="${esc(g.name)}"><b>${esc(g.name)}</b><span>${g.count} 篇</span><small>${esc(g.description)}</small></button>`).join("")}</div>`;
+      host.querySelectorAll("[data-md-group]").forEach(b=>b.onclick=()=>{ mdDashGroup=b.dataset.mdGroup; mdDashPath=""; mdDashLoad(); });
+      return;
+    }
+    if(mdDashPath){
+      const file = await api(`/api/project/note?project_id=${encodeURIComponent(mdDashProject)}&path=${encodeURIComponent(mdDashPath)}`);
+      host.innerHTML = `<div class="md-dash-head"><button class="btn ghost" id="mdDashBackFiles">← ${esc(group.name)}</button><b>${esc(file.title)}</b><span id="mdDashState" class="hint"></span><button class="btn" id="mdDashSave">保存</button></div><div class="md-dash-editor"><textarea id="mdDashSource" spellcheck="true"></textarea><article id="mdDashPreview" class="md-render"></article></div>`;
+      $("mdDashSource").value=file.content; $("mdDashPreview").innerHTML=renderMarkdown(file.content);
+      $("mdDashSource").oninput=()=>{ $("mdDashState").textContent="未保存"; $("mdDashPreview").innerHTML=renderMarkdown($("mdDashSource").value); };
+      $("mdDashBackFiles").onclick=()=>{ mdDashPath=""; mdDashLoad(); };
+      $("mdDashSave").onclick=async()=>{ try{ await api("/api/project/note/save",{project_id:mdDashProject,path:mdDashPath,content:$("mdDashSource").value}); $("mdDashState").textContent="已保存"; }catch(e){ uiNotify(e.message); } };
+      return;
+    }
+    host.innerHTML = `<div class="md-dash-head"><button class="btn ghost" id="mdDashBackGroups">← 分类</button><b>${esc(group.name)} · ${group.count} 篇</b><button class="btn" id="mdDashNew">＋ 新建</button></div><div class="md-dash-files">${group.files.length?group.files.map(f=>`<button class="md-note-item" data-md-file="${esc(f.path)}">${esc(f.title)}<small>${new Date(f.updated_at*1000).toLocaleDateString()}</small></button>`).join(""):`<div class="hint">这个分类还没有笔记</div>`}</div>`;
+    $("mdDashBackGroups").onclick=()=>{ mdDashGroup=""; mdDashLoad(); };
+    host.querySelectorAll("[data-md-file]").forEach(b=>b.onclick=()=>{ mdDashPath=b.dataset.mdFile; mdDashLoad(); });
+    $("mdDashNew").onclick=async()=>{
+      if(group.name==="未分类") return uiNotify("请在具体分类中创建笔记");
+      const name = (await uiPrompt("新笔记标题"))?.trim(); if(!name) return;
+      const safe = name.replace(/[\\/:*?\"<>|]/g,"_").slice(0,100);
+      const path = `笔记/${group.name}/${safe}.md`;
+      try{ await api("/api/project/note/save",{project_id:mdDashProject,path,content:`# ${name}\n\n`}); mdDashPath=path; mdDashLoad(); }catch(e){ uiNotify(e.message); }
+    };
+  }catch(e){ host.innerHTML=`<div class="msg error">${esc(e.message)}</div>`; }
+}
 async function renderNotes(m){
   m.style.padding = "";
-  m.innerHTML = `<div class="md-view" id="mdView">
+  m.innerHTML = `<div id="mdDashboard" class="md-dashboard"><div class="md-dash-head"><h2>项目笔记</h2><select id="mdDashProject"><option value="">选择项目</option>${(S.tasks||[]).map(t=>`<option value="${esc(t.id)}" ${t.id===(mdDashProject||curTask)?"selected":""}>${esc(t.title)}</option>`).join("")}</select><button class="btn ghost" id="mdLegacyOpen">独立笔记 / Zotero 导入</button></div><div id="mdDashboardBody"></div></div><div class="md-view" id="mdView" style="display:none">
     <aside class="md-note-side">
       <div class="md-note-side-head">
         <button class="btn" id="btnMdNew">＋ 新建</button>
@@ -1156,6 +1208,10 @@ async function renderNotes(m){
   </div>`;
   mdBind(m);
   if(!mdLoaded) await mdLoad(); else mdPaint();
+  mdDashProject = $("mdDashProject").value;
+  $("mdDashProject").onchange=e=>{ mdDashProject=e.target.value; mdDashGroup=""; mdDashPath=""; mdDashLoad(); };
+  $("mdLegacyOpen").onclick=()=>{ $("mdDashboard").style.display="none"; $("mdView").style.display="flex"; };
+  mdDashLoad();
   mdFocus(localStorage.getItem("rw-md-focus")==="true", true);     // 上次在专注模式就还在专注模式
   if(mdNarrowOn){ $("mdView")?.classList.add("narrow"); document.body.classList.add("md-narrow"); }
   const nb = $("btnMdNarrow"); if(nb && mdNarrowOn) nb.textContent = "▯ 铺满";
@@ -1460,11 +1516,7 @@ function setFont(f){ document.documentElement.style.setProperty("--app-font-size
 
 /* ---------------- markdown 极简渲染 ---------------- */
 function md(t){
-  const html = esc(t||"")
-    .replace(/^### (.*)$/gm,"<h3>$1</h3>").replace(/^## (.*)$/gm,"<h2>$1</h2>").replace(/^# (.*)$/gm,"<h1>$1</h1>")
-    .replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/`([^`]+)`/g,"<code>$1</code>")
-    .replace(/^\s*[-*] (.*)$/gm,"<li>$1</li>").replace(/\|(.+)\|/g,m=>m);
-  return html.replace(/(<li>[\s\S]*?<\/li>)(?!\s*<li>)/g,"<ul>$1</ul>").replace(/\n{2,}/g,"<br>");
+  return renderMarkdown(t);
 }
 
 /* ---------------- 启动 ---------------- */

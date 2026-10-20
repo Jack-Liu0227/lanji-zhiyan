@@ -311,6 +311,8 @@ class WorkflowDB(ResearchDB):
             self.db.execute("ALTER TABLE schedules ADD COLUMN last_run_at TEXT NOT NULL DEFAULT ''")
         if "next_run_at" not in cols_sch:
             self.db.execute("ALTER TABLE schedules ADD COLUMN next_run_at TEXT NOT NULL DEFAULT ''")
+        if "assistant_id" not in cols_sch:
+            self.db.execute("ALTER TABLE schedules ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''")
         cols_runs = {r["name"] for r in self.db.execute("PRAGMA table_info(schedule_runs)")}
         if "name" not in cols_runs:
             self.db.execute("ALTER TABLE schedule_runs ADD COLUMN name TEXT NOT NULL DEFAULT ''")
@@ -319,6 +321,7 @@ class WorkflowDB(ResearchDB):
         if "reason" not in cols_runs:
             self.db.execute("ALTER TABLE schedule_runs ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
         self.assistant_seed(BUILTIN_ASSISTANTS)      # 公开助手（内置）：只补缺，不覆盖改过的
+        self.db.execute("UPDATE schedules SET assistant_id='builtin-steward' WHERE id LIKE 'builtin.schedule.%' AND assistant_id=''")
         _recent = self.db.execute("SELECT id FROM research_tasks ORDER BY updated_at DESC LIMIT 1").fetchone()
         self.schedule_seed(BUILTIN_SCHEDULES, _recent["id"] if _recent else "")   # 内置定时任务：只补缺（没有项目就先留空，等用户绑）
         self.db.execute("""CREATE TABLE IF NOT EXISTS teams (
@@ -347,8 +350,36 @@ class WorkflowDB(ResearchDB):
                 self.db.execute(f"ALTER TABLE {_t} ADD COLUMN key_host TEXT NOT NULL DEFAULT ''")
         encrypt_legacy_secrets(self)                   # 老库里的明文 key → DPAPI 密文（幂等）
         self.db.commit()
+        import project_sources
+        project_sources.restore_source_protection(self)
         for folder in (PAPERS, NOTES, OUT):
             folder.mkdir(parents=True, exist_ok=True)
+
+    def create_task(self, title: str, question: str = "", material_system: str = "", base_dir: str = "") -> str:
+        chosen = str(base_dir or "").strip()
+        if chosen:
+            paths.validate_project_dir(chosen)
+        task_id = super().create_task(title, question, material_system, chosen)
+        if not chosen and str(self.path) != ":memory:":
+            base = self.path.resolve().parent / "projects" / task_id
+            self.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?", (str(base), task_id))
+            self.db.commit()
+            make_project_tree(base, self.summary(task_id)["task"])
+        return task_id
+
+    def bind_chat(self, cid: str, task_id: str | None = None) -> dict[str, Any]:
+        self.chat(cid)
+        tid = str(task_id or "").strip()
+        if tid and self.base_dir(tid):
+            paths.validate_project_dir(self.base_dir(tid))
+        if tid and not self.base_dir(tid):
+            if not self.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone():
+                raise ValueError("没有这个项目")
+            base = self.path.resolve().parent / "projects" / tid
+            self.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?", (str(base), tid))
+            self.db.commit()
+            make_project_tree(base, self.summary(tid)["task"])
+        return super().bind_chat(cid, tid)
 
     def __enter__(self) -> "WorkflowDB":
         return self
@@ -369,7 +400,11 @@ class WorkflowDB(ResearchDB):
 
     def out_dir(self, task_id: str) -> Path:
         """对话自己的产出目录（chats.out_dir）；没设就落在默认 data/out。"""
-        row = self.db.execute("SELECT out_dir FROM chats WHERE id=?", (task_id,)).fetchone()
+        if self.base_dir(task_id):
+            return self.pdir(task_id, "其余")
+        row = self.db.execute("SELECT out_dir, task_id FROM chats WHERE id=?", (task_id,)).fetchone()
+        if row and row["task_id"]:
+            return self.pdir(row["task_id"], "其余")
         raw = (row["out_dir"] if row else "") or ""
         folder = Path(raw).expanduser() if raw else OUT
         folder.mkdir(parents=True, exist_ok=True)
@@ -607,6 +642,12 @@ class WorkflowDB(ResearchDB):
         fallback = {"文献库": PAPERS, "笔记": NOTES, "论文正文": OUT, "最终产物": OUT, "其余": OUT, "记忆": OUT, "对话": OUT}
         base = self.base_dir(task_id)
         folder = (base / kind) if (base and kind in names) else fallback.get(kind, OUT)
+        if base:
+            paths.validate_project_dir(base)
+            try:
+                folder.resolve().relative_to(base.resolve())
+            except ValueError:
+                raise ValueError("项目目录中的子目录越界") from None
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
@@ -622,6 +663,9 @@ class WorkflowDB(ResearchDB):
         sid = str(data.get("id") or "").strip() or uuid.uuid4().hex
         stamp = now()
         enabled = 1 if data.get("enabled", True) else 0
+        assistant_id = str(data.get("assistant_id") or "").strip()
+        if assistant_id and (not self.assistant(assistant_id) or not self.assistant(assistant_id).get("enabled")):
+            raise ValueError("绑定的专家不存在或已停用")
         fields = (str(data.get("name") or "未命名任务"), str(data.get("prompt") or ""),
                   str(data.get("project_id") or ""), str(data.get("frequency") or "daily"),
                   str(data.get("cron") or "0 9 * * *"), str(data.get("output_dir") or "定时任务"),
@@ -631,8 +675,12 @@ class WorkflowDB(ResearchDB):
             self.db.execute("""UPDATE schedules SET name=?, prompt=?, project_id=?, frequency=?, cron=?,
                 output_dir=?, enabled=?, next_run_at=?, updated_at=? WHERE id=?""", (*fields, stamp, sid))
         else:
-            self.db.execute("INSERT INTO schedules VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (sid, *fields[:6], enabled, "", fields[7], stamp, stamp))
+            self.db.execute("""INSERT INTO schedules
+                (id,name,prompt,project_id,frequency,cron,output_dir,enabled,last_run_at,next_run_at,created_at,updated_at,assistant_id)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (sid, *fields[:6], enabled, "", fields[7], stamp, stamp, assistant_id))
+        if row:
+            self.db.execute("UPDATE schedules SET assistant_id=? WHERE id=?", (assistant_id, sid))
         self.db.commit()
         return self.schedule(sid) or {}
 
@@ -654,7 +702,7 @@ class WorkflowDB(ResearchDB):
                 continue
             self.db.execute(
                 "INSERT INTO schedules (id,name,prompt,project_id,frequency,cron,output_dir,enabled,"
-                "last_run_at,next_run_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,1,'','',?,?)",
+                "last_run_at,next_run_at,created_at,updated_at,assistant_id) VALUES (?,?,?,?,?,?,?,1,'','',?,?,'builtin-steward')",
                 (b["id"], b["name"], b["prompt"], project_id, b.get("frequency", "daily"),
                  b.get("cron", "0 9 * * *"), b.get("output_dir", "定时任务"), now(), now()))
             n += 1
@@ -938,17 +986,27 @@ class WorkflowDB(ResearchDB):
         base = self.base_dir(task_id)
         if not base:
             return
-        folder = base / "记忆"
-        folder.mkdir(parents=True, exist_ok=True)
+        folder = self.pdir(task_id, "记忆")
+        for filename in ("长期记忆.md", "短期记忆.md"):
+            if not (folder / filename).resolve().is_relative_to(base.resolve()):
+                raise ValueError("记忆文件越过项目目录")
         long = [m["text"] for m in self.memory(task_id, "long")]
         shorts = [m["text"] for m in self.memory(task_id, "short")]
         msgs = self.messages(task_id)
         lines = [f"- {x}" for x in shorts] + [
             f"- {'我' if m['role'] == 'user' else '助手'}（{m['created_at'][:16]}）：{' '.join((m['content'] or '').split())[:300]}"
             for m in msgs]
-        (folder / "长期记忆.md").write_text(
-            "# 长期记忆\n\n项目要点与重要结论（自动维护，可直接编辑，下次运行会读回来）。\n\n"
-            + ("\n".join(f"- {x}" for x in long) or "- （暂无）") + "\n", encoding="utf-8")
+        long_path = folder / "长期记忆.md"
+        existing = long_path.read_text(encoding="utf-8") if long_path.is_file() else ""
+        if existing:
+            missing = [x for x in long if f"- {x}" not in existing]
+            if missing:
+                with long_path.open("a", encoding="utf-8") as stream:
+                    stream.write("\n" + "\n".join(f"- {x}" for x in missing) + "\n")
+        else:
+            long_path.write_text(
+                "# 长期记忆\n\n项目要点与重要结论（自动维护，可直接编辑，下次运行会读回来）。\n\n"
+                + ("\n".join(f"- {x}" for x in long) or "- （暂无）") + "\n", encoding="utf-8")
         (folder / "短期记忆.md").write_text(
             "# 短期记忆\n\n这个项目的对话内容与细节（按时间顺序，越靠下越新）。\n\n"
             + ("\n".join(lines) or "- （暂无）") + "\n", encoding="utf-8")
@@ -972,6 +1030,14 @@ class WorkflowDB(ResearchDB):
         """拼给模型看的记忆块：长期全给，短期给窗口外的老对话（窗口内的走正常 messages）。"""
         self.seed_long_memory(task_id)
         long = [m["text"] for m in self.memory(task_id, "long")]
+        base = self.base_dir(task_id)
+        memory_file = base / "记忆" / "长期记忆.md" if base else None
+        if memory_file and not memory_file.resolve().is_relative_to(base.resolve()):
+            raise ValueError("记忆文件越过项目目录")
+        if memory_file and memory_file.is_file():
+            for item in memory_file.read_text(encoding="utf-8").splitlines():
+                if item.startswith("- ") and item[2:].strip() not in long:
+                    long.append(item[2:].strip())
         msgs = self.messages(task_id)
         older = msgs[:-now_window] if len(msgs) > now_window else []
         short = [f"{m['role']}: {' '.join((m['content'] or '').split())[:line]}" for m in older]
@@ -1560,7 +1626,8 @@ class ModelInvoker:
 
 
 def chat_raw(profile: dict[str, Any], messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None,
-             temperature: float = 0.2, timeout: int = 180, max_tokens: int = 4096) -> dict[str, Any]:
+             temperature: float = 0.2, timeout: int = 180, max_tokens: int = 4096,
+             on_delta: Any = None, cancel_check: Any = None, on_reasoning: Any = None) -> dict[str, Any]:
     """返回 assistant message 原始结构（含 tool_calls），供 agent 循环使用。"""
     if not profile:
         raise RuntimeError("尚未配置模型：到「模型」页添加一个 OpenAI 兼容接口并设为当前模型。")
@@ -1570,13 +1637,16 @@ def chat_raw(profile: dict[str, Any], messages: list[dict[str, Any]], tools: lis
         return invoked
     try:
         import runtime
-        return runtime.call(profile, messages, tools=tools, temperature=temperature, timeout=timeout, max_tokens=max_tokens)
+        return runtime.call(profile, messages, tools=tools, temperature=temperature, timeout=timeout,
+                            max_tokens=max_tokens, on_delta=on_delta, cancel_check=cancel_check,
+                            on_reasoning=on_reasoning)
     except (ImportError, ModuleNotFoundError):
         pass
     guards.scrub(messages, note=f"→ {profile.get('model') or '?'}")   # 出站闸门：个人信息/密钥就地打码，再发出去
     if profile.get("api", "openai-completions") != "openai-completions":
         from agent_protocols import complete
-        return complete(profile, messages, tools, temperature, timeout, max_tokens)
+        return complete(profile, messages, tools, temperature, timeout, max_tokens,
+                        on_delta=on_delta, cancel_check=cancel_check, on_reasoning=on_reasoning)
     payload = {"model": profile["model"], "temperature": temperature, "max_tokens": max_tokens, "messages": messages}
     if profile.get("reasoning", "auto") != "auto":
         payload["reasoning_effort"] = profile["reasoning"]
@@ -1759,11 +1829,13 @@ def idea_system(db: "WorkflowDB", task_id: str) -> str:
 
 def _overview(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     s = db.summary(task_id)
+    scoped = bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone())
     return {"任务": s["task"]["title"], "阶段": s["task"]["stage"], "文献": s["papers"], "证据候选": s["evidence"],
             "检索结果": [{"id": r["id"], "title": r["title"][:90], "source": r["source"], "year": r["year"], "oa": bool(r["pdf_url"])} for r in db.results(task_id)[:10]],
             "文献库": [{"id": p["id"], "name": p["filename"], "pages": p["pages"]} for p in db.papers_of(task_id)[:10]],
             "笔记": [{"id": n["id"], "title": n["title"]} for n in db.notes(task_id)[:10]],
-            "日历": [{"title": e["title"], "date": e["date"]} for e in db.events()[:10]]}
+            "日历": [{"title": e["title"], "date": e["date"]} for e in db.events()
+                     if not scoped or e.get("task_id") == task_id][:10]}
 
 
 def _resolve_project(db: "WorkflowDB", needle: str) -> dict[str, Any] | None:
@@ -1804,7 +1876,9 @@ def _knowledge_query(db: "WorkflowDB", task_id: str, query: str, project: str = 
     if not q:
         raise ValueError("要给检索关键词")
     hits: list[dict[str, Any]] = []
-    for pid, ptitle in _search_scope(db, task_id, project):
+    scope = dict(_search_scope(db, task_id, project))
+    scoped = bool(project) or bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone())
+    for pid, ptitle in scope.items():
         for n in db.notes(pid):
             if q in (n["title"] or "").lower() or q in (n["markdown"] or "").lower():
                 idx = (n["markdown"] or "").lower().find(q)
@@ -1815,15 +1889,17 @@ def _knowledge_query(db: "WorkflowDB", task_id: str, query: str, project: str = 
                 hits.append({"kind": "evidence", "project": ptitle, "field": e["field"], "value": e["value"],
                              "citation": f"{e['filename']} p.{e['page_no']}", "context": e["excerpt"]})
     for note in db.md_notes():                                  # 笔记页那批「大笔记」
+        if scoped and note.get("task_id") not in scope:
+            continue
         body = (note.get("content") or "")
         if q in (note.get("title") or "").lower() or q in body.lower():
             idx = body.lower().find(q)
-            hits.append({"kind": "big-note", "project": "", "id": note.get("id"), "title": note.get("title"),
+            hits.append({"kind": "big-note", "project": scope.get(note.get("task_id"), ""), "id": note.get("id"), "title": note.get("title"),
                          "context": body[max(0, idx - 120): idx + 240]})
     return {"query": query, "hits": hits[:20], "total": len(hits)}
 
 
-def _calendar_list(db: "WorkflowDB", args: dict[str, Any]) -> dict[str, Any]:
+def _calendar_list(db: "WorkflowDB", args: dict[str, Any], project_id: str = "") -> dict[str, Any]:
     """看日程：给月份就按月，给区间就按区间，都不给就是今天。"""
     from datetime import date as _date
     month = str(args.get("month") or "").strip()
@@ -1837,13 +1913,15 @@ def _calendar_list(db: "WorkflowDB", args: dict[str, Any]) -> dict[str, Any]:
         rows = [e for e in db.events() if start <= (e.get("date") or "") <= end]
         label = start if start == end else "%s ~ %s" % (start, end)
     titles = {t["id"]: t["title"] for t in db.tasks()}
+    if project_id:
+        rows = [e for e in rows if e.get("task_id") == project_id]
     items = [{"id": e["id"], "date": e["date"], "time": e.get("time") or "", "title": e["title"],
               "kind": e.get("kind") or "", "done": bool(e.get("done")),
               "project": titles.get(e.get("task_id") or "", "")} for e in rows]
     return {"range": label, "count": len(items), "events": items}
 
 
-def _schedule_manage(db: "WorkflowDB", args: dict[str, Any]) -> dict[str, Any]:
+def _schedule_manage(db: "WorkflowDB", args: dict[str, Any], project_id: str = "") -> dict[str, Any]:
     """定时任务：list / create / toggle / delete。"""
     import schedule as sched_lib
     action = str(args.get("action") or "list").strip()
@@ -1855,7 +1933,7 @@ def _schedule_manage(db: "WorkflowDB", args: dict[str, Any]) -> dict[str, Any]:
                 "next_run_at": row.get("next_run_at") or "", "prompt": (row.get("prompt") or "")[:200]}
 
     if action == "list":
-        rows = [public(r) for r in db.schedules()]
+        rows = [public(r) for r in db.schedules() if not project_id or r.get("project_id") == project_id]
         return {"count": len(rows), "schedules": rows}
 
     if action == "create":
@@ -1873,14 +1951,20 @@ def _schedule_manage(db: "WorkflowDB", args: dict[str, Any]) -> dict[str, Any]:
         if not ok2:
             raise ValueError(folder)
         project = str(args.get("project") or "").strip()
-        pid = ""
+        pid = project_id
         if project:
             row = _resolve_project(db, project)
             if not row:
                 raise ValueError("找不到这个项目：%s" % project)
             pid = row["id"]
+        if not pid:
+            raise ValueError("请指定定时任务所属的项目")
+        assistant_id = str(args.get("assistant_id") or "").strip()
+        if not assistant_id:
+            assistant_id = "builtin-steward"
         enabled = args.get("enabled", True) is not False
         saved = db.schedule_save({"name": name, "prompt": prompt, "project_id": pid,
+                                  "assistant_id": assistant_id,
                                   "frequency": "cron", "cron": cron, "output_dir": folder,
                                   "enabled": enabled,
                                   "next_run_at": sched_lib.next_run_at(cron) if enabled else ""})
@@ -1890,6 +1974,8 @@ def _schedule_manage(db: "WorkflowDB", args: dict[str, Any]) -> dict[str, Any]:
     row = db.schedule(sid)
     if not row:
         raise ValueError("找不到这个定时任务（先 action=list 拿 id）")
+    if project_id and row.get("project_id") != project_id:
+        raise PermissionError("只能管理当前项目的定时任务")
     if action == "toggle":
         enabled = args.get("enabled")
         enabled = (not bool(row["enabled"])) if enabled is None else bool(enabled)
@@ -1926,11 +2012,17 @@ TOOL_RISK = {
     "project_create": "workspace_write", "schedule_manage": "workspace_write", "calendar_list": "read_only",
     "team_board": "read_only", "mail_send": "external_write", "feishu_send": "external_write",
     "zotero_write": "external_write", "zotero_sync": "external_write",
+    "project_note_list": "read_only", "project_note_read": "read_only",
+    "project_task_manage": "workspace_write", "assistant_manage": "workspace_write",
+    "project_list": "read_only", "skill_read": "read_only",
+    "zotero_search": "read_only", "zotero_item": "read_only", "zotero_import_pdf": "workspace_write",
 }
 
 
 def tool_risk(name: str) -> str:
     """Return a stable policy category for every tool, including future MCP tools."""
+    if name == "mcp_register":
+        return "workspace_write"
     if name.startswith("mcp_"):
         return "external_write"
     return TOOL_RISK.get(name, "workspace_write")
@@ -1939,10 +2031,45 @@ def tool_risk(name: str) -> str:
 def enforce_tool_policy(name: str, args: dict[str, Any], permission: str) -> None:
     """Apply policy at the execution boundary, not only by hiding tool schemas."""
     risk = tool_risk(name)
-    if permission == "read_only" and risk != "read_only":
+    action_read = name in {"assistant_manage", "project_task_manage", "schedule_manage"} and args.get("action", "list") == "list"
+    connector_read = name in {"mail_accounts", "mail_list", "mail_read", "zotero_collections"}
+    if permission == "read_only" and risk != "read_only" and not action_read and not connector_read:
         raise PermissionError(f"只读权限禁止 {risk} 工具：{name}")
-    if risk == "external_write" and permission != "full_access" and args.get("confirm") is not True:
-        raise PermissionError("远程写入或外发必须取得明确确认（confirm=true）")
+    if risk == "external_write" and permission != "full_access":
+        raise PermissionError("远程写入或外发需要用户在专家设置中开启 Full Access")
+
+
+def enforce_project_scope(db: "WorkflowDB", project_id: str, name: str, args: dict[str, Any]) -> None:
+    """Validate ownership before any built-in, integration or nested tool runs."""
+    if not project_id or not db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (project_id,)).fetchone():
+        return
+    for field in ("project_id", "task_id"):
+        if args.get(field) and str(args[field]) != project_id:
+            raise PermissionError("项目内的工具只能操作当前项目")
+    if args.get("project"):
+        selected = _resolve_project(db, str(args["project"]))
+        if not selected or selected["id"] != project_id:
+            raise PermissionError("项目内的工具只能操作当前项目")
+    if name == "project_create":
+        raise PermissionError("请在未绑定项目的智研管家对话中创建新项目")
+    for field in ("path", "vault", "base_dir"):
+        raw = args.get(field)
+        if not raw or name.startswith("project_note_") or name == "skill_read":
+            continue
+        root = db.base_dir(project_id)
+        candidate = Path(str(raw)).expanduser()
+        if root and not candidate.is_absolute():
+            candidate = root / candidate
+        if not root or not candidate.resolve().is_relative_to(root.resolve()):
+            raise PermissionError("文件操作只允许在当前项目目录内进行")
+        if field == "path":
+            args[field] = str(candidate.resolve())
+    for field, table in (("paper_id", "papers"), ("note_id", "notes"), ("result_id", "search_cache")):
+        if not args.get(field):
+            continue
+        row = db.db.execute(f"SELECT task_id FROM {table} WHERE id=?", (str(args[field]),)).fetchone()
+        if row and row["task_id"] != project_id:
+            raise PermissionError("文献、笔记或检索结果不属于当前项目")
 
 
 def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: Any = None,
@@ -2007,16 +2134,127 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
 def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], scope: str = "",
                emit: Any = None, profile: dict[str, Any] | None = None) -> Any:
     """scope = 当前步骤（''/'idea'/'outline'/'write'/'review'）—— doc_read/doc_write 据此决定动哪个文件。"""
+    enforce_project_scope(db, task_id, name, args)
+    scoped_project = task_id if db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone() else ""
+    if name == "project_list":
+        rows = db.db.execute("SELECT id,title,base_dir FROM research_tasks ORDER BY updated_at DESC")
+        return {"current_project_id": scoped_project, "projects": [dict(row) for row in rows]}
+    if name in ("project_note_list", "project_note_read", "project_note_write", "project_task_manage", "team_create", "workflow_create", "skill_create"):
+        project_id = _team_project(db, task_id, str(args.get("project") or ""))
+        if name.startswith("project_note_"):
+            import project_notes
+            if name == "project_note_list":
+                return project_notes.dashboard(db, project_id)
+            if name == "project_note_read":
+                return project_notes.read(db, project_id, str(args.get("path") or ""))
+            return project_notes.write(db, project_id, str(args.get("path") or ""), str(args.get("content") or ""))
+        if name == "project_task_manage":
+            import project_todos
+            action = str(args.get("action") or "list")
+            if action == "list":
+                return {"tasks": project_todos.list_todos(db, project_id)}
+            if action == "create":
+                return project_todos.add_todo(db, project_id, str(args.get("title") or ""),
+                                              str(args.get("description") or ""), str(args.get("priority") or "P2"),
+                                              str(args.get("assistant_id") or ""), str(args.get("due_date") or ""))
+            if action == "update":
+                todo_id = str(args.get("id") or "")
+                if not any(row["id"] == todo_id for row in project_todos.list_todos(db, project_id)):
+                    raise ValueError("这个待办不属于当前项目")
+                fields = {k: args[k] for k in ("title", "description", "status", "priority", "due_date") if k in args}
+                if "status" in fields:
+                    fields["status"] = str(fields["status"]).upper()
+                    if fields["status"] not in project_todos.STATUSES:
+                        raise ValueError("任务状态必须是 TODO / IN_PROGRESS / REVIEW / DONE")
+                if "assistant_id" in args:
+                    fields["assigned_assistant"] = args["assistant_id"]
+                return project_todos.update_todo(db, todo_id, **fields)
+            raise ValueError("action 只支持 list/create/update")
+        if name == "team_create":
+            ids = args.get("assistant_ids") or ["builtin-steward"]
+            if not isinstance(ids, list) or len(ids) > 12 or len(set(ids)) != len(ids):
+                raise ValueError("团队需指定 1–12 个不重复的专家 ID")
+            assistants = [db.require_assistant(str(aid)) for aid in ids]
+            team_row = db.team_add(str(args.get("name") or ""), project_id=project_id,
+                                   purpose=str(args.get("purpose") or ""))
+            members = []
+            for index, assistant in enumerate(assistants):
+                members.append(db.team_member_add(team_row["id"], assistant["name"],
+                                                  role="leader" if index == 0 else "member",
+                                                  assistant_id=assistant["id"]))
+            return {"team": team_row, "members": members}
+        if name == "workflow_create":
+            import workflow_layout
+            workflow_layout.ensure_schema(db)
+            steps = [str(s) for s in (args.get("steps") or [])]
+            definition = workflow_layout._linear(steps)
+            saved = workflow_layout.save_layout(db, {"name": str(args.get("name") or ""),
+                                                       "description": str(args.get("description") or ""), **definition})
+            workflow_layout.select_layout(db, {"task_id": project_id, "layout_id": saved["layout"]["id"]})
+            return saved
+        if name == "skill_create":
+            import asset_service
+            import project_notes
+            skill_name = str(args.get("name") or "").strip()
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", skill_name):
+                raise ValueError("Skill 名称只允许字母、数字、下划线和横线")
+            root = project_notes.project_root(db, project_id)
+            target = root / ".agents" / "skills" / skill_name / "SKILL.md"
+            if not target.resolve().is_relative_to(root):
+                raise ValueError("Skill 路径越过项目文件夹")
+            if target.exists():
+                raise ValueError("同名 Skill 已存在")
+            description = str(args.get("description") or "").replace("\n", " ")[:300]
+            instructions = str(args.get("instructions") or "")
+            content = f"---\nname: {skill_name}\ndescription: {json.dumps(description, ensure_ascii=False)}\n---\n\n{instructions}\n"
+            if len(content.encode("utf-8")) > 1024 * 1024:
+                raise ValueError("Skill 超过 1 MB")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            asset_service.atomic_write_text(target, content)
+            return {"name": skill_name, "path": str(target)}
+    if name == "assistant_manage":
+        action = str(args.get("action") or "list")
+        if action == "list":
+            return {"assistants": [{"id": a["id"], "name": a["name"], "enabled": a["enabled"]} for a in db.assistants()]}
+        if action not in ("create", "update"):
+            raise ValueError("action 只支持 list/create/update")
+        aid = str(args.get("id") or "") if action == "update" else uuid.uuid4().hex
+        if action == "update" and not db.assistant(aid):
+            raise ValueError("专家不存在")
+        fields = {k: args[k] for k in ("name", "rules", "description", "model_id") if k in args}
+        return {"assistant": db.assistant_save(aid, **fields)}
+    if name == "mcp_register":
+        import capabilities
+        server_name = str(args.get("name") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", server_name):
+            raise ValueError("MCP 名称格式无效")
+        cfg = capabilities._config(db)
+        if server_name in cfg["mcpServers"]:
+            raise ValueError("同名 MCP 已存在")
+        url, command = str(args.get("url") or ""), str(args.get("command") or "")
+        if bool(url) == bool(command):
+            raise ValueError("MCP 需要且只需要 URL 或 command")
+        cfg["mcpServers"][server_name] = ({"url": url, "transport": "streamable-http", "enabled": False}
+                                           if url else {"command": command, "args": args.get("args") or [],
+                                                        "transport": "stdio", "enabled": False})
+        capabilities.save_mcp(db, cfg)
+        return {"name": server_name, "enabled": False}
     if name == "delegate":
         return _delegate(db, task_id, args.get("jobs") or [], emit=emit, profile=profile,
                          scope=scope, parallel=int(args.get("parallel") or 3))
     if name in ("team_board", "team_assign", "team_form"):
         import team as _team                                  # 延迟导入：team 反向依赖 workflow
-        tid = _team_project(db, task_id, args.get("project", ""))
+        project_id = _team_project(db, task_id, args.get("project", ""))
+        tid = str(args.get("team_id") or project_id)
+        if args.get("team_id"):
+            selected_team = db.team(tid)
+            if not selected_team or selected_team.get("project_id") != project_id:
+                raise PermissionError("团队不属于当前项目")
         if name == "team_board":
-            return _team.board(tid)
+            return {**_team.board(tid), "team_id": tid,
+                    "teams": [row for row in db.teams() if row.get("project_id") == project_id]}
         if name == "team_form":
-            return _team.form_team(tid, args.get("purpose", ""), args.get("members") or [])
+            return _team.form_team(project_id, args.get("purpose", ""), args.get("members") or [])
         return _team.assign(tid, args.get("member", ""), args.get("prompt", ""), trigger="leader",
                             origin="leader@" + task_id[:8], depends_on=args.get("depends_on"),
                             output_contract=args.get("output_contract"), reviewer_id=args.get("reviewer_id", ""))
@@ -2027,17 +2265,22 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
     if name == "knowledge_query":
         return _knowledge_query(db, task_id, args.get("query", ""), str(args.get("project") or ""))
     if name == "calendar_list":
-        return _calendar_list(db, args)
+        return _calendar_list(db, args, scoped_project)
     if name == "schedule_manage":
-        return _schedule_manage(db, args)
+        return _schedule_manage(db, args, scoped_project)
     if name == "project_create":
         title = str(args.get("title") or "").strip()
         if not title:
             raise ValueError("新建项目至少要有标题")
         base = str(args.get("base_dir") or "").strip()
+        if base:
+            paths.validate_project_dir(base)
+        if base and not paths.grant_dir(base):
+            raise PermissionError("该目录尚未由文件夹选择器授权，请在项目界面选择目录")
         tid = db.create_task(title, str(args.get("question") or ""), str(args.get("material_system") or ""), base)
         made = make_project_tree(base, db.summary(tid)["task"]) if base else []
-        return {"project_id": tid, "title": title, "base_dir": base, "dirs": made}
+        return {"project_id": tid, "title": title, "base_dir": str(db.base_dir(tid) or ""),
+                "dirs": made or [name for name, _ in PROJ_DIRS]}
     if name == "calendar_add":
         return db.add_event(args.get("title", ""), args.get("date", ""), task_id, args.get("kind", "milestone"),
                             time=args.get("time", ""))
@@ -2296,7 +2539,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
               system: str | None = None, tools: list[dict[str, Any]] | None = None,
               extra_context: str = "", scope: str = "", publish: bool = True,
               profile: dict[str, Any] | None = None, assistant_id: str = "",
-              member: dict[str, Any] | None = None, step: str = "") -> dict[str, Any]:
+              member: dict[str, Any] | None = None, step: str = "", cancel_check: Any = None) -> dict[str, Any]:
     """工具调用循环。emit(event) 每产生一条事件调用一次（SSE 用）。
     system/tools 不传就是通用 Agent（AGENT_SYSTEM + 全量工具）；创新点审查/确认大纲那两步会传受限工具 + 记忆块。
     scope 决定这轮对话和哪一步共用历史（'' = 创新点审查/通用，'outline' = 确认大纲）。
@@ -2327,8 +2570,15 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         except Exception:
             bound = ""
         if bound and not db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (bound,)).fetchone():
-            bound = ""                             # 项目被删了 → 退回随意对话
+            raise ValueError("绑定的项目已不可用，请重新选择项目")
+    elif db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone():
+        bound = task_id
     ctx_id = bound or task_id                       # 工具按这个 id 干活：绑了项目就落在项目里
+    if bound:
+        root = db.base_dir(bound)
+        if not root:
+            raise ValueError("绑定项目尚未设置文件夹，请重新选择项目")
+        paths.validate_project_dir(root)
     import run_service
     tracked_run = run_service.start(db, ctx_id, "agent", idempotency_key="")
     tracked_node = run_service.node_start(db, tracked_run["id"], scope or "agent")
@@ -2357,6 +2607,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                "跨项目的事让用户回首页 Agent（智研管家）做。\n"
                f"当前项目：{task['title']}\n研究问题：{task['question']}\n"
                f"关键词 / 材料体系：{task['material_system']}\n项目 ID：{task_id}\n产出目录：{db.out_dir(task_id)}")
+        ctx += "\n\n" + db.memory_block(task_id)
     # builtin-steward 的 rules 就是 AGENT_SYSTEM，首页/通用对话上面已经整段写过了，再套一层【当前助手】等于把同一段话重复一遍
     if aid and aid != "builtin-steward":   # Also applies to each team's selected assistant.
         try:
@@ -2379,10 +2630,12 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         ctx += "\n\n" + extra_context
     project_dir = str((db.summary(bound or task_id).get("task") or {}).get("base_dir") or "")
     ctx += "\n\n" + capabilities.skill_context(db, aid, project_dir)
+    if tools is None:
+        ctx += capabilities.steward_context(db, aid, project_dir)
     ctx += "\n\n权限模式：%s。%s" % (permission, {
-        "auto": "由你根据用户目标决定操作范围；外发邮件、消息和远程写入仍需明确确认。",
+        "auto": "Choose actions for the user goal. Sending mail or messages and remote writes require user enabled Full Access.",
         "read_only": "只允许只读工具，禁止写入文件、数据库、邮件或外部服务。",
-        "workspace_write": "可以修改工作区内容；外发邮件、消息和远程写入需要明确确认。",
+        "workspace_write": "You may change workspace content. Sending mail or messages and remote writes require user enabled Full Access.",
         "full_access": "危险：用户授予完全访问权限，可使用所有已启用工具和外部写入，不再要求逐次确认；谨慎处理不可逆操作。",
     }[permission])
     history = [{"role": m["role"], "content": m["content"]}
@@ -2394,8 +2647,12 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     elif any(t.get("function", {}).get("name") == "skill_read" for t in capabilities.capability_tool_specs(db, aid, project_dir)):
         tool_specs += [t for t in capabilities.capability_tool_specs(db, aid, project_dir) if t.get("function", {}).get("name") == "skill_read"]
     tool_specs = capabilities.filter_tools(db, aid, tool_specs, project_dir)
+    if bound and permission != "full_access":
+        tool_specs = [t for t in tool_specs if t.get("function", {}).get("name") == "mcp_register"
+                      or not t.get("function", {}).get("name", "").startswith("mcp_")]
     if permission == "read_only":
-        tool_specs = [t for t in tool_specs if t.get("function", {}).get("name") in agent_settings.READ_TOOLS]
+        tool_specs = [t for t in tool_specs if t.get("function", {}).get("name") in agent_settings.READ_TOOLS
+                      or t.get("function", {}).get("name") in {"project_list", "zotero_search", "zotero_item", "assistant_manage", "project_task_manage", "schedule_manage"}]
     tool_specs = list({t["function"]["name"]: t for t in tool_specs}.values())
     allowed_names = {t.get("function", {}).get("name") for t in tool_specs}
     integration_names = {t.get("function", {}).get("name") for t in agent_integrations.tool_specs()}
@@ -2408,12 +2665,40 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     final = ""
     tokens = {"prompt": 0, "completion": 0, "total": 0, "exact": True}
     for turn in range(max_steps):   # 别用 step：它在上面是本步的名字（助手身份/收口规则都靠它）
+        if cancel_check and cancel_check():
+            run_service.finish_node(db, tracked_node["id"], "failed", error="运行已中断")
+            run_service.finish(db, tracked_run["id"], "failed", error="运行已中断")
+            raise RuntimeError("运行已中断")
+        partial: list[str] = []
+        reasoning_parts: list[str] = []
+        reasoning_id = f"{tracked_run['id']}:{turn}"
+        model_started = time.monotonic()
+        say({"type": "reasoning_start", "id": reasoning_id})
+        def forward_reasoning(piece: str) -> None:
+            reasoning_parts.append(piece)
+            say({"type": "reasoning_delta", "id": reasoning_id, "content": piece})
+        def forward_delta(piece: str) -> None:
+            partial.append(piece)
+            say({"type": "assistant_delta", "content": piece})
         try:
-            msg = chat_raw(profile, messages, tools=tool_specs)
+            msg = chat_raw(profile, messages, tools=tool_specs,
+                           on_delta=forward_delta if emit else None, cancel_check=cancel_check,
+                           on_reasoning=forward_reasoning if emit else None)
         except Exception as exc:
+            say({"type": "reasoning_done", "id": reasoning_id, "content": "".join(reasoning_parts),
+                 "duration_ms": int((time.monotonic() - model_started) * 1000)})
+            if cancel_check and cancel_check() and publish and partial:
+                db.add_message(task_id, "assistant", "".join(partial), scope=scope)
             run_service.finish_node(db, tracked_node["id"], "failed", error=str(exc))
             run_service.finish(db, tracked_run["id"], "failed", error=str(exc))
             raise
+        thought = msg.get("reasoning") or "".join(reasoning_parts)
+        reasoning_event = {"type": "reasoning_done", "id": reasoning_id,
+                           "content": thought if isinstance(thought, str) else "",
+                           "duration_ms": int((time.monotonic() - model_started) * 1000)}
+        say(reasoning_event)
+        if reasoning_event["content"]:
+            events.append(reasoning_event)
         use = msg.get("usage") or {}
         if use:
             # 每次回包发「这一次」的用量（可累加），不发累计值——否则存进事件流后回放会重复计数
@@ -2441,6 +2726,10 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             assistant_message["_protocol"] = msg["_protocol"]
         messages.append(assistant_message)
         for call in calls:
+            if cancel_check and cancel_check():
+                run_service.finish_node(db, tracked_node["id"], "failed", error="运行已中断")
+                run_service.finish(db, tracked_run["id"], "failed", error="运行已中断")
+                raise RuntimeError("运行已中断")
             fn = (call.get("function") or {})
             name = fn.get("name") or "?"
             try:
@@ -2454,9 +2743,10 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 if name not in allowed_names:
                     raise PermissionError("当前助手未获准使用此工具：" + name)
                 enforce_tool_policy(name, args, permission)
+                enforce_project_scope(db, bound, name, args)
                 if name in integration_names:
                     result = agent_integrations.invoke(name, db, ctx_id, args, assistant_id=aid, permission=permission)
-                elif name == "skill_read" or name.startswith("mcp_"):
+                elif name == "skill_read" or (name.startswith("mcp_") and name != "mcp_register"):
                     result = capabilities.invoke_tool(db, aid, name, args, project_dir)
                 else:
                     result = _tool_impl(name, db, ctx_id, args, scope, emit=emit, profile=profile)
@@ -2479,7 +2769,16 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             messages.append({"role": "tool", "tool_call_id": call.get("id") or name, "name": name,
                              "content": json.dumps(result, ensure_ascii=False, default=str)[:4000]})
     else:
-        final = "达到单轮工具调用上限，先停在这里。可以再说一句让我继续。"
+        outcomes = [event for event in events if event.get("type") == "tool_result"]
+        lines = []
+        for event in outcomes[-6:]:
+            status = "成功" if event.get("ok") else "失败"
+            detail = event.get("path") or event.get("summary") or "无详情"
+            lines.append(f"- {event.get('name', '工具')}（{status}）：{detail}")
+        final = "本轮已达到工具调用上限，暂停继续执行。"
+        if lines:
+            final += "\n\n实际执行结果：\n" + "\n".join(lines)
+        final += "\n\n以上为工具执行记录，尚未完成最终核验；可以发送后续指令继续。"
         say({"type": "assistant", "content": final})
     if publish:
         db.add_message(task_id, "assistant", final, events, scope=scope)

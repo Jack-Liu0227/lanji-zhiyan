@@ -389,6 +389,28 @@ def storage_dir() -> Path:
     return find_zotero_data_dir() / "storage"
 
 
+def linked_attachment_roots() -> list[Path]:
+    """Read path preferences only; never execute prefs.js or open Zotero's DB."""
+    if sys.platform == "win32":
+        profile = Path(os.environ.get("APPDATA") or Path.home() / "AppData/Roaming") / "Zotero/Zotero/Profiles"
+    elif sys.platform == "darwin":
+        profile = Path.home() / "Library/Application Support/Zotero/Profiles"
+    else:
+        profile = Path.home() / ".zotero/zotero"
+    roots = []
+    for prefs in profile.glob("*/prefs.js"):
+        try:
+            content = prefs.read_text(encoding="utf-8")
+            matches = re.findall(r'user_pref\(\s*"extensions\.zotero\.baseAttachmentPath"\s*,\s*("(?:\\.|[^"\\])*")\s*\)', content)
+            for match in matches:
+                value = json.loads(match)
+                if value and Path(value).is_absolute():
+                    roots.append(Path(value).resolve())
+        except (OSError, UnicodeError, ValueError):
+            continue
+    return roots
+
+
 def pdf_path(key: str, base: str | None = None) -> str:
     """条目第一个 PDF 附件在本机的绝对路径。
 
@@ -423,9 +445,9 @@ def pdf_path(key: str, base: str | None = None) -> str:
                 return str(Path(p).resolve())
             if str(p).startswith("attachments:"):
                 rel = str(p)[len("attachments:"):].lstrip("/\\")
-                for candidate_root in [s_dir.parent, s_dir, Path.home()]:
-                    cand = candidate_root / rel
-                    if cand.is_file():
+                for candidate_root in linked_attachment_roots():
+                    cand = (candidate_root / rel).resolve()
+                    if cand.is_relative_to(candidate_root) and cand.is_file():
                         return str(cand.resolve())
 
         # 2. enclosure href

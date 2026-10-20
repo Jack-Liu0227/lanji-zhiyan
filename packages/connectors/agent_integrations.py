@@ -5,6 +5,7 @@ from typing import Any
 
 import feishu
 import mail
+import zotero
 import zotero_sync
 
 
@@ -13,10 +14,13 @@ def tool_specs() -> list[dict]:
         ("mail_accounts", "列出已配置邮箱及其账户ID，不含密码。", {}),
         ("mail_list", "读取邮箱邮件列表。", {"account_id": "string", "folder": "string", "page": "integer"}),
         ("mail_read", "按UID读取指定邮件正文。", {"account_id": "string", "folder": "string", "uid": "string"}),
-        ("mail_send", "发送邮件（外发，需用户明确授权confirm；只读权限禁止）。", {"account_id": "string", "to": "string", "cc": "string", "subject": "string", "text": "string", "confirm": "boolean"}),
-        ("feishu_send", "使用当前助手已配置的飞书机器人发送消息（外发需确认）。", {"text": "string", "receive_id": "string", "confirm": "boolean"}),
+        ("zotero_search", "通过本机 API 查询 Zotero 题录，不修改数据库或附件。", {"query": "string", "start": "integer", "limit": "integer"}),
+        ("zotero_item", "通过本机 API 读取指定 Zotero 条目的题录。", {"key": "string"}),
+        ("zotero_import_pdf", "将 Zotero 条目的 PDF 复制并入库到当前项目，返回 paper_id 和副本路径；原附件始终只读。", {"key": "string"}),
+        ("mail_send", "Send an email; requires user enabled Full Access", {"account_id": "string", "to": "string", "cc": "string", "subject": "string", "text": "string"}),
+        ("feishu_send", "Send a Feishu message; requires user enabled Full Access", {"text": "string", "receive_id": "string"}),
         ("zotero_collections", "读取已配置 Zotero Web API 的全部集合。", {}),
-        ("zotero_write", "写入 Zotero 条目，修改需提供key/version；外写需确认。", {"item": "object", "confirm": "boolean"}),
+        ("zotero_write", "Write a Zotero item; requires Full Access and key/version for updates", {"item": "object"}),
         ("zotero_sync", "预览或执行项目与绑定Collection的元数据同步；默认只预览，执行需plan_token与确认。", {"task_id": "string", "mode": "string", "dry_run": "boolean", "plan_token": "string", "confirm": "boolean"}),
     ]
     return [{"type": "function", "function": {"name": name, "description": desc,
@@ -25,12 +29,21 @@ def tool_specs() -> list[dict]:
 
 
 def invoke(name: str, db: Any, task_id: str, args: dict, assistant_id: str = "", permission: str = "auto") -> dict:
+    if name in {"zotero_search", "zotero_item", "zotero_import_pdf"}:
+        if name == "zotero_search":
+            return zotero.items(q=str(args.get("query") or ""), start=int(args.get("start") or 0), limit=int(args.get("limit") or 20))
+        if name == "zotero_item":
+            return zotero.item(str(args.get("key") or ""))
+        if permission in {"read_only", "read-only"}:
+            raise PermissionError("只读权限不能创建项目副本")
+        import project_sources
+        return project_sources.import_zotero_pdf(db, task_id, str(args.get("key") or ""))
     external_write = name in {"mail_send", "feishu_send", "zotero_write"} or (name == "zotero_sync" and args.get("dry_run") is False)
     if external_write:
         if permission in {"read_only", "read-only"}:
             raise ValueError("当前助手为只读权限，禁止外发/写入")
-        if permission not in {"full_access", "full-access"} and args.get("confirm") is not True:
-            raise ValueError("此操作会外发或修改远端数据，请取得用户明确授权后传入 confirm=true")
+        if permission not in {"full_access", "full-access"}:
+            raise ValueError("此操作会外发或修改远端数据，请由用户在专家设置中开启 Full Access")
     if name == "mail_accounts":
         return {"accounts": [mail.public_account(a) for a in mail.list_mail_accounts()]}
     if name in {"mail_list", "mail_read", "mail_send"}:

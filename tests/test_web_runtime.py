@@ -98,6 +98,40 @@ class WebRuntimeTest(unittest.TestCase):
             self.assertTrue(modal.evaluate("element => element.classList.contains('hidden')"))
         self.assertEqual(self.errors, [])
 
+    def test_project_notes_dashboard_opens_existing_markdown(self) -> None:
+        self.load_page()
+        self.page.locator('[data-nav="notes"]').click()
+        self.page.locator('[data-md-group="文献矩阵"]').wait_for()
+        self.page.evaluate("""async () => {
+          const project_id = S.tasks[0].id;
+          await api('/api/project/note/save', {project_id, path:'笔记/文献矩阵/浏览器验证.md', content:'# 浏览器验证\\n\\n已有内容'});
+        }""")
+        self.page.locator('[data-md-group="文献矩阵"]').click()
+        self.page.locator('[data-md-file="笔记/文献矩阵/浏览器验证.md"]').click()
+        self.assertIn("已有内容", self.page.locator("#mdDashSource").input_value())
+        self.assertEqual(self.errors, [])
+
+    def test_steward_binds_existing_project_and_restores_selection(self) -> None:
+        self.load_page()
+        project = self.page.evaluate("S.tasks[0]")
+        picker = self.page.get_by_role("combobox", name="选择已有项目")
+        picker.select_option(project["id"])
+        self.page.wait_for_function("id => S.chats.find(c => c.id === curChat)?.task_id === id && document.querySelector('#outpick')?.disabled", arg=project["id"])
+        self.assertTrue(self.page.locator("#outpick").is_disabled())
+        self.assertIn(project["title"], self.page.locator(".at-project-scope").inner_text())
+        self.assertIn("复制后处理", self.page.locator(".at-project-scope").inner_text())
+        self.page.reload(wait_until="networkidle")
+        self.assertEqual(self.page.locator("#projbind").input_value(), project["id"])
+        error = self.page.evaluate("""async () => {
+          try { await api('/api/chat/bind', {id:curChat, task_id:'missing-project'}); return ''; }
+          catch (e) { return e.message; }
+        }""")
+        self.assertTrue(error)
+        self.page.locator("#projbind").select_option("")
+        self.page.wait_for_function("S.chats.find(c => c.id === curChat)?.task_id === '' && !document.querySelector('#outpick')?.disabled")
+        self.assertFalse(self.page.locator("#outpick").is_disabled())
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

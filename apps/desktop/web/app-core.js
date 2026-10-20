@@ -92,14 +92,22 @@ const $ = (id)=>document.getElementById(id);
 const esc = (s)=>String(s??"").replace(/[&<>"]/g,(c)=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 /* ---- Markdown 管线（marked + KaTeX 扩展 + DOMPurify 白名单） ---- */
+let markdownMathSlots = null;
+function mathSlot(text, display){
+  if(!markdownMathSlots) return `<code>${esc(text)}</code>`;
+  const id=markdownMathSlots.length;
+  markdownMathSlots.push({text, display});
+  const tag=display?"div":"span";
+  return `<${tag} data-rw-math="${id}"></${tag}>`;
+}
 if(window.marked && window.marked.use){
   window.marked.use({gfm:true, breaks:true, extensions:[
-    {name:"blockKatex", level:"block", start:(src)=>src.indexOf("$$"),
-     tokenizer(src){ const m=/^\$\$\s*([\s\S]+?)\s*\$\$(?:\n|$)/.exec(src); return m?{type:"blockKatex",raw:m[0],text:m[1]}:undefined; },
-     renderer(tok){ try{ return window.katex.renderToString(tok.text,{displayMode:true,throwOnError:false,output:"htmlAndMathml"}); }catch(e){ return `<pre>${esc(tok.text)}</pre>`; } }},
-    {name:"inlineKatex", level:"inline", start:(src)=>src.indexOf("$"),
-     tokenizer(src){ const m=/^\$([^$\n]+?)\$/.exec(src); return m?{type:"inlineKatex",raw:m[0],text:m[1]}:undefined; },
-     renderer(tok){ try{ return window.katex.renderToString(tok.text,{displayMode:false,throwOnError:false,output:"htmlAndMathml"}); }catch(e){ return `<code>${esc(tok.text)}</code>`; } }},
+    {name:"blockKatex", level:"block", start:(src)=>src.search(/\$\$|\\\[/),
+     tokenizer(src){ const m=/^(?:\$\$\s*([\s\S]+?)\s*\$\$|\\\[\s*([\s\S]+?)\s*\\\])(?:\n|$)/.exec(src); return m?{type:"blockKatex",raw:m[0],text:m[1]||m[2]}:undefined; },
+     renderer(tok){ return mathSlot(tok.text,true); }},
+    {name:"inlineKatex", level:"inline", start:(src)=>src.search(/\$|\\[([]/),
+     tokenizer(src){ const m=/^(?:\$(?!\s)([^$\n]+?)(?<!\s)\$(?!\d)|\\\(([\s\S]+?)\\\)|\\\[([\s\S]+?)\\\])/.exec(src); return m?{type:"inlineKatex",raw:m[0],text:m[1]||m[2]||m[3],display:!!m[3]}:undefined; },
+     renderer(tok){ return mathSlot(tok.text,!!tok.display); }},
   ]});
 }
 if(window.DOMPurify && window.DOMPurify.addHook){
@@ -292,7 +300,7 @@ function uiNotify(text, ms = 3400) {
 
 function uiConfirm(text, opts = {}) {
   return new Promise(resolve => {
-    const wrap = document.createElement("div");
+    const wrap = document.createElement("dialog");
     wrap.className = "modal";
     wrap.innerHTML = `
       <div class="modal-mask"></div>
@@ -304,7 +312,7 @@ function uiConfirm(text, opts = {}) {
           <button class="btn ${opts.danger === false ? "" : "danger"}" data-ok>${esc(opts.ok || "确定")}</button>
         </div>
       </div>`;
-    const done = v => { wrap.remove(); document.removeEventListener("keydown", key, true); resolve(v); };
+    const done = v => { wrap.close(); wrap.remove(); document.removeEventListener("keydown", key, true); resolve(v); };
     const key = e => {
       if (e.key === "Escape") { e.preventDefault(); done(false); }
       if (e.key === "Enter") { e.preventDefault(); done(true); }
@@ -314,13 +322,14 @@ function uiConfirm(text, opts = {}) {
     wrap.querySelector(".modal-mask").onclick = () => done(false);
     document.addEventListener("keydown", key, true);
     document.body.appendChild(wrap);
+    wrap.showModal();
     wrap.querySelector("[data-ok]").focus();
   });
 }
 
 function uiPrompt(text, def = "") {
   return new Promise(resolve => {
-    const wrap = document.createElement("div");
+    const wrap = document.createElement("dialog");
     wrap.className = "modal";
     wrap.innerHTML = `
       <div class="modal-mask"></div>
@@ -332,7 +341,7 @@ function uiPrompt(text, def = "") {
           <button class="btn" data-ok>确定</button>
         </div>
       </div>`;
-    const done = v => { wrap.remove(); document.removeEventListener("keydown", key, true); resolve(v); };
+    const done = v => { wrap.close(); wrap.remove(); document.removeEventListener("keydown", key, true); resolve(v); };
     const inp = wrap.querySelector("#uiPromptIn");
     const key = e => {
       if (e.key === "Escape") { e.preventDefault(); done(null); }
@@ -343,6 +352,7 @@ function uiPrompt(text, def = "") {
     wrap.querySelector(".modal-mask").onclick = () => done(null);
     document.addEventListener("keydown", key, true);
     document.body.appendChild(wrap);
+    wrap.showModal();
     inp.focus(); inp.select();
   });
 }

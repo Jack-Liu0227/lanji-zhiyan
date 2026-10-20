@@ -263,6 +263,8 @@ PROJ_DIRS: list[tuple[str, str]] = [
 def make_project_tree(base: str | Path, task: dict[str, Any] | None = None) -> list[str]:
     """在用户选的项目位置里建好固定子目录 + 每个目录一个 README，再写一个根 README 说明结构。"""
     root = Path(str(base)).expanduser()
+    import paths
+    paths.validate_project_dir(root)
     root.mkdir(parents=True, exist_ok=True)
     old, new = root / "最终成品", root / "最终产物"
     if old.is_dir() and not new.exists():
@@ -270,9 +272,21 @@ def make_project_tree(base: str | Path, task: dict[str, Any] | None = None) -> l
     made: list[str] = []
     for name, desc in PROJ_DIRS:
         d = root / name
+        if not d.resolve().is_relative_to(root.resolve()):
+            raise ValueError("项目子目录越过项目文件夹")
         d.mkdir(parents=True, exist_ok=True)
-        (d / "README.md").write_text(f"# {name}\n\n{desc}\n", encoding="utf-8")
+        readme = d / "README.md"
+        if not readme.exists() and not readme.is_symlink():
+            readme.write_text(f"# {name}\n\n{desc}\n", encoding="utf-8")
         made.append(name)
+    from project_notes import CATEGORIES
+    for name, _ in CATEGORIES:
+        category = root / "笔记" / name
+        if not category.resolve().is_relative_to(root.resolve()):
+            raise ValueError("笔记目录越过项目文件夹")
+        category.mkdir(exist_ok=True)
+    import capabilities
+    capabilities.install_steward_skill(root)
     (root / "对话" / datetime.now().strftime("%Y-%m-%d")).mkdir(parents=True, exist_ok=True)
     # 新项目目录标成低完整性：xelatex / babeldoc 这类 Low 子进程只允许往这类目录写
     try:
@@ -281,7 +295,9 @@ def make_project_tree(base: str | Path, task: dict[str, Any] | None = None) -> l
     except Exception:
         pass
     t = task or {}
-    (root / "README.md").write_text("\n".join([
+    project_readme = root / "README.md"
+    if not project_readme.exists() and not project_readme.is_symlink():
+        project_readme.write_text("\n".join([
         f"# {t.get('title') or root.name}",
         "",
         f"这个文件夹是「览籍智研」的一个项目位置：程序按用途把文件分到下面 {len(PROJ_DIRS)} 个子目录，",
@@ -295,7 +311,7 @@ def make_project_tree(base: str | Path, task: dict[str, Any] | None = None) -> l
         "## 目录结构",
         *[f"- `{name}/` —— {desc.split('：')[0]}" for name, desc in PROJ_DIRS],
         "",
-    ]), encoding="utf-8")
+        ]), encoding="utf-8")
     return made
 
 

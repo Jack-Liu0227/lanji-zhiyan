@@ -19,6 +19,7 @@ a = Analysis(
     datas=[
         (os.path.join(_ROOT, 'apps', 'desktop', 'web'), 'web'),
         (os.path.join(_ROOT, 'VERSION'), '.'),
+        (os.path.join(_ROOT, '.agents', 'skills', 'research-steward'), '.agents/skills/research-steward'),
         (os.path.join(_ROOT, 'tools', 'home'), 'tools/home'),
         (os.path.join(_ROOT, 'tools', 'build', 'icon.ico'), 'build'),
         (os.path.join(_ROOT, 'packages', 'contracts', 'providers_catalog.json'), 'packages/contracts'),
