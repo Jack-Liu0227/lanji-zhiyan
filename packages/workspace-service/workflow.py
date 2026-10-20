@@ -158,6 +158,13 @@ OAUTH_CONSOLE = {
 }
 
 STAGES = ["idea", "search", "download", "notes", "outline", "map", "write", "review", "entrans", "convert"]
+# 新用户首启那张欢迎对话的正文（改文案只改这里）
+WELCOME_TEXT = (
+    "新用户你好，我是你的个人科研管家：览籍智研，叫我小智就行。\n\n"
+    "我能陪你走完一篇论文的全流程：查文献、下全文、精读做笔记、定大纲、写正文、审稿、中译英、导出格式，"
+    "每一步都留痕，能回退。\n\n"
+    "先说说你的研究方向，再给一句话研究问题，我帮你把项目建起来。只想随便聊也行。这条对话随时可以删。"
+)
 STAGE_LABEL = {
     "idea": "创新点审查", "search": "论文搜索", "download": "下载精读",
     "notes": "论文翻译", "outline": "确认大纲", "map": "梳理精读", "write": "文章撰写", "review": "审查",
@@ -1452,6 +1459,16 @@ class WorkflowDB(ResearchDB):
                         " VALUES (?,?,?,?,?,?,?,?)", row)
         self.db.commit()
         return self.messages(task_id, scope)[-1]
+
+    def seed_welcome(self) -> str:
+        """新用户首启：种一条「小智」欢迎对话 —— 真实 chat + 一条 assistant 消息，
+        在对话列表里能看见、能像普通对话一样删掉。已经有对话就什么都不做。
+        只该在「这个库一个项目都还没有」的首启路径里调用（见 server.main），删掉后不会再冒出来。"""
+        if self.chats():
+            return ""
+        cid = self.create_chat("小智")
+        self.add_message(cid, "assistant", WELCOME_TEXT, [], scope="")
+        return cid
 
     def messages(self, task_id: str, scope: str | None = None) -> list[dict[str, Any]]:
         """scope=None 拿全部（老行为）；给了 scope 就只看这个步骤的对话。

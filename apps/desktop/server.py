@@ -1873,6 +1873,7 @@ def main() -> int:
                     "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
                     "固态锂电池, 复合固态电解质, 锂金属负极",
                 )
+                _db.seed_welcome()          # 新用户首启：种一条「小智」欢迎对话（能正常删掉，删了不再出现）
         import mail
         mail.encrypt_legacy()          # 老 mail.json 里的明文授权码 → DPAPI 密文（幂等，干净时是空转）
         srv = Server(("127.0.0.1", port), Handler)

@@ -1451,6 +1451,8 @@ async function refreshState(rerender=true){
   if(curTask && !S.tasks.some(t=>t.id===curTask)) curTask=null;
   if(!curTask && S.tasks.length){ curTask=S.tasks[0].id; localStorage.setItem("rw-task",curTask); }
   if(curChat && !S.chats.some(c=>c.id===curChat)){ curChat=null; localStorage.removeItem("rw-chat"); }
+  // 首次打开（本机还没选过对话）→ 默认进最新那条。新用户首启种的那条「小智」欢迎对话就在这里被打开
+  if(!curChat && S.chats.length){ curChat=S.chats[0].id; localStorage.setItem("rw-chat",curChat); }
   if(rerender) render();
 }
 function initTheme(){

@@ -548,6 +548,22 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.db.bind_chat(chat, "no-such-project")                  # 绑一个不存在的项目 → 拒绝
 
+    def test_首启种一条小智欢迎对话且可删(self) -> None:
+        """新用户第一次打开：有且只有一条「小智」对话，正文带自我介绍；种两次不会多一条；能删。"""
+        cid = self.db.seed_welcome()
+        chats = self.db.chats()
+        self.assertEqual(len(chats), 1)
+        self.assertEqual(chats[0]["title"], "小智")
+        msg = self.db.messages(cid)
+        self.assertEqual([m["role"] for m in msg], ["assistant"])
+        self.assertIn("小智", msg[0]["content"])
+        self.assertIn("览籍智研", msg[0]["content"])
+        self.assertEqual(self.db.seed_welcome(), "")                  # 已有对话 → 不再种
+        self.assertEqual(len(self.db.chats()), 1)
+        self.db.clear_messages(cid)
+        self.db.delete_chat(cid)
+        self.assertEqual(self.db.chats(), [])
+
 
 # ---------------- 来自 test_deepread.py ----------------
 os.environ.setdefault("RESEARCH_WORKBENCH_DB", str(pathlib.Path(tempfile.gettempdir()) / "dr_unit.sqlite3"))
