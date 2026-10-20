@@ -912,9 +912,11 @@ function renderWorkflow(m){
         <div class="wf-panels">${WF_ORDER.map(s=> PANELS[s] ? PANELS[s](s===wfStep)
           : `<div class="card" id="panel-${s}"${s===wfStep?"":' style="display:none"'}><h3>${STAGE[s]}</h3><div id="out-${s}"></div></div>`).join("")}</div>
         <div class="wf-foot">
+          <span class="wf-pill" id="wfFootPill">第 1 / 10 步</span>
           <span class="hint" id="wfFootHint">确认后这一步锁定，下一步才能拿它当输入。</span>
           <span style="flex:1"></span>
           <button class="btn ghost" id="wfBack">退回上一步</button>
+          <span class="wf-sep"></span>
           <button class="btn primary" id="wfDeliver">确认交付 →</button></div>
       </main>
       <aside class="wf-agent" id="wfAgent"></aside>
@@ -960,8 +962,10 @@ function renderWorkflow(m){
 }
 function wfPaintFoot(){
   const a = WF_AGENT[wfStep];
-  const hint = $("wfFootHint");
-  if(hint && a) hint.textContent = `${STAGE[wfStep]}：产出由右边的「${a.name}」生成，看一眼没问题就确认交付。`;
+  const hint = $("wfFootHint"), pill = $("wfFootPill");
+  const name = (STAGE[wfStep]||wfStep).slice((STAGE[wfStep]||"").indexOf(" ")+1);
+  if(pill) pill.textContent = `第 ${WF_ORDER.indexOf(wfStep)+1} / ${WF_ORDER.length} 步 · ${name}`;
+  if(hint && a) hint.textContent = `右侧「${a.name}」的产出看着没问题就交付`;
 }
 function iwBind(m){
   const ta = $("iwMine"); if(!ta) return;

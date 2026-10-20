@@ -801,8 +801,14 @@ html[data-theme="light"] .quick-add .quick-time{color-scheme:light}
 .wf-panels .ol-right,.wf-panels .mp-right{display:none}
 .wf-panels .ol-grid,.wf-panels .mp-grid{grid-template-columns:minmax(0,1fr)}
    border-radius:9px;padding:9px 11px;overflow-wrap:anywhere}
-.wf-foot{display:flex;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--line);background:var(--panel2)}
+.wf-foot{display:flex;align-items:center;gap:12px;padding:9px 12px;border-top:1px solid var(--line);background:var(--panel2)}
 .wf-foot .hint{font-size:11.5px;color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 底条左边那枚「第 N / 10 步 · 步骤名」胶囊（方案 B） */
+.wf-pill{flex:none;font-size:11.5px;font-weight:600;color:var(--accent);
+  background:color-mix(in srgb,var(--accent) 9%,transparent);border:1px solid color-mix(in srgb,var(--accent) 28%,transparent);
+  border-radius:999px;padding:3px 10px;white-space:nowrap}
+.wf-sep{flex:none;width:1px;height:20px;background:var(--line)}
+.wf-foot .btn{height:32px;padding:0 15px;border-radius:8px;font-size:13px}
 
 /* 右：本步助手（沿用 .at 外壳，只补头像/模型胶囊/空状态） */
 .wf-agent{display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
