@@ -56,7 +56,7 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
                       outline_read, outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
                       cite_read, cite_add, conv_files, conv_run, conv_compile, conv_open,
-                      en_state, en_run, _safe_path,
+                      en_state, en_run, _safe_path, step_plan,
                       stage_download_selected, stage_zotero_import, test_provider,
                       deepread_kick, deepread_state, deepread_stop)
 
@@ -1492,6 +1492,12 @@ class Handler(BaseHTTPRequestHandler):
                                                "map", "write", "review", "entrans", "convert"):
                         return self._json({"error": "缺 task_id 或 step 不认识"}, 400)
                     return self._json(db.log_step(tid, step, "done", str(data.get("summary") or "用户确认交付")[:200]))
+                if path == "/api/step/plan":                  # 三栏页右栏：本步助手看着上一步的交付现写「进度同步 + 计划」
+                    tid = str(data.get("task_id") or "")
+                    step = str(data.get("step") or "")
+                    if not tid or step not in STAGES:
+                        return self._json({"error": "缺 task_id 或 step 不认识"}, 400)
+                    return self._json(step_plan(db, tid, step))
                 if path == "/api/chat/bind":                  # 对话绑项目（'' = 解绑成随意对话）
                     b = data or {}
                     with WorkflowDB(DB_PATH) as db:

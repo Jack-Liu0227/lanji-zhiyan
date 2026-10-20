@@ -2086,6 +2086,67 @@ STEP_AGENT = {                       # 十步各有一个助手身份（跟前�
 }
 
 
+def _plan_context(db: "WorkflowDB", tid: str, step: str) -> str:
+    """写「本步计划」时给模型的料：项目底子 + 上一步的交付 + 库里已有啥。
+    上一步交付三处来源都带上（最后一条结论 / 文档正文 / 判定笔记），模型自己挑用得上的。"""
+    task = (db.summary(tid) or {}).get("task") or {}
+    parts = ["项目：%s\n研究问题：%s\n材料体系：%s" % (
+        task.get("title") or "", task.get("question") or "（没填）", task.get("material_system") or "（没填）")]
+    mine = (db.idea_input(tid) or "").strip()
+    if mine:
+        parts.append("【用户写的创新点原文】\n" + mine[:1500])
+    v = db.idea_verdict(tid) or {}
+    if v.get("markdown"):
+        parts.append("【创新点审查的判定】\n" + v["markdown"][:1500])
+    i = STAGES.index(step) if step in STAGES else 0
+    prev = STAGES[i-1] if i else ""
+    if prev:
+        pm = db.messages(tid, prev)
+        if pm:
+            parts.append("【上一步「%s」最后的结论】\n%s" % (STAGE_LABEL.get(prev, prev), (pm[-1].get("content") or "")[:1500]))
+        if prev in ("outline", "write", "review"):
+            body = (doc_read(db, tid, prev) or {}).get("markdown") or ""
+            if body:
+                parts.append("【上一步产出的正文】\n" + body[:3000])
+        pl = db.papers_of(tid) or []
+        if pl:
+            parts.append("【项目文献库里已有的】\n" + "\n".join(
+                "- %s (%s)" % (p.get("title") or "", p.get("year") or "") for p in pl[:8]))
+        ns = db.notes(tid) or []
+        if ns:
+            parts.append("【项目笔记】\n" + "\n".join("- %s" % (n.get("title") or "") for n in ns[:6]))
+    return "\n\n".join(parts)
+
+
+def step_plan(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
+    """每一步的「进度同步 + 本步计划」：让这一步的助手看着上一步的交付**现写**一条，
+    落成该步对话的第一条 assistant 消息（events=[{type:plan}]）。已有就复用，不重复烧模型。"""
+    step = step if step in STAGES else "idea"
+    msgs = db.messages(task_id, step)
+    if msgs and msgs[-1].get("role") == "assistant" and any(
+            isinstance(e, dict) and e.get("type") == "plan" for e in (msgs[-1].get("events") or [])):
+        return {"text": msgs[-1].get("content") or "", "cached": True}
+    who, label = STEP_AGENT.get(step, ""), STAGE_LABEL.get(step, step)
+    system = (
+        f"你在一套科研工作流里当「{who}」，现在轮到「{label}」这一步，只负责这一步的事。\n"
+        "用户刚确认完上一步的交付。先用一句话说清你从上一步同步到了什么（要点到具体结论或数字，别写空话），"
+        "再用 3-5 条列出这一步的具体计划：要检索什么词 / 看哪些数据 / 改哪几节，都要写具体，"
+        "不许写「进行分析」「进一步研究」这种空话；最后一句问他按这个来行不行。\n"
+        "只写计划，不要执行任何操作、不要调用工具、不要寒暄、不要重复项目背景。")
+    prof = agent_profile(db, task_id) or {}
+    try:
+        text = (chat(prof, [{"role": "system", "content": system},
+                            {"role": "user", "content": _plan_context(db, task_id, step)}],
+                     temperature=0.3, timeout=180, max_tokens=900) or "").strip()
+    except Exception as exc:
+        return {"text": "", "cached": False, "error": f"{type(exc).__name__}: {exc}"[:200]}
+    if not text:
+        return {"text": "", "cached": False, "error": "模型没有返回内容"}
+    db.add_message(task_id, "assistant", text, [{"type": "plan"}], scope=step)
+    return {"text": text, "cached": False}
+
+
+
 def _system_for(who: str, system: str | None) -> str:
     """第一段 system。十步各有助手身份时，把 AGENT_SYSTEM 开头那两句「你叫览籍智研 / 答：你是览籍智研」
     换成本步的名字 —— 只加在后面 ctx 里没用，模型会照第一行复述。其余规则原样保留。"""

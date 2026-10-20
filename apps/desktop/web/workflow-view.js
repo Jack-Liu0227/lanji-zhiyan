@@ -689,7 +689,7 @@ const PANELS = {
 };   // 有专门功能区的步骤；其余留白卡
 let wfStep=localStorage.getItem("rw-wf-step")||"idea";
 let wfMin=localStorage.getItem("rw-wf-min")==="1";
-let wfMsgs=[], wfEvents=[], wfSteps=[];   // 右栏「本步助手」的历史与事件 + 项目各步的执行日志（计划卡要说上一步）
+let wfMsgs=[], wfEvents=[];   // 右栏「本步助手」的历史与事件
 
 /* ==== 三栏工作台：左十步 / 中展示区+确认交付 / 右本步助手 ==== */
 /* 每一步一个助手：emoji + 名字 + 一句话职责 + 聊天挂在哪个 scoped 端点 */
@@ -786,40 +786,55 @@ async function wfAgentPaint(m, step){
 }
 
 let wfView = "conversation";
-const stageName = s => (STAGE[s]||s).slice((STAGE[s]||"").indexOf(" ")+1);
-/* 右栏空态 = 这个助手的「进度同步 + 本步计划」：确认交付跳过来时用户先看到它，点同意才开跑 */
-function wfPlanHTML(step){
+/* 右栏空态 = 这一步的助手看着上一步的交付现写的「进度同步 + 本步计划」（后端 step_plan 落库，
+   已有就直接读消息，不会重复烧模型）。plan 消息的 events 带 {type:"plan"}，最后一条才挂「同意」。 */
+function wfPlanHTML(step, text, pending){
   const a = WF_AGENT[step] || WF_AGENT.idea;
-  const i = WF_ORDER.indexOf(step), prev = i > 0 ? WF_ORDER[i-1] : "";
-  const last = prev ? (wfSteps||[]).filter(s=>s.stage===prev).slice(-1)[0] : null;
-  const sync = !prev ? "这是第一步，没有上一步要等。"
-    : last && last.status==="done"
-      ? `上一步「${esc(stageName(prev))}」你已经确认交付了${last.summary?` — ${esc(last.summary)}`:""}。`
-      : `上一步「${esc(stageName(prev))}」还没确认交付${last&&last.summary?`（最近一条：${esc(last.summary)}）`:""}，我按现有产出接着往下做。`;
-  const plan = (WF_PLAN[step]||[a.sub]);
+  const body = text
+    ? `<div class="md wf-plan-md">${md(text)}</div>`
+    : `<p class="wf-plan-q">这一步我打算这么做，你看行不行：</p>
+       <ol>${(WF_PLAN[step]||[a.sub]).map(x=>`<li>${esc(x)}</li>`).join("")}</ol>`;
   return `<div class="wf-plan">
     <div class="wf-plan-h"><span class="wf-av">${a.emoji}</span><b>${esc(a.name)}</b><span class="wf-plan-tag">已同步进度</span></div>
-    <p class="wf-plan-sync">${sync}</p>
-    <p class="wf-plan-q">这一步我打算这么做，你看行不行：</p>
-    <ol>${plan.map(x=>`<li>${esc(x)}</li>`).join("")}</ol>
-    <div class="wf-plan-b"><button class="btn" id="wvPlanOk">同意，按这个开始</button>
-      <button class="btn ghost" id="wvPlanNo">先说要改什么</button></div></div>`;
+    ${body}
+    ${pending ? `<div class="wf-plan-b"><button class="btn" id="wvPlanOk">同意，按这个开始</button>
+      <button class="btn ghost" id="wvPlanNo">先说要改什么</button></div>` : ""}</div>`;
+}
+let wfPlanSeq = 0;
+async function wfPlanLoad(step){
+  const box = $("wv-msgs"); if(!box) return;
+  const a = WF_AGENT[step] || WF_AGENT.idea;
+  box.innerHTML = `<div class="wf-plan wf-plan-wait"><div class="wf-plan-h"><span class="wf-av">${a.emoji}</span><b>${esc(a.name)}</b></div>
+    <p class="wf-plan-sync">正在读上一步的交付，写这一步的计划…</p></div>`;
+  const my = ++wfPlanSeq;
+  let text = "";
+  try{ const d = await api("/api/step/plan", {task_id:curTask, step}); text = (d && d.text) || ""; }catch(e){}
+  if(my !== wfPlanSeq || wfStep !== step) return;          // 期间换步 / 又发了一轮 → 丢弃这次结果
+  if($("wv-msgs") !== box) return;
+  wfMsgs = [{role:"assistant", content:text, events:[{type:"plan"}], created_at:new Date().toISOString()}];
+  wfPaintMsgs(step);
 }
 function wfPaintMsgs(step){
   const box = $("wv-msgs"); if(!box) return;
   if(wfView === "trajectory"){ box.innerHTML = ""; renderTrajectory(box, wfEvents); return; }
-  if(!wfMsgs.length){
-    box.innerHTML = wfPlanHTML(step);
-    const ok = $("wvPlanOk"), no = $("wvPlanNo"), ta = $("wv-ask");
-    if(ok) ok.onclick = ()=>{ ok.disabled = no.disabled = true;
-      if(ta) ta.value = "同意这个计划，按它开始。";
-      wfSend(null, step); };
-    if(no) no.onclick = ()=>{ if(ta) ta.focus(); };
-    return;
-  }
+  if(!wfMsgs.length){ wfPlanLoad(step); return; }
   box.innerHTML = "";
   const who = WF_AGENT[step] || WF_AGENT.idea;          // 这一步的助手说话，不是智研管家
-  wfMsgs.forEach(mv => appendOne(box, {type:mv.role, content:mv.content, events:mv.events, replay:true, at:mv.created_at}, who));
+  wfMsgs.forEach((mv, i) => {
+    if((mv.events||[]).some(e => e.type === "plan")){
+      box.insertAdjacentHTML("beforeend", wfPlanHTML(step, mv.content, i === wfMsgs.length-1));
+      return;
+    }
+    appendOne(box, {type:mv.role, content:mv.content, events:mv.events, replay:true, at:mv.created_at}, who);
+  });
+  const ok = $("wvPlanOk"), no = $("wvPlanNo"), ta = $("wv-ask");
+  if(ok) ok.onclick = ()=>{
+    ok.disabled = no.disabled = true;
+    const bar = ok.closest(".wf-plan-b"); if(bar) bar.remove();   // 同意后这排按钮就收起来
+    if(ta) ta.value = "同意，按这个计划开始。";
+    wfSend(null, step);
+  };
+  if(no) no.onclick = ()=>{ if(ta) ta.focus(); };
   box.scrollTop = box.scrollHeight;
 }
 function wfPaintStats(){
@@ -1190,7 +1205,6 @@ function wsBind(m){
 
 async function loadTaskState(){
   try{ const d=await api(`/api/task?id=${encodeURIComponent(curTask)}`);
-    wfSteps = d.steps || [];                    // 计划卡要用上一步的确认状态和摘要
     const sm=d.stage_map||{}; Object.keys(STAGE).forEach(s=>{ const el=$("st-"+s); if(el&&sm[s]) el.className="pill ok"; });
     // 左栏十步：已完成的亮、没开始的暗、当前步主色
     document.querySelectorAll(".wf-step[data-step]").forEach(b=>{
@@ -1199,8 +1213,6 @@ async function loadTaskState(){
       b.classList.toggle("todo", !st && s!==wfStep);
       if(st==="failed") b.classList.add("fail");
     });
-    // 右栏还是空态（计划卡）→ 重画一次，把刚拿到的「上一步」写进去
-    if(!wfMsgs.length && $("wv-msgs") && wfView==="conversation") wfPaintMsgs(wfStep);
   }catch(e){}
 }
 /* ---------------- 项目 ---------------- */
