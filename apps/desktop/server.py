@@ -480,7 +480,8 @@ class Handler(BaseHTTPRequestHandler):
         prefixes = (
             "/api/agent-settings", "/api/capabilities", "/api/workflow/layouts", "/api/feishu/", "/api/zotero/web/",
             "/api/projects", "/api/papers/", "/api/chats", "/api/assistants", "/api/teams/", "/api/runs/",
-            "/api/mcp/", "/api/audit/", "/api/easyscholar/", "/api/zotero/mcp/", "/api/todos", "/api/space/",
+            "/api/mcp/", "/api/audit/", "/api/easyscholar/", "/api/zotero/mcp/", "/api/todos", "/api/kanban", "/api/space/",
+            "/api/assets", "/api/workflow/run", "/api/workflow/runs", "/api/workflow/recover",
         )
         if not path.startswith(prefixes):
             return False
@@ -1180,8 +1181,10 @@ class Handler(BaseHTTPRequestHandler):
             with WorkflowDB(DB_PATH) as db:
                 if path == "/api/mdnotes/save":
                     tid = data.get("task_id")
+                    pid = data.get("paper_id")
                     return self._json({"note": db.save_md_note(data.get("id", ""), data.get("title", ""),
-                                                               data.get("content", ""), None if tid is None else str(tid))})
+                                                               data.get("content", ""), None if tid is None else str(tid),
+                                                               None if pid is None else str(pid))})
 
                 if path.startswith("/api/assistant/") or path == "/api/chat/assistant":
                     b = data or {}
@@ -1263,11 +1266,17 @@ class Handler(BaseHTTPRequestHandler):
                     if path == "/api/team/assign":
                         return self._json({"task": team.assign(
                             b.get("id", ""), b.get("member", ""), b.get("prompt", ""),
-                            b.get("title", ""), "manual" if b.get("manual") else "leader")})
+                            b.get("title", ""), "manual" if b.get("manual") else "leader",
+                            depends_on=b.get("depends_on"), output_contract=b.get("output_contract"),
+                            reviewer_id=b.get("reviewer_id", ""))})
                     if path == "/api/team/task/cancel":
                         return self._json(team.cancel(b.get("row_id", "")))
                     if path == "/api/team/task/retry":
                         return self._json(team.retry(b.get("row_id", "")))
+                    if path == "/api/team/task/review":
+                        return self._json({"task": team.review(
+                            b.get("row_id", ""), bool(b.get("approved")),
+                            b.get("reviewer_id", ""), b.get("feedback", ""))})
                 if path.startswith("/api/schedule/"):      # 定时任务：保存/启停/删除/立即运行/删运行记录
                     if path == "/api/schedule/save":
                         name = str(data.get("name") or "").strip()
@@ -1319,7 +1328,8 @@ class Handler(BaseHTTPRequestHandler):
                             return self._json({"deleted": wdb.schedule_run_delete(data.get("ids") or [])})
                     return self._json({"error": "未知的定时任务操作"}, 404)
                 if path == "/api/mdnotes/delete":
-                    db.delete_md_note(data.get("id", ""))
+                    with WorkflowDB(DB_PATH) as note_db:
+                        note_db.delete_md_note(data.get("id", ""))
                     return self._json({"deleted": True})
                 if path == "/api/trans/start":
                     tid = (data.get("task_id") or "").strip()

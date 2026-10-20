@@ -7,9 +7,53 @@ import capabilities
 import easyscholar
 import project_todos
 import space_service
+import asset_service
+import run_service
 
 
 def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[str]], db: Any) -> Any | None:
+    # ---------------- 0. Canonical assets and resumable workflow runs ----------------
+    if path == "/api/assets" and method == "GET":
+        project_id = (query.get("project_id") or [""])[0]
+        kind = (query.get("kind") or [""])[0]
+        return {"assets": asset_service.list_assets(db, project_id, kind)}
+
+    if path == "/api/assets/search" and method == "GET":
+        return {"query": (query.get("q") or [""])[0],
+                "assets": asset_service.search(db, (query.get("q") or [""])[0],
+                                                project_id=(query.get("project_id") or [""])[0])}
+
+    if path == "/api/assets/relations" and method == "GET":
+        return {"asset_id": (query.get("id") or [""])[0],
+                "relations": asset_service.relations(db, (query.get("id") or [""])[0])}
+
+    if path == "/api/assets/diagnostics" and method == "GET":
+        return asset_service.project_diagnostics(db, (query.get("project_id") or [""])[0])
+
+    if path == "/api/assets/rebuild" and method == "POST":
+        return asset_service.rebuild_project_index(
+            db, str(body.get("project_id") or ""),
+            include_files=bool(body.get("include_files", True)),
+        )
+
+    if path == "/api/workflow/runs" and method == "GET":
+        runs = run_service.list_runs(db, (query.get("project_id") or [""])[0])
+        return {"runs": [{**run, "nodes": run_service.nodes(db, run["id"])} for run in runs]}
+
+    if path == "/api/workflow/run" and method == "GET":
+        run = run_service.detail(db, (query.get("id") or [""])[0])
+        if not run:
+            raise KeyError((query.get("id") or [""])[0])
+        return {"run": run}
+
+    if path == "/api/workflow/run" and method == "POST":
+        return {"run": run_service.start(db, str(body.get("project_id") or ""),
+                                          str(body.get("workflow") or "research"),
+                                          idempotency_key=str(body.get("idempotency_key") or ""))}
+
+    if path == "/api/workflow/recover" and method == "POST":
+        return {"recovered": run_service.recover_stale(db, int(body.get("max_age_minutes") or 15))}
+
     # ---------------- 1. easyScholar ----------------
     if path == "/api/easyscholar/config" and method == "GET":
         conn = db.db if hasattr(db, "db") else db

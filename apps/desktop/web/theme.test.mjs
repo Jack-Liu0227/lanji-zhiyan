@@ -5,9 +5,11 @@ import assert from "node:assert";
 import { readFileSync } from "node:fs";
 
 const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
-const js = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]).sort((a, b) => b.length - a.length)[0];   // 取最大的那块（头里还有一个构建戳小脚本）
+const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+const external = readFileSync(new URL("./notes-and-settings.js", import.meta.url), "utf8");
+const js = [...inline, external].find(source => source.includes("const DEFAULT_THEME"));
+assert.ok(js, "theme implementation was not found in index.html or notes-and-settings.js");
 const block = js.slice(js.indexOf("const DEFAULT_THEME"), js.indexOf("function bindSwatches"));
-
 const shim = `
 const store = {};
 const localStorage = { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; } };

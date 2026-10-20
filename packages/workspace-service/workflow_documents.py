@@ -101,8 +101,12 @@ def map_write(db: "WorkflowDB", task_id: str, data: Any) -> dict[str, Any]:
     p = map_path(db, task_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     fileguard.before_write(p, "谱系图覆盖")
-    p.write_text(json.dumps({"nodes": nodes, "edges": edges, "updated": now()},
-                            ensure_ascii=False, indent=1), encoding="utf-8")
+    content = json.dumps({"nodes": nodes, "edges": edges, "updated": now()},
+                         ensure_ascii=False, indent=1)
+    import asset_service
+    asset_service.atomic_write_text(p, content)
+    asset_service.register_file(db, p, project_id=task_id, kind="document", title=MAP_FILE,
+                                source="workflow", body=content, metadata={"document_kind": "map"})
     return map_read(db, task_id)
 
 
@@ -130,7 +134,11 @@ def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str) -> dict[
     p = doc_path(db, task_id, kind)
     p.parent.mkdir(parents=True, exist_ok=True)
     fileguard.before_write(p, f"{kind}正文覆盖")
-    p.write_text((markdown or "").strip() + "\n", encoding="utf-8")
+    content = (markdown or "").strip() + "\n"
+    import asset_service
+    asset_service.atomic_write_text(p, content)
+    asset_service.register_file(db, p, project_id=task_id, kind="document", title=(DOC_STEPS.get(kind) or DOC_STEPS["outline"])["file"],
+                                source="workflow", body=content, metadata={"document_kind": kind})
     out = doc_read(db, task_id, kind)
     out["written"] = True
     return out

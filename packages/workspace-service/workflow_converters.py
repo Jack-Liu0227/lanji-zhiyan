@@ -91,8 +91,11 @@ def cite_sync(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
         lines.append("")
     fileguard.before_write(md, "引用台账")
     fileguard.before_write(js, "引用台账")
-    md.write_text("\n".join(lines), encoding="utf-8")
-    js.write_text(json.dumps(entries, ensure_ascii=False, indent=1), encoding="utf-8")
+    import asset_service
+    asset_service.atomic_write_text(md, "\n".join(lines))
+    asset_service.atomic_write_text(js, json.dumps(entries, ensure_ascii=False, indent=1))
+    asset_service.register_file(db, md, project_id=task_id, kind="document", title=CITE_FILE,
+                                source="workflow", body="\n".join(lines), metadata={"document_kind": "citation_ledger"})
     return {"path": str(md), "count": len(entries), "stale": sum(1 for e in entries if not e.get("ok")),
             "markdown": "\n".join(lines)}
 

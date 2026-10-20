@@ -134,7 +134,10 @@ class ResearchDB:
         try:
             import migrations
             migrations.run_migrations(self.db, db_path=self.path if str(self.path) != ":memory:" else None)
-        except Exception:
+        except ImportError:
+            # Source-only utilities may open a database without the migration package.
+            # Migration failures themselves must remain visible; otherwise a partially
+            # upgraded database fails later with misleading missing-column errors.
             pass
         self.db.executescript(SCHEMA)
         self.db.commit()
@@ -243,6 +246,15 @@ class ResearchDB:
         self.db.executemany("INSERT INTO paper_pages VALUES (?,?,?)", [(paper_id, n, text) for n, text in pages])
         self.db.execute("UPDATE research_tasks SET stage='reading', updated_at=? WHERE id=?", (t, task_id))
         self.db.commit()
+        try:
+            import asset_service
+            asset_service.register_file(self, path, project_id=task_id, kind="paper",
+                                        title=path.stem, source="paper_ingest",
+                                        metadata={"paper_id": paper_id, "pages": len(pages)})
+        except Exception:
+            # Asset indexing is a recoverable projection; paper ingestion itself
+            # must remain usable for legacy databases and offline repairs.
+            pass
         return self.paper(paper_id)
 
     def paper(self, paper_id: str) -> dict[str, Any]:
@@ -309,6 +321,22 @@ class ResearchDB:
         }
         self.db.execute("INSERT INTO evidence VALUES (?,?,?,?,?,?,?,?)", tuple(row.values()))
         self.db.commit()
+        try:
+            import asset_service
+            evidence_asset = asset_service.register(
+                self, project_id=paper.get("task_id", ""), kind="evidence",
+                title=f"{field}: {value}", canonical_uri=f"db://evidence/{row['id']}",
+                storage="sqlite", source="evidence_gate", body=excerpt,
+                metadata={"evidence_id": row["id"], "paper_id": paper_id, "page_no": page_no},
+            )
+            paper_asset = self.db.execute(
+                "SELECT id FROM assets WHERE canonical_uri=?", (str(Path(paper["source_path"]).resolve()),)
+            ).fetchone()
+            if paper_asset:
+                asset_service.link(self, evidence_asset["id"], "derived_from", paper_asset["id"],
+                                   {"page_no": page_no, "excerpt": excerpt})
+        except Exception:
+            pass
         return row
 
     def evidence(self, task_id: str | None = None) -> list[sqlite3.Row]:

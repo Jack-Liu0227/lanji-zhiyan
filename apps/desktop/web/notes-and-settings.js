@@ -900,6 +900,8 @@ async function renderSpace(m){
         <span class="sp-gap"></span>
         <button class="btn" id="spFlow">进入科研台 →</button>
         <button class="btn ghost" id="spLeader">问智研管家 →</button>
+        <button class="btn ghost" id="spRebuild" title="把旧笔记、文献和产物登记到统一资产索引">整理资产</button>
+        <span class="hint" id="spAssetStatus" aria-live="polite"></span>
       </div>
       <div class="sp-hd2">
         <p class="hint">项目级聚合只读取已关联的本地数据；写操作回到各领域的 Command 和安全通道。归档可恢复，外部文件不会被删除。</p>
@@ -924,6 +926,25 @@ async function renderSpace(m){
   $("spBody").innerHTML = spBodyHTML(d);
   if(spTab === "notes") m.classList.add("sp-fill");
   spBind(d);
+
+  const assetStatus = $("spAssetStatus");
+  const rebuild = $("spRebuild");
+  const refreshAssetStatus = async () => {
+    try {
+      const stats = await api(`/api/assets/diagnostics?project_id=${encodeURIComponent(curTask)}`);
+      if(assetStatus) assetStatus.textContent = `资产 ${stats.assets || 0} · 冲突 ${stats.conflicts || 0}`;
+    } catch(_) {}
+  };
+  refreshAssetStatus();
+  if(rebuild) rebuild.onclick = async () => {
+    rebuild.disabled = true;
+    try {
+      await api("/api/assets/rebuild", {method:"POST", project_id:curTask, include_files:true});
+      toast("资产索引已整理", "success");
+      await refreshAssetStatus();
+    } catch(err) { toast(`资产整理失败：${err.message}`, "error"); }
+    finally { rebuild.disabled = false; }
+  };
 
   // 全局搜索交互
   const sInp = $("spSearchInput"), sClear = $("spSearchClear"), sRes = $("spSearchResults");
