@@ -563,7 +563,8 @@ def _round(scope: str, turns: int) -> None:
                 if st.get("stop"):
                     db.add_message(scope, "assistant", "（已停止）", scope=history_scope, sender="系统")
                     return
-                hist = [dict(m) for m in db.messages(scope, history_scope)][-12:]
+                hist = workflow.recent_dialogue([dict(m) for m in db.messages(scope, history_scope)],
+                                                workflow.context_budget(db))
                 tail = "\n".join((h.get("content") or "") for h in hist[-2:])
                 speaker = next_speaker(tail, names, last)
                 if not speaker:

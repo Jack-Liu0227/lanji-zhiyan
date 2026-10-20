@@ -1040,7 +1040,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"messages": db.messages(q["id"][0])})
             if path == "/api/security":                   # 权限模式：all=不再逐次问，ask=编译/写文件每次问
                 with WorkflowDB(DB_PATH) as db:
-                    return self._json({"permission_mode": str(kv_store.read(db, "security").get("permission_mode") or "")})
+                    sec = kv_store.read(db, "security")
+                    return self._json({"permission_mode": str(sec.get("permission_mode") or ""),
+                                       "history_chars": int(sec.get("history_chars") or 0)})
             if path == "/api/step/messages":               # 三栏页：右栏「本步助手」的历史（按 scope 取）
                 with WorkflowDB(DB_PATH) as db:
                     step = (q.get("step") or ["idea"])[0]
@@ -1582,11 +1584,22 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json({"error": "缺 task_id 或 step 不认识"}, 400)
                     return self._json(db.log_step(tid, step, "done", str(data.get("summary") or "用户确认交付")[:200]))
                 if path == "/api/security":
-                    mode = str(data.get("permission_mode") or "")
-                    if mode not in ("all", "ask"):
-                        return self._json({"error": "permission_mode 只能是 all 或 ask"}, 400)
-                    kv_store.write(db, "security", {**kv_store.read(db, "security"), "permission_mode": mode})
-                    return self._json({"ok": True, "permission_mode": mode})
+                    sec = kv_store.read(db, "security")
+                    if "permission_mode" in data:
+                        mode = str(data.get("permission_mode") or "")
+                        if mode not in ("all", "ask"):
+                            return self._json({"error": "permission_mode 只能是 all 或 ask"}, 400)
+                        sec["permission_mode"] = mode
+                    if "history_chars" in data:          # Agent 每次对话喂多少字历史（设置页「权限」里调）
+                        try:
+                            chars = int(data.get("history_chars") or 0)
+                        except (TypeError, ValueError):
+                            chars = 0
+                        if not 2000 <= chars <= 400_000:
+                            return self._json({"error": "上下文预算要在 2000–400000 字之间"}, 400)
+                        sec["history_chars"] = chars
+                    kv_store.write(db, "security", sec)
+                    return self._json({"ok": True, **sec})
                 if path == "/api/step/plan":                  # 三栏页右栏：本步助手看着上一步的交付现写「进度同步 + 计划」
                     tid = str(data.get("task_id") or "")
                     step = str(data.get("step") or "")

@@ -1668,8 +1668,18 @@ def _json_in(text: str) -> Any | None:
     return None
 
 
+_JSON_MAX_TOKENS = 8000   # 推理模型的思维链也记在这个上限里，见 chat_json
+
+
 def chat_json(profile: dict[str, Any], messages: list[dict[str, str]], **kw: Any) -> Any:
-    """要模型回 JSON。本地小模型偶尔先讲一段人话、或者把 JSON 截断 —— 再要一次，只这一次。"""
+    """要模型回 JSON。本地小模型偶尔先讲一段人话、把 JSON 截断，或者把单条结果包成数组
+    —— 再要一次，只这一次。
+
+    预算不能跟着 chat() 的 4096 走：推理模型（deepseek-v4-flash 这类）的思维链也计入
+    max_tokens（实测 4001/4096 全是思考，正文只剩两千来字），4096 下正文经常被截断甚至
+    整段空回，调用方只会看到「模型没有返回 JSON」。
+    """
+    kw.setdefault("max_tokens", _JSON_MAX_TOKENS)
     raw = chat(profile, messages, **kw)
     got = _json_in(raw)
     if got is None:
@@ -1679,6 +1689,8 @@ def chat_json(profile: dict[str, Any], messages: list[dict[str, str]], **kw: Any
         got = _json_in(raw2)
         if got is None:
             raise RuntimeError(f"模型没有返回 JSON：{raw2[:200]}")
+    if isinstance(got, list):          # 模型把单条判定包成 [{...}] 时取第一个对象
+        got = next((x for x in got if isinstance(x, dict)), {})
     return got
 
 
@@ -2253,6 +2265,40 @@ def _system_for(who: str, system: str | None) -> str:
     )
 
 
+HISTORY_CHARS = 40_000      # 默认历史预算；设置页「权限 → 上下文预算」存了就按存的来
+
+
+def context_budget(db: Any = None) -> int:
+    """Agent 每次对话喂多少字历史：设置页存的值优先，没存/值不合法用默认。"""
+    if db is not None:
+        try:
+            import service_settings as kv
+            chars = int(kv.read(db, "security").get("history_chars") or 0)
+        except (ImportError, OSError, ValueError, TypeError, KeyError):
+            chars = 0                          # KV 表没建 / 值坏了 → 用默认，别让整个对话跑不起来
+        if 2_000 <= chars <= 400_000:
+            return chars
+    return HISTORY_CHARS
+
+
+def recent_dialogue(messages: list[dict[str, Any]], chars: int = HISTORY_CHARS) -> list[dict[str, Any]]:
+    """从最新往前按字符预算装历史，装不下就停（至少留最新一条）。
+
+    为什么不用「最近 N 条」：一条长判定能顶十条短问答，卡死条数会让上下文时多时少 ——
+    短问答时浪费额度，长材料时又把最早的原文挤掉。
+    """
+    picked: list[dict[str, Any]] = []
+    used = 0
+    for m in reversed(list(messages)):
+        n = len(str(m.get("content") or ""))
+        if picked and used + n > chars:
+            break
+        picked.append(m)
+        used += n
+    picked.reverse()
+    return picked
+
+
 def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_steps: int = 6,
               system: str | None = None, tools: list[dict[str, Any]] | None = None,
               extra_context: str = "", scope: str = "", publish: bool = True,
@@ -2341,7 +2387,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         "workspace_write": "可以修改工作区内容；外发邮件、消息和远程写入需要明确确认。",
         "full_access": "危险：用户授予完全访问权限，可使用所有已启用工具和外部写入，不再要求逐次确认；谨慎处理不可逆操作。",
     }[permission])
-    history = [{"role": m["role"], "content": m["content"]} for m in db.messages(task_id, scope or "idea")[:-1]][-12:]
+    history = [{"role": m["role"], "content": m["content"]}
+               for m in recent_dialogue(db.messages(task_id, scope or "idea")[:-1], context_budget(db))]
     tool_specs = list(TOOL_SPECS if tools is None else tools)
     if tools is None:
         tool_specs += agent_integrations.tool_specs()

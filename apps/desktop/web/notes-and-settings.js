@@ -1390,6 +1390,14 @@ function setPanel(){
       <div class="perm-opts">
         ${opt("all", "允许所有", "在允许的目录里直接读写、编译、导出，不再逐次询问。")}
         ${opt("ask", "每次都要问", "编译、写文件、导出前先问你一句「允许这一次吗」。")}
+      </div></div>
+    <div class="card" style="margin-top:12px"><h3>上下文预算</h3>
+      <div class="hint">每次对话最多带多少字历史给模型。40000 字 ≈ 2 万 token，约合十几轮长对话；调大记得更多，但更慢更贵。</div>
+      <div class="ag-row" style="margin-top:8px">
+        <input class="control" id="ctxchars" type="number" min="2000" max="400000" step="1000"
+               value="${Number((S.sec||{}).history_chars) || 40000}" style="max-width:160px">
+        <span class="hint">字（2000–400000）</span>
+        <button class="btn btn-primary" id="ctxsave">保存</button>
       </div></div>`;
   }
   if(setSec === "models") return `<div class="card"><h3>模型列表</h3>
@@ -1418,6 +1426,15 @@ function renderSettings(m){
     m.querySelectorAll('input[name="permmode"]').forEach(r => r.onchange = async () => {
       await setPermissionMode(r.value); render();
     });
+    const cs = $("ctxsave");
+    if(cs) cs.onclick = async () => {
+      const n = parseInt($("ctxchars").value, 10);
+      if(!(n >= 2000 && n <= 400000)) return uiNotify("范围是 2000–400000 字");
+      try {
+        S.sec = await api("/api/security", { history_chars: n });
+        uiNotify("上下文预算已保存：" + n + " 字");
+      } catch(e) { uiNotify("保存失败：" + e.message); }
+    };
   }
   if(setSec === "theme"){
     $("th").onclick = ()=>setTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");

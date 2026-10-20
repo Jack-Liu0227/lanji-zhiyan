@@ -657,3 +657,70 @@ class ChatJsonTest(unittest.TestCase):
     def test_数组(self):
         import workflow
         self.assertEqual(workflow._json_in("```json\n[1, 2, 3]\n```"), [1, 2, 3])
+
+    def test_单条结果被包成数组时取第一个对象(self):
+        from unittest import mock
+        import workflow
+        with mock.patch.object(workflow, "chat", return_value='[{"verdict": "小修"}]'):
+            self.assertEqual(workflow.chat_json({"model": "m"}, [{"role": "user", "content": "x"}]),
+                             {"verdict": "小修"})
+
+    def test_JSON预算高于对话默认(self):
+        """推理模型的思维链吃 max_tokens：chat_json 不能沿用 chat() 的 4096，正文会被截断。"""
+        from unittest import mock
+        import workflow
+        seen = {}
+
+        def fake(profile, messages, **kw):
+            seen.update(kw)
+            return '{"ok": 1}'
+
+        with mock.patch.object(workflow, "chat", side_effect=fake):
+            self.assertEqual(workflow.chat_json({"model": "m"}, [{"role": "user", "content": "x"}]), {"ok": 1})
+        self.assertGreaterEqual(seen["max_tokens"], 8000)
+
+
+class RecentDialogueTest(unittest.TestCase):
+    """历史按字符预算装，不按条数：装不下就从最早的丢，最新的永远留。"""
+
+    def test_预算内全留(self):
+        import workflow
+        msgs = [{"role": "user", "content": "a" * 10}, {"role": "assistant", "content": "b" * 10}]
+        self.assertEqual(workflow.recent_dialogue(msgs, chars=100), msgs)
+
+    def test_超预算按最新往前装(self):
+        import workflow
+        msgs = [{"role": "user", "content": str(i) * 100} for i in range(5)]
+        got = workflow.recent_dialogue(msgs, chars=250)      # 每条约 100 字 → 只装得下最新两条
+        self.assertEqual([m["content"][0] for m in got], ["3", "4"])
+
+    def test_单条超预算也留最新一条(self):
+        import workflow
+        got = workflow.recent_dialogue([{"role": "user", "content": "x" * 9999}], chars=10)
+        self.assertEqual(len(got), 1)
+
+
+class ContextBudgetTest(unittest.TestCase):
+    """设置页存的值优先；没存或越界一律回落默认，不能让整个对话跑不起来。"""
+
+    def test_设置值优先(self):
+        from unittest import mock
+        import service_settings as kv
+        import workflow
+        with mock.patch.object(kv, "read", return_value={"history_chars": 12345}):
+            self.assertEqual(workflow.context_budget(object()), 12345)
+
+    def test_没存或越界回落默认(self):
+        from unittest import mock
+        import service_settings as kv
+        import workflow
+        for bad in ({}, {"history_chars": 5}, {"history_chars": "abc"}, {"history_chars": 10 ** 7}):
+            with mock.patch.object(kv, "read", return_value=bad):
+                self.assertEqual(workflow.context_budget(object()), workflow.HISTORY_CHARS)
+
+    def test_读不出来也不炸(self):
+        from unittest import mock
+        import service_settings as kv
+        import workflow
+        with mock.patch.object(kv, "read", side_effect=OSError("db locked")):
+            self.assertEqual(workflow.context_budget(object()), workflow.HISTORY_CHARS)
