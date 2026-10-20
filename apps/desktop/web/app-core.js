@@ -340,3 +340,20 @@ function uiPrompt(text, def = "") {
     inp.focus(); inp.select();
   });
 }
+
+/* ---------------- 模型 Key 守卫 ----------------
+   新装用户没配 Key 时，发消息/翻译/出计划一律先拦下来，别让一轮请求打到后端再回一句报错。
+   「编译 .tex」不走这里：那是本地 xelatex，不需要任何 Key。 */
+function hasModelKey() {
+  if ((S.models || []).some(m => m.api_key)) return true;        // 任一档案填了 key（前端只会拿到 "***"）
+  if (S.active && S.active.api_key) return true;
+  return (S.providers || []).some(p => p.key_present);
+}
+async function requireModelKey() {
+  if (hasModelKey()) return true;
+  const go = await uiConfirm(
+    "还没有配置模型 API Key，助手任何一步都跑不起来。先去「设置 → 模型」填一家的 Key，再回来继续。",
+    { title: "需要先配 API Key", ok: "去设置", cancel: "知道了", danger: false });
+  if (go) openTab("settings");
+  return false;
+}

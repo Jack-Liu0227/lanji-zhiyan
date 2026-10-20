@@ -394,6 +394,7 @@ function docGrow(k){
   ta.style.height = Math.min(TA_MAX, Math.max(TA_MIN, measureAsk(ta))) + "px";
 }
 async function docSend(k){
+  if(!(await requireModelKey())) return;          // 没配 Key：先提示去设置，不发请求
   const st = docState(k);
   const ta = docEl(k, "ask"); const text = ta.value.trim();
   if(!text && !st.atts.length) return;
@@ -627,6 +628,7 @@ function enReadLocal(f){
   fr.readAsText(f, "utf-8");
 }
 async function enRun(){
+  if(!(await requireModelKey())) return;          // 没配 Key：先提示去设置，不发请求
   const inTa = $("en-in"), btn = $("en-run");
   const text = (inTa.value || "").trim();
   if(!text) return enMsg("还没有中文内容 —— 点左上 ＋ 选文件，或先去「论文撰写」写出正文");
@@ -808,7 +810,10 @@ async function wfPlanLoad(step){
     <p class="wf-plan-sync">正在读上一步的交付，写这一步的计划…</p></div>`;
   const my = ++wfPlanSeq;
   let text = "";
-  try{ const d = await api("/api/step/plan", {task_id:curTask, step}); text = (d && d.text) || ""; }catch(e){}
+  try{
+    // 没配 Key 就别去敲后端（会静默失败，一直停在「正在读…」）→ 直接落到 WF_PLAN 静态兜底
+    if(hasModelKey()){ const d = await api("/api/step/plan", {task_id:curTask, step}); text = (d && d.text) || ""; }
+  }catch(e){}
   if(my !== wfPlanSeq || wfStep !== step) return;          // 期间换步 / 又发了一轮 → 丢弃这次结果
   if($("wv-msgs") !== box) return;
   wfMsgs = [{role:"assistant", content:text, events:[{type:"plan"}], created_at:new Date().toISOString()}];
@@ -854,6 +859,7 @@ function wfPaintStats(){
 async function wfSend(m, step){
   const ta = $("wv-ask"), btn = $("wv-send"), box = $("wv-msgs");
   const text = (ta.value||"").trim(); if(!text) return;
+  if(!(await requireModelKey())) return;          // 没配 Key：先提示去设置，不发请求
   const a = WF_AGENT[step] || WF_AGENT.idea;
   if(step === "idea" && typeof iwFlush === "function") await iwFlush();   // 上区刚改的字先落库，这一轮就读到最新的
   ta.value = ""; ta.style.height = "auto";

@@ -847,6 +847,7 @@ document.addEventListener("click",(e)=>{          // 点菜单外面收起（监
 });
 
 async function send(){
+  if(!(await requireModelKey())) return;          // 没配 Key：先提示去设置，不发请求
   const ta=$("ask"); const text=ta.value.trim(); if(!text && !atts.length) return;
   // 没对话（或 localStorage 里那条已经删了）就直接发 → 自动新建一条不绑项目的对话，不弹框拦人
   if(!curChat || !(S.chats||[]).some(c=>c.id===curChat)){

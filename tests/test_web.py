@@ -114,6 +114,21 @@ class NoNativeDialogsTest(unittest.TestCase):
         self.assertEqual(bad, [], "这些地方还在用浏览器原生弹窗：\n" + "\n".join(bad))
 
 
+class ModelKeyGuardTest(unittest.TestCase):
+    """没配模型 Key 的新用户：发消息 / 中译英 / 出步骤计划都先弹「去设置配 Key」，别打到后端再回一句报错。
+    「编译 .tex」不在守卫里 —— 那是本地 xelatex，不需要任何 Key。"""
+
+    def test_发送入口都挂了守卫(self) -> None:
+        chat = (WEB / "chat-views.js").read_text(encoding="utf-8")
+        wf = (WEB / "workflow-view.js").read_text(encoding="utf-8")
+        core = (WEB / "app-core.js").read_text(encoding="utf-8")
+        self.assertIn("function hasModelKey", core)
+        self.assertIn("async function requireModelKey", core)
+        self.assertEqual(chat.count("requireModelKey()"), 1, "主页聊天发送缺守卫")
+        self.assertEqual(wf.count("requireModelKey()"), 3, "右栏发送 / 文档步发送 / 中译英 三处守卫")
+        self.assertIn("if(hasModelKey())", wf, "出步骤计划前也要判 Key，否则一直显示「正在读上一步的交付」")
+
+
 class MainScriptSyntaxTest(unittest.TestCase):
     """web/index.html 里那块主脚本必须过 node --check。
     2026-10-12 踩过：加一个 class 时多带了一个反引号，模板串提前闭合，整页只剩一句 SyntaxError 白屏 ——
