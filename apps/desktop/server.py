@@ -132,7 +132,8 @@ def _front(hwnd: int) -> None:
 # ---------- 旧实例接管（以前这里退回 Edge --app，会先弹小窗再被拉满 = 用户报的「闪一个小卡片」）----------
 def _port_owner(port: int) -> int:
     """谁在听这个端口：netstat 输出是 GBK，只认 ASCII 的 PID 列。"""
-    out = subprocess.run(["netstat", "-ano"], capture_output=True).stdout.decode("mbcs", "replace")
+    out = subprocess.run(["netstat", "-ano"], capture_output=True,
+                         creationflags=paths.NO_WINDOW).stdout.decode("mbcs", "replace")
     for line in out.splitlines():
         f = line.split()
         if len(f) >= 5 and f[0].upper() == "TCP" and f[3].upper() == "LISTENING" and f[1].endswith(f":{port}"):
@@ -148,6 +149,7 @@ def _is_our_app(pid: int) -> bool:
     if not pid:
         return False
     out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                         creationflags=paths.NO_WINDOW,
                          capture_output=True).stdout.decode("mbcs", "replace").strip().lower()
     name = out.split(",")[0].strip('"') if out else ""
     return name in ("python.exe", "pythonw.exe") or "research-workbench" in name
@@ -1883,7 +1885,10 @@ def _spawn_low_server(port: int):
         import lowbox
     except Exception:
         return None
-    cmd = [sys.executable, str(Path(__file__).resolve()), "--port", str(port), "--no-open"]
+    if getattr(sys, "frozen", False):          # 打包后 sys.executable 就是本 exe，别再塞脚本路径
+        cmd = [sys.executable, "--port", str(port), "--no-open"]
+    else:
+        cmd = [sys.executable, str(Path(__file__).resolve()), "--port", str(port), "--no-open"]
     env = dict(os.environ, RW_LOW_SERVER="1")
     try:
         proc = lowbox.popen(cmd, cwd=str(Path(__file__).resolve().parent), env=env)

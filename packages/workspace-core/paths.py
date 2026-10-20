@@ -182,6 +182,10 @@ def ensure_layout() -> dict:
     return meta
 
 
+# 控制台程序（icacls/netstat/tasklist）不加这个就会在启动时闪黑框
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
 def _harden(path: Path) -> None:
     """只给当前用户读写（Windows）。失败就算了：不因为权限收紧把应用弄挂。"""
     if os.name != "nt":
@@ -192,7 +196,7 @@ def _harden(path: Path) -> None:
     try:
         subprocess.run(["icacls", str(path), "/inheritance:r",
                         "/grant:r", f"{user}:(OI)(CI)F"],
-                       capture_output=True, timeout=10)
+                       capture_output=True, timeout=10, creationflags=NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         pass
 

@@ -107,7 +107,8 @@ def mark_low(path: str | os.PathLike[str], recursive: bool = True) -> bool:
         cmd = ["icacls", str(path), "/setintegritylevel", "(OI)(CI)L"]
         if recursive:
             cmd.append("/T")
-        r = subprocess.run(cmd, capture_output=True, timeout=120)
+        r = subprocess.run(cmd, capture_output=True, timeout=120,
+                           creationflags=0x08000000 if os.name == "nt" else 0)   # 别闪黑框
         return r.returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
