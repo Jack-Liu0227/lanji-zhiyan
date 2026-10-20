@@ -1688,19 +1688,141 @@ def _overview(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
             "日历": [{"title": e["title"], "date": e["date"]} for e in db.events()[:10]]}
 
 
-def _knowledge_query(db: "WorkflowDB", task_id: str, query: str) -> dict[str, Any]:
-    q = query.lower().strip()
-    hits = []
-    for n in db.notes(task_id):
-        if q in n["title"].lower() or q in n["markdown"].lower():
-            idx = n["markdown"].lower().find(q)
-            hits.append({"kind": "note", "id": n["id"], "title": n["title"],
-                         "context": n["markdown"][max(0, idx - 120): idx + 240]})
-    for e in db.evidence(task_id):
-        if q in (e["value"] or "").lower() or q in e["excerpt"].lower() or q in e["field"].lower():
-            hits.append({"kind": "evidence", "field": e["field"], "value": e["value"],
-                         "citation": f"{e['filename']} p.{e['page_no']}", "context": e["excerpt"]})
+def _resolve_project(db: "WorkflowDB", needle: str) -> dict[str, Any] | None:
+    """项目名或 id → 项目行（先精确再包含；找不到返回 None）。"""
+    needle = (needle or "").strip()
+    if not needle:
+        return None
+    tasks = db.tasks()
+    for t in tasks:
+        if t["id"] == needle:
+            return dict(t)
+    for t in tasks:
+        if (t["title"] or "").strip() == needle:
+            return dict(t)
+    for t in tasks:
+        if needle in (t["title"] or ""):
+            return dict(t)
+    return None
+
+
+def _search_scope(db: "WorkflowDB", task_id: str, project: str) -> list[tuple[str, str]]:
+    """这次检索覆盖哪些项目：指定项目 > 当前项目 > 全部项目（首页 Agent 没有项目时）。"""
+    if project:
+        row = _resolve_project(db, project)
+        if not row:
+            raise ValueError("找不到这个项目：%s（可先用 library_overview 或问用户）" % project)
+        return [(row["id"], row["title"])]
+    if task_id and db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone():
+        return [(task_id, db.summary(task_id)["task"]["title"])]
+    chat = db.db.execute("SELECT 1 FROM chats WHERE id=?", (task_id,)).fetchone() if task_id else None
+    if chat:
+        return [(t["id"], t["title"]) for t in db.tasks()]      # 首页/通用对话：跨项目
+    return [(task_id, "")] if task_id else [(t["id"], t["title"]) for t in db.tasks()]
+
+
+def _knowledge_query(db: "WorkflowDB", task_id: str, query: str, project: str = "") -> dict[str, Any]:
+    q = (query or "").lower().strip()
+    if not q:
+        raise ValueError("要给检索关键词")
+    hits: list[dict[str, Any]] = []
+    for pid, ptitle in _search_scope(db, task_id, project):
+        for n in db.notes(pid):
+            if q in (n["title"] or "").lower() or q in (n["markdown"] or "").lower():
+                idx = (n["markdown"] or "").lower().find(q)
+                hits.append({"kind": "note", "project": ptitle, "id": n["id"], "title": n["title"],
+                             "context": (n["markdown"] or "")[max(0, idx - 120): idx + 240]})
+        for e in db.evidence(pid):
+            if q in (e["value"] or "").lower() or q in (e["excerpt"] or "").lower() or q in (e["field"] or "").lower():
+                hits.append({"kind": "evidence", "project": ptitle, "field": e["field"], "value": e["value"],
+                             "citation": f"{e['filename']} p.{e['page_no']}", "context": e["excerpt"]})
+    for note in db.md_notes():                                  # 笔记页那批「大笔记」
+        body = (note.get("content") or "")
+        if q in (note.get("title") or "").lower() or q in body.lower():
+            idx = body.lower().find(q)
+            hits.append({"kind": "big-note", "project": "", "id": note.get("id"), "title": note.get("title"),
+                         "context": body[max(0, idx - 120): idx + 240]})
     return {"query": query, "hits": hits[:20], "total": len(hits)}
+
+
+def _calendar_list(db: "WorkflowDB", args: dict[str, Any]) -> dict[str, Any]:
+    """看日程：给月份就按月，给区间就按区间，都不给就是今天。"""
+    from datetime import date as _date
+    month = str(args.get("month") or "").strip()
+    start = str(args.get("date_from") or "").strip()
+    end = str(args.get("date_to") or "").strip() or start
+    if month:
+        rows, label = db.events(month[:7]), month[:7]
+    else:
+        if not start:
+            start = end = _date.today().isoformat()
+        rows = [e for e in db.events() if start <= (e.get("date") or "") <= end]
+        label = start if start == end else "%s ~ %s" % (start, end)
+    titles = {t["id"]: t["title"] for t in db.tasks()}
+    items = [{"id": e["id"], "date": e["date"], "time": e.get("time") or "", "title": e["title"],
+              "kind": e.get("kind") or "", "done": bool(e.get("done")),
+              "project": titles.get(e.get("task_id") or "", "")} for e in rows]
+    return {"range": label, "count": len(items), "events": items}
+
+
+def _schedule_manage(db: "WorkflowDB", args: dict[str, Any]) -> dict[str, Any]:
+    """定时任务：list / create / toggle / delete。"""
+    import schedule as sched_lib
+    action = str(args.get("action") or "list").strip()
+    titles = {t["id"]: t["title"] for t in db.tasks()}
+
+    def public(row: dict[str, Any]) -> dict[str, Any]:
+        return {"id": row["id"], "name": row["name"], "cron": row["cron"],
+                "enabled": bool(row["enabled"]), "project": titles.get(row.get("project_id") or "", ""),
+                "next_run_at": row.get("next_run_at") or "", "prompt": (row.get("prompt") or "")[:200]}
+
+    if action == "list":
+        rows = [public(r) for r in db.schedules()]
+        return {"count": len(rows), "schedules": rows}
+
+    if action == "create":
+        name = str(args.get("name") or "").strip()
+        prompt = str(args.get("prompt") or "").strip()
+        cron = str(args.get("cron") or "0 9 * * *").strip()
+        if not name:
+            raise ValueError("定时任务要有名字")
+        if not prompt:
+            raise ValueError("要写清楚到点了让 Agent 做什么（prompt）")
+        ok, why = sched_lib.valid(cron)
+        if not ok:
+            raise ValueError(why)
+        ok2, folder = sched_lib.inspect_output_dir(str(args.get("output_dir") or "定时任务"))
+        if not ok2:
+            raise ValueError(folder)
+        project = str(args.get("project") or "").strip()
+        pid = ""
+        if project:
+            row = _resolve_project(db, project)
+            if not row:
+                raise ValueError("找不到这个项目：%s" % project)
+            pid = row["id"]
+        enabled = args.get("enabled", True) is not False
+        saved = db.schedule_save({"name": name, "prompt": prompt, "project_id": pid,
+                                  "frequency": "cron", "cron": cron, "output_dir": folder,
+                                  "enabled": enabled,
+                                  "next_run_at": sched_lib.next_run_at(cron) if enabled else ""})
+        return {"created": True, "schedule": public(saved)}
+
+    sid = str(args.get("id") or "").strip()
+    row = db.schedule(sid)
+    if not row:
+        raise ValueError("找不到这个定时任务（先 action=list 拿 id）")
+    if action == "toggle":
+        enabled = args.get("enabled")
+        enabled = (not bool(row["enabled"])) if enabled is None else bool(enabled)
+        db.schedule_set_enabled(sid, enabled)
+        db.schedule_mark_run(sid, row.get("last_run_at") or "",
+                             sched_lib.next_run_at(row["cron"]) if enabled else "")
+        return {"toggled": True, "schedule": public(db.schedule(sid) or row)}
+    if action == "delete":
+        db.schedule_delete(sid)
+        return {"deleted": True, "id": sid, "name": row["name"]}
+    raise ValueError("action 只支持 list / create / toggle / delete")
 
 
 # 子 agent 只给只读工具（写操作留在父对话手里，子 agent 不许越权）
@@ -1723,7 +1845,7 @@ TOOL_RISK = {
     "notes_compose": "workspace_write", "idea_review": "workspace_write", "paper_read": "workspace_write",
     "read": "workspace_write", "draft_write": "workspace_write", "draft_review": "workspace_write",
     "calendar_add": "workspace_write", "team_assign": "workspace_write", "team_form": "workspace_write",
-    "project_create": "workspace_write",
+    "project_create": "workspace_write", "schedule_manage": "workspace_write", "calendar_list": "read_only",
     "team_board": "read_only", "mail_send": "external_write", "feishu_send": "external_write",
     "zotero_write": "external_write", "zotero_sync": "external_write",
 }
@@ -1825,7 +1947,11 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
     if name == "library_overview":
         return _overview(db, task_id)
     if name == "knowledge_query":
-        return _knowledge_query(db, task_id, args.get("query", ""))
+        return _knowledge_query(db, task_id, args.get("query", ""), str(args.get("project") or ""))
+    if name == "calendar_list":
+        return _calendar_list(db, args)
+    if name == "schedule_manage":
+        return _schedule_manage(db, args)
     if name == "project_create":
         title = str(args.get("title") or "").strip()
         if not title:
@@ -1953,11 +2079,33 @@ def agent_profile(db: "WorkflowDB", task_id: str) -> dict[str, Any] | None:
     return db.active_model()
 
 
+STEP_AGENT = {                       # 十步各有一个助手身份（跟前端 WF_AGENT 同名，改一处两边对齐）
+    "idea": "创新点审查助手", "search": "文献检索助手", "download": "入库助手", "notes": "翻译助手",
+    "outline": "框架助手", "map": "谱系助手", "write": "写作助手", "review": "审查助手",
+    "entrans": "中译英助手", "convert": "格式助手",
+}
+
+
+def _system_for(who: str, system: str | None) -> str:
+    """第一段 system。十步各有助手身份时，把 AGENT_SYSTEM 开头那两句「你叫览籍智研 / 答：你是览籍智研」
+    换成本步的名字 —— 只加在后面 ctx 里没用，模型会照第一行复述。其余规则原样保留。"""
+    base = system or AGENT_SYSTEM
+    if not who or system:
+        return base
+    return base.replace(
+        "你叫「览籍智研」，是这个软件的主 Agent，也是一位做科研的研究生的科研助手",
+        "你叫「%s」，是这个软件里负责这一步的副手，服务对象是做科研的研究生" % who, 1,
+    ).replace(
+        "用户怎么问「你是谁」就怎么答：你是览籍智研，他的科研助手。",
+        "用户怎么问「你是谁」就怎么答：你是%s。" % who, 1,
+    )
+
+
 def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_steps: int = 6,
               system: str | None = None, tools: list[dict[str, Any]] | None = None,
               extra_context: str = "", scope: str = "", publish: bool = True,
               profile: dict[str, Any] | None = None, assistant_id: str = "",
-              member: dict[str, Any] | None = None) -> dict[str, Any]:
+              member: dict[str, Any] | None = None, step: str = "") -> dict[str, Any]:
     """工具调用循环。emit(event) 每产生一条事件调用一次（SSE 用）。
     system/tools 不传就是通用 Agent（AGENT_SYSTEM + 全量工具）；创新点审查/确认大纲那两步会传受限工具 + 记忆块。
     scope 决定这轮对话和哪一步共用历史（'' = 创新点审查/通用，'outline' = 确认大纲）。
@@ -2027,6 +2175,10 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         if asst:
             ctx += "\n\n【当前助手】%s（%s）\n规则：%s" % (
                 asst["name"], "公开内置" if asst["source"] == "builtin" else "我的助手", asst["rules"] or "（没写规则）")
+    who = STEP_AGENT.get(step or scope or "", "")
+    if who:      # 工作流里的每一步都是一个独立助手，别让它自称「览籍智研 / 智研管家 / Partner Agent」
+        ctx += (f"\n\n【你的身份】这一步你是「{who}」，只负责这一步的事；上面提到的「览籍智研 / 智研管家 / Partner Agent」是"
+                f"整台机器和首页的称呼，不是你的自称。有人问「你是谁」，就答「我是{who}」，再用一句话说这一步负责什么。")
     if extra_context:
         ctx += "\n\n" + extra_context
     project_dir = str((db.summary(bound or task_id).get("task") or {}).get("base_dir") or "")
@@ -2051,7 +2203,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     allowed_names = {t.get("function", {}).get("name") for t in tool_specs}
     integration_names = {t.get("function", {}).get("name") for t in agent_integrations.tool_specs()}
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system or AGENT_SYSTEM},
+        {"role": "system", "content": _system_for(who, system)},
         {"role": "system", "content": ctx},
         *history, {"role": "user", "content": text},
     ]
@@ -2156,6 +2308,20 @@ def _brief(name: str, result: Any) -> str:
         return "已组队「%s」：%d 人（加急办公室）" % (result.get("name", ""), len(result.get("added") or []))
     if name == "project_create":
         return "已建项目「%s」· %s" % (result.get("title", ""), str(result.get("project_id", ""))[:8])
+    if name == "calendar_list":
+        return "%s 共 %d 条日程" % (result.get("range", ""), result.get("count", 0))
+    if name == "schedule_manage":
+        if result.get("schedules") is not None:
+            return "定时任务 %d 个" % result.get("count", 0)
+        if result.get("created"):
+            return "已建定时任务「%s」%s" % ((result.get("schedule") or {}).get("name", ""), (result.get("schedule") or {}).get("cron", ""))
+        if result.get("toggled"):
+            s = result.get("schedule") or {}
+            return "「%s」已%s" % (s.get("name", ""), "启用" if s.get("enabled") else "暂停")
+        if result.get("deleted"):
+            return "已删除定时任务「%s」" % result.get("name", "")
+    if name == "knowledge_query":
+        return "命中 %d 条（%s）" % (result.get("total", 0), "、".join(sorted({h.get("project") or "大笔记" for h in (result.get("hits") or [])}))[:60])
     if name == "paper_search":
         return f"检索到 {result.get('found')} 条，新增入库 {len(result.get('saved') or [])} 条"
     if name == "paper_download":
@@ -2175,8 +2341,7 @@ def _brief(name: str, result: Any) -> str:
         return f"已导出 {result.get('path', '')}"
     if name == "calendar_add":
         return f"已加日程 {result.get('title')} @ {result.get('date')} {result.get('time') or ''}".strip()
-    if name == "knowledge_query":
-        return f"命中 {result.get('total', 0)} 条"
+
     if name == "library_overview":
         return f"文献 {result.get('文献')} 篇 / 检索结果 {len(result.get('检索结果') or [])} 条 / 笔记 {len(result.get('笔记') or [])} 篇"
     if name == "memory_save":

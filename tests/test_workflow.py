@@ -30,6 +30,34 @@ class WorkflowTest(unittest.TestCase):
         self.db.close()
         self.td.cleanup()
 
+    def test_calendar_list_schedule_manage_and_cross_project_query(self) -> None:
+        """主 agent 的三件日常：看今天的日程、管定时任务、跨项目查笔记。"""
+        from datetime import date
+        self.db.add_event("组会", date.today().isoformat(), self.task, "meeting", "", "14:00")
+        got = workflow._tool_impl("calendar_list", self.db, self.task, {})
+        self.assertEqual(got["count"], 1)
+        self.assertEqual(got["events"][0]["title"], "组会")
+        self.assertEqual(got["events"][0]["time"], "14:00")
+
+        made = workflow._tool_impl("schedule_manage", self.db, self.task, {
+            "action": "create", "name": "盯掺杂文献", "prompt": "检索 NaNiFeMn 掺杂新文献",
+            "cron": "0 9 * * *", "project": "O3 掺杂"})
+        sid = made["schedule"]["id"]
+        self.assertTrue(made["schedule"]["enabled"])
+        self.assertEqual(made["schedule"]["project"], "O3 掺杂")
+        self.assertIn(sid, [s["id"] for s in workflow._tool_impl("schedule_manage", self.db, self.task, {"action": "list"})["schedules"]])
+        off = workflow._tool_impl("schedule_manage", self.db, self.task, {"action": "toggle", "id": sid, "enabled": False})
+        self.assertFalse(off["schedule"]["enabled"])
+        self.assertTrue(workflow._tool_impl("schedule_manage", self.db, self.task, {"action": "delete", "id": sid})["deleted"])
+
+        self.db.add_note(self.task, "掺杂笔记", "Mg 掺杂能稳定 O3 相", "")
+        chat = self.db.create_chat("全局")
+        global_hit = workflow._tool_impl("knowledge_query", self.db, chat, {"query": "Mg 掺杂"})
+        self.assertEqual(global_hit["total"], 1)                      # 首页 Agent 没 projects 也查得到
+        self.assertEqual(global_hit["hits"][0]["project"], "O3 掺杂")
+        with self.assertRaises(ValueError):
+            workflow._tool_impl("knowledge_query", self.db, chat, {"query": "x", "project": "不存在的项目"})
+
     def test_project_create_tool_registered_and_works(self) -> None:
         """主 agent 必须能自己建项目：工具在 TOOL_SPECS 里，且真能建出来（带项目位置就建目录）。"""
         names = [spec["function"]["name"] for spec in workflow.TOOL_SPECS]

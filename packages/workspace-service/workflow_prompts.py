@@ -114,14 +114,15 @@ OUTLINE_TEMPLATE = """# <题目：一句话说清做什么>
 
 AGENT_SYSTEM = """你叫「览籍智研」，是这个软件的主 Agent，也是一位做科研的研究生的科研助手（查文献、读论文、记笔记、写稿、跑数据都归你管）。
 用户怎么问「你是谁」就怎么答：你是览籍智研，他的科研助手。用中文工作，只通过工具动手，不编造数据。
-可用工具覆盖：新建项目、创新点审查、论文搜索、OA 下载、逐页精读、知识库笔记、文章撰写、稿件审查、格式转换、日历、库内检索、团队派活。
+可用工具覆盖：新建项目、创新点审查、论文搜索、OA 下载、逐页精读、知识库笔记、文章撰写、稿件审查、格式转换、日历（看/加）、定时任务（列出/新建/暂停/删除）、库内检索（可跨项目）、团队派活。
 规则：
 1. 先调 library_overview 或 knowledge_query 了解现状，再决定下一步；用户没说清楚目标时先问一句，不要瞎跑。
 2. 工具返回的候选证据必须带页码与原文献；页码或原文对不上的条目一律不当结论。
 3. 只下载开放获取全文；没有 OA 链接就如实说明，不做替代下载。
 4. 每一步做完用一两句中文说明你做了什么、拿到什么、下一步建议。审查/撰写产出是草稿，不是结论。
 5. 一个目标尽量用最少的工具调用完成；任务完成后直接给结论。
-6. **用户说「新建项目 / 新建课题」就直接调 project_create**：标题、研究问题、材料体系能按他的话拟出来就先拟，别反问一串再等；建完把项目名和 project_id 告诉他，后面所有工具都用这个 id。"""
+6. **用户说「新建项目 / 新建课题」就直接调 project_create**：标题、研究问题、材料体系能按他的话拟出来就先拟，别反问一串再等；建完把项目名和 project_id 告诉他，后面所有工具都用这个 id。
+7. **问日程先 calendar_list**（今天/这周/这个月），别凭印象报；**要定时任务就先 schedule_manage(list) 看现状**再新建/暂停/删除。跨项目查笔记给 knowledge_query 带上 project。"""
 
 _DELEGATE_SYSTEM = ("你是被派活的子 agent：只看得到这条任务本身，看不到父对话的历史。只做这一件事，"
                     "做完给一份不超过 300 字的摘要：结论 + 关键事实/数字 + 产物路径。不要复述任务、不要寒暄。")
@@ -331,7 +332,24 @@ TOOL_SPECS = [
              "material_system": {"type": "string", "description": "材料体系 / 关键词，逗号分隔；不知道就留空"},
              "base_dir": {"type": "string", "description": "项目文件夹位置（绝对路径）；用户没指定就留空，文件落到工作区默认目录"}},
             ["title"]),
-    _schema("knowledge_query", "在本任务已入库的笔记与证据里做关键词检索。", {"query": {"type": "string"}}, ["query"]),
+    _schema("knowledge_query", "在笔记与证据里做关键词检索。不填 project 就查当前项目；跨项目问「某个项目里的某篇笔记」时把 project 填上（项目名或 id）。",
+            {"query": {"type": "string"},
+             "project": {"type": "string", "description": "项目名或 project_id；不填=当前项目，首页 Agent 不填=全部项目一起搜"}},
+            ["query"]),
+    _schema("calendar_list", "看日程：默认返回今天；也可以给日期区间或月份。用户问「今天/这周/这个月有什么安排」先调它，别只看系统提示里那几条。",
+            {"date_from": {"type": "string", "description": "YYYY-MM-DD，默认今天"},
+             "date_to": {"type": "string", "description": "YYYY-MM-DD，默认与 date_from 相同"},
+             "month": {"type": "string", "description": "YYYY-MM，给月份就忽略上面两个"}}),
+    _schema("schedule_manage", "管理定时任务：列出、新建、暂停/启用、删除。用户说「每天早上帮我盯一下某个项目」「把那个定时任务暂停」时用它。",
+            {"action": {"type": "string", "enum": ["list", "create", "toggle", "delete"]},
+             "id": {"type": "string", "description": "toggle/delete 用：定时任务 id（先 list 拿）"},
+             "name": {"type": "string", "description": "create 用：任务名"},
+             "prompt": {"type": "string", "description": "create 用：到点了让 Agent 做什么"},
+             "cron": {"type": "string", "description": "create 用：cron 五段式，例如每天 9 点 = \"0 9 * * *\"；工作日 8:30 = \"30 8 * * 1-5\""},
+             "project": {"type": "string", "description": "create 用：绑哪个项目（名字或 id），不填=全局"},
+             "output_dir": {"type": "string", "description": "create 用：产物子目录，默认 定时任务"},
+             "enabled": {"type": "boolean", "description": "toggle 用：true=启用，false=暂停"}},
+            ["action"]),
     _schema("team_board", "看团队看板：成员各自状态 + 最近派活与执行情况（谁在跑、谁完成了、失败原因）。",
             {"project": {"type": "string", "description": "项目名或 id；不填=当前项目"}}),
     _schema("team_form", "为一个项目临时组队：说清为什么组、要交什么、拉哪几个助手（写名字），开一间加急办公室。"
