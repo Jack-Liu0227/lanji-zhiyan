@@ -1850,6 +1850,66 @@ class Handler(BaseHTTPRequestHandler):
         return folder_picker.pick_folder(initial, title)
 
 
+def _start_inproc(port: int, url: str) -> None:
+    """老路径：HTTP 服务跟窗口在同一个（Medium）进程里。沙箱起不来时用它兜底。"""
+    with WorkflowDB(DB_PATH) as _db:
+        if not _db.tasks():
+            _db.create_task(
+                "锂金属固态电池界面反应动力学与多尺度演化研究",
+                "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
+                "固态锂电池, 复合固态电解质, 锂金属负极",
+            )
+            _db.seed_welcome()          # 新用户首启：种一条「小智」欢迎对话（能正常删掉，删了不再出现）
+    import mail
+    mail.encrypt_legacy()              # 老 mail.json 里的明文授权码 → DPAPI 密文（幂等，干净时是空转）
+    # 低完整性写边界：把 data/ 和项目目录标成 Low（Low 子进程只能写这些地方）。
+    # 放到后台线程，几百篇 PDF 的 /T 也不至于让启动卡住；幂等，每次启动跑一遍没代价。
+    threading.Thread(target=paths.mark_write_roots_low, daemon=True).start()
+    srv = Server(("127.0.0.1", port), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    schedule.start()           # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
+    team.start_worker()        # 团队派活队列（串行：一次跑一个成员）
+    print(f"览籍智研已启动：{url}")
+
+
+_LOW_SERVER = None            # 低完整性服务端子进程（沙箱模式）；None = 同进程服务（老行为）
+
+
+def _spawn_low_server(port: int):
+    """把 HTTP 服务放到低完整性（Low IL）子进程里：它能写的只有 data/ 与项目目录（内核强制）。
+    本进程留着画窗口 —— WebView2 在 Low IL 下建不出窗口（实测 HTTP 通、窗口没有）。
+    起不来就返回 None，调用方退回同进程服务，不能因为沙箱把应用搞挂。"""
+    try:
+        import lowbox
+    except Exception:
+        return None
+    cmd = [sys.executable, str(Path(__file__).resolve()), "--port", str(port), "--no-open"]
+    env = dict(os.environ, RW_LOW_SERVER="1")
+    try:
+        proc = lowbox.popen(cmd, cwd=str(Path(__file__).resolve().parent), env=env)
+    except OSError:
+        return None
+    for _ in range(120):                       # 最多等 24s（首次冷启动要给库迁移留时间）
+        with socket.socket() as probe:
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                return proc
+        if proc.poll() is not None:            # 子进程自己退了
+            return None
+        time.sleep(0.2)
+    proc.kill()
+    return None
+
+
+def _stop_low_server() -> None:
+    global _LOW_SERVER
+    if _LOW_SERVER is not None:
+        try:
+            _LOW_SERVER.kill()
+        except Exception:
+            pass
+        _LOW_SERVER = None
+
+
 def main() -> int:
     # Frozen builds launch this process as a tiny native dialog helper.  Handle
     # that mode before checking the web bundle or starting the HTTP service.
@@ -1879,31 +1939,26 @@ def main() -> int:
         # 端口被老构建占着（改过前端没重启）：杀掉老实例让自己接管，不再退回 Edge --app 兜底 ——
         # 那条路径 --start-maximized 时常不生效，先弹个小窗再被拉满，就是「闪一个小卡片」。
         busy = not _takeover(port)
+    global _LOW_SERVER
     if busy:
         print(f"览籍智研已在运行：{url}")
+    elif "--no-open" in sys.argv:
+        _start_inproc(port, url)                  # 子进程模式（我们就是那个 Low IL 服务端）
     else:
-        with WorkflowDB(DB_PATH) as _db:
-            if not _db.tasks():
-                _db.create_task(
-                    "锂金属固态电池界面反应动力学与多尺度演化研究",
-                    "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
-                    "固态锂电池, 复合固态电解质, 锂金属负极",
-                )
-                _db.seed_welcome()          # 新用户首启：种一条「小智」欢迎对话（能正常删掉，删了不再出现）
-        import mail
-        mail.encrypt_legacy()          # 老 mail.json 里的明文授权码 → DPAPI 密文（幂等，干净时是空转）
-        # 低完整性写边界：把 data/ 和项目目录标成 Low（Low 子进程只能写这些地方）。
-        # 放到后台线程，几百篇 PDF 的 /T 也不至于让启动卡住；幂等，每次启动跑一遍没代价。
-        threading.Thread(target=paths.mark_write_roots_low, daemon=True).start()
-        srv = Server(("127.0.0.1", port), Handler)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        schedule.start()          # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
-        team.start_worker()       # 团队派活队列（串行：一次跑一个成员）
-        print(f"览籍智研已启动：{url}")
+        # 沙箱模式：服务跑在 Low IL 子进程里，本进程只当窗口宿主
+        _LOW_SERVER = _spawn_low_server(port)
+        if _LOW_SERVER is None:
+            print("沙箱子进程起不来，退回同进程服务")
+            _start_inproc(port, url)
+        else:
+            import atexit
+            atexit.register(_stop_low_server)
+            print(f"览籍智研已启动（服务跑在低完整性沙箱里）：{url}")
     if "--no-open" not in sys.argv:
         # 自己的无边框窗口；起不来（没装 pywebview / WebView2 运行时）才退回系统浏览器。
         # Edge --app 兜底已删：它会先弹个小窗再被 _maximize 拉满（「闪一个小卡片」）。
         if not busy and _webview_window(url, stamp):
+            _stop_low_server()                    # 关窗 = 一起收掉沙箱里的服务端，不留僵尸
             return 0
         webbrowser.open(url)
     if busy:

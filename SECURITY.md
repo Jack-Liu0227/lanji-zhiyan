@@ -52,8 +52,14 @@
    *部分已收敛（2026-10-20）*：外部子进程 **xelatex** 现在跑在**低完整性（Low IL）**里
    （`packages/workspace-core/lowbox.py`），`data/` 与各项目目录被标成 Low ——
    内核强制它**只能写这些目录**，写桌面 / Windows / 用户目录一律拒绝（实测）。
-   同一条边界也覆盖以后新加的外部工具。**仍未沙箱**：babeldoc（uv 要写 `%LOCALAPPDATA%\uv`），
-   MCP 服务器的子进程，以及主进程自己（Medium，写操作靠 `paths.resolve_allowed()` 白名单）。
+   **2026-10-20 晚升级**：整个 **HTTP 服务端进程**（库、工具、xelatex、babeldoc）都跑在 Low IL 里，
+   只剩窗口宿主（WebView2，Medium）在外 —— WebView2 在 Low IL 下建不出窗口（实测 HTTP 通、窗口没有）。
+   结构：`server.py`（Medium，只画窗口）→ 起 `pythonw server.py --port N --no-open` 的 **Low IL 子进程**；
+   关窗时父进程 `_stop_low_server()` 一并收掉，不留僵尸。
+   写白名单的目录（HOME、data/、各项目目录、对话产出目录）都标成 Low；其余一律 Medium → 服务端写不进。
+   **仍未沙箱**：MCP 服务器子进程（各服务器要自己的 cache）。
+   **已知副作用**：Obsidian 库如果不在授权目录里，写回 frontmatter 会被内核拒 ——
+   要么把库放进项目/数据目录，要么对它跑一次 `icacls "<库路径>" /setintegritylevel (OI)(CI)L /T`。
    回滚：`icacls <目录> /setintegritylevel M /T`。
 3. 脱敏只覆盖结构化字段（规则层）；人名/机构/地址会原样发给模型提供方。
 4. DPAPI 只挡"把数据目录拷到别的账号/机器"；挡不住同用户进程。**顺带一句**：`user/` 拷到另一台机器或重装系统后解不开，换机只能重填 key；`user/` 千万不要放进 OneDrive 等同步目录。

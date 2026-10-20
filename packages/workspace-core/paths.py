@@ -255,7 +255,7 @@ def mark_write_roots_low(verbose: bool = False) -> dict[str, str]:
     if not lowbox.available():
         return {}
     out: dict[str, str] = {}
-    for root in [DATA, *project_roots()]:
+    for root in [HOME, DATA, *project_roots()]:      # HOME 一起标：user/ executors/ cache/ 都得让沙箱里的服务端写得进
         try:
             if root and Path(root).is_dir():
                 ok = lowbox.mark_low(root, recursive=True)
