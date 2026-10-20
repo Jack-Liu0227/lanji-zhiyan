@@ -128,5 +128,25 @@ class TrimTest(unittest.TestCase):
         self.assertEqual(pdfio.page_count(mono), 1)
 
 
+class BabeldocEnvTest(unittest.TestCase):
+    """翻译子进程的环境：家里所有 key 都不许传进去（模型 key 走命令行 --openai-api-key）。
+    以前是 os.environ 整份复制，等于把每个 provider 的 key 都递给第三方 PDF 工具。"""
+
+    def test_凭据类环境变量全剥掉(self) -> None:
+        keys = {"ZHIPUAI_API_KEY": "sk-x", "OPENAI_API_KEY": "sk-y", "GH_TOKEN": "t",
+                "DEEPSEEK_API_KEY": "sk-z", "RW_DEBUG_CDP": "9333", "MY_SECRET": "s"}
+        old = {k: os.environ.get(k) for k in keys}
+        os.environ.update(keys)
+        try:
+            env = papertran._env()
+        finally:
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        leaked = sorted(k for k in env if k in keys)
+        self.assertEqual(leaked, [], "这些变量漏进了 babeldoc 子进程：%s" % leaked)
+        self.assertEqual(env["NO_PROXY"], "*")                  # 真要的那几个还在
+        self.assertIn("PATH", env)
+
+
 if __name__ == "__main__":
     unittest.main()

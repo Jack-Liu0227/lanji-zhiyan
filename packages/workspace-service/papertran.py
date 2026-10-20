@@ -177,7 +177,11 @@ def status(paper_id: str, out_dir: Path | None = None) -> dict[str, Any]:
 
 
 def _env() -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if not k.lower().endswith("_proxy")}
+    """babeldoc 子进程的环境：**先把凭据类变量全剥掉**（fileguard.clean_env），只补它真要的几个。
+    模型 key 是命令行 `--openai-api-key` 传的，子进程不需要任何 *_KEY 环境变量 ——
+    以前这里是 os.environ 整份复制，等于把家里所有 key 都递给一个第三方 PDF 工具。"""
+    import fileguard
+    env = {k: v for k, v in fileguard.clean_env().items() if not k.lower().endswith("_proxy")}
     env["HF_HUB_OFFLINE"] = "1"                                 # 版式模型本机已有缓存
     env["HF_HUB_DISABLE_TELEMETRY"] = "1"
     env["TIKTOKEN_CACHE_DIR"] = os.path.expanduser("~/.cache/babeldoc/tiktoken")

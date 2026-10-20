@@ -39,10 +39,15 @@
 ## 4. 已知缺口（别当成"已加固"）
 
 1. HTTP 监听 `127.0.0.1`、**无鉴权、无 CORS 头**：本机进程能调全部 API（网页读不到响应）。
+   *浏览器跨站那条已堵*：`do_POST` 先判 `Origin`（非本机一律 403）再判 `Content-Type: application/json`（415），
+   **`/api/upload` 也不例外**（2026-10-20 之前它在两道闸门之前 return，任何网页都能往 `uploads/` 塞文件）。
+   早退前会 `_drain()` 读掉 body，客户端拿到的是 403/415 而不是 RST。
 2. 进程以当前 Windows 用户**全权限**运行：没有降权、没有沙箱。
 3. 脱敏只覆盖结构化字段（规则层）；人名/机构/地址会原样发给模型提供方。
 4. DPAPI 只挡"把数据目录拷到别的账号/机器"；挡不住同用户进程。**顺带一句**：`user/` 拷到另一台机器或重装系统后解不开，换机只能重填 key；`user/` 千万不要放进 OneDrive 等同步目录。
-5. PDF 翻译的子进程（BabelDOC）仍继承完整环境变量（它自己要用 `ZHIPUAI_API_KEY` 跑翻译），**这条没剥**；xelatex 那条已经剥了。
+5. ~~PDF 翻译的子进程（BabelDOC）仍继承完整环境变量~~ —— **已修**（2026-10-20）：`papertran._env()` 改用
+   `fileguard.clean_env()`，key/token/secret/本应用私有变量全剥掉；模型 key 本来就是命令行
+   `--openai-api-key` 传的，子进程不需要任何 `*_KEY`。回归检查 `tests/test_papertran.BabeldocEnvTest`。
 6. `executors/tools/`（以及 `agents/`、`skills/`）**允许模型自己写**：不做签名、不做哈希校验，写进去就能被执行。这是产品决策，不是疏忽 —— 但它意味着"模型被骗 → 直接落一个可执行文件"是可能的。要收紧就加 `tools/manifest.json`（名字 + sha256）并只认白名单。
 
 ## 5. 报告问题

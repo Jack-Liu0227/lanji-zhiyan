@@ -17,7 +17,7 @@ for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-
     sys.path.insert(0, str(ROOT / "packages" / _n))
 
 CALL = re.compile(r"fetch\((.*?)\)", re.S)
-EXEMPT = "/api/upload"          # 唯一豁免：它走原始字节 body，server.py 在闸门之前就 return 了
+EXEMPT = "/api/upload"          # 唯一豁免：它走原始字节 body（仍要过 Origin 校验，但不收 JSON 头）
 
 
 class WebFetchTest(unittest.TestCase):
@@ -51,6 +51,51 @@ class ChatWithoutConversationTest(unittest.TestCase):
     def test_frontend_no_longer_blocks_send(self) -> None:
         self.assertNotIn('alert("先新建一个对话（左上角 ＋）")', self.chat_js)
         self.assertIn("/api/chat/create", self.chat_js)
+
+
+class UploadOriginGateTest(unittest.TestCase):
+    """附件上传走原始字节 body，绕不过浏览器的 preflight —— 所以服务端必须自己先挡跨站 Origin。
+    2026-10-20 之前 /api/upload 在 Origin 校验之前就 return 了：任何网页都能往 uploads/ 塞文件。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import os, socket, subprocess, tempfile, time
+        cls.tmp = tempfile.TemporaryDirectory(prefix="rw-upload-gate-")
+        cls.addClassCleanup(cls.tmp.cleanup)
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            cls.port = probe.getsockname()[1]
+        env = dict(os.environ, LANJI_ZHIYAN_HOME=cls.tmp.name, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+        cls.proc = subprocess.Popen([sys.executable, str(ROOT / "apps/desktop/server.py"),
+                                     "--port", str(cls.port), "--no-open"],
+                                    env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cls.addClassCleanup(cls.proc.kill)
+        for _ in range(80):                                  # 最多等 8s 起服务
+            try:
+                socket.create_connection(("127.0.0.1", cls.port), timeout=0.5).close()
+                return
+            except OSError:
+                time.sleep(0.1)
+
+    def _post(self, desc: str, origin: str | None, body: bytes = b"hi") -> int:
+        import urllib.error, urllib.request
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/upload?name=probe.txt", data=body,
+                                     headers={"Content-Type": "text/plain"})   # 跨站「简单请求」的形状
+        if origin:
+            req.add_header("Origin", origin)
+        try:
+            return urllib.request.urlopen(req, timeout=10).status
+        except urllib.error.HTTPError as exc:
+            return exc.code
+
+    def test_跨站来源被挡(self) -> None:
+        self.assertEqual(self._post("evil", "https://evil.example"), 403)
+
+    def test_本机来源放行(self) -> None:
+        self.assertIn(self._post("self", f"http://127.0.0.1:{self.port}"), (200, 400))
+
+    def test_没有_Origin_的本机进程照旧可用(self) -> None:
+        self.assertIn(self._post("none", None), (200, 400))
 
 
 class MainScriptSyntaxTest(unittest.TestCase):

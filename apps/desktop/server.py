@@ -1234,23 +1234,29 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # 界面永远拿到可读错误
             self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
 
+    def _drain(self) -> None:
+        """早退（403/415）前把 body 读掉 —— 不读就回包，客户端拿到的是 RST 而不是干净的状态码。"""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            if 0 < n <= 64 * 1024:
+                self.rfile.read(n)
+        except Exception:
+            pass
+
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path, q = parsed.path, urllib.parse.parse_qs(parsed.query)
-        if path == "/api/upload":
+        # 跨站来源先挡：附件上传走原始字节、绕不过 preflight，所以必须在 upload 分支之前判
+        origin = (self.headers.get("Origin") or "").strip()
+        if origin and not re.match(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", origin):
+            self._drain()
+            return self._json({"error": "来源不被允许"}, 403)
+        if path == "/api/upload":                        # 原始字节走 body，所以放在 JSON 检查之前
             return self._upload(q)
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if ctype != "application/json":
+        if ctype != "application/json":                  # 挡跨站「简单请求」：非 JSON 一律不收
+            self._drain()
             return self._json({"error": "只接受 application/json"}, 415)
-        origin = (self.headers.get("Origin") or "").strip()
-        if origin and not re.match(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", origin):
-            return self._json({"error": "来源不被允许"}, 403)
-        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if ctype != "application/json":                      # 挡跨站「简单请求」：非 JSON 一律不收
-            return self._json({"error": "只接受 application/json"}, 415)
-        origin = (self.headers.get("Origin") or "").strip()
-        if origin and not re.match(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", origin):
-            return self._json({"error": "来源不被允许"}, 403)
         data = self._body()
         if self._extension_route("POST", path, data, q):
             return
