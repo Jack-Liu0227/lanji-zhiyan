@@ -214,8 +214,8 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .msg-err{border:1px solid color-mix(in srgb,var(--err) 30%,var(--line));border-radius:10px;background:color-mix(in srgb,var(--err) 10%,transparent);padding:10px 12px;color:var(--err);font-size:12px}
 .tool-card{border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;background:var(--panel);font-size:12px}
 .tool-card.bad{border-left-color:var(--err)}
-.tool-card>summary{display:flex;cursor:pointer;align-items:center;gap:8px;padding:8px 10px;list-style:none}
-.tool-card>summary::-webkit-details-marker{display:none}
+.tool-card summary{display:flex;cursor:pointer;align-items:center;gap:8px;padding:8px 10px;list-style:none}
+.tool-card summary::-webkit-details-marker{display:none}
 .tool-name{flex:none;font-weight:700;color:var(--fg)}
 .tool-detail{min-width:0;flex:1;overflow:hidden;color:var(--muted);font-size:11px;text-overflow:ellipsis;white-space:nowrap}
 .tool-dur{flex:none;color:var(--muted);font-size:10px}
@@ -738,7 +738,7 @@ html[data-theme="light"] .quick-add .quick-time{color-scheme:light}
 
 /* 工作流页：左竖列（照最左侧导航栏的卡片样式）+ 右功能区 */
 /* 工作流页：三栏 —— 左十步 / 中展示区+确认交付 / 右本步助手 */
-.wf-page{display:grid;grid-template-columns:172px minmax(0,1fr) 404px;gap:12px;height:100%;min-height:0;padding-bottom:2px}
+.wf-page{display:grid;grid-template-columns:172px minmax(0,1.965fr) minmax(300px,1fr);gap:12px;height:100%;min-height:0;padding-bottom:2px}
 .page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .ph-acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .set-wrap{display:grid;grid-template-columns:168px 1fr;gap:16px;align-items:start}
@@ -779,7 +779,7 @@ html[data-theme="light"] .quick-add .quick-time{color-scheme:light}
 .wf-step.on{background:color-mix(in srgb,var(--accent) 13%,transparent);border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent);opacity:1}
 .wf-step.on .wf-lbl{font-weight:700}
 .wf-step.on:not(.done) .wf-dot{background:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
-.wf-page.min{grid-template-columns:52px minmax(0,1fr) 404px}
+.wf-page.min{grid-template-columns:52px minmax(0,1.965fr) minmax(300px,1fr)}
 .wf-page.min .wf-lbl,.wf-page.min .wf-proj{display:none}
 .wf-page.min .wf-step{padding:8px 0;justify-content:center}
 .wf-page.min .wf-ico{width:auto}

@@ -1750,8 +1750,13 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     extra = ""
                 # step 只用来给这个助手一个身份（前端在 body 里带上）；不参与下面的 log_step，那一步照旧只记 runners
+                wstep = step or str(data.get("step") or "")
+                # 对话落在这个步骤自己的 scope 里 —— 右栏是按 /api/step/messages?step=X 取历史的，
+                # 不落 scope 的话通用 Agent 这几步（检索/下载/笔记/翻译/转换）一换步就整段消失、
+                # 三块统计面板永远是 0 / 还没有。纯聊天（不绑项目）照旧 scope=''。
+                on_task = bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
                 run_agent(db, tid, data.get("message", ""), emit, extra_context=extra,
-                          step=step or str(data.get("step") or ""))
+                          step=wstep, scope=wstep if (wstep and on_task) else "")
             if track:
                 db.log_step(tid, step, "failed" if had_error else "done",
                             "执行过程报告错误" if had_error else "执行完成")
