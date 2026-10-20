@@ -136,10 +136,6 @@ def _dependency_state(row: dict[str, Any], tasks: dict[str, dict[str, Any]]) -> 
     return "ready"
 
 
-def _dependencies_ready(row: dict[str, Any], tasks: dict[str, dict[str, Any]]) -> bool:
-    return _dependency_state(row, tasks) == "ready"
-
-
 def assign(task_id: str, member: str, prompt: str, title: str = "", trigger: str = "leader",
            origin: str = "", depends_on: Any = None, output_contract: dict[str, Any] | None = None,
            reviewer_id: str = "") -> dict[str, Any]:

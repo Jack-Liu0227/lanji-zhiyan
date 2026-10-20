@@ -2,6 +2,35 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 2026-10-20（本轮：精读不再空回 + 谱系图横向思维导图 + 各助手只看自己的账 + 死代码清理）
+
+**1. 精读「读不出来」的根因不是 PDF 没文本层**
+实测：`max_tokens=3000` 时推理模型的思维链把额度吃光，`finish_reason=length`、`content_len=0`，于是笔记只剩标题（92–95 字的空笔记）。
+改法：`chat()` 空回翻倍预算重试一次；`stage_read` 每段给 6000，拿不到内容直接判失败（不再落空笔记）；
+`read_done_filenames()` 让已有实质笔记（≥300 字）的论文重跑跳过。影响：检索/精读两步。
+验证：真实接口复现（3000 空回 / 6000 出 3743 字），补读 Dissociation 3889 字、High-performance 3193 字，5/5 篇都有实质笔记。
+
+**2. 右栏统计改成「只算这个助手自己」**
+`usage_stats()` 删除（唯一的调用方是 `/api/step/messages`），前端不再叠加项目合计；轮数/工具数/token 边跑边刷。
+
+**3. 检索助手跑完必须收口**
+提示词 + 服务端兜底（模型没问「还要调整检索式吗」就补一句，问过不重复）。顺带修 `for step in range()` 遮蔽同名的 `step` 参数。
+
+**4. 谱系图改成横向思维导图**
+- 分层：父子边判层级（「下一章」是同级串联，不参与分层），列内 DFS 排序，父节点对齐子节点中线
+- 拖动节点落盘 `x/y`；agent 重写整份 JSON 时保留用户坐标，`keep_positions=False`（前端「全部重排」）才清
+- 点节点弹编辑卡（标题/说明/类型），↻ 重新整理，缩放 −/＋/适应
+- `map_seed()`：大纲已有、谱系图还没有 → 自动长出「章 → 节」树，不用等用户开口；已有图绝不覆盖
+- `map_sources()` 的笔记改成「标题 + id」，不再给哈希文件名
+
+**5. 死代码清理**（判据：全仓 0 引用）
+- 死 import 3 处：`workflow.py` 的 `cite_sync`/`CONV_FORMATS`、`workflow_converters.py` 的 `subprocess`、`tools/check_literature_env.py` 的 `urllib.error`
+- 死函数 1 个：`team.py::_dependencies_ready`（只有 `_dependency_state` 在用）
+- 死 CSS 12 条规则：`cap-grid / cap-card-* / cap-item-card` 一整套（旧能力卡片布局，js 里 0 出现），约 2.1 KB
+- 加 `x/y` 持久化后留下的旧分支不动；`q/` 是 gitignore 的本地草稿（含取 token 的脚本），仓库里没有，未动
+
+验证：`py_compile` 0 失败、`node --check` 全过、`300 tests OK (skipped=9)`、起一次应用 `/`、`/api/step/outs`、`/api/map/state`、`/api/security` 全 200、谱系图 21 节点 20 边。
+
 ## 待发 PR（本轮：项目卡片进科研平台 + 看板浅色适配 + 看板标题行）
 
 只动前端 4 个文件，改完 **F5 就够**：`apps/desktop/web/` 下 `workflow-view.js`、`app.css`、`kanban.css`、`kanban-view.js`。

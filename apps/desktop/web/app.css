@@ -12,7 +12,7 @@ a{color:var(--accent)}
 .app-shell{display:flex;height:100vh}
 .sidebar{width:232px;flex:none;background:var(--side-bg,var(--panel2));border-right:1px solid var(--line);display:flex;flex-direction:column}
 .sidebar.collapsed{width:64px}
-.sidebar.collapsed .lbl,.sidebar.collapsed .sidebar-group-children,.sidebar.collapsed .swatches{display:none}
+.sidebar.collapsed .lbl,.sidebar.collapsed .swatches{display:none}
 .brand{display:flex;align-items:center;gap:10px;padding:12px 12px 10px}
 .mark{width:30px;height:30px;flex:none;display:block}   /* 应用徽标：来自 mark.png（透明圆弧,无白底） */
 .brand .lbl{display:flex;flex-direction:column;justify-content:center;gap:1px;min-width:0;text-align:center}   /* 中文/英文共用同一条竖中线 */
@@ -1471,20 +1471,7 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .iw-mine:focus{outline:none;border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
 .iw-verdict{flex:1;min-height:0;overflow:auto;padding:14px 20px;font-size:13.5px;line-height:1.9}
 .iw-verdict .ol-empty{margin:0}
-
-/* ===== 能力与技能卡片统一尺寸与按钮绝对底端对齐 ===== */
-.cap-grid{display:grid !important;grid-template-columns:repeat(auto-fill,320px) !important;gap:16px !important;justify-content:start !important}
-.cap-grid .card,.cap-grid .card.cap-item-card{margin:0 !important;width:320px !important;height:270px !important;min-height:270px !important;max-height:270px !important;box-sizing:border-box !important;display:flex !important;flex-direction:column !important;justify-content:space-between !important;padding:16px !important;border-radius:12px !important;background:var(--panel,var(--bg)) !important;border:1px solid var(--line) !important}
-.cap-card-header{flex:0 0 auto !important;margin-bottom:6px !important}
-.cap-card-title-row{display:flex !important;align-items:center !important;justify-content:space-between !important;gap:8px !important}
-.cap-card-title-row h4{margin:0 !important;font-size:14px !important;font-weight:700 !important;white-space:nowrap !important;overflow:hidden !important;text-overflow:ellipsis !important;flex:1 !important}
-.cap-card-body{flex:1 1 auto !important;min-height:0 !important;display:flex !important;flex-direction:column !important;gap:6px !important;overflow:hidden !important;margin:4px 0 !important}
-.cap-card-desc{flex:1 1 auto !important;min-height:0 !important;overflow-y:auto !important;max-height:110px !important;line-height:1.5 !important;font-size:12px !important;white-space:pre-wrap !important;overflow-wrap:anywhere !important;scrollbar-width:thin !important;padding-right:4px !important;margin:0 !important;color:var(--muted) !important}
-.cap-card-desc::-webkit-scrollbar{width:4px}
-.cap-card-desc::-webkit-scrollbar-thumb{background:var(--line);border-radius:2px}
-.cap-card-path{flex:0 0 auto !important;font-size:11px !important;max-height:32px !important;overflow-y:auto !important;scrollbar-width:thin !important;white-space:nowrap !important;text-overflow:ellipsis !important;margin:0 !important;opacity:.7 !important}
 .cap-card-actions{flex:0 0 auto !important;margin-top:auto !important;padding-top:10px !important;height:34px !important;display:flex !important;align-items:center !important;gap:8px !important}
-@media(max-width:650px){.cap-grid{grid-template-columns:1fr !important}.cap-grid .card,.cap-grid .card.cap-item-card{width:100% !important}}
 
 /* ===== 弹出卡片：居中通知（原 alert）+ 确认弹窗的按钮/正文补充 ===== */
 .btn.danger{background:var(--err);color:#fff}
