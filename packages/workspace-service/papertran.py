@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import pdfio            # PDF 读写（pypdf/pdfplumber，见 pdfio.py）
 import json
+import lowbox          # 低完整性（Low IL）子进程：写入范围由内核限制
+import paths
 import os
 import re
 import subprocess
@@ -22,7 +24,10 @@ from pathlib import Path
 from typing import Any
 
 # BabelDOC 实测：模型/字体走本机缓存，只有 tiktoken 小文件首次要联网（已灌进缓存）
-BABELDOC_CMD = ["uv", "tool", "run", "babeldoc"]
+# 优先直跑 uv tools 里装好的 exe：`uv tool run` 要写 %LOCALAPPDATA%\uv\cache，
+# 在低完整性沙箱里直接 "Failed to initialize cache / 拒绝访问"；直跑 exe 就可以进沙箱。
+BABELDOC_EXE = Path(os.environ.get("APPDATA", "")) / "uv" / "tools" / "babeldoc" / "Scripts" / "babeldoc.exe"
+BABELDOC_CMD = [str(BABELDOC_EXE)] if BABELDOC_EXE.is_file() else ["uv", "tool", "run", "babeldoc"]
 
 # 从 pythonw（无控制台）里起控制台程序，Windows 会给子进程新建一个黑窗；
 # 用户一关这个黑窗，子进程就收到控制台事件、以 0xC000013A 退出 —— 表现就是
@@ -184,12 +189,20 @@ def _env() -> dict[str, str]:
     env = {k: v for k, v in fileguard.clean_env().items() if not k.lower().endswith("_proxy")}
     env["HF_HUB_OFFLINE"] = "1"                                 # 版式模型本机已有缓存
     env["HF_HUB_DISABLE_TELEMETRY"] = "1"
-    env["TIKTOKEN_CACHE_DIR"] = os.path.expanduser("~/.cache/babeldoc/tiktoken")
+    # babeldoc 把缓存硬编码在 Path.home()/.cache/babeldoc（const.py），所以把 home 指到 Low 目录；
+    # 但版式模型在 HF 缓存里（几百 MB），那个目录**保持原位只读**，别让子进程去下载。
+    env["HF_HOME"] = os.path.expanduser("~/.cache/huggingface")
+    env["HF_HUB_CACHE"] = os.path.expanduser("~/.cache/huggingface/hub")
+    env["TIKTOKEN_CACHE_DIR"] = str(paths.LOWTMP / "home" / ".cache" / "babeldoc" / "tiktoken")
+    _fake_home = paths.LOWTMP / "home"
+    _fake_home.mkdir(parents=True, exist_ok=True)
+    env["USERPROFILE"] = str(_fake_home)
+    env["HOMEDRIVE"], env["HOMEPATH"] = _fake_home.drive, str(_fake_home)[2:]
     env["NO_PROXY"] = "*"
     env["PYTHONUNBUFFERED"] = "1"                               # 不然日志/progress 全憋在缓冲区里，UI 看不出进度
     env["PYTHONIOENCODING"] = "utf-8"
     env["COLUMNS"] = "220"                                      # rich 按 80 列换行会把 "12/40" 截成 "12/…"
-    return env
+    return lowbox.sandbox_env(env, paths.LOWTMP)                # TEMP/TMP 也要在 Low 目录里
 
 
 def _parse_pages(s: str) -> list[tuple[int, int]]:
@@ -288,13 +301,15 @@ def _why(code: int) -> str:
 
 def _spawn(paper_id: str, cmd: list[str], env: dict[str, str], fh: Any, a: int, b: int) -> int:
     """跑一段 babeldoc：日志边写边刷新，状态里同步进度"""
-    # 暂不进 Low IL 沙箱：uv 要写 %LOCALAPPDATA%\uv\cache 与 uv\tools（Medium），
-    # 进了沙箱会 "Failed to initialize cache / 拒绝访问"。要沙箱就得把 uv 的 tool/cache
-    # 目录也搬到 Low 位置并重装一次 babeldoc —— 留作后续（见 doc/plan/2026-10-20_真边界spike.md）。
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
-                            errors="replace", env=env,
-                            creationflags=_CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP)
+    # 直跑 exe 时进 Low IL 沙箱（只能写项目目录）；还在走 uv 包装器时只能普通 spawn
+    # —— uv 要写 %LOCALAPPDATA%\uv\cache，Low 下直接拒绝访问。
+    if BABELDOC_EXE.is_file():
+        proc = lowbox.popen(cmd, env=env)
+    else:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
+                                errors="replace", env=env,
+                                creationflags=_CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP)
     phase, done, tot = "", 0, 0
     last = [time.monotonic()]
     stop_event = threading.Event()
