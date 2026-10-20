@@ -41,7 +41,7 @@ DOC_SUFFIXES = frozenset((
 _SECRET_ENV = re.compile(
     r"(?i)(api[_-]?key|apikey|token|secret|passw|credential|auth|cookie"
     r"|openai|anthropic|deepseek|dashscope|zhipu|moonshot|siliconflow|hf_|huggingface|github|gitlab"
-    r"|lanji_zhiyan|research_workbench|rw_trans|rw_debug)")
+    r"|research_workbench|rw_trans|rw_debug)")
 
 
 # ---------------------------------------------------------------- 子进程环境
@@ -124,8 +124,9 @@ def open_document(path: object) -> dict:
     if suffix not in DOC_SUFFIXES:
         raise ValueError(f"出于安全只打开文档类文件（{suffix or '无扩展名'} 不在白名单里）；"
                          f"代码/脚本类请在编辑器里查看：{p.name}")
-    if not hasattr(os, "startfile"):
+    if not hasattr(os, "startfile") and not paths.GRANT:
         raise RuntimeError("这个系统没有 startfile")
     audit("open", p)
-    os.startfile(str(p))                      # noqa: S606 —— Windows 专用，前面已经卡过白名单
+    if not paths.host_open(p):                # Low 里 ShellExecute 给文档返回 5 → 请宿主代开
+        raise ValueError(f"系统拒绝把这个文件交给默认程序（沙箱里只能由窗口宿主打开）：{p.name}")
     return {"opened": str(p)}

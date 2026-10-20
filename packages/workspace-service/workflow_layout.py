@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from workflow import STAGES, STAGE_LABEL, now
@@ -25,6 +25,7 @@ AFTER DELETE ON research_tasks BEGIN
 END;
 """
 _ID = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
+DEFAULT_LAYOUT_ID = "builtin.workflow.research"    # 项目没选过布局时默认用它，别靠排序碰运气
 _DONE = {"done", "completed", "success", "succeeded", "downloaded"}
 _RUNNING = {"running", "in_progress", "downloading", "reading", "translating"}
 _FAILED = {"failed", "error", "manual"}
@@ -45,8 +46,12 @@ def ensure_schema(db: Any) -> None:
     ]
     # Seed only once, including after the user deliberately deletes a template.
     if not db.db.execute("SELECT 1 FROM workflow_layouts LIMIT 1").fetchone():
-        for wid, name, description, stages in seeds:
-            stamp = now()
+        # now() 在 Windows 上同一时钟刻度里连着调三次会给出一模一样的字符串，
+        # 那样 ORDER BY created_at,id 就退化成按 id 排序（"reading" < "research"），
+        # 新项目默认打开的工作流会随机变成「文献精读」。逐条 +1µs，让列表顺序 = 声明顺序。
+        base = datetime.fromisoformat(now())
+        for index, (wid, name, description, stages) in enumerate(seeds):
+            stamp = (base + timedelta(microseconds=index)).isoformat()
             db.db.execute("INSERT INTO workflow_layouts VALUES (?,?,?,?,?,?)",
                           (wid, name, description, json.dumps(_linear(stages), ensure_ascii=False), stamp, stamp))
     db.db.commit()
@@ -239,7 +244,8 @@ def state(db: Any, task_id: str) -> dict[str, Any]:
     _project(db, task_id)
     layouts = [_public(row) for row in db.db.execute("SELECT * FROM workflow_layouts ORDER BY created_at,id")]
     binding = db.db.execute("SELECT * FROM project_workflow_layouts WHERE task_id=?", (task_id,)).fetchone()
-    layout = next((item for item in layouts if binding and item["id"] == binding["layout_id"]), layouts[0])
+    fallback = next((item for item in layouts if item["id"] == DEFAULT_LAYOUT_ID), layouts[0])
+    layout = next((item for item in layouts if binding and item["id"] == binding["layout_id"]), fallback)
     if not binding or binding["layout_id"] != layout["id"]:
         db.db.execute("INSERT OR REPLACE INTO project_workflow_layouts VALUES (?,?,?,?)",
                       (task_id, layout["id"], layout["order"][0], now()))

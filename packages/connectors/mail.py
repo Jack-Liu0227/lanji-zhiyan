@@ -237,7 +237,7 @@ def _build_client(acc: dict[str, Any]) -> imaplib.IMAP4:
         conn = imaplib.IMAP4(host, port, timeout=25)
     try:
         # 网易邮箱强制要求客户端先发 ID，否则返回「Unsafe Login」
-        conn.xatom("ID", '("name" "LanjiZhiyan" "version" "0.1.0" "vendor" "LanjiZhiyan")')
+        conn.xatom("ID", '("name" "ResearchWorkbench" "version" "1.0" "vendor" "ResearchWorkbench")')
     except Exception:
         pass
     conn.login(str(acc.get("email")), str(acc.get("password")))

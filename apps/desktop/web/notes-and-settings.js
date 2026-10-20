@@ -62,7 +62,7 @@ async function mdNarrow(){
   mdNarrowOn = !mdNarrowOn;
   const b = $("btnMdNarrow");
   try{
-    await api("/api/win/" + (mdNarrowOn ? "narrow" : "wide"), {});
+    await winCommand(mdNarrowOn ? "narrow" : "wide");
     $("mdView")?.classList.toggle("narrow", mdNarrowOn);
     document.body.classList.toggle("md-narrow", mdNarrowOn);       // 外壳（侧栏/标签/状态栏）也收掉
     if(b) b.textContent = mdNarrowOn ? "▯ 铺满" : "▯ 窄栏";
@@ -72,7 +72,7 @@ function mdFail(e, what){
   // 前端已更新、服务端还是旧的（接口 404）时最容易撞上：把话说清楚，别静默失败
   const hint = /not found|404/i.test(e?.message||"") ? "（服务端还是旧版本，重启一次「览籍智研」）" : "";
   console.error("笔记操作失败:", what, e);
-  alert(`${what}失败：${e.message}${hint}`);
+  uiNotify(`${what}失败：${e.message}${hint}`);
 }
 async function mdLoad(){
   try{
@@ -149,14 +149,14 @@ function mdCmd(command, value=""){
 }
 async function mdImport(files){
   const input=[...(files||[])], list=input.filter(f=>/\.(?:md|markdown)$/i.test(f.name));
-  if(!list.length) return alert("请导入 .md 或 .markdown 文件");
+  if(!list.length) return uiNotify("请导入 .md 或 .markdown 文件");
   let n=0;
   for(const f of list.slice(0,50)){
     if(f.size > 5*1024*1024) continue;
     try{
       const content=(await f.text()).replace(/^\uFEFF/,"");
       await mdNew(f.name.replace(/\.(?:md|markdown)$/i,"")||"导入笔记", content, true); n++;
-    }catch(e){ alert(`无法读取「${f.name}」：${e.message}`); }
+    }catch(e){ uiNotify(`无法读取「${f.name}」：${e.message}`); }
   }
   if(n) $("mdSaveState").textContent = `已导入 ${n} 篇`;
 }
@@ -165,7 +165,7 @@ async function mdExport(fmt){
   await mdSave();
   if(fmt==="pdf"){                                   // 走浏览器打印 → 另存为 PDF
     const w = window.open("", "_blank");
-    if(!w) return alert("浏览器拦了打印窗口");
+    if(!w) return uiNotify("浏览器拦了打印窗口");
     w.document.write(`<title>${esc(note.title)}</title><link rel="stylesheet" href="/vendor/katex/katex.min.css">
 <link rel="stylesheet" href="/vendor/starmap.css">`
       + `<style>body{font:14px/1.75 "Microsoft YaHei",sans-serif;padding:32px;max-width:860px;margin:auto}`
@@ -217,7 +217,7 @@ function mdBind(m){
   $("btnMdNarrow").onclick = ()=>mdNarrow();
   $("btnMdDelete").onclick = async ()=>{
     const note = mdActive();
-    if(!note || !confirm(`确认删除笔记「${note.title}」？`)) return;
+    if(!note || !await uiConfirm(`确认删除笔记「${note.title}」？`)) return;
     await api("/api/mdnotes/delete",{id:note.id});
     mdNotes = mdNotes.filter(x=>x.id!==note.id);
     mdActiveId = mdNotes[0]?.id || null;
@@ -328,7 +328,7 @@ function zotBind(){
   $("zotSearch").onclick = ()=>zotLoad(true).catch(e=>mdFail(e,"搜索"));
   $("zotQuery").onkeydown = (e)=>{ if(e.key === "Enter") zotLoad(true).catch(err=>mdFail(err,"搜索")); };
   $("zotToProject").onclick = async ()=>{
-    if(!curTask) return alert("请先在顶部选择或新建一个项目，再导入文献");
+    if(!curTask) return uiNotify("请先在顶部选择或新建一个项目，再导入文献");
     const btn = $("zotToProject"); btn.disabled = true;
     $("zotStatus").textContent = "正在导入题录并自动解析本机 PDF 附件…";
     const selKeys = Array.from(zotSelectedKeys);
@@ -486,10 +486,10 @@ async function renderSchedules(m){
       const body = { id: schEdit.id, name: nm(), prompt: $("schPrompt").value.trim(),
         project_id: $("schProj").value, frequency: $("schFreq").value, cron: $("schCron").value.trim(),
         output_dir: $("schOut").value.trim() || "定时任务", enabled: $("schOn").value === "1" };
-      if(!body.prompt) return alert("Prompt 必填");
+      if(!body.prompt) return uiNotify("Prompt 必填");
       try{ await api("/api/schedule/save", body); schEdit=null; await schLoad();
            schFeedback = "定时任务已保存；仅在应用运行时执行。"; render(); }
-      catch(e){ alert("保存失败：" + e.message); }
+      catch(e){ uiNotify("保存失败：" + e.message); }
     };
   };
   $("schNew").onclick = ()=>{ schEdit = schEditSeed(null); render(); setTimeout(()=>$("schName")?.focus(),30); };
@@ -499,28 +499,28 @@ async function renderSchedules(m){
   m.querySelectorAll("[data-sch-toggle]").forEach(b=>b.onclick=async ()=>{
     try{ await api("/api/schedule/toggle", { id:b.dataset.schToggle, enabled: b.dataset.on !== "1" });
          schFeedback = "定时任务状态已更新。"; await schLoad(); render(); }
-    catch(e){ alert("状态更新失败：" + e.message); } });
+    catch(e){ uiNotify("状态更新失败：" + e.message); } });
   m.querySelectorAll("[data-sch-del]").forEach(b=>b.onclick=async ()=>{
     const r = schRows.find(x=>x.id===b.dataset.schDel);
-    if(!confirm(`确认归档“${r?r.name:""}”？归档后不会再自动运行。`)) return;
+    if(!await uiConfirm(`确认归档“${r?r.name:""}”？归档后不会再自动运行。`)) return;
     try{ await api("/api/schedule/delete", { id:b.dataset.schDel }); schFeedback = "定时任务已归档。";
          await schLoad(); render(); }
-    catch(e){ alert("归档失败：" + e.message); } });
+    catch(e){ uiNotify("归档失败：" + e.message); } });
   m.querySelectorAll("[data-sch-run]").forEach(b=>b.onclick=async ()=>{
     try{ await api("/api/schedule/run", { id:b.dataset.schRun }); schFeedback = "定时任务已立即触发；跑完会出现在「最近运行」。";
          render(); setTimeout(()=>{ if(route()==="schedules") render(); }, 6000); }
-    catch(e){ alert("触发失败：" + e.message); } });
+    catch(e){ uiNotify("触发失败：" + e.message); } });
   m.querySelectorAll("[data-run-retry]").forEach(b=>b.onclick=async ()=>{
     try{ await api("/api/schedule/run", { id:b.dataset.runRetry }); schFeedback = "已按该规则重新触发一次。";
          render(); setTimeout(()=>{ if(route()==="schedules") render(); }, 6000); }
-    catch(e){ alert("重试失败：" + e.message); } });
+    catch(e){ uiNotify("重试失败：" + e.message); } });
   m.querySelectorAll("[data-run-del]").forEach(b=>b.onclick=async ()=>{
     try{ await api("/api/schedule/run/delete", { ids:[b.dataset.runDel] }); await schLoad(); render(); }
-    catch(e){ alert("删除运行记录失败：" + e.message); } });
+    catch(e){ uiNotify("删除运行记录失败：" + e.message); } });
   $("schRunsClear") && ($("schRunsClear").onclick = async ()=>{
-    if(!confirm(`删除全部 ${schRuns.length} 条运行记录？定时规则与产物文件都不会被改动。`)) return;
+    if(!await uiConfirm(`删除全部 ${schRuns.length} 条运行记录？定时规则与产物文件都不会被改动。`)) return;
     try{ await api("/api/schedule/run/delete", { ids: schRuns.map(x=>x.id) }); await schLoad(); render(); }
-    catch(e){ alert("清空失败：" + e.message); } });
+    catch(e){ uiNotify("清空失败：" + e.message); } });
 }
 const schTaskName = (id)=> (S.tasks||[]).find(t=>t.id===id)?.title || "";
 
@@ -693,14 +693,14 @@ function spBind(d){
     sg.disabled = true; sg.innerHTML = `<span class="spin"></span>生成中 0s`;
     const tick = setInterval(()=>{ sg.innerHTML = `<span class="spin"></span>生成中 ${Math.round((Date.now()-t0)/1000)}s`; }, 500);
     try{ await api("/api/task/papergraph/build", {id: curTask}); }
-    catch(e){ alert("生成失败：" + e.message); }
+    catch(e){ uiNotify("生成失败：" + e.message); }
     finally{ clearInterval(tick); render(); }
   };
   const del = $("spDel");
   if(del) del.onclick = async ()=>{
     const t = d.task||{};
-    if(!confirm(`删除项目「${t.title||""}」？\n它的文献、证据、笔记、会话、日程、步骤都会一起删掉，不可撤销。`)) return;
-    try{ await api("/api/task/delete", {id: curTask}); }catch(e){ return alert("删除失败："+e.message); }
+    if(!await uiConfirm(`删除项目「${t.title||""}」？\n它的文献、证据、笔记、会话、日程、步骤都会一起删掉，不可撤销。`)) return;
+    try{ await api("/api/task/delete", {id: curTask}); }catch(e){ return uiNotify("删除失败："+e.message); }
     curTask = null; localStorage.removeItem("rw-task"); await refreshState(false); openTab("tasks");
   };
 
@@ -739,7 +739,7 @@ function spBind(d){
         });
         listEl.querySelectorAll("[data-todo-del]").forEach(btn => {
           btn.onclick = async () => {
-            if(!confirm("确定删除该任务吗？")) return;
+            if(!await uiConfirm("确定删除该任务吗？")) return;
             await api("/api/todos/delete", { id: btn.dataset.todoDel });
             await loadTodos();
           };
@@ -760,7 +760,7 @@ function spBind(d){
           await api("/api/todos/add", { task_id: curTask, title, priority: priSel ? priSel.value : "P2" });
           titleInp.value = "";
           await loadTodos();
-        }catch(e){ alert("添加任务失败：" + e.message); }
+        }catch(e){ uiNotify("添加任务失败：" + e.message); }
         finally{ addBtn.disabled = false; }
       };
       titleInp.onkeydown = (e) => { if(e.key === "Enter") addBtn.click(); };
@@ -774,7 +774,7 @@ function spBind(d){
           const res = await api("/api/todos/import_workflow", { task_id: curTask });
           toast(`已根据工作流阶段同步创建 ${res.created} 条待办任务`, "success");
           await loadTodos();
-        }catch(e){ alert("导入失败：" + e.message); }
+        }catch(e){ uiNotify("导入失败：" + e.message); }
         finally{ impWfBtn.disabled = false; }
       };
     }
@@ -1256,11 +1256,11 @@ function renderModels(m){
       const id=b.dataset.keySave, inp=grid.querySelector(`[data-key-input="${id}"]`);
       try{ await api("/api/providers/key",{id,api_key:inp.value}); await refreshState(); }catch(e){ bail(id,e); } });
     grid.querySelectorAll("[data-key-clear]").forEach(b=>b.onclick=async()=>{
-      if(!confirm("清除该 Provider 的凭据？")) return;
+      if(!await uiConfirm("清除该 Provider 的凭据？")) return;
       try{ await api("/api/providers/key",{id:b.dataset.keyClear,api_key:""}); await refreshState(); }catch(e){ bail(b.dataset.keyClear,e); } });
     grid.querySelectorAll("[data-prov-del]").forEach(b=>b.onclick=async()=>{
       const id=b.dataset.provDel, p=all.find(x=>x.id===id)||{};
-      if(!confirm(p.source==="custom"?"删除该 Provider？":"复位该 Provider？（清 Key 与已采用模型，卡片保留）")) return;
+      if(!await uiConfirm(p.source==="custom"?"删除该 Provider？":"复位该 Provider？（清 Key 与已采用模型，卡片保留）")) return;
       try{ await api("/api/providers/delete",{id}); await refreshState(); }catch(e){ bail(id,e); } });
     grid.querySelectorAll("[data-origin]").forEach(b=>b.onclick=()=>{
       const [pid,url]=b.dataset.origin.split("|");
@@ -1346,7 +1346,7 @@ function contrastOn(hex, bg){                       // WCAG 对比度
 }
 function applyTheme(primary){
   const c = hexToHsl(primary);
-  if(!c){ alert("色值格式不正确，请输入如 #176B87 的色号"); return; }
+  if(!c){ uiNotify("色值格式不正确，请输入如 #176B87 的色号"); return; }
   const dark = document.documentElement.dataset.theme==="dark", root=document.documentElement;
   // 深色底要提亮；浅色底用本色，但莫兰迪那种浅灰本色在白底上等于看不见 → 一档档压暗到看得清为止
   const lightAccent = (()=>{ let l=c.l, x=primary;
@@ -1367,7 +1367,7 @@ function bindSwatches(host){
 }
 let setSec = "theme";                    // 设置左列分区（照工作流中间可选栏）
 let setMeta = null;                      // /api/settings/meta 缓存：tool 在 S.tools，skill / MCP 在这
-const SET_SECS = [["theme", "🎨", "主题色"], ["models", "🔌", "模型列表"], ["tools", "🧰", "Tool"], ["skills", "⚡", "Skill"], ["mcp", "🔗", "MCP"]];
+const SET_SECS = [["theme", "🎨", "主题色"], ["perm", "🛡", "权限"], ["models", "🔌", "模型列表"], ["tools", "🧰", "Tool"], ["skills", "⚡", "Skill"], ["mcp", "🔗", "MCP"]];
 function setPanel(){
   if(setSec === "theme") return `<div class="card"><h3>主题色</h3>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -1382,6 +1382,24 @@ function setPanel(){
     </div>
     <div class="hint" style="margin-top:8px">字体大小：</div>
     <div style="display:flex;gap:6px;margin-top:4px">${[["compact","紧凑"],["comfortable","标准"],["large","大"]].map(([k,l])=>`<button class="btn ghost" data-f="${k}">${l}</button>`).join("")}</div></div>`;
+  if(setSec === "perm") {
+    const mode = (S.sec||{}).permission_mode || "";
+    const opt = (k, t, d) => `<label class="perm-opt ${mode===k?"on":""}"><input type="radio" name="permmode" value="${k}" ${mode===k?"checked":""}><div><b>${t}</b><p>${d}</p></div></label>`;
+    return `<div class="card"><h3>权限模式</h3>
+      <div class="hint">我只能在程序自己的数据目录和你亲手选过的项目文件夹里读写；越界会直接拒绝并记一条审计。</div>
+      <div class="perm-opts">
+        ${opt("all", "允许所有", "在允许的目录里直接读写、编译、导出，不再逐次询问。")}
+        ${opt("ask", "每次都要问", "编译、写文件、导出前先问你一句「允许这一次吗」。")}
+      </div></div>
+    <div class="card" style="margin-top:12px"><h3>上下文预算</h3>
+      <div class="hint">每次对话最多带多少字历史给模型。40000 字 ≈ 2 万 token，约合十几轮长对话；调大记得更多，但更慢更贵。</div>
+      <div class="ag-row" style="margin-top:8px">
+        <input class="control" id="ctxchars" type="number" min="2000" max="400000" step="1000"
+               value="${Number((S.sec||{}).history_chars) || 40000}" style="max-width:160px">
+        <span class="hint">字（2000–400000）</span>
+        <button class="btn btn-primary" id="ctxsave">保存</button>
+      </div></div>`;
+  }
   if(setSec === "models") return `<div class="card"><h3>模型列表</h3>
       <div class="hint">可选模型、凭据、默认模型都在这里设置（原来侧栏的「模型」页）。</div></div><div id="set-models"></div>`;
   if(setSec === "tools") return `<div class="card"><h3>Agent 可用工具 <span class="pill">${(S.tools||[]).length}</span></h3>
@@ -1404,6 +1422,20 @@ function renderSettings(m){
       <div class="set-body" id="set-body">${setPanel()}</div></div>`;
   m.querySelectorAll("[data-set]").forEach(b=>b.onclick=()=>{ setSec = b.dataset.set; render(); });
   const ta = $("to-assist"); if(ta) ta.onclick = ()=>openTab("assistants");
+  if(setSec === "perm"){
+    m.querySelectorAll('input[name="permmode"]').forEach(r => r.onchange = async () => {
+      await setPermissionMode(r.value); render();
+    });
+    const cs = $("ctxsave");
+    if(cs) cs.onclick = async () => {
+      const n = parseInt($("ctxchars").value, 10);
+      if(!(n >= 2000 && n <= 400000)) return uiNotify("范围是 2000–400000 字");
+      try {
+        S.sec = await api("/api/security", { history_chars: n });
+        uiNotify("上下文预算已保存：" + n + " 字");
+      } catch(e) { uiNotify("保存失败：" + e.message); }
+    };
+  }
   if(setSec === "theme"){
     $("th").onclick = ()=>setTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
     bindSwatches($("presets"));
@@ -1448,9 +1480,12 @@ async function refreshState(rerender=true){
   { const pv = await api("/api/providers"); S.providers=pv.providers; S.wires=pv.wires; S.default=pv.default; }
   if(!S.tools.length) S.tools = (await api("/api/tools")).tools;
   S.loaded=true;
+  await loadSecurity();                                                        // 权限模式（all / ask）
   if(curTask && !S.tasks.some(t=>t.id===curTask)) curTask=null;
   if(!curTask && S.tasks.length){ curTask=S.tasks[0].id; localStorage.setItem("rw-task",curTask); }
   if(curChat && !S.chats.some(c=>c.id===curChat)){ curChat=null; localStorage.removeItem("rw-chat"); }
+  // 首次打开（本机还没选过对话）→ 默认进最新那条。新用户首启种的那条「小智」欢迎对话就在这里被打开
+  if(!curChat && S.chats.length){ curChat=S.chats[0].id; localStorage.setItem("rw-chat",curChat); }
   if(rerender) render();
 }
 function initTheme(){

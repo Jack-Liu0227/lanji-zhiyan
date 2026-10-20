@@ -2,21 +2,191 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 2026-10-20（本轮：精读不再空回 + 谱系图横向思维导图 + 各助手只看自己的账 + 死代码清理）
+
+**1. 精读「读不出来」的根因不是 PDF 没文本层**
+实测：`max_tokens=3000` 时推理模型的思维链把额度吃光，`finish_reason=length`、`content_len=0`，于是笔记只剩标题（92–95 字的空笔记）。
+改法：`chat()` 空回翻倍预算重试一次；`stage_read` 每段给 6000，拿不到内容直接判失败（不再落空笔记）；
+`read_done_filenames()` 让已有实质笔记（≥300 字）的论文重跑跳过。影响：检索/精读两步。
+验证：真实接口复现（3000 空回 / 6000 出 3743 字），补读 Dissociation 3889 字、High-performance 3193 字，5/5 篇都有实质笔记。
+
+**2. 右栏统计改成「只算这个助手自己」**
+`usage_stats()` 删除（唯一的调用方是 `/api/step/messages`），前端不再叠加项目合计；轮数/工具数/token 边跑边刷。
+
+**3. 检索助手跑完必须收口**
+提示词 + 服务端兜底（模型没问「还要调整检索式吗」就补一句，问过不重复）。顺带修 `for step in range()` 遮蔽同名的 `step` 参数。
+
+**4. 谱系图改成横向思维导图**
+- 分层：父子边判层级（「下一章」是同级串联，不参与分层），列内 DFS 排序，父节点对齐子节点中线
+- 拖动节点落盘 `x/y`；agent 重写整份 JSON 时保留用户坐标，`keep_positions=False`（前端「全部重排」）才清
+- 点节点弹编辑卡（标题/说明/类型），↻ 重新整理，缩放 −/＋/适应
+- `map_seed()`：大纲已有、谱系图还没有 → 自动长出「章 → 节」树，不用等用户开口；已有图绝不覆盖
+- `map_sources()` 的笔记改成「标题 + id」，不再给哈希文件名
+
+**5. 死代码清理**（判据：全仓 0 引用）
+- 死 import 3 处：`workflow.py` 的 `cite_sync`/`CONV_FORMATS`、`workflow_converters.py` 的 `subprocess`、`tools/check_literature_env.py` 的 `urllib.error`
+- 死函数 1 个：`team.py::_dependencies_ready`（只有 `_dependency_state` 在用）
+- 死 CSS 12 条规则：`cap-grid / cap-card-* / cap-item-card` 一整套（旧能力卡片布局，js 里 0 出现），约 2.1 KB
+- 加 `x/y` 持久化后留下的旧分支不动；`q/` 是 gitignore 的本地草稿（含取 token 的脚本），仓库里没有，未动
+
+验证：`py_compile` 0 失败、`node --check` 全过、`300 tests OK (skipped=9)`、起一次应用 `/`、`/api/step/outs`、`/api/map/state`、`/api/security` 全 200、谱系图 21 节点 20 边。
+
+## 待发 PR（本轮：项目卡片进科研平台 + 看板浅色适配 + 看板标题行）
+
+只动前端 4 个文件，改完 **F5 就够**：`apps/desktop/web/` 下 `workflow-view.js`、`app.css`、`kanban.css`、`kanban-view.js`。
+
+**1. 「项目」卡片「进入 →」改落科研平台**
+原来跳 `openTab("space")`（项目空间），按他要求改成 `openTab("workflow")`：切当前项目 + 直接进十步工作流。
+整行点击语义不变（只切当前项目、不动页面），删除/新建逻辑没碰。
+
+**2. 看板浅色模式卡片全是灰黑块 —— 根因是主题变量名对不上**
+`kanban.css` 处处写 `var(--bg-card, 暗色兜底)` / `var(--bg-sub, …)` / `var(--border, …)`，而 `app.css` 两套主题只定义
+`--panel / --panel2 / --line`——这三个变量**全站从未定义过**，所以永远吃各自的深色兜底：深色看着正常，浅色就整片深灰。
+同病的还有 `project-space.js`、`notes-and-settings.js`、`agent-settings.js` 里同名变量（这轮未逐一改，接上别名后一起跟着好）。
+
+改法：
+- `app.css` 浅色根补 `--bg-card:var(--panel);--bg-sub:var(--panel2);--border:var(--line)`。
+  **深色根故意不补**：让深色继续走原兜底值，保证深色像素级不变。
+- `kanban.css` 里 `rgba(255,255,255,α)` 这类「白色微光」表面（进度条底、徽章底、分栏线、悬停态、空列虚线）
+  换成 `color-mix(in srgb, var(--fg) α%, transparent)`——跟着主题自动反色。
+- 语义色收成 `.kb-root` 上的 `--kb-sky / --kb-violet / --kb-rose / --kb-amber / --kb-green`：
+  深色 = 原来的粉彩，浅色 = 加深版（原色压在白底只有 1.3–2.3:1，等于看不清）。
+  卡片悬停阴影改用主题 `--shadow`（浅色下 40% 纯黑会糊成灰斑）。
+- `kanban-view.js` 内联的 `#f0f6fc / #8b949e / #38bdf8 / #8b5cf6 / #fb7185 / #10b981 / #f59e0b / #c4b5fd`
+  换成主题变量；第二视图（十步管道 / 排期）那两段标题原来是白字白底，浅色下等于没有。
+
+**3. 「📋 科研进度与计划看板」被挤成竖排**
+`.kb-main-title` 是 flex item 且默认 `flex-shrink:1`，被右边的项目下拉（256px）+ 阶段胶囊挤到 105px 宽，
+中文断成 3 行，标题块高 84px、概览区被撑到 235px。
+改法：`.kb-main-title{ flex:0 0 auto; white-space:nowrap }`——标题永不被挤扁，窄窗先让「按钮组」整块折到第二行。
+
+**4. 十步工作流每步输入框右下的「🤖 步骤名」胶囊删掉**
+`wfAgentHTML()` 里发送键左边那个 `<span class="at-sel">🤖 创新点审查</span>`（只读署名胶囊，不可点）整段移除，
+输入栏只剩 `＋` 和 `↑`。`.at-sel` 样式与其它页（项目/专家页的模型、署名、团队选择器）共用，未动。
+
+**5. 「专家」页第一张卡（智研管家）的 🤖 emoji 换成主页那套 Q 版小人**
+实际渲染专家页的是 `agent-settings.js` 的 `renderAssistants`（它覆盖了 `chat-views.js` 里的同名函数），
+卡片标题原来直接吐 `${h(a.avatar)}`。改成 `a.id === "builtin-steward"` 时出 `<img src="${Q_AV}">`（22×22，
+`object-fit:contain` + `vertical-align:-4px` 对标题基线），其余专家仍是自己的 emoji。
+`Q_AV`（`/vendor/img/agent-q.png`）是 `chat-views.js` 里既有的主形象常量，没有新增资源。
+`chat-views.js` 的 `asAvatarOf` 没动 —— 它还管着对话列表/消息的脸，改动面超范围。
+
+**6. 十步工作流的回复被签成「智研管家」—— 实际是拿错了身份来源**
+`appendOne()`（`chat-views.js`）渲染 `assistant` 行时，名字和头像取的是**当前打开的那个对话**绑的专家
+（`S.chats` 里 `curChat.assistant_id`），拿不到就回落「智研管家」+ Q 版小人。科研平台每一步的对话根本不在
+`curChat` 里，所以十步全被签成管家/上一个对话的专家——内容其实是各自步骤端点出的，只是署名错。
+改法：
+- `appendOne(box, ev, who)` 加第三个可选参数：传了就用手上的 `{emoji, name}`，不传仍走老逻辑
+  （智研管家页、专家页一个字不变）；`ev.replay` 递归子事件时把 `who` 一起传下去。
+- `workflow-view.js` 三处调用点传 `WF_AGENT[step]`：`wfPaintMsgs`（历史重放）、`wfSend` 流式 `appendOne(box, ev, a)`、以及 `done` 兜底那一行。
+- 后端没改：`/api/idea`、`/api/outline`、`/api/write` …本来就是分步端点，回复内容一直是本步的。
+
+**7. 回复正文里还自称「我是览籍智研」—— 根因在第一段 system，不在追加的那段**
+署名改对后他截图反馈：正文仍是「我是览籍智研，你的科研助手…」。`AGENT_SYSTEM`（`workflow_prompts.py`）第一行
+就把身份写死「你叫「览籍智研」…」，第二行还教「问你是谁就答：你是览籍智研」；`run_agent` 后面追加的
+【你的身份】对它无效——模型照第一行复述。
+改法（`workflow.py`，一处）：
+- 新增 `_system_for(who, system)`：`who` 非空且调用方没显式传 `system` 时，把 `AGENT_SYSTEM` 开头那两句
+  替换成「你叫「{who}」…」「问你是谁就答：你是{who}。」，其余规则原样保留；否则原样返回。
+- `messages[0]` 从 `system or AGENT_SYSTEM` 改走 `_system_for(who, system)`。
+- 前端 `wfSend` 的请求体现在带 `step`（`{task_id, message, step}`），后端 `/api/agent` 读它传给 `run_agent`
+  —— 这行和 `STEP_AGENT` 那段是本轮另一路（同工作区的会话）先落的，本条目只是把最后一环接上并验过。
+
+**验**（离线，不调模型：把 `workflow.chat_raw` 换成假函数，直接跑真 `run_agent` 抓 `messages[0]`）：
+十步逐个断言第一段 system 为「你叫「X」」且不含「览籍智研」；`step=""` 时仍是「你叫「览籍智研」」，通用对话没被误改。
+临时探针项目 `__身份探针__` 用完已删（`/api/task/delete` 返回 deleted=true，库里只剩他原有 3 个项目）。
+
+**8. 从学长 fork 的 `xuezhang/asset-workflow` 挑回 main 真缺的两条路由**
+那条分支与 main **无共同祖先**（从他自己的 `initial commit: 览籍智研 0.1.0` 重开），main 领先 131 个提交，
+直接 `merge --allow-unrelated-histories` 会按它的树覆盖 main（还会删 `migrations/006_team_task_dag.sql`、
+`tests/test_team_scheduler.py`、两版 logo）。逐个文件比对后结论：**它没有任何 main 缺少的文件**（A=0），
+资产层/`/api/assets/rebuild` 等我们已有。唯一真缺的是两条 GET 路由——**main 的前端在调、后端却没实现**：
+- `GET /api/starmap/item?id=&title=&doi=&key=`：知识星图点开节点看条目详情（Zotero 有就回 Zotero，
+  没有就用本地 papers/paper_meta 拼一份 Zotero 形状的回包）。调用方 `web/vendor/neural/scene.js:831`。
+- `GET /api/zotero/select?key=`：唤起 Zotero 定位条目（`zotero://select/items/0_<key>`）。调用方 `web/starmap-view.js:26`。
+两条都按原样搬进 `apps/desktop/server.py`（插在 `/api/starmap/brief` 与 `/api/litgraph` 之间），
+main 现有实现一行未改。
+
+**验**：`py_compile` 通过；起 `server.py --no-open` 实测——`/api/zotero/select` 无 key 时按预期 `{"error":"缺少 key"}` 400，
+`/api/starmap/item?id=<真 paper id>` 返回 `zotero_found:false` + 标题/年份/页数/doi 完整；全量 270 项测试 OK（skipped=8）。
+没搬的：分支里 `workflow.py` 给解密失败的 key 补 `key_error/key_invalid` 提示（4 行）——`agent_settings.py` 已有同类提示，暂不动。
+
+**验**：
+- 浅色（1440×900，浏览器实测计算样式）：`kb-header` / `kb-col` 底色 `rgb(255,255,255)`、`kb-card` `rgb(241,244,248)`；
+  全页扫描 **无** alpha>0.5 且亮度<0.35 的深色块、**无**文字对比度 <3:1 的元素（扫描按祖先链做 alpha 合成）。
+- 深色回归：`kb-header`/`kb-col` 仍是 `rgba(22,27,34,.7)`、`kb-card` 仍 `rgba(16,20,26,.85)`、列顶条仍 `#38bdf8`，
+  与改动前兜底值逐项相同。
+- 标题行：1440 / 1200 / 1024 / 900 四档宽度下都是单行 195×28，概览区高 235 → 193。
+- 十步联测：项目会话里逐一点 idea→search→download→notes→outline→map→write→review→entrans→convert
+  十个步骤，可见输入栏右下 `children` 只有 `send-btn`，`.at-sel` 一个不剩；`node --check workflow-view.js` 通过。
+- 专家页（真机 1440×900，起 `server.py --no-open` 验完就关）：`.ag-grid article.card` 第一张 `h4` 里是
+  `<img src="/vendor/img/agent-q.png">`，`naturalWidth=512` 已加载、渲染 22×22，第二张卡（Pony 模式）无 img 仍是 🐴。
+- 署名回归（真机、headless 起服验完就关）：创新点审查那一步的历史消息现在是
+  `🔍 创新点审查助手 researcher 完成`（emoji 头像，不再是小人图片）；`appendOne` 传十个 `WF_AGENT` 逐个探针，
+  依次得到 创新点审查助手 / 文献检索助手 / 入库助手 / 翻译助手 / 框架助手 / 谱系助手 / 写作助手 / 审查助手 / 中译英助手 / 格式助手。
+  智研管家页不传 `who`，行为不变。
+- 项目卡片跳转：改后服务返回的 `workflow-view.js` 已含 `openTab("workflow")`（曾 curl 核对）；
+  **点击端到端没跑**（核对时应用窗口已关、服务不在），待 F5 后点一次确认。
+- 截图（未入库）：`桌面\kanban-light.png`、`桌面\kanban-title.png`、`桌面\wf-composer.png`、`桌面\expert-steward.png`、`桌面\wf-step-agent.png`；卡片是注入的假数据，只为看配色。
+
+## 待发 PR（本轮：品牌统一 —— 数据根改名 + 旧数据迁移，只取学长分支里的品牌那部分）
+
+学长 fork 上还有一条 `codex/asset-workflow-upgrade`，是**另一条历史**（`initial commit: 览籍智研 0.1.0` + 一个资产统一提交），
+不能直接合：他那条把 #12 的实现又做了一遍、还删了 `migrations/006_team_task_dag.sql` 和 `test_team_scheduler.py`。
+这次只把其中真正缺的「品牌统一」搬过来，其余保持 main 现状。
+
+- `packages/workspace-core/paths.py`：`APP_NAME` `ResearchWorkbench` → `览籍智研`，数据根
+  `%LOCALAPPDATA%\ResearchWorkbench` → `%LOCALAPPDATA%\览籍智研`；环境变量新增 `LANJI_ZHIYAN_HOME/DATA/DB`
+  并**兼容**旧的 `RW_HOME / RESEARCH_WORKBENCH_DATA / RESEARCH_WORKBENCH_DB`；
+  首次启动把旧数据根里的 `data/ user/ executors/` **只补缺失、不覆盖**地复制过来，写 `.legacy-home-migrated` 标记只搬一次。
+- 打包链改名：`tools/lanji-zhiyan.spec` → `tools/览籍智研.spec`（`name='览籍智研'`）、
+  `installer.spec` `name='览籍智研-安装程序'`、`installer.py` `APP="览籍智研"` + 老版本目录迁移、
+  `build-app.bat` 同步；删掉已被 `installer.py` 取代的 `tools/install.ps1`。
+- 侧栏副标题 `Research workspace` → `科研工作台`；README / SECURITY 里的路径与变量名同步。
+- 新增 `tests/test_branding.py`（3 项）：`paths.APP_NAME` 是中文、打包 spec 用中文名、侧栏显示中文品牌。
+- **没照搬**的：`006_team_task_dag.sql`（#12 的团队依赖/审核门要用）、`test_team_scheduler.py`——
+  他那条分支缺这两样，属于回退，不跟。
+
+**迁移实测**（本机真库，先停应用再搬）：`%LOCALAPPDATA%\览籍智研\` 1.1G 落盘、marker 已写；
+新库里 papers 62 / paper_pages 1253 / chat 22，`active_model()` 仍是 DeepSeek 且 DPAPI 解出 35 位 key
+（同一 Windows 用户，密文搬过去照样能解）；`papers\` 下 36 个 PDF。
+旧目录 `%LOCALAPPDATA%\ResearchWorkbench\` 原样保留当回滚备份，确认没问题再删。
+
+**验**：全量 268 项测试 OK（skipped=8）；应用重启后 `/`、`/api/state`、`/api/workflow/layouts` 200；
+浏览器实测侧栏「览籍智研 / 科研工作台」，知识库页读出 3 项目 / 62 文献 / 18 笔记 / 198 候选。
+
+## 待发 PR（本轮：修 3 条 flaky 测试 —— 根因是新项目默认工作流会随机变成「文献精读」）
+
+**现象**：`tests/test_workflow_layout.py` 里的 `test_definition_and_project_selection_survive_reopen` /
+`test_team_queue_and_scoped_chat_supply_actual_evidence` / `test_evidence_compares_actual_times_not_iso_wall_clock_strings`
+单跑、全跑、连跑结果都不一样（OK / 1F1E / 1F2E 随机），在 origin/main 上也一样。
+
+**根因（不是测试的问题，是产品的问题）**：`workflow_layout.ensure_schema` 播种三套内置模板时逐条调 `now()`，
+而 `now()` 在 Windows 上是系统时钟打点——同一时钟刻度里连调三次会给**完全相同的字符串**（实测三次全同）。
+于是 `ORDER BY created_at,id` 退化成按 id 排序：`builtin.workflow.reading` < `builtin.workflow.research`，
+**新项目默认打开的工作流有 18/20 的概率是「文献精读」**（没有 outline/review 节点），依赖默认布局的那三条测试就随机红。
+
+**改法**（都在 `packages/workspace-service/workflow_layout.py`，共享层改一次）：
+1. 播种时取一次基准时间，逐条 `+index µs` → 列表顺序 = 声明顺序，不受时钟粒度影响；
+2. `state()` 在项目没选过布局时的兜底从 `layouts[0]` 改成**明确指向 `builtin.workflow.research`**
+   （新增 `DEFAULT_LAYOUT_ID` 常量）—— 老库时间戳已经打平的情况也一起修好。
+
+**验证**：新增 `test_seed_order_is_stable_and_default_layout_is_the_full_workflow`（播种首条必须是 research +
+把三条时间戳强行打平后默认布局仍是 research 且节点里有 review）；
+`tests.test_workflow_layout` 单跑 **8 次全绿**；全量 265 项**连跑两次都 OK（skipped=8）**。
+真库实测：默认布局 = `builtin.workflow.research`「完整科研工作流」10 个节点，模板顺序 research → reading → writing。
+
 ## 2026-10-20 · 0.1.0 发布前清理
 
 - 路由模块去版本号：`v130_routes.py` → `feature_routes.py`，同步 server 与测试。
 - 测试按领域拆分：easyScholar、项目 TODO、项目空间、Zotero MCP、扩展路由各自独立；`ManagedConnection`、`ModelInvoker`、`RunManager` 归回对应测试文件。
-- 产品名、主程序、安装目录、快捷方式、打包 spec 与发布资产统一为“览籍智研”；`build-app.bat` / `check.bat` / `start.bat` 保留 ASCII 文件名，便于命令行输入。
-- 新环境变量 `LANJI_ZHIYAN_HOME/DATA/DB` 为主，旧 `RW_HOME`、`RESEARCH_WORKBENCH_*` 继续兼容；首次启动自动补齐旧英文目录中的数据，不覆盖现有文件。
+- 工具脚本统一 ASCII 命名：`build-app.bat` / `check.bat` / `start.bat` / `lanji-zhiyan.spec` / `installer.spec`。
 - 删除死资源 `vendor/kb3d.js`；移除重复的 `docs/` 受跟踪文件，唯一诊断文档并入 `doc/`。
-- 删除全仓零引用的 `logo.png` 与 `览籍智研.png`，并清掉本地遗留的浏览器保存页 `docs/`。
-- 删除 `reproduction_routes.py` 中已被 capabilities 取代且调用不存在函数的 `/api/mcp/*` 旧路由，以及重复的 `install.ps1` 安装脚本。
+- 删除 `reproduction_routes.py` 中已被 capabilities 取代且调用不存在函数的 `/api/mcp/*` 旧路由。
 - 修复浏览器回归测试的过期选择器；`theme.test.mjs` 改为从拆分后的 `notes-and-settings.js` 取主题代码，`ids.test.mjs` 扫描全部前端 JS。
 - 版本号统一：新增 `VERSION`，窗口标题显示应用版本 + 构建戳。
 
-**验**：`python -m pytest tests -q` 255 项全绿；`node apps/desktop/web/theme.test.mjs`、`node apps/desktop/web/ids.test.mjs` 通过；冻结版 EXE 与安装程序均在隔离数据目录完成启动验证。
-
-**发布资产**：`览籍智研-0.1.0-安装程序.exe`、`览籍智研-0.1.0-免安装版.zip`。
+**验**：`python -m pytest tests -q` 249 项全绿；`node apps/desktop/web/theme.test.mjs`、`node apps/desktop/web/ids.test.mjs` 通过。
 
 ## 待发 PR（本轮：清废旧代码 pass 2 —— 死 import / 死 CSS / 死图 / 拆模块漏的 import）
 
@@ -262,7 +432,7 @@ server.py 能 import、真起 8765 跑通；浏览器实测 app.css 解析出 12
 | `tests/` | 断言跟着改；新增 `test_leader_old_name_migrated`（旧名迁移后仍只有 1 个 leader） |
 | `README.md` / `docs/交接.md` | 文字口径同步 |
 
-历史态文档已改名 `doc/plan/2026-10-19_览籍智研源码复现方案.md`，正文中的旧产品名同步统一。
+历史态文档 `doc/plan/research_workbench_source_reproduction_plan.md` 保留原名（记录当时的产品定义，不改历史）。
 
 ### 验证
 

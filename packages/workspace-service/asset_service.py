@@ -73,6 +73,28 @@ def get(db, asset_id: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def find_by_metadata(db, *, project_id: str = "", kind: str = "", key: str,
+                     value: Any) -> list[dict[str, Any]]:
+    """Find assets by a small legacy identifier stored in metadata JSON."""
+    conn = _conn(db)
+    clauses, args = ["1=1"], []
+    if project_id:
+        clauses.append("project_id=?")
+        args.append(project_id)
+    if kind:
+        clauses.append("kind=?")
+        args.append(kind)
+    rows = conn.execute("SELECT * FROM assets WHERE " + " AND ".join(clauses) +
+                        " ORDER BY updated_at DESC", args).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        metadata = _metadata(item.get("metadata"))
+        if str(metadata.get(key, "")) == str(value):
+            out.append(item)
+    return out
+
+
 def list_assets(db, project_id: str = "", kind: str = "", limit: int = 200) -> list[dict[str, Any]]:
     conn = _conn(db)
     clauses, args = ["1=1"], []
@@ -188,7 +210,7 @@ def search(db, query: str, *, project_id: str = "", limit: int = 50) -> list[dic
     try:
         rows = conn.execute("""SELECT a.*, snippet(asset_fts, 3, '<mark>', '</mark>', ' … ', 24) AS snippet
             FROM asset_fts JOIN assets a ON a.id=asset_fts.asset_id
-            WHERE asset_fts MATCH ?""" + where + " ORDER BY a.updated_at DESC LIMIT ?", args).fetchall()
+            WHERE a.status='active' AND asset_fts MATCH ?""" + where + " ORDER BY a.updated_at DESC LIMIT ?", args).fetchall()
     except Exception:
         rows = []
     # unicode61 does not split CJK text into word tokens, so retain a LIKE
@@ -202,7 +224,7 @@ def search(db, query: str, *, project_id: str = "", limit: int = 50) -> list[dic
         like_args.append(max(1, min(int(limit), 200)))
         rows = conn.execute("""SELECT a.*, substr(f.body, 1, 180) AS snippet
             FROM asset_fts f JOIN assets a ON a.id=f.asset_id
-            WHERE (f.title LIKE ? OR f.body LIKE ?)""" + project_where +
+            WHERE a.status='active' AND (f.title LIKE ? OR f.body LIKE ?)""" + project_where +
             " ORDER BY a.updated_at DESC LIMIT ?", like_args).fetchall()
     return [dict(row) for row in rows]
 
@@ -247,6 +269,41 @@ def _virtual_asset(db, *, project_id: str, kind: str, legacy_id: str, title: str
     add_revision(db, asset["id"], uri, digest, created_by="legacy_rebuild",
                  message="legacy index rebuild", force=bool(old and old["content_hash"] != digest))
     return get(db, asset["id"]) or asset
+
+
+def _legacy_note_asset(db, row: dict[str, Any], project_id: str, table: str) -> dict[str, Any]:
+    """Prefer the real Markdown mirror when rebuilding a legacy note."""
+    legacy_id = str(row["id"])
+    title = str(row.get("title") or "项目笔记")
+    body = str(row.get("markdown") if table == "notes" else row.get("content") or "")
+    if project_id:
+        path = db.pdir(project_id, "笔记") / f"{legacy_id}.md"
+    else:
+        try:
+            from paths import NOTES
+            path = NOTES / f"{legacy_id}.md"
+        except ImportError:
+            path = None
+    if path and path.is_file():
+        try:
+            body = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            pass
+        asset = register_file(db, path, project_id=project_id, kind="note", title=title,
+                              source="legacy_rebuild", body=body,
+                              metadata={"paper_id": row.get("paper_id") or "",
+                                        "legacy_id": legacy_id, "table": table})
+        # Older rebuilds used a db:// URI for the same note. Retain it for
+        # provenance, but keep only the file-backed asset active.
+        old_uri = f"db://{table}/{legacy_id}"
+        db.db.execute("UPDATE assets SET status='archived', updated_at=? "
+                      "WHERE canonical_uri=? AND id<>?", (_now(db), old_uri, asset["id"]))
+        db.db.commit()
+        return asset
+    return _virtual_asset(db, project_id=project_id, kind="note", legacy_id=legacy_id,
+                          title=title, body=body,
+                          metadata={"paper_id": row.get("paper_id") or "", "table": table},
+                          uri_prefix=table)
 
 
 def rebuild_project_index(db, project_id: str, *, include_files: bool = True) -> dict[str, Any]:
@@ -307,20 +364,18 @@ def rebuild_project_index(db, project_id: str, *, include_files: bool = True) ->
 
     for note in conn.execute("SELECT * FROM notes WHERE task_id=?", (project_id,)).fetchall():
         row = dict(note)
-        asset = _virtual_asset(db, project_id=project_id, kind="note", legacy_id=str(row["id"]),
-                               title=str(row.get("title") or "项目笔记"),
-                               body=str(row.get("markdown") or ""),
-                               metadata={"paper_id": row.get("paper_id") or "", "table": "notes"},
-                               uri_prefix="notes")
+        asset = _legacy_note_asset(db, row, project_id, "notes")
+        if paper_assets.get(row.get("paper_id")):
+            link(db, asset["id"], "derived_from", paper_assets[row["paper_id"]],
+                 {"paper_id": row["paper_id"]})
         counts["notes"] += 1
 
     for note in conn.execute("SELECT * FROM md_notes WHERE task_id=?", (project_id,)).fetchall():
         row = dict(note)
-        asset = _virtual_asset(db, project_id=project_id, kind="note", legacy_id=str(row["id"]),
-                               title=str(row.get("title") or "项目笔记"),
-                               body=str(row.get("content") or ""),
-                               metadata={"paper_id": row.get("paper_id") or "", "table": "md_notes"},
-                               uri_prefix="md_notes")
+        asset = _legacy_note_asset(db, row, project_id, "md_notes")
+        if paper_assets.get(row.get("paper_id")):
+            link(db, asset["id"], "derived_from", paper_assets[row["paper_id"]],
+                 {"paper_id": row["paper_id"]})
         counts["notes"] += 1
 
     if include_files:

@@ -17,8 +17,8 @@ import unittest
 
 
 # ---------------- 来自 test_team.py ----------------
-os.environ["LANJI_ZHIYAN_DB"] = str(pathlib.Path(tempfile.gettempdir()) / "team_test.sqlite3")
-_p = pathlib.Path(os.environ["LANJI_ZHIYAN_DB"])
+os.environ["RESEARCH_WORKBENCH_DB"] = str(pathlib.Path(tempfile.gettempdir()) / "team_test.sqlite3")
+_p = pathlib.Path(os.environ["RESEARCH_WORKBENCH_DB"])
 import team                      # noqa: E402
 import workflow                  # noqa: E402
 
@@ -152,7 +152,7 @@ class TeamTest(unittest.TestCase):
 
 # ---------------- 来自 test_teams.py ----------------
 _p = pathlib.Path(tempfile.gettempdir()) / "teams_unit.sqlite3"
-os.environ["LANJI_ZHIYAN_DB"] = str(_p)
+os.environ["RESEARCH_WORKBENCH_DB"] = str(_p)
 
 import team  # noqa: E402
 
@@ -201,8 +201,8 @@ class TeamsTest(unittest.TestCase):
     # ---------- 机动位 ----------
     def test_02_three_temp_then_full(self):
         t1 = team.new_team("temp")
-        team.new_team("temp")
-        team.new_team("temp")
+        t2 = team.new_team("temp")
+        t3x = team.new_team("temp")
         self.assertEqual(team.teams()["temp"], 3)
         with self.assertRaises(ValueError) as e:
             team.new_team("temp")                         # 三个都在用 → 不给
@@ -300,7 +300,7 @@ class TeamsTest(unittest.TestCase):
 
 # ---------------- 来自 test_team_chat.py ----------------
 _p = pathlib.Path(tempfile.gettempdir()) / "team2_unit.sqlite3"
-os.environ["LANJI_ZHIYAN_DB"] = str(_p)
+os.environ["RESEARCH_WORKBENCH_DB"] = str(_p)
 
 import team  # noqa: E402
 

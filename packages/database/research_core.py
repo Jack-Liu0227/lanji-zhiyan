@@ -134,7 +134,10 @@ class ResearchDB:
         try:
             import migrations
             migrations.run_migrations(self.db, db_path=self.path if str(self.path) != ":memory:" else None)
-        except Exception:
+        except ImportError:
+            # Source-only utilities may open a database without the migration package.
+            # Migration failures themselves must remain visible; otherwise a partially
+            # upgraded database fails later with misleading missing-column errors.
             pass
         self.db.executescript(SCHEMA)
         self.db.commit()

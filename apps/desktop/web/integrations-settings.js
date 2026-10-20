@@ -365,7 +365,7 @@
     });
     field("fs-refresh").onclick = event => action(event.target, loadFeishu);
     field("fs-test").onclick = event => action(event.target, async () => {
-      if (!confirm("将向已配置的飞书收件人 / 群聊发送一条真实测试消息，是否继续？")) return;
+      if (!await uiConfirm("将向已配置的飞书收件人 / 群聊发送一条真实测试消息，是否继续？")) return;
       const sent = await api("/api/feishu/test", {assistant_id: assistantId, text: field("fs-message").value});
       field("integration-result").textContent = "发送成功：" + (sent.message_id || sent.mode || "已确认");
     });
@@ -438,7 +438,7 @@
       field("integration-result").textContent = `已拉取 ${data.collections.length} 个集合。`;
     });
     for (const [id, create] of [["zs-bind", false], ["zs-create", true]]) field(id).onclick = event => action(event.target, async () => {
-      if (!confirm(create ? "在 Zotero 云端创建一个项目同名集合并绑定，是否继续？" : "更新项目的集合绑定？旧条目不会被删除；更换集合后将重建映射。")) return;
+      if (!await uiConfirm(create ? "在 Zotero 云端创建一个项目同名集合并绑定，是否继续？" : "更新项目的集合绑定？旧条目不会被删除；更换集合后将重建映射。")) return;
       await api("/api/zotero/web/bind", {task_id: projectId, collection: field("zs-collection").value, create, confirm: true});
       await loadZotero();
     });
@@ -449,7 +449,7 @@
       field("zs-apply").disabled = !!preview.conflicts.length || !preview.actions.length;
     });
     field("zs-apply").onclick = event => action(event.target, async () => {
-      if (!preview || !confirm(`将执行预览中的 ${preview.actions.length} 项同步（可能修改本地或 Zotero 云端），是否继续？`)) return;
+      if (!preview || !await uiConfirm(`将执行预览中的 ${preview.actions.length} 项同步（可能修改本地或 Zotero 云端），是否继续？`)) return;
       const result = await api("/api/zotero/web/sync", {task_id: projectId, mode: preview.mode, dry_run: false, plan_token: preview.plan_token, confirm: true});
       field("integration-result").textContent = JSON.stringify(result, null, 2); preview = null;
       field("zs-apply").disabled = true;
@@ -462,7 +462,7 @@
     });
     field("zs-item-write").onclick = event => action(event.target, async () => {
       const item = JSON.parse(field("zs-item").value);
-      if (!confirm("将把此条目 JSON 写入 Zotero 云端，确认已核对字段及目标 Library？")) return;
+      if (!await uiConfirm("将把此条目 JSON 写入 Zotero 云端，确认已核对字段及目标 Library？")) return;
       const result = await api("/api/zotero/web/write", {item, confirm: true});
       field("integration-result").textContent = JSON.stringify(result, null, 2);
     });

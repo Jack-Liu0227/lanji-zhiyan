@@ -17,7 +17,7 @@ _DB = pathlib.Path(tempfile.gettempdir()) / "chat_migrate_test.sqlite3"
 
 class ChatMigrateTest(unittest.TestCase):
     def setUp(self):
-        os.environ["LANJI_ZHIYAN_DB"] = str(_DB)
+        os.environ["RESEARCH_WORKBENCH_DB"] = str(_DB)
         import gc
         gc.collect()
         for p in (_DB, _DB.with_suffix(".sqlite3-wal"), _DB.with_suffix(".sqlite3-shm")):

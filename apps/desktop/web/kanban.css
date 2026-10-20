@@ -14,6 +14,20 @@
   overflow-y: auto;
   gap: 16px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* 看板自己的语义色：深色=原来的粉彩，浅色=加深版（粉彩压在白底上 <2:1 看不清） */
+  --kb-sky: #38bdf8;
+  --kb-violet: #c4b5fd;
+  --kb-rose: #fb7185;
+  --kb-amber: #fbbf24;
+  --kb-green: #10b981;
+}
+
+html[data-theme="light"] .kb-root {
+  --kb-sky: #0e7490;
+  --kb-violet: #6d28d9;
+  --kb-rose: #be123c;
+  --kb-amber: #92400e;
+  --kb-green: #047857;
 }
 
 /* 顶部概览与 KPI 卡片组 */
@@ -23,7 +37,7 @@
   gap: 14px;
   background: var(--bg-card, rgba(22, 27, 34, 0.7));
   backdrop-filter: blur(16px);
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--border, color-mix(in srgb, var(--fg) 8.0%, transparent));
   border-radius: 12px;
   padding: 16px 20px;
 }
@@ -50,12 +64,14 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 0 0 auto;      /* 标题不许被右边的下拉框/按钮挤扁，否则中文竖着断行 */
+  white-space: nowrap;
 }
 
 .kb-proj-select {
   background: var(--bg-sub, rgba(13, 17, 23, 0.8));
   color: var(--fg, #e6edf3);
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  border: 1px solid var(--border, color-mix(in srgb, var(--fg) 12.0%, transparent));
   border-radius: 6px;
   padding: 4px 10px;
   font-size: 13px;
@@ -66,8 +82,8 @@
 }
 
 .kb-proj-select:focus {
-  border-color: #38bdf8;
-  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+  border-color: var(--kb-sky);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--kb-sky) 20.0%, transparent);
 }
 
 .kb-stage-pill {
@@ -78,17 +94,17 @@
   border-radius: 9999px;
   font-size: 11px;
   font-weight: 600;
-  background: rgba(56, 189, 248, 0.12);
-  color: #38bdf8;
-  border: 1px solid rgba(56, 189, 248, 0.3);
+  background: color-mix(in srgb, var(--kb-sky) 12.0%, transparent);
+  color: var(--kb-sky);
+  border: 1px solid color-mix(in srgb, var(--kb-sky) 30.0%, transparent);
 }
 
 .kb-stage-pill .dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #38bdf8;
-  box-shadow: 0 0 8px #38bdf8;
+  background: var(--kb-sky);
+  box-shadow: 0 0 8px var(--kb-sky);
   animation: kb-pulse 2s infinite ease-in-out;
 }
 
@@ -112,7 +128,7 @@
 
 .kb-kpi-card {
   background: var(--bg-sub, rgba(16, 20, 26, 0.6));
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border, color-mix(in srgb, var(--fg) 6.0%, transparent));
   border-radius: 8px;
   padding: 12px 14px;
   display: flex;
@@ -122,7 +138,7 @@
 }
 
 .kb-kpi-card:hover {
-  border-color: rgba(56, 189, 248, 0.3);
+  border-color: color-mix(in srgb, var(--kb-sky) 30.0%, transparent);
   transform: translateY(-1px);
 }
 
@@ -155,7 +171,7 @@
 .kb-progress-bar {
   width: 100%;
   height: 4px;
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--fg) 8.0%, transparent);
   border-radius: 999px;
   overflow: hidden;
   margin-top: 4px;
@@ -164,7 +180,7 @@
 .kb-progress-fill {
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, #38bdf8, #8b5cf6);
+  background: linear-gradient(90deg, var(--kb-sky), #8b5cf6);
   transition: width 0.3s ease;
 }
 
@@ -182,7 +198,7 @@
   background: var(--bg-card, rgba(22, 27, 34, 0.8));
   padding: 3px;
   border-radius: 8px;
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--border, color-mix(in srgb, var(--fg) 8.0%, transparent));
 }
 
 .kb-view-tab {
@@ -203,7 +219,7 @@
 
 .kb-view-tab.active {
   background: var(--bg-sub, #1f2937);
-  color: #38bdf8;
+  color: var(--kb-sky);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
@@ -217,7 +233,7 @@
 .kb-search-input {
   background: var(--bg-card, rgba(22, 27, 34, 0.8));
   color: var(--fg, #f0f6fc);
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border: 1px solid var(--border, color-mix(in srgb, var(--fg) 10.0%, transparent));
   border-radius: 6px;
   padding: 5px 10px;
   font-size: 12px;
@@ -228,13 +244,13 @@
 
 .kb-search-input:focus {
   width: 200px;
-  border-color: #38bdf8;
+  border-color: var(--kb-sky);
 }
 
 .kb-filter-select {
   background: var(--bg-card, rgba(22, 27, 34, 0.8));
   color: var(--fg, #f0f6fc);
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border: 1px solid var(--border, color-mix(in srgb, var(--fg) 10.0%, transparent));
   border-radius: 6px;
   padding: 5px 8px;
   font-size: 12px;
@@ -266,7 +282,7 @@
 
 .kb-col {
   background: var(--bg-card, rgba(22, 27, 34, 0.7));
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--border, color-mix(in srgb, var(--fg) 8.0%, transparent));
   border-radius: 10px;
   display: flex;
   flex-direction: column;
@@ -275,8 +291,8 @@
 }
 
 .kb-col.drag-over {
-  border-color: #38bdf8;
-  background: rgba(56, 189, 248, 0.04);
+  border-color: var(--kb-sky);
+  background: color-mix(in srgb, var(--kb-sky) 4.0%, transparent);
 }
 
 .kb-col-head {
@@ -284,7 +300,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.06));
+  border-bottom: 1px solid var(--border, color-mix(in srgb, var(--fg) 6.0%, transparent));
 }
 
 .kb-col-title {
@@ -302,12 +318,12 @@
   font-weight: 600;
   padding: 2px 7px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--fg) 8.0%, transparent);
   color: var(--muted, #8b949e);
 }
 
 /* 列特定装饰线条 */
-.kb-col[data-col="TODO"] .kb-col-head { border-top: 3px solid #38bdf8; }
+.kb-col[data-col="TODO"] .kb-col-head { border-top: 3px solid var(--kb-sky); }
 .kb-col[data-col="IN_PROGRESS"] .kb-col-head { border-top: 3px solid #8b5cf6; }
 .kb-col[data-col="REVIEW"] .kb-col-head { border-top: 3px solid #f59e0b; }
 .kb-col[data-col="DONE"] .kb-col-head { border-top: 3px solid #10b981; }
@@ -324,7 +340,7 @@
 }
 
 .kb-col-btn-add:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--fg) 8.0%, transparent);
   color: var(--fg, #f0f6fc);
 }
 
@@ -341,7 +357,7 @@
 /* ================= 任务卡片 ================= */
 .kb-card {
   background: var(--bg-sub, rgba(16, 20, 26, 0.85));
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--border, color-mix(in srgb, var(--fg) 8.0%, transparent));
   border-radius: 8px;
   padding: 12px;
   display: flex;
@@ -354,8 +370,8 @@
 
 .kb-card:hover {
   transform: translateY(-2px);
-  border-color: rgba(56, 189, 248, 0.4);
-  box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.4);
+  border-color: color-mix(in srgb, var(--kb-sky) 40.0%, transparent);
+  box-shadow: var(--shadow);
 }
 
 .kb-card.dragging {
@@ -414,21 +430,21 @@
 
 .kb-prio-P0 {
   background: rgba(244, 63, 94, 0.18);
-  color: #fb7185;
+  color: var(--kb-rose);
   border: 1px solid rgba(244, 63, 94, 0.35);
   box-shadow: 0 0 6px rgba(244, 63, 94, 0.2);
 }
 
 .kb-prio-P1 {
   background: rgba(245, 158, 11, 0.18);
-  color: #fbbf24;
+  color: var(--kb-amber);
   border: 1px solid rgba(245, 158, 11, 0.35);
 }
 
 .kb-prio-P2 {
-  background: rgba(56, 189, 248, 0.18);
-  color: #38bdf8;
-  border: 1px solid rgba(56, 189, 248, 0.3);
+  background: color-mix(in srgb, var(--kb-sky) 18.0%, transparent);
+  color: var(--kb-sky);
+  border: 1px solid color-mix(in srgb, var(--kb-sky) 30.0%, transparent);
 }
 
 .kb-agent-tag {
@@ -439,7 +455,7 @@
   padding: 2px 7px;
   border-radius: 999px;
   background: rgba(139, 92, 246, 0.15);
-  color: #c4b5fd;
+  color: var(--kb-violet);
   border: 1px solid rgba(139, 92, 246, 0.25);
 }
 
@@ -452,7 +468,7 @@
 }
 
 .kb-due-tag.overdue {
-  color: #fb7185;
+  color: var(--kb-rose);
   font-weight: 600;
 }
 
@@ -462,7 +478,7 @@
   align-items: center;
   margin-top: 4px;
   padding-top: 6px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  border-top: 1px solid color-mix(in srgb, var(--fg) 4.0%, transparent);
 }
 
 .kb-card-actions {
@@ -478,7 +494,7 @@
 
 .kb-btn-mini {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid color-mix(in srgb, var(--fg) 10.0%, transparent);
   color: var(--muted, #8b949e);
   border-radius: 4px;
   padding: 2px 6px;
@@ -488,9 +504,9 @@
 }
 
 .kb-btn-mini:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: color-mix(in srgb, var(--fg) 10.0%, transparent);
   color: var(--fg, #f0f6fc);
-  border-color: #38bdf8;
+  border-color: var(--kb-sky);
 }
 
 .kb-empty-col {
@@ -498,7 +514,7 @@
   padding: 24px 12px;
   color: var(--muted, #6e7681);
   font-size: 12px;
-  border: 1px dashed rgba(255, 255, 255, 0.08);
+  border: 1px dashed color-mix(in srgb, var(--fg) 8.0%, transparent);
   border-radius: 6px;
   margin: auto 0;
 }
@@ -509,7 +525,7 @@
   flex-direction: column;
   gap: 16px;
   background: var(--bg-card, rgba(22, 27, 34, 0.7));
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--border, color-mix(in srgb, var(--fg) 8.0%, transparent));
   border-radius: 12px;
   padding: 20px;
 }
@@ -522,7 +538,7 @@
 
 .kb-stage-card {
   background: var(--bg-sub, rgba(16, 20, 26, 0.8));
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--border, color-mix(in srgb, var(--fg) 8.0%, transparent));
   border-radius: 8px;
   padding: 14px;
   display: flex;
@@ -533,9 +549,9 @@
 }
 
 .kb-stage-card.is-current {
-  border-color: #38bdf8;
-  box-shadow: 0 0 16px -2px rgba(56, 189, 248, 0.25);
-  background: rgba(56, 189, 248, 0.03);
+  border-color: var(--kb-sky);
+  box-shadow: 0 0 16px -2px color-mix(in srgb, var(--kb-sky) 25.0%, transparent);
+  background: color-mix(in srgb, var(--kb-sky) 3.0%, transparent);
 }
 
 .kb-stage-card.is-done {
@@ -552,14 +568,14 @@
   font-family: monospace;
   font-size: 12px;
   font-weight: 700;
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.1);
+  color: var(--kb-sky);
+  background: color-mix(in srgb, var(--kb-sky) 10.0%, transparent);
   padding: 2px 6px;
   border-radius: 4px;
 }
 
 .kb-stage-card.is-done .kb-stage-num {
-  color: #10b981;
+  color: var(--kb-green);
   background: rgba(16, 185, 129, 0.12);
 }
 
@@ -571,19 +587,19 @@
 }
 
 .kb-stage-status-badge.current {
-  background: rgba(56, 189, 248, 0.15);
-  color: #38bdf8;
-  border: 1px solid rgba(56, 189, 248, 0.3);
+  background: color-mix(in srgb, var(--kb-sky) 15.0%, transparent);
+  color: var(--kb-sky);
+  border: 1px solid color-mix(in srgb, var(--kb-sky) 30.0%, transparent);
 }
 
 .kb-stage-status-badge.done {
   background: rgba(16, 185, 129, 0.15);
-  color: #10b981;
+  color: var(--kb-green);
   border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
 .kb-stage-status-badge.pending {
-  background: rgba(255, 255, 255, 0.05);
+  background: color-mix(in srgb, var(--fg) 5.0%, transparent);
   color: var(--muted, #8b949e);
 }
 

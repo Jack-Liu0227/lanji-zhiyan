@@ -17,12 +17,12 @@ from datetime import datetime
 
 # 先指到临时库，再 import workflow（DB_PATH 是导入期常量）
 _TMP = tempfile.mkdtemp(prefix="rw-sched-test-")
-os.environ["LANJI_ZHIYAN_DB"] = os.path.join(_TMP, "t.sqlite3")
+os.environ["RESEARCH_WORKBENCH_DB"] = os.path.join(_TMP, "t.sqlite3")
 
 import schedule          # noqa: E402
 import workflow          # noqa: E402
 
-_DB = Path(os.environ["LANJI_ZHIYAN_DB"])
+_DB = Path(os.environ["RESEARCH_WORKBENCH_DB"])
 schedule.DB_PATH = _DB
 
 

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Any
 from xml.etree import ElementTree as ET
 
-UA = "Mozilla/5.0 (compatible; LanjiZhiyan/0.1.0; +local)"
+UA = "Mozilla/5.0 (compatible; research-workbench/1.0; +local)"
 TIMEOUT = 12
 MAX_ITEMS = 60                 # 单个源一次最多收 60 条（够看；多的下次刷新还会来）
 SUMMARY_MAX = 400

@@ -33,7 +33,7 @@ class AgentSettingsWebTest(unittest.TestCase):
         cls.url = f"http://127.0.0.1:{port}/"
         log = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
         cls.addClassCleanup(log.close)
-        env = dict(os.environ, LANJI_ZHIYAN_DB=str(Path(tmp.name) / "test.sqlite3"), PYTHONIOENCODING="utf-8")
+        env = dict(os.environ, RESEARCH_WORKBENCH_DB=str(Path(tmp.name) / "test.sqlite3"), PYTHONIOENCODING="utf-8")
         server = subprocess.Popen([sys.executable, str(ROOT / "apps/desktop/server.py"), "--port", str(port), "--no-open"], cwd=ROOT, env=env, stdout=log, stderr=log)
         def stop():
             if server.poll() is None:

@@ -140,6 +140,20 @@ class WorkflowLayoutTest(unittest.TestCase):
         node = next(n for n in self.call("GET", "/state", query={"task_id": self.tid})["nodes"] if n["step"] == "review")
         self.assertEqual(node["source"], "steps")
 
+    def test_seed_order_is_stable_and_default_layout_is_the_full_workflow(self):
+        """now() 在 Windows 上同一时钟刻度里连调会给出相同字符串 → 排序退化成按 id，
+        默认布局会随机变成「文献精读」。播种要逐条递进，state 也要明确兜底 research。"""
+        self.call("GET")
+        ids = [row["id"] for row in self.db.db.execute(
+            "SELECT id FROM workflow_layouts ORDER BY created_at,id")]
+        self.assertEqual(ids[0], "builtin.workflow.research")
+        # 老库：三条模板时间戳打平，仍要落到完整科研工作流
+        self.db.db.execute("UPDATE workflow_layouts SET created_at='2026-01-01T00:00:00+00:00'")
+        self.db.db.commit()
+        state = self.call("GET", "/state", query={"task_id": self.tid})
+        self.assertEqual(state["layout"]["id"], "builtin.workflow.research")
+        self.assertIn("review", [node["step"] for node in state["nodes"]])
+
     def test_project_deletion_cleans_binding_but_preserves_workflow_definition(self):
         saved = self.call("POST", "/save", self.definition())["layout"]
         self.call("POST", "/select", {"task_id": self.tid, "layout_id": saved["id"]})

@@ -8,25 +8,23 @@
 
 ## 一、安装（Windows）
 
-**直发（现在这条路）**：拿 `览籍智研-0.1.0-安装程序.exe`（单文件安装器）双击即可 —— 装到 `%LOCALAPPDATA%\览籍智研`，桌面建快捷方式并启动。**重装不动数据**（库/PDF/笔记都在 `data\`），旧版 `ResearchWorkbench` 的数据会自动补齐到新目录。
+**直发（现在这条路）**：拿 `览籍智研-安装程序.exe`（单文件安装器）双击即可 —— 装到 `%LOCALAPPDATA%\Programs\览籍智研`，桌面建快捷方式并启动。**重装不动数据**（库/PDF/笔记都在 `data\`）。
 
 **从源码跑（开发）**：
 
 ```powershell
-cd lanji-zhiyan
+cd research-workbench
 tools\start.bat                      # 自动选择本机 Python，打开无边框桌面窗口
 python apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开浏览器
 ```
-
-> GitHub 仓库 slug 保留 ASCII：`lanji-zhiyan`（平台不支持中文仓库名）；产品名、程序名、安装目录与发布资产统一为“览籍智研”。
 
 源码运行需要 **Python 3.10 或更新版本**（已验证 3.13.5）。启动脚本依次检查项目 `.venv`、旧版默认安装位置的 3.10、`py -3` 和 PATH 中的 `python`，并使用同一环境的 `pythonw.exe` 开窗。第三方依赖见 `requirements.txt`（全部 BSD/MIT/PSF，无 AGPL），需安装在选中的 Python 环境中。
 
 如果启动检查失败，脚本会显示错误并暂停，详细信息保存在 `data/startup.log`；服务启动后的异常见 `apps/desktop/data/server-error.log`。按错误提示，用选中的 Python 执行 `-m pip install -r requirements.txt` 修复依赖。
 
-**下载安装**（GitHub Releases）：<https://github.com/Jack-Liu0227/lanji-zhiyan/releases/latest> —— 两个资产：`览籍智研-0.1.0-安装程序.exe`（单文件安装器，双击即装、自动建桌面快捷方式）与 `览籍智研-0.1.0-免安装版.zip`（解压双击里面的 `览籍智研.exe`）。
+**下载安装**（GitHub Releases）：<https://github.com/Jack-Liu0227/lanji-zhiyan/releases/latest> —— 两个资产：`览籍智研-0.1.0-安装程序.exe`（单文件安装器，双击即装、自动建桌面快捷方式）与 `览籍智研-0.1.0-win64.zip`（免安装，解压双击里面的 `览籍智研.exe`）。
 
-**自己打包**：双击 `tools\build-app.bat`（用 `tools\览籍智研.spec`，入口 `apps/desktop/server.py`）→ `dist\览籍智研\`；要单文件安装器再打 `tools\installer.spec`（入口 `tools/installer.py`）。打包环境需装有 `pywebview`，否则运行时会退回普通 Edge 窗口。
+**自己打包**：双击 `tools\build-app.bat`（用 `tools\览籍智研.spec`，入口 `apps/desktop/server.py`）→ `dist\览籍智研\`；要单文件安装器再打 `tools\installer.spec`（入口 `tools/installer.py`）。**必须用 3.10 打包**，否则运行时会静默退回带黑标题栏的 Edge 窗口。
 
 ---
 
@@ -64,7 +62,7 @@ node apps/desktop/web/ids.test.mjs              # 悬空 id（$("x") 引用了�
 
 改完 `.py` **必须关窗重开**（窗口就是服务进程，关窗即退）；只改 `apps/desktop/web/` 按 F5 即可。
 
-验 UI 的套路（不碰真库）：起临时实例 `LANJI_ZHIYAN_DB="C:/Users/<你>/AppData/Local/Temp/x.sqlite3" python apps/desktop/server.py --port 8799 --no-open`，再用无头 Edge + CDP 驱动页面读数/截图。**注意别用 `/tmp/...`**：MSYS 的 `/tmp` 不会被翻译，原生 Python 会当成 `C:	mp\`，库就建到别处去了。旧变量 `RESEARCH_WORKBENCH_DB` 仍兼容。
+验 UI 的套路（不碰真库）：起临时实例 `LANJI_ZHIYAN_DB="C:/Users/<你>/AppData/Local/Temp/x.sqlite3" py -3.10 apps/desktop/server.py --port 8799 --no-open`，再用无头 Edge + CDP 驱动页面读数/截图。**注意别用 `/tmp/...`**：MSYS 的 `/tmp` 不会被翻译，原生 Python 会当成 `C:	mp\`，库就建到别处去了。
 
 ---
 
@@ -100,7 +98,7 @@ node apps/desktop/web/ids.test.mjs              # 悬空 id（$("x") 引用了�
 | `packages/connectors/` | Zotero、Obsidian、邮箱、RSS、easyScholar、飞书等外部连接器 |
 | `apps/desktop/web/` | 单文件前端 `index.html`（CSS/JS 全内联）+ `vendor/`（marked / DOMPurify / KaTeX / pdf.js / lunar / starmap / neural）+ 主题自检 |
 | `tests/` | 单元测试与浏览器回归（`python -m unittest discover -s tests -t .`） |
-| `tools/` | `check.bat` / `build-app.bat` / `start.bat` / `览籍智研.spec` / `installer.spec` / `installer.py` / `hooks/` / `build/icon.ico`（打包与自检都在这里） |
+| `tools/` | `check.bat` / `build-app.bat` / `start.bat` / `*.spec` / `install.ps1` / `installer.py` / `hooks/` / `build/icon.ico`（打包与自检都在这里） |
 | `packages/` | 分包布局：`database` / `workspace-service` / `workspace-core` / `connectors` / `contracts` / `ai-runtime` |
 | `doc/` | 设计、计划、诊断与改动记录（`doc/CHANGELOG.md`） |
 | `data/` | 全部数据（`research.sqlite3` + `papers/` `notes/` `out/` `uploads/`） |

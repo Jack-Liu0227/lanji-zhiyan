@@ -103,7 +103,7 @@
             <div class="kb-kpi-card">
               <div class="kb-kpi-lbl">
                 <span>课题总完成度</span>
-                <span style="color:#38bdf8">${completionRate}%</span>
+                <span style="color:var(--kb-sky)">${completionRate}%</span>
               </div>
               <div class="kb-kpi-val">
                 ${d.stats.done} <span class="kb-kpi-sub">/ ${d.stats.total} 项任务已完成</span>
@@ -116,20 +116,20 @@
             <div class="kb-kpi-card">
               <div class="kb-kpi-lbl">
                 <span>进行与审核中</span>
-                <span style="color:#8b5cf6">Active</span>
+                <span style="color:var(--kb-violet)">Active</span>
               </div>
               <div class="kb-kpi-val">
                 ${d.stats.in_progress + d.stats.review} <span class="kb-kpi-sub">(${d.stats.in_progress} 进行中 · ${d.stats.review} 待审核)</span>
               </div>
               <div class="kb-kpi-sub" style="margin-top:4px">
-                待办储备：${d.stats.todo} 项 ${d.stats.p0_count ? `· <span style="color:#fb7185">P0紧急 ${d.stats.p0_count} 项</span>` : ''}
+                待办储备：${d.stats.todo} 项 ${d.stats.p0_count ? `· <span style="color:var(--kb-rose)">P0紧急 ${d.stats.p0_count} 项</span>` : ''}
               </div>
             </div>
 
             <div class="kb-kpi-card">
               <div class="kb-kpi-lbl">
                 <span>智能专家协同</span>
-                <span style="color:#10b981">Agents</span>
+                <span style="color:var(--kb-green)">Agents</span>
               </div>
               <div class="kb-kpi-val">
                 ${(d.assistants || []).length} <span class="kb-kpi-sub">位专家在席</span>
@@ -142,7 +142,7 @@
             <div class="kb-kpi-card">
               <div class="kb-kpi-lbl">
                 <span>课题数字资产</span>
-                <span style="color:#f59e0b">Library</span>
+                <span style="color:var(--kb-amber)">Library</span>
               </div>
               <div class="kb-kpi-val">
                 ${d.stats.papers_count} <span class="kb-kpi-sub">篇文献 · ${d.stats.notes_count} 篇大笔记</span>
@@ -293,7 +293,7 @@
           </div>
           <div class="kb-card-actions">
             <button class="kb-btn-mini" data-act="edit" data-id="${t.id}" title="编辑任务">✎</button>
-            <button class="kb-btn-mini" data-act="del" data-id="${t.id}" title="删除任务" style="color:#fb7185">✕</button>
+            <button class="kb-btn-mini" data-act="del" data-id="${t.id}" title="删除任务" style="color:var(--kb-rose)">✕</button>
           </div>
         </div>
       </div>
@@ -307,8 +307,8 @@
       <div class="kb-pipeline-view">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px">
           <div>
-            <h3 style="margin:0; font-size:15px; color:#f0f6fc">🔬 标准十步科研创新与落地工作流</h3>
-            <p style="margin:4px 0 0; font-size:12px; color:#8b949e">与「科研平台」十步流程深度打通，点击任意卡片即可直达该阶段实战操作界面。</p>
+            <h3 style="margin:0; font-size:15px; color:var(--fg)">🔬 标准十步科研创新与落地工作流</h3>
+            <p style="margin:4px 0 0; font-size:12px; color:var(--muted)">与「科研平台」十步流程深度打通，点击任意卡片即可直达该阶段实战操作界面。</p>
           </div>
           <button class="btn sm btn-primary" onclick="window.openTab('workflow')">进入科研平台 →</button>
         </div>
@@ -324,7 +324,7 @@
               </div>
               <h4 class="kb-stage-title">${escapeHtml(st.label)}</h4>
               <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px">
-                <span style="font-size:11px; color:#8b949e">流程代码：${st.key}</span>
+                <span style="font-size:11px; color:var(--muted)">流程代码：${st.key}</span>
                 <button class="btn sm ghost" onclick="window.openTab('workflow');" style="padding:2px 8px; font-size:11px">跳转工作流</button>
               </div>
             </div>
@@ -345,8 +345,8 @@
       <div class="kb-pipeline-view">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px">
           <div>
-            <h3 style="margin:0; font-size:15px; color:#f0f6fc">📅 课题任务排期与里程碑追踪</h3>
-            <p style="margin:4px 0 0; font-size:12px; color:#8b949e">按重要紧急程度与时间排期聚合展示当前课题规划。</p>
+            <h3 style="margin:0; font-size:15px; color:var(--fg)">📅 课题任务排期与里程碑追踪</h3>
+            <p style="margin:4px 0 0; font-size:12px; color:var(--muted)">按重要紧急程度与时间排期聚合展示当前课题规划。</p>
           </div>
           <button class="btn sm" onclick="window.openTab('calendar')">打开日历排期 →</button>
         </div>
@@ -354,7 +354,7 @@
         <div style="display:flex; flex-direction:column; gap:16px">
           ${urgent.length ? `
             <div style="border-left:3px solid #fb7185; padding-left:12px">
-              <h4 style="margin:0 0 8px; color:#fb7185; font-size:13px">🚨 P0 紧急攻关任务 (${urgent.length})</h4>
+              <h4 style="margin:0 0 8px; color:var(--kb-rose); font-size:13px">🚨 P0 紧急攻关任务 (${urgent.length})</h4>
               <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:10px">
                 ${urgent.map(t => renderTodoCard(t, t.status)).join('')}
               </div>
@@ -362,14 +362,14 @@
           ` : ''}
 
           <div style="border-left:3px solid #8b5cf6; padding-left:12px">
-            <h4 style="margin:0 0 8px; color:#c4b5fd; font-size:13px">🚀 正在执行中 (${inProgress.length})</h4>
+            <h4 style="margin:0 0 8px; color:var(--kb-violet); font-size:13px">🚀 正在执行中 (${inProgress.length})</h4>
             <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:10px">
               ${inProgress.length ? inProgress.map(t => renderTodoCard(t, 'IN_PROGRESS')).join('') : '<div class="hint">暂无正在执行的任务</div>'}
             </div>
           </div>
 
           <div style="border-left:3px solid #38bdf8; padding-left:12px">
-            <h4 style="margin:0 0 8px; color:#38bdf8; font-size:13px">📋 待开展计划 (${upcoming.length})</h4>
+            <h4 style="margin:0 0 8px; color:var(--kb-sky); font-size:13px">📋 待开展计划 (${upcoming.length})</h4>
             <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:10px">
               ${upcoming.length ? upcoming.map(t => renderTodoCard(t, 'TODO')).join('') : '<div class="hint">待办池为空</div>'}
             </div>
@@ -446,7 +446,7 @@
     container.querySelector('#kbBtnImportWf')?.addEventListener('click', async () => {
       const tid = window.curTask || (d.task ? d.task.id : '');
       if (!tid) {
-        alert('请先创建或选择一个项目！');
+        uiNotify('请先创建或选择一个项目！');
         return;
       }
       try {
@@ -454,7 +454,7 @@
         await fetchKanbanData(tid);
         renderBoard(container);
       } catch (err) {
-        alert('导入工作流失败: ' + err.message);
+        uiNotify('导入工作流失败: ' + err.message);
       }
     });
 
@@ -501,7 +501,7 @@
         } else if (act === 'edit') {
           openTaskModal(t, kbState.data);
         } else if (act === 'del') {
-          if (confirm(`确定要删除任务「${t.title}」吗？`)) {
+          if (await uiConfirm(`确定要删除任务「${t.title}」吗？`)) {
             await window.api('/api/todos/delete', { id: todoId });
             await fetchKanbanData(window.curTask);
             renderBoard(container);
@@ -646,7 +646,7 @@
     modal.querySelector('#btnKbModalSave').onclick = async () => {
       const title = modal.querySelector('#kbTaskTitle').value.trim();
       if (!title) {
-        alert('请输入任务标题！');
+        uiNotify('请输入任务标题！');
         return;
       }
       const description = modal.querySelector('#kbTaskDesc').value.trim();
@@ -683,7 +683,7 @@
         const main = document.getElementById('main');
         if (main) renderBoard(main);
       } catch (err) {
-        alert('保存失败: ' + err.message);
+        uiNotify('保存失败: ' + err.message);
       }
     };
   }

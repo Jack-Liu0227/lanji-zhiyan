@@ -30,6 +30,47 @@ class WorkflowTest(unittest.TestCase):
         self.db.close()
         self.td.cleanup()
 
+    def test_calendar_list_schedule_manage_and_cross_project_query(self) -> None:
+        """主 agent 的三件日常：看今天的日程、管定时任务、跨项目查笔记。"""
+        from datetime import date
+        self.db.add_event("组会", date.today().isoformat(), self.task, "meeting", "", "14:00")
+        got = workflow._tool_impl("calendar_list", self.db, self.task, {})
+        self.assertEqual(got["count"], 1)
+        self.assertEqual(got["events"][0]["title"], "组会")
+        self.assertEqual(got["events"][0]["time"], "14:00")
+
+        made = workflow._tool_impl("schedule_manage", self.db, self.task, {
+            "action": "create", "name": "盯掺杂文献", "prompt": "检索 NaNiFeMn 掺杂新文献",
+            "cron": "0 9 * * *", "project": "O3 掺杂"})
+        sid = made["schedule"]["id"]
+        self.assertTrue(made["schedule"]["enabled"])
+        self.assertEqual(made["schedule"]["project"], "O3 掺杂")
+        self.assertIn(sid, [s["id"] for s in workflow._tool_impl("schedule_manage", self.db, self.task, {"action": "list"})["schedules"]])
+        off = workflow._tool_impl("schedule_manage", self.db, self.task, {"action": "toggle", "id": sid, "enabled": False})
+        self.assertFalse(off["schedule"]["enabled"])
+        self.assertTrue(workflow._tool_impl("schedule_manage", self.db, self.task, {"action": "delete", "id": sid})["deleted"])
+
+        self.db.add_note(self.task, "掺杂笔记", "Mg 掺杂能稳定 O3 相", "")
+        chat = self.db.create_chat("全局")
+        global_hit = workflow._tool_impl("knowledge_query", self.db, chat, {"query": "Mg 掺杂"})
+        self.assertEqual(global_hit["total"], 1)                      # 首页 Agent 没 projects 也查得到
+        self.assertEqual(global_hit["hits"][0]["project"], "O3 掺杂")
+        with self.assertRaises(ValueError):
+            workflow._tool_impl("knowledge_query", self.db, chat, {"query": "x", "project": "不存在的项目"})
+
+    def test_project_create_tool_registered_and_works(self) -> None:
+        """主 agent 必须能自己建项目：工具在 TOOL_SPECS 里，且真能建出来（带项目位置就建目录）。"""
+        names = [spec["function"]["name"] for spec in workflow.TOOL_SPECS]
+        self.assertIn("project_create", names)
+        base = str(Path(self.td.name) / "新项目")
+        out = workflow._tool_impl("project_create", self.db, "", {
+            "title": "钠电 O3 掺杂筛选", "question": "选哪种掺杂金属", "material_system": "NaNiFeMn", "base_dir": base})
+        self.assertTrue(out["project_id"])
+        self.assertEqual(self.db.summary(out["project_id"])["task"]["title"], "钠电 O3 掺杂筛选")
+        self.assertTrue((Path(base) / "文献库").is_dir())
+        with self.assertRaises(ValueError):
+            workflow._tool_impl("project_create", self.db, "", {"title": "  "})
+
     def test_project_tree_has_dated_chat_dir_and_final_artifacts(self) -> None:
         """项目位置里「对话」按日期分夹、「最终产物」装交付件；老的「最终成品」空壳自动改名。"""
         from datetime import datetime
@@ -270,6 +311,50 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("失败", out["events"][1]["summary"])
 
 
+    def test_检索跑完必须收口问要不要改检索式(self) -> None:
+        """文献检索助手检索完不能只报个数：要问「还要调整检索式吗」。别的步骤不带这句。"""
+        self.db.add_model("假模型4", "http://127.0.0.1:1/v1", "fake4", "sk", activate=True)
+        seen: dict = {}
+
+        def fake_chat_raw(profile, messages, tools=None, **kw):
+            seen["ctx"] = messages[1]["content"]          # [0]=system, [1]=上下文
+            return {"role": "assistant", "content": "跑完了。", "tool_calls": []}
+
+        old = workflow.chat_raw
+        workflow.chat_raw = fake_chat_raw
+        try:
+            run_agent(self.db, self.task, "检索一下", step="search", scope="search")
+            self.assertIn("还要调整检索式吗", seen["ctx"])
+            run_agent(self.db, self.task, "看下现状", step="notes", scope="notes")
+            self.assertNotIn("还要调整检索式吗", seen["ctx"])
+        finally:
+            workflow.chat_raw = old
+
+    def test_检索完不提问就补一句(self) -> None:
+        """模型只回「检索完了」没提问 → 服务端补上收口提问；它自己问过就绝不重复问。"""
+        self.db.add_model("假模型5", "http://127.0.0.1:1/v1", "fake5", "sk", activate=True)
+
+        def make_chat(reply):
+            def fake_chat_raw(profile, messages, tools=None, **kw):
+                if not any(m.get("role") == "tool" for m in messages):
+                    return {"role": "assistant", "content": "", "tool_calls": [
+                        {"id": "c1", "type": "function",
+                         "function": {"name": "paper_search", "arguments": "{}"}}]}
+                return {"role": "assistant", "content": reply, "tool_calls": []}
+            return fake_chat_raw
+
+        old_chat, old_tool = workflow.chat_raw, workflow._tool_impl
+        workflow._tool_impl = lambda name, *a, **k: {"found": 3, "saved": []}
+        try:
+            workflow.chat_raw = make_chat("检索完了，共 3 条。")
+            out = run_agent(self.db, self.task, "检索", step="search", scope="search", publish=False)
+            self.assertIn("还要调整检索式吗", out["reply"])
+            workflow.chat_raw = make_chat("检索完了，共 3 条。还要按年份筛一下吗？")
+            out2 = run_agent(self.db, self.task, "再检索", step="search", scope="search", publish=False)
+            self.assertEqual(out2["reply"].count("？"), 1)          # 自己问过了，不重复补
+        finally:
+            workflow.chat_raw, workflow._tool_impl = old_chat, old_tool
+
     def test_agent_roles_leader_vs_partner(self) -> None:
         """分档：首页通用对话 = 智研管家（带全局简报，能看到所有项目）；
         项目对话 = 绑定该项目的 Partner Agent。锁住这两句口径，别以后被改回去。"""
@@ -507,9 +592,28 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.db.bind_chat(chat, "no-such-project")                  # 绑一个不存在的项目 → 拒绝
 
+    def test_首启种一条小智欢迎对话且可删(self) -> None:
+        """新用户第一次打开：有且只有一条「小智」对话，正文带自我介绍；种两次不会多一条；能删。"""
+        cid = self.db.seed_welcome()
+        chats = self.db.chats()
+        self.assertEqual(len(chats), 1)
+        self.assertEqual(chats[0]["title"], "小智")
+        msg = self.db.messages(cid)
+        self.assertEqual([m["role"] for m in msg], ["assistant"])
+        self.assertIn("小智", msg[0]["content"])
+        self.assertIn("览籍智研", msg[0]["content"])
+        self.assertEqual(self.db.seed_welcome(), "")                  # 已有对话 → 不再种
+        self.assertEqual(len(self.db.chats()), 1)
+        self.db.clear_messages(cid)
+        self.db.delete_chat(cid)
+        self.assertEqual(self.db.chats(), [])
+
 
 # ---------------- 来自 test_deepread.py ----------------
-os.environ.setdefault("LANJI_ZHIYAN_DB", str(pathlib.Path(tempfile.gettempdir()) / "dr_unit.sqlite3"))
+os.environ.setdefault("RESEARCH_WORKBENCH_DB", str(pathlib.Path(tempfile.gettempdir()) / "dr_unit.sqlite3"))
+
+import workflow  # noqa: E402
+
 
 class DeepreadTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -581,3 +685,184 @@ class ModelInvokerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ChatEmptyRetryTest(unittest.TestCase):
+    """推理模型把 max_tokens 花光时正文是空串 —— chat() 要翻倍预算再来一次。"""
+
+    def test_空回翻倍重试(self):
+        from unittest import mock
+        import workflow
+        seen = []
+
+        def fake_raw(profile, messages, **kw):
+            seen.append(kw.get("max_tokens"))
+            return {"content": "" if len(seen) == 1 else "有内容了"}
+
+        with mock.patch.object(workflow, "chat_raw", side_effect=fake_raw):
+            self.assertEqual(workflow.chat({"model": "m"}, [{"role": "user", "content": "x"}], max_tokens=3000), "有内容了")
+        self.assertEqual(seen, [3000, 6000])
+
+    def test_正常回包不重试(self):
+        from unittest import mock
+        import workflow
+        seen = []
+
+        def fake_raw(profile, messages, **kw):
+            seen.append(1)
+            return {"content": "一次就好"}
+
+        with mock.patch.object(workflow, "chat_raw", side_effect=fake_raw):
+            self.assertEqual(workflow.chat({"model": "m"}, [{"role": "user", "content": "x"}]), "一次就好")
+        self.assertEqual(len(seen), 1)
+
+
+class ReadDoneTest(unittest.TestCase):
+    """精读重跑不能重读：有实质内容的精读笔记算读过，只有标题的空笔记不算。"""
+
+    def test_空笔记不算读过(self):
+        import workflow_stages
+        notes = [{"title": "精读 · a.pdf", "markdown": "# 精读 · a.pdf\n"},
+                 {"title": "精读 · b.pdf", "markdown": "# 精读 · b.pdf\n\n" + "要点" * 200},
+                 {"title": "创新点审查", "markdown": "x" * 1000}]
+        fake = type("D", (), {"notes": lambda self, tid: notes})()
+        self.assertEqual(workflow_stages.read_done_filenames(fake, "t"), {"b.pdf"})
+
+
+class PlanContextTest(unittest.TestCase):
+    """「同步上一步」的顺序：上一步的交付必须排在创新点背景之前，否则每个助手都开口复述创新点。"""
+
+    def test_上一步排在背景之前(self):
+        import tempfile
+        from pathlib import Path as P
+        import workflow
+        td = tempfile.TemporaryDirectory()
+        db = workflow.WorkflowDB(P(td.name) / "wb.sqlite3")
+        try:
+            tid = db.create_task("测试项目", "研究问题", "体系")
+            db.add_message(tid, "assistant", "上一步结论：大纲共 15 节，主线是局部电阻梯度。", [], scope="outline")
+            db.idea_input_save(tid, "用户写的创新点原文 ABC")
+            ctx = workflow._plan_context(db, tid, "map")
+            self.assertIn("上一步「", ctx)
+            self.assertIn("背景：项目最初的创新点", ctx)
+            self.assertLess(ctx.index("上一步「"), ctx.index("背景：项目最初的创新点"))   # 上一步在前
+            self.assertIn("大纲共 15 节", ctx)
+        finally:
+            db.close()
+            td.cleanup()
+
+
+class MapSeedTest(unittest.TestCase):
+    """谱系图没有时按大纲长出来；已有图绝不覆盖。"""
+    def test_按大纲长出章节树(self):
+        import tempfile
+        from pathlib import Path as P
+        import workflow
+        import workflow_documents as wd
+        td = tempfile.TemporaryDirectory()
+        db = workflow.WorkflowDB(P(td.name) / "wb.sqlite3")
+        try:
+            tid = db.create_task("测试项目", "研究问题", "体系", str(P(td.name) / "proj"))
+            wd.outline_write(db, tid, "# 题目\n\n## 1. 引言\n### 1.1 背景\n### 1.2 局限\n## 2. 方法\n### 2.1 结构\n")
+            first = wd.map_seed(db, tid)
+            labels = [n["label"] for n in first["nodes"]]
+            self.assertEqual(labels, ["1. 引言", "1.1 背景", "1.2 局限", "2. 方法", "2.1 结构"])
+            self.assertTrue(first["edges"])                       # 章 → 节 挂上了
+            again = wd.map_seed(db, tid)                          # 已有图不覆盖
+            self.assertEqual(len(again["nodes"]), len(first["nodes"]))
+            self.assertEqual(again["updated"], first["updated"])
+
+            # 拖过的坐标：agent 重写要保留，前端「全部重排」要能真的清掉
+            moved = [{**n, "x": 100 + i, "y": 200 + i} for i, n in enumerate(first["nodes"])]
+            wd.map_write(db, tid, {"nodes": moved, "edges": first["edges"]})
+            kept = wd.map_write(db, tid, {"nodes": first["nodes"], "edges": first["edges"]})       # 不带坐标
+            self.assertIn("x", kept["nodes"][0], "agent 重写时手动坐标不能丢")
+            cleared = wd.map_write(db, tid, {"nodes": first["nodes"], "edges": first["edges"]},
+                                   keep_positions=False)
+            self.assertNotIn("x", cleared["nodes"][0], "「全部重排」必须能清掉坐标")
+        finally:
+            db.close()
+            td.cleanup()
+
+
+class ChatJsonTest(unittest.TestCase):
+    """模型先讲人话 / 把 JSON 截断 → 不能直接炸；截断要判成「没有 JSON」，好走一次重试。"""
+
+    def test_从讲话后面抠出JSON(self):
+        import workflow
+        got = workflow._json_in('好的，我分析一下。\n判定如下：\n{"verdict": "可行", "score": 7}\n以上。')
+        self.assertEqual(got, {"verdict": "可行", "score": 7})
+
+    def test_截断的JSON判为没有(self):
+        import workflow
+        self.assertIsNone(workflow._json_in('{"verdict": "可行", "score":'))
+
+    def test_数组(self):
+        import workflow
+        self.assertEqual(workflow._json_in("```json\n[1, 2, 3]\n```"), [1, 2, 3])
+
+    def test_单条结果被包成数组时取第一个对象(self):
+        from unittest import mock
+        import workflow
+        with mock.patch.object(workflow, "chat", return_value='[{"verdict": "小修"}]'):
+            self.assertEqual(workflow.chat_json({"model": "m"}, [{"role": "user", "content": "x"}]),
+                             {"verdict": "小修"})
+
+    def test_JSON预算高于对话默认(self):
+        """推理模型的思维链吃 max_tokens：chat_json 不能沿用 chat() 的 4096，正文会被截断。"""
+        from unittest import mock
+        import workflow
+        seen = {}
+
+        def fake(profile, messages, **kw):
+            seen.update(kw)
+            return '{"ok": 1}'
+
+        with mock.patch.object(workflow, "chat", side_effect=fake):
+            self.assertEqual(workflow.chat_json({"model": "m"}, [{"role": "user", "content": "x"}]), {"ok": 1})
+        self.assertGreaterEqual(seen["max_tokens"], 8000)
+
+
+class RecentDialogueTest(unittest.TestCase):
+    """历史按字符预算装，不按条数：装不下就从最早的丢，最新的永远留。"""
+
+    def test_预算内全留(self):
+        import workflow
+        msgs = [{"role": "user", "content": "a" * 10}, {"role": "assistant", "content": "b" * 10}]
+        self.assertEqual(workflow.recent_dialogue(msgs, chars=100), msgs)
+
+    def test_超预算按最新往前装(self):
+        import workflow
+        msgs = [{"role": "user", "content": str(i) * 100} for i in range(5)]
+        got = workflow.recent_dialogue(msgs, chars=250)      # 每条约 100 字 → 只装得下最新两条
+        self.assertEqual([m["content"][0] for m in got], ["3", "4"])
+
+    def test_单条超预算也留最新一条(self):
+        import workflow
+        got = workflow.recent_dialogue([{"role": "user", "content": "x" * 9999}], chars=10)
+        self.assertEqual(len(got), 1)
+
+
+class ContextBudgetTest(unittest.TestCase):
+    """设置页存的值优先；没存或越界一律回落默认，不能让整个对话跑不起来。"""
+
+    def test_设置值优先(self):
+        from unittest import mock
+        import service_settings as kv
+        import workflow
+        with mock.patch.object(kv, "read", return_value={"history_chars": 12345}):
+            self.assertEqual(workflow.context_budget(object()), 12345)
+
+    def test_没存或越界回落默认(self):
+        from unittest import mock
+        import service_settings as kv
+        import workflow
+        for bad in ({}, {"history_chars": 5}, {"history_chars": "abc"}, {"history_chars": 10 ** 7}):
+            with mock.patch.object(kv, "read", return_value=bad):
+                self.assertEqual(workflow.context_budget(object()), workflow.HISTORY_CHARS)
+
+    def test_读不出来也不炸(self):
+        from unittest import mock
+        import service_settings as kv
+        import workflow
+        with mock.patch.object(kv, "read", side_effect=OSError("db locked")):
+            self.assertEqual(workflow.context_budget(object()), workflow.HISTORY_CHARS)

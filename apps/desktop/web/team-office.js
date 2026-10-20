@@ -354,13 +354,13 @@ function officeForm(pid) {
   box.querySelector("#tofOk").onclick = async () => {
     const purpose = box.querySelector("#tofPurpose").value.trim();
     const ids = [...box.querySelectorAll(".pick input:checked")].map((x) => x.value);
-    if (!purpose) return alert("先说清为什么组");
-    if (!ids.length) return alert("一个人都没挑");
+    if (!purpose) return uiNotify("先说清为什么组");
+    if (!ids.length) return uiNotify("一个人都没挑");
     try {
       const r = await api("/api/teams/new", { kind: "temp", name: purpose.slice(0, 24), purpose, project: pid });
       for (const id of ids) await api("/api/team/chat/member", { scope: r.team.id, assistant_id: id });
       officeSel = r.team.id;
       close(); render();
-    } catch (e) { alert(e.message); }
+    } catch (e) { uiNotify(e.message); }
   };
 }

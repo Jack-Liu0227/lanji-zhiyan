@@ -137,7 +137,7 @@ def doi_resolves(doi: str, timeout: int = 3) -> bool:
         import json
         import urllib.request as u
         d = _nz(doi)
-        req = u.Request(f"https://api.crossref.org/works/{doi}", headers={"User-Agent": "LanjiZhiyan/0.1.0"})
+        req = u.Request(f"https://api.crossref.org/works/{doi}", headers={"User-Agent": "research-workbench/1.0"})
         with u.urlopen(req, timeout=timeout) as r:
             return bool(json.load(r).get("message", {}).get("DOI")) and d != ""
     except Exception:

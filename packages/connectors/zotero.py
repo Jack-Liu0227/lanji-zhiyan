@@ -273,6 +273,15 @@ def find_zotero_data_dir() -> Path:
     return Path.home() / "Zotero"
 
 
+def _host_launch() -> bool:
+    """请窗口宿主（Medium）起 Zotero；没有通道（同进程模式）返回 False 让调用方自己起。"""
+    try:
+        import paths
+        return paths.host_app("zotero")
+    except Exception:                             # noqa: BLE001 —— 拿不到通道就走本地起
+        return False
+
+
 def launch_zotero() -> dict[str, Any]:
     """尝试唤起本机 Zotero 客户端并在后台等待 Local API 就绪。"""
     exe = find_zotero_executable()
@@ -285,7 +294,8 @@ def launch_zotero() -> dict[str, Any]:
 
     try:
         flags = subprocess.DETACHED_PROCESS if os.name == "nt" else 0
-        subprocess.Popen([exe], creationflags=flags)
+        if not _host_launch():            # 沙箱里自己 Popen 出来的是 Low 进程（写不了 ~/Zotero）→ 请宿主起
+            subprocess.Popen([exe], creationflags=flags)
         for _ in range(8):
             time.sleep(1)
             if _ping(DEFAULT_BASE)[0]:

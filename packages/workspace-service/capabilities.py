@@ -401,7 +401,7 @@ class _MCPConnection:
             threading.Thread(target=self._drain_stderr, daemon=True).start()
         try:
             result = self.call("initialize", {"protocolVersion": self.protocol_version, "capabilities": {},
-                                               "clientInfo": {"name": "lanji-zhiyan", "version": "0.1.0"}})
+                                               "clientInfo": {"name": "research-workbench", "version": "1.0"}})
             negotiated = result.get("protocolVersion", self.protocol_version)
             if negotiated not in ("2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"):
                 raise ValueError("MCP server negotiated an unsupported protocol version")

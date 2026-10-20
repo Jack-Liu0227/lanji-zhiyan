@@ -223,7 +223,7 @@ def registration_begin(db: Any, aid: str, body: dict | None = None) -> dict:
     if not _registration_qr_is_trusted(parsed, _registration_region(domain)):
         raise ValueError("飞书注册服务返回了不受信任的扫码地址")
     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-    query.update({"from": ["sdk"], "tp": ["sdk"], "source": ["lanji-zhiyan"]})
+    query.update({"from": ["sdk"], "tp": ["sdk"], "source": ["research-workbench"]})
     name = str(body.get("name") or body.get("name_preset") or "").strip()
     if name:
         query["name"] = [name[:80]]

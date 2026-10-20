@@ -14,7 +14,7 @@ from typing import Any
 import paths
 
 PAPERS = paths.PAPERS
-UA = {"User-Agent": "LanjiZhiyan/0.1.0 (mailto:local@localhost)"}
+UA = {"User-Agent": "research-workbench-1.0 (mailto:local@localhost)"}
 
 def _text(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", value or "")).strip()
@@ -274,6 +274,12 @@ def make_project_tree(base: str | Path, task: dict[str, Any] | None = None) -> l
         (d / "README.md").write_text(f"# {name}\n\n{desc}\n", encoding="utf-8")
         made.append(name)
     (root / "对话" / datetime.now().strftime("%Y-%m-%d")).mkdir(parents=True, exist_ok=True)
+    # 新项目目录标成低完整性：xelatex / babeldoc 这类 Low 子进程只允许往这类目录写
+    try:
+        import lowbox
+        lowbox.mark_low(root, recursive=True)
+    except Exception:
+        pass
     t = task or {}
     (root / "README.md").write_text("\n".join([
         f"# {t.get('title') or root.name}",

@@ -242,7 +242,7 @@ def query_publication_rank(conn: sqlite3.Connection, publication_name: str, forc
     params = urllib.parse.urlencode({"secretKey": secret_key, "publicationName": name})
     url = f"{EASYSCHOLAR_API_URL}?{params}"
     
-    req = urllib.request.Request(url, headers={"User-Agent": "LanjiZhiyan/0.1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "ResearchWorkbench/1.3.0"})
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -287,7 +287,7 @@ def test_connection(secret_key: str) -> dict[str, Any]:
     _throttle()
     params = urllib.parse.urlencode({"secretKey": key, "publicationName": "Nature"})
     url = f"{EASYSCHOLAR_API_URL}?{params}"
-    req = urllib.request.Request(url, headers={"User-Agent": "LanjiZhiyan/0.1.0"})
+    req = urllib.request.Request(url, headers={"User-Agent": "ResearchWorkbench/1.3.0"})
     try:
         t0 = time.time()
         with urllib.request.urlopen(req, timeout=10) as resp:

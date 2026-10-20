@@ -46,17 +46,19 @@ import capabilities
 import workflow_layout
 import folder_picker
 import feishu
+import service_settings as kv_store      # 轻量 KV：权限模式这类一台机器一份的开关
 import zotero_sync
 import agent_integrations
 import reproduction_routes
 import feature_routes
 from run_manager import RunManager
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
-                      USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
+                      TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
-                      outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
-                      cite_read, conv_files, conv_run, conv_compile, conv_open,
-                      en_state, en_run, _safe_path,
+                      outline_read, outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
+                      map_seed, project_outs,
+                      cite_read, cite_add, conv_files, conv_run, conv_compile, conv_open,
+                      en_state, en_run, _safe_path, step_plan,
                       stage_download_selected, stage_zotero_import, test_provider,
                       deepread_kick, deepread_state, deepread_stop)
 
@@ -82,10 +84,6 @@ team.DB_PATH = DB_PATH              # 团队共用同一个库
 UPLOADS = paths.UPLOADS
 PORT = 8765
 APP_TITLE = "览籍智研"      # 窗口标题前缀（web/index.html 会追加 " · v<构建戳>"）
-try:
-    APP_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip() or "0.1.0"
-except OSError:
-    APP_VERSION = "0.1.0"
 STAMP = 0                       # web/index.html 的时间戳；无边框窗口靠它认「自己那扇窗」
 
 
@@ -132,20 +130,48 @@ def _front(hwnd: int) -> None:
     u.BringWindowToTop(hwnd)
 
 
-def _maximize(hwnd: int) -> None:
-    """--start-maximized 有时不生效（窗口起来是近似全屏但没最大化）→ 补一刀。"""
-    import ctypes
-    u = ctypes.windll.user32
-    if not u.IsZoomed(hwnd):
-        u.ShowWindow(hwnd, 3)                        # SW_MAXIMIZE
+# ---------- 旧实例接管（以前这里退回 Edge --app，会先弹小窗再被拉满 = 用户报的「闪一个小卡片」）----------
+def _port_owner(port: int) -> int:
+    """谁在听这个端口：netstat 输出是 GBK，只认 ASCII 的 PID 列。"""
+    out = subprocess.run(["netstat", "-ano"], capture_output=True,
+                         creationflags=paths.NO_WINDOW).stdout.decode("mbcs", "replace")
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) >= 5 and f[0].upper() == "TCP" and f[3].upper() == "LISTENING" and f[1].endswith(f":{port}"):
+            try:
+                return int(f[4])
+            except ValueError:
+                return 0
+    return 0
 
 
-def edge() -> str | None:
-    for cand in (os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Microsoft", "Edge", "Application", "msedge.exe"),
-                 os.path.join(os.environ.get("ProgramFiles", ""), "Microsoft", "Edge", "Application", "msedge.exe")):
-        if cand and Path(cand).is_file():
-            return cand
-    return None
+def _is_our_app(pid: int) -> bool:
+    """只杀自己人：python / pythonw / 打包后的 research-workbench.exe，绝不动浏览器。"""
+    if not pid:
+        return False
+    out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                         creationflags=paths.NO_WINDOW,
+                         capture_output=True).stdout.decode("mbcs", "replace").strip().lower()
+    name = out.split(",")[0].strip('"') if out else ""
+    return name in ("python.exe", "pythonw.exe") or "research-workbench" in name
+
+
+def _takeover(port: int, wait: float = 5.0) -> bool:
+    """端口被一版老构建占着（改过前端但没重启）→ 杀掉老实例，让自己接管端口。"""
+    pid = _port_owner(port)
+    if not _is_our_app(pid):
+        return False
+    try:
+        os.kill(pid, 15)                     # Windows 上等于 TerminateProcess
+    except OSError:
+        return False
+    end = time.time() + wait
+    while time.time() < end:
+        with socket.socket() as probe:
+            if probe.connect_ex(("127.0.0.1", port)) != 0:
+                return True                  # 端口放开了
+        time.sleep(0.15)
+    return False
 
 
 def _work_area() -> tuple[int, int, int, int]:
@@ -164,7 +190,7 @@ def _win_hwnd() -> int:
     只按标题认的话「窄栏/最大化」可能打到那扇带黑标题栏的兜底窗上（实测踩到过两扇同时在）。"""
     import ctypes
     from ctypes import wintypes
-    same = [(h, t) for h, t in _app_windows() if str(STAMP) in t]
+    same = [(h, t) for h, t in _app_windows() if f"v{STAMP}" in t]
     if not same:
         return 0
     me = os.getpid()
@@ -232,8 +258,12 @@ def _resizable(h: int) -> bool:
 
 
 def _win(action: str) -> dict[str, Any]:
-    """无边框窗口右上角那三个按钮。WinForms 没有标题栏了，就用 Win32 直接下命令
-    （跟 _front/_maximize 一样从别的线程调就行，不需要 pywebview 的界面线程）。"""
+    """无边框窗口右上角那三个按钮。
+
+    注意**必须由宿主进程调**：HTTP 服务跑在 Low IL 沙箱子进程里，UIPI 会静默丢掉它对
+    中完整性窗口的 ShowWindow / WM_CLOSE（最大化的 SetWindowPos 不受 UIPI 限制，所以
+    只有最小化和关闭会「点了没反应」）。前端因此优先走 js_api（=宿主进程），HTTP 只当兜底。
+    """
     import ctypes
     from ctypes import wintypes
     u = ctypes.windll.user32
@@ -263,6 +293,20 @@ def _win(action: str) -> dict[str, Any]:
     return {"ok": action}
 
 
+class _WinBridge:
+    """暴露给页面的 window.pywebview.api.win(action)。
+
+    存在的唯一理由：最小化/关闭只能在宿主进程里下命令（见 _win 的说明），
+    HTTP 那条路（Low IL 沙箱）会被 UIPI 拦掉。
+    """
+
+    def win(self, action: str) -> dict[str, Any]:
+        try:
+            return _win(str(action))
+        except Exception as exc:
+            return {"error": str(exc)}
+
+
 def _webview_window(url: str, stamp: int) -> bool:
     """自己的无边框窗口（WebView2 / pywebview）。起来就阻塞到关窗、返回 True；
     起不来（没装 pywebview / WebView2 运行时）返回 False，调用方退回 Edge --app。"""
@@ -280,21 +324,47 @@ def _webview_window(url: str, stamp: int) -> bool:
         webview.settings["REMOTE_DEBUGGING_PORT"] = int(os.environ["RW_DEBUG_CDP"])
     threading.Thread(target=_watch_restore, daemon=True).start()
     try:
-        webview.create_window(
-            f"{APP_TITLE} · v{APP_VERSION} · {stamp}", url + "&pw=1",
+        win = webview.create_window(
+            f"{APP_TITLE} · v{stamp}", url + "&pw=1",
+            hidden=True,                          # 先藏着，_show_pinned() 钉准客户区再露脸（否则能看到尺寸跳一下）
             frameless=True, easy_drag=False,      # 拖动靠 .pywebview-drag-region（顶栏），不是抓哪儿拖哪儿
+            js_api=_WinBridge(),                  # 最小化/关闭绕开 Low IL 服务，直接在宿主进程里动手
             x=int(x / s), y=int(y / s), width=int(w / s), height=int(h / s),
             min_size=(int(420 / s), int(380 / s)), background_color="#0b0f14")   # 逻辑像素！专注模式的「窄栏」只有 580 物理，按 DPI 反算，否则会把窗口钳在 ~690 宽
             # 窗口底色 = 深色主题的 --bg（原来是开始卡片的 #F9FCFE，卡片一删，那一下就变成白闪）
         webview.start(gui="edgechromium", private_mode=False,   # 关掉隐私模式，localStorage/头像才留得住
                       storage_path=str(paths.CACHE / "webview"),
                       icon=str(icon) if icon.is_file() else None,
-                      func=lambda: _fit_after())
+                      func=lambda: _show_pinned(win))
         return True                                   # 关窗 → 这里返回 → main 退出 → 服务一起停
     except Exception:
         log = paths.CACHE / "server-error.log"
         log.write_text(traceback.format_exc(), encoding="utf-8")
         return False
+
+
+def _show_pinned(win: Any) -> None:
+    """先把窗口钉准再露脸。以前是 show 之后每 100ms 才钉一次，肉眼能看到
+    2465×1543 → 2488×1600 的一下跳；现在 hidden=True 起来，钉完再 show()。
+    露脸之后仍留 _fit_after 兜底：WinForms 的 AutoScaleMode.Dpi 会在 show 后再重排一次，
+    而隐藏态量到的 GetClientRect 不可靠，所以钉不准也不能让后面的兜底线程不启动。"""
+    try:
+        h = 0                              # func 线程可能比窗口本体早一步 → 等一下再认窗口
+        for _ in range(50):
+            h = _win_hwnd()
+            if h:
+                break
+            time.sleep(0.02)
+        if h:
+            _resizable(h)                  # 先补缩放边框（会把客户区缩掉 20px），再按客户区钉
+            _fit(h, True)
+    except Exception:
+        pass                               # 隐藏态钉歪了没事，_fit_after 会重钉
+    try:
+        win.show()
+    except Exception:
+        pass
+    threading.Thread(target=_fit_after, daemon=True).start()
 
 
 def _nudge(h: int) -> None:
@@ -338,14 +408,17 @@ def _fit_after() -> None:
     """窗口起来后把矩形钉到工作区。WinForms 的 AutoScaleMode.Dpi 会在窗口 show 之后
     自己重排一次尺寸（实测 2488x1600 被打回 1866x1200 居中），所以 4 秒内每隔 100ms
     检查一次，偏了就再钉一次；钉住了就不再碰（避免反复重排把页面刷花）。
-    没有开始卡片了，起来直接钉满工作区。"""
-    pinned = False
+    **补边框要排在任何钉框之前**：_resizable 会把客户区缩掉 20px，先钉后补边框等于白跳一下。"""
+    framed = False
+    first = True
     for _ in range(40):
         h = _win_hwnd()
-        if h and not _at_work_area(h):
-            _fit(h, True)
-        if h and not pinned:                     # 首次拿到窗口就补缩放边框（之后能拖边改宽窄）
-            pinned = _resizable(h)
+        if h:
+            if not framed:
+                framed = _resizable(h)
+            if first or not _at_work_area(h):
+                _fit(h, True)              # 拿到窗口后先无条件钉一次：隐藏态那次钉的不作数
+            first = False
         time.sleep(0.1)
 
 
@@ -484,7 +557,7 @@ class Handler(BaseHTTPRequestHandler):
         prefixes = (
             "/api/agent-settings", "/api/capabilities", "/api/workflow/layouts", "/api/feishu/", "/api/zotero/web/",
             "/api/projects", "/api/papers/", "/api/chats", "/api/assistants", "/api/teams/", "/api/runs/",
-            "/api/audit/", "/api/easyscholar/", "/api/zotero/mcp/", "/api/todos", "/api/kanban", "/api/space/",
+            "/api/mcp/", "/api/audit/", "/api/easyscholar/", "/api/zotero/mcp/", "/api/todos", "/api/kanban", "/api/space/",
             "/api/assets", "/api/workflow/run", "/api/workflow/runs", "/api/workflow/recover",
         )
         if not path.startswith(prefixes):
@@ -924,6 +997,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/state":
                 with WorkflowDB(DB_PATH) as db:
                     all_tasks = db.tasks()
+                    if not all_tasks:
+                        db.create_task(
+                            "锂金属固态电池界面反应动力学与多尺度演化研究",
+                            "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
+                            "固态锂电池, 复合固态电解质, 锂金属负极",
+                        )
+                        all_tasks = db.tasks()
                     active = db.active_model()
                     return self._json({
                         "tasks": [{**dict(t), "stage_now": db.stage_now(t["id"], t["stage"])} for t in all_tasks],
@@ -959,10 +1039,16 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/chat":
                 with WorkflowDB(DB_PATH) as db:
                     return self._json({"messages": db.messages(q["id"][0])})
+            if path == "/api/security":                   # 权限模式：all=不再逐次问，ask=编译/写文件每次问
+                with WorkflowDB(DB_PATH) as db:
+                    sec = kv_store.read(db, "security")
+                    return self._json({"permission_mode": str(sec.get("permission_mode") or ""),
+                                       "history_chars": int(sec.get("history_chars") or 0)})
             if path == "/api/step/messages":               # 三栏页：右栏「本步助手」的历史（按 scope 取）
                 with WorkflowDB(DB_PATH) as db:
                     step = (q.get("step") or ["idea"])[0]
-                    return self._json({"step": step, "messages": db.messages(q["id"][0], step)})
+                    tid = q["id"][0]
+                    return self._json({"step": step, "messages": db.messages(tid, step)})
             if path == "/api/doc/state":                  # 确认大纲 / 论文撰写 / 稿件审查 共用的「左边那份文件」
                 step = (q.get("step") or ["outline"])[0]
                 with WorkflowDB(DB_PATH) as db:
@@ -978,6 +1064,10 @@ class Handler(BaseHTTPRequestHandler):
                                        "outline": doc_read(db, tid, "outline"),
                                        "sources": map_sources(db, tid),
                                        **map_read(db, tid)})
+            if path == "/api/step/outs":                   # 右栏「产出目录」：项目里落过盘的文件，新的在前
+                with WorkflowDB(DB_PATH) as db:
+                    tid = q["id"][0]
+                    return self._json({"out": str(db.out_dir(tid)), "outs": project_outs(db, tid)})
             if path == "/api/en/state":                   # 中译英：默认源（正文.md）+ 上次译文
                 with WorkflowDB(DB_PATH) as db:
                     return self._json(en_state(db, q["id"][0]))
@@ -1004,15 +1094,10 @@ class Handler(BaseHTTPRequestHandler):
                                    "snapshots": [{"at": s.parent.name + " " + s.name, "bytes": s.stat().st_size}
                                                  for s in fileguard.snapshots(p)]})
             if path == "/api/paper/open":                 # 星图/文献双击：用系统默认程序打开这篇论文的 PDF
-                p = None
-                p_arg = (q.get("path") or [""])[0]
-                if p_arg:
-                    p = Path(p_arg)
-                else:
-                    with WorkflowDB(DB_PATH) as db:
-                        row = db.db.execute("SELECT source_path FROM papers WHERE id=?",
-                                            (q.get("id", [""])[0],)).fetchone()
-                    p = Path(row["source_path"]) if row else None
+                with WorkflowDB(DB_PATH) as db:
+                    row = db.db.execute("SELECT source_path FROM papers WHERE id=?",
+                                        (q.get("id", [""])[0],)).fetchone()
+                p = Path(row["source_path"]) if row else None
                 if not p or not p.is_file():
                     return self._json({"error": "找不到这篇论文的 PDF 文件（可能已移走）"}, 404)
                 return self._json(fileguard.open_document(p))
@@ -1079,8 +1164,6 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"notes": db.md_notes()})
             if path == "/api/zotero/status":            # Zotero 本机只读接入（笔记页用）
                 return self._json(zotero.status(q.get("base", [""])[0] or None))
-            if path == "/api/zotero/launch":            # 自动唤起本机 Zotero 进程
-                return self._json(zotero.launch_zotero())
             if path == "/api/zotero/collections":
                 try:
                     return self._json(zotero.collections(q.get("base", [""])[0] or None))
@@ -1190,23 +1273,29 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # 界面永远拿到可读错误
             self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
 
+    def _drain(self) -> None:
+        """早退（403/415）前把 body 读掉 —— 不读就回包，客户端拿到的是 RST 而不是干净的状态码。"""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+            if 0 < n <= 64 * 1024:
+                self.rfile.read(n)
+        except Exception:
+            pass
+
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path, q = parsed.path, urllib.parse.parse_qs(parsed.query)
-        if path == "/api/upload":
+        # 跨站来源先挡：附件上传走原始字节、绕不过 preflight，所以必须在 upload 分支之前判
+        origin = (self.headers.get("Origin") or "").strip()
+        if origin and not re.match(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", origin):
+            self._drain()
+            return self._json({"error": "来源不被允许"}, 403)
+        if path == "/api/upload":                        # 原始字节走 body，所以放在 JSON 检查之前
             return self._upload(q)
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if ctype != "application/json":
+        if ctype != "application/json":                  # 挡跨站「简单请求」：非 JSON 一律不收
+            self._drain()
             return self._json({"error": "只接受 application/json"}, 415)
-        origin = (self.headers.get("Origin") or "").strip()
-        if origin and not re.match(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", origin):
-            return self._json({"error": "来源不被允许"}, 403)
-        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-        if ctype != "application/json":                      # 挡跨站「简单请求」：非 JSON 一律不收
-            return self._json({"error": "只接受 application/json"}, 415)
-        origin = (self.headers.get("Origin") or "").strip()
-        if origin and not re.match(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", origin):
-            return self._json({"error": "来源不被允许"}, 403)
         data = self._body()
         if self._extension_route("POST", path, data, q):
             return
@@ -1270,8 +1359,10 @@ class Handler(BaseHTTPRequestHandler):
             with WorkflowDB(DB_PATH) as db:
                 if path == "/api/mdnotes/save":
                     tid = data.get("task_id")
+                    pid = data.get("paper_id")
                     return self._json({"note": db.save_md_note(data.get("id", ""), data.get("title", ""),
-                                                               data.get("content", ""), None if tid is None else str(tid))})
+                                                               data.get("content", ""), None if tid is None else str(tid),
+                                                               None if pid is None else str(pid))})
 
                 if path.startswith("/api/assistant/") or path == "/api/chat/assistant":
                     b = data or {}
@@ -1353,11 +1444,17 @@ class Handler(BaseHTTPRequestHandler):
                     if path == "/api/team/assign":
                         return self._json({"task": team.assign(
                             b.get("id", ""), b.get("member", ""), b.get("prompt", ""),
-                            b.get("title", ""), "manual" if b.get("manual") else "leader")})
+                            b.get("title", ""), "manual" if b.get("manual") else "leader",
+                            depends_on=b.get("depends_on"), output_contract=b.get("output_contract"),
+                            reviewer_id=b.get("reviewer_id", ""))})
                     if path == "/api/team/task/cancel":
                         return self._json(team.cancel(b.get("row_id", "")))
                     if path == "/api/team/task/retry":
                         return self._json(team.retry(b.get("row_id", "")))
+                    if path == "/api/team/task/review":
+                        return self._json({"task": team.review(
+                            b.get("row_id", ""), bool(b.get("approved")),
+                            b.get("reviewer_id", ""), b.get("feedback", ""))})
                 if path.startswith("/api/schedule/"):      # 定时任务：保存/启停/删除/立即运行/删运行记录
                     if path == "/api/schedule/save":
                         name = str(data.get("name") or "").strip()
@@ -1409,7 +1506,8 @@ class Handler(BaseHTTPRequestHandler):
                             return self._json({"deleted": wdb.schedule_run_delete(data.get("ids") or [])})
                     return self._json({"error": "未知的定时任务操作"}, 404)
                 if path == "/api/mdnotes/delete":
-                    db.delete_md_note(data.get("id", ""))
+                    with WorkflowDB(DB_PATH) as note_db:
+                        note_db.delete_md_note(data.get("id", ""))
                     return self._json({"deleted": True})
                 if path == "/api/trans/start":
                     tid = (data.get("task_id") or "").strip()
@@ -1447,7 +1545,11 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/map/save":                # 谱系图整份覆盖写（手改 / 前端拖节点后落盘）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(map_write(db, (data.get("task_id") or "").strip(),
-                                                    data.get("data") or {}))
+                                                    data.get("data") or {},
+                                                    keep_positions=bool(data.get("keep_positions", False))))
+                if path == "/api/map/seed":                # 谱系图还没有 → 直接按大纲长出「章 → 节」，不用等用户开口
+                    with WorkflowDB(DB_PATH) as db:
+                        return self._json(map_seed(db, (data.get("task_id") or "").strip()))
                 if path == "/api/doc/save":                # 手动改/用回复落盘（三步共用）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(doc_write(db, (data.get("task_id") or "").strip(),
@@ -1464,12 +1566,12 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json(papertran.reading_note(db, tid, (data.get("id") or "").strip(), out))
                 if path == "/api/rss/refresh":
                     return self._json(rss.refresh(db))
-                if path == "/api/zotero/launch":
-                    return self._json(zotero.launch_zotero())
                 if path == "/api/task/create":
                     base = (data.get("base_dir") or "").strip()
                     tid = db.create_task(data.get("title", ""), data.get("question", ""),
                                          data.get("material_system") or data.get("material", ""), base)
+                    if base:
+                        paths.grant_dir(base)      # 桌面这类 Medium 目录：请宿主代建并标 Low，否则沙箱里 mkdir 不放
                     made = make_project_tree(base, db.summary(tid)["task"]) if base else []
                     return self._json({"task_id": tid, "base_dir": base, "dirs": made})
                 if path == "/api/task/delete":
@@ -1489,6 +1591,29 @@ class Handler(BaseHTTPRequestHandler):
                                                "map", "write", "review", "entrans", "convert"):
                         return self._json({"error": "缺 task_id 或 step 不认识"}, 400)
                     return self._json(db.log_step(tid, step, "done", str(data.get("summary") or "用户确认交付")[:200]))
+                if path == "/api/security":
+                    sec = kv_store.read(db, "security")
+                    if "permission_mode" in data:
+                        mode = str(data.get("permission_mode") or "")
+                        if mode not in ("all", "ask"):
+                            return self._json({"error": "permission_mode 只能是 all 或 ask"}, 400)
+                        sec["permission_mode"] = mode
+                    if "history_chars" in data:          # Agent 每次对话喂多少字历史（设置页「权限」里调）
+                        try:
+                            chars = int(data.get("history_chars") or 0)
+                        except (TypeError, ValueError):
+                            chars = 0
+                        if not 2000 <= chars <= 400_000:
+                            return self._json({"error": "上下文预算要在 2000–400000 字之间"}, 400)
+                        sec["history_chars"] = chars
+                    kv_store.write(db, "security", sec)
+                    return self._json({"ok": True, **sec})
+                if path == "/api/step/plan":                  # 三栏页右栏：本步助手看着上一步的交付现写「进度同步 + 计划」
+                    tid = str(data.get("task_id") or "")
+                    step = str(data.get("step") or "")
+                    if not tid or step not in STAGES:
+                        return self._json({"error": "缺 task_id 或 step 不认识"}, 400)
+                    return self._json(step_plan(db, tid, step))
                 if path == "/api/chat/bind":                  # 对话绑项目（'' = 解绑成随意对话）
                     b = data or {}
                     with WorkflowDB(DB_PATH) as db:
@@ -1512,6 +1637,8 @@ class Handler(BaseHTTPRequestHandler):
                             return self._json(got, 500)
                         if not picked:
                             picked = got.get("dir", "")
+                            if picked:
+                                paths.grant_dir(picked)     # 用户选的产出目录也交给宿主建/标 Low
                         if not picked:
                             return self._json({"cancelled": True})
                     return self._json({"chat": db.update_chat(cid, out_dir=picked)})
@@ -1746,7 +1873,14 @@ class Handler(BaseHTTPRequestHandler):
                     extra = db.tr_hl_context(tid)
                 except Exception:
                     extra = ""
-                run_agent(db, tid, data.get("message", ""), emit, extra_context=extra)
+                # step 只用来给这个助手一个身份（前端在 body 里带上）；不参与下面的 log_step，那一步照旧只记 runners
+                wstep = step or str(data.get("step") or "")
+                # 对话落在这个步骤自己的 scope 里 —— 右栏是按 /api/step/messages?step=X 取历史的，
+                # 不落 scope 的话通用 Agent 这几步（检索/下载/笔记/翻译/转换）一换步就整段消失、
+                # 三块统计面板永远是 0 / 还没有。纯聊天（不绑项目）照旧 scope=''。
+                on_task = bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
+                run_agent(db, tid, data.get("message", ""), emit, extra_context=extra,
+                          step=wstep, scope=wstep if (wstep and on_task) else "")
             if track:
                 db.log_step(tid, step, "failed" if had_error else "done",
                             "执行过程报告错误" if had_error else "执行完成")
@@ -1762,6 +1896,143 @@ class Handler(BaseHTTPRequestHandler):
     # ---------- 通用 Agent 对话（不绑项目） ----------
     def _pick_folder(self, initial: str = "", title: str = "选择产出文件夹") -> dict[str, Any]:
         return folder_picker.pick_folder(initial, title)
+
+
+def _start_inproc(port: int, url: str) -> None:
+    """老路径：HTTP 服务跟窗口在同一个（Medium）进程里。沙箱起不来时用它兜底。"""
+    with WorkflowDB(DB_PATH) as _db:
+        if not _db.tasks():
+            _db.create_task(
+                "锂金属固态电池界面反应动力学与多尺度演化研究",
+                "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
+                "固态锂电池, 复合固态电解质, 锂金属负极",
+            )
+            _db.seed_welcome()          # 新用户首启：种一条「小智」欢迎对话（能正常删掉，删了不再出现）
+    import mail
+    mail.encrypt_legacy()              # 老 mail.json 里的明文授权码 → DPAPI 密文（幂等，干净时是空转）
+    # 低完整性写边界：把 data/ 和项目目录标成 Low（Low 子进程只能写这些地方）。
+    # 放到后台线程，几百篇 PDF 的 /T 也不至于让启动卡住；幂等，每次启动跑一遍没代价。
+    # **必须由宿主（Medium）来标**：icacls 改完整性级别要目标对象的 WRITE_DAC，
+    # 沙箱里的 Low 进程对 Medium 目录没有这个权力，只会静默失败（结果就是项目目录一直写不进）。
+    if not os.environ.get("RW_LOW_SERVER"):
+        threading.Thread(target=paths.mark_write_roots_low, daemon=True).start()
+    srv = Server(("127.0.0.1", port), Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    schedule.start()           # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
+    team.start_worker()        # 团队派活队列（串行：一次跑一个成员）
+    print(f"览籍智研已启动：{url}")
+
+
+def _host_open(target: str) -> bool:
+    """宿主（Medium）里用 ShellExecute 打开文档/目录/链接。
+
+    只有宿主能做：Low 进程对文档/目录直接拿 SE_ERR_ACCESSDENIED(5)（实测），
+    http/https 与自定义协议倒是能交出去。
+    """
+    import ctypes
+    from ctypes import wintypes
+    sh = ctypes.windll.shell32
+    sh.ShellExecuteW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                 wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_int]
+    sh.ShellExecuteW.restype = ctypes.c_void_p
+    return int(sh.ShellExecuteW(None, "open", str(target), None, None, 1) or 0) > 32
+
+
+def _start_grant_helper():
+    """窗口宿主（Medium）上的小帮手：代沙箱里的服务端建目录、标 Low、开文档、起外部程序。
+    只监听 127.0.0.1 的随机端口，只认带随机 key 的 POST —— key 只进沙箱子进程的环境变量。"""
+    import http.server
+    import secrets
+
+    key = secrets.token_hex(16)
+
+    class Grant(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_a):        # 别往 stderr 刷行
+            pass
+
+        def do_POST(self):
+            ok = False
+            if self.headers.get("X-RW-Key") == key:
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    data = json.loads(self.rfile.read(n) or b"{}")
+                    if self.path == "/grant":
+                        target = Path(str(data.get("path") or ""))
+                        if target.is_absolute():
+                            target.mkdir(parents=True, exist_ok=True)
+                            import lowbox
+                            ok = lowbox.mark_low(target)
+                    elif self.path == "/open":          # 文档/目录只有 Medium 开得动
+                        target = str(data.get("target") or "")
+                        ok = bool(target) and _host_open(target)
+                    elif self.path == "/app":           # 外部 GUI 程序：名字白名单，路径宿主自己解
+                        if data.get("name") == "zotero":
+                            import zotero
+                            exe = zotero.find_zotero_executable()
+                            if exe:
+                                subprocess.Popen([exe], creationflags=subprocess.DETACHED_PROCESS)
+                                ok = True
+                except (OSError, ValueError, KeyError):
+                    ok = False
+            body = json.dumps({"ok": ok}).encode()
+            self.send_response(200 if ok else 403)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Grant)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv.server_address[1], key
+
+
+_LOW_SERVER = None            # 低完整性服务端子进程（沙箱模式）；None = 同进程服务（老行为）
+
+
+def _spawn_low_server(port: int):
+    """把 HTTP 服务放到低完整性（Low IL）子进程里：它能写的只有 data/ 与项目目录（内核强制）。
+    本进程留着画窗口 —— WebView2 在 Low IL 下建不出窗口（实测 HTTP 通、窗口没有）。
+    起不来就返回 None，调用方退回同进程服务，不能因为沙箱把应用搞挂。"""
+    try:
+        import lowbox
+    except Exception:
+        return None
+    if getattr(sys, "frozen", False):          # 打包后 sys.executable 就是本 exe，别再塞脚本路径
+        cmd = [sys.executable, "--port", str(port), "--no-open"]
+    else:
+        cmd = [sys.executable, str(Path(__file__).resolve()), "--port", str(port), "--no-open"]
+    env = dict(os.environ, RW_LOW_SERVER="1")
+    # 先把 data/ 与项目目录标 Low **再由宿主起沙箱**：Low 自己 icacls 是 rc=5（实测），
+    # 新装的库/项目目录会一路写不进去（首启建库就失败）。
+    paths.mark_write_roots_low()
+    # TEMP 指进 Low 目录：Low 服务自己（以及它 Popen 出来的工具）都写不进 Medium 的 %TEMP%
+    env = lowbox.sandbox_env(env, paths.LOWTMP)
+    grant = _start_grant_helper()              # 先起代建通道，再把端口/key 传给子进程
+    env["RW_GRANT"] = f"127.0.0.1:{grant[0]}"
+    env["RW_GRANT_KEY"] = grant[1]
+    try:
+        proc = lowbox.popen(cmd, cwd=str(Path(__file__).resolve().parent), env=env)
+    except OSError:
+        return None
+    for _ in range(120):                       # 最多等 24s（首次冷启动要给库迁移留时间）
+        with socket.socket() as probe:
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                return proc
+        if proc.poll() is not None:            # 子进程自己退了
+            return None
+        time.sleep(0.2)
+    proc.kill()
+    return None
+
+
+def _stop_low_server() -> None:
+    global _LOW_SERVER
+    if _LOW_SERVER is not None:
+        try:
+            _LOW_SERVER.kill()
+        except Exception:
+            pass
+        _LOW_SERVER = None
 
 
 def main() -> int:
@@ -1784,52 +2055,40 @@ def main() -> int:
     global STAMP
     STAMP = stamp
     url = f"http://127.0.0.1:{port}/?v={stamp}"
-    if busy:
-        print(f"览籍智研已在运行：{url}")
-    else:
-        with WorkflowDB(DB_PATH) as _db:
-            import service_settings
-            sys_cfg = service_settings.read(_db, "system")
-            if not sys_cfg.get("demo_seeded"):
-                if not _db.tasks():
-                    _db.create_task(
-                        "锂金属固态电池界面反应动力学与多尺度演化研究",
-                        "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
-                        "固态锂电池, 复合固态电解质, 锂金属负极",
-                    )
-                service_settings.write(_db, "system", {**sys_cfg, "demo_seeded": True})
-        import mail
-        mail.encrypt_legacy()          # 老 mail.json 里的明文授权码 → DPAPI 密文（幂等，干净时是空转）
-        srv = Server(("127.0.0.1", port), Handler)
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
-        schedule.start()          # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
-        team.start_worker()       # 团队派活队列（串行：一次跑一个成员）
-        print(f"览籍智研已启动：{url}")
-    if "--no-open" not in sys.argv:
-        # 已经有「这一版」的窗口 → 把它从最小化恢复并置前，不再开新的
-        same = [h for h, title in _app_windows() if str(stamp) in title]
-        if same:
+    if busy and "--no-open" not in sys.argv:
+        same = [h for h, title in _app_windows() if f"v{stamp}" in title]
+        if same:                                  # 已经有一扇「这一版」的窗 → 只置前，绝不开第二扇
             for h in same:
                 _front(h)
-        elif not busy and _webview_window(url, stamp):
-            # 自己的无边框窗口（没有系统标题栏，顶栏是页面自己画的）→ 关窗即退出
             return 0
+        # 端口被老构建占着（改过前端没重启）：杀掉老实例让自己接管，不再退回 Edge --app 兜底 ——
+        # 那条路径 --start-maximized 时常不生效，先弹个小窗再被拉满，就是「闪一个小卡片」。
+        busy = not _takeover(port)
+    global _LOW_SERVER
+    if busy:
+        print(f"览籍智研已在运行：{url}")
+    elif "--no-open" in sys.argv:
+        _start_inproc(port, url)                  # 子进程模式（我们就是那个 Low IL 服务端）
+    else:
+        # 沙箱模式：服务跑在 Low IL 子进程里，本进程只当窗口宿主
+        _LOW_SERVER = _spawn_low_server(port)
+        if _LOW_SERVER is None:
+            print("沙箱子进程起不来，退回同进程服务")
+            _start_inproc(port, url)
         else:
-            exe = edge()
-            try:
-                if exe:
-                    # 退回 Edge --app（旧路径，会带一条系统标题栏）；默认铺满屏幕
-                    subprocess.Popen([exe, f"--app={url}", "--start-maximized"],
-                                     creationflags=0x00000008)  # DETACHED_PROCESS
-                    for _ in range(12):                       # 等窗口起来再置前（新开的也不保证在前）
-                        time.sleep(0.5)
-                        opened = [h for h, t in _app_windows() if f"v{stamp}" in t]
-                        if opened:
-                            _front(opened[0]); _maximize(opened[0]); break
-                else:
-                    webbrowser.open(url)
-            except OSError:
-                webbrowser.open(url)
+            import atexit
+            atexit.register(_stop_low_server)
+            # 授权目录标 Low 只能 Medium 干（子进程对 Medium 目录没有 WRITE_DAC），所以在这边标。
+            # 已经存在的项目目录（老项目、别人机器上带过来的）都在这一趟里补标。
+            threading.Thread(target=paths.mark_write_roots_low, daemon=True).start()
+            print(f"览籍智研已启动（服务跑在低完整性沙箱里）：{url}")
+    if "--no-open" not in sys.argv:
+        # 自己的无边框窗口；起不来（没装 pywebview / WebView2 运行时）才退回系统浏览器。
+        # Edge --app 兜底已删：它会先弹个小窗再被 _maximize 拉满（「闪一个小卡片」）。
+        if not busy and _webview_window(url, stamp):
+            _stop_low_server()                    # 关窗 = 一起收掉沙箱里的服务端，不留僵尸
+            return 0
+        webbrowser.open(url)
     if busy:
         return 0
     try:

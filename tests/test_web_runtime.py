@@ -39,7 +39,7 @@ class WebRuntimeTest(unittest.TestCase):
             probe.bind(("127.0.0.1", 0))
             port = probe.getsockname()[1]
         cls.url = f"http://127.0.0.1:{port}/"
-        env = dict(os.environ, LANJI_ZHIYAN_DB=str(Path(temporary.name) / "research.sqlite3"),
+        env = dict(os.environ, RESEARCH_WORKBENCH_DB=str(Path(temporary.name) / "research.sqlite3"),
                    PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
         server = subprocess.Popen(
             [sys.executable, str(ROOT / "apps/desktop/server.py"), "--port", str(port), "--no-open"],

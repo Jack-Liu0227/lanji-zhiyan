@@ -17,7 +17,7 @@ for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-
     sys.path.insert(0, str(ROOT / "packages" / _n))
 
 CALL = re.compile(r"fetch\((.*?)\)", re.S)
-EXEMPT = "/api/upload"          # 唯一豁免：它走原始字节 body，server.py 在闸门之前就 return 了
+EXEMPT = "/api/upload"          # 唯一豁免：它走原始字节 body（仍要过 Origin 校验，但不收 JSON 头）
 
 
 class WebFetchTest(unittest.TestCase):
@@ -51,6 +51,82 @@ class ChatWithoutConversationTest(unittest.TestCase):
     def test_frontend_no_longer_blocks_send(self) -> None:
         self.assertNotIn('alert("先新建一个对话（左上角 ＋）")', self.chat_js)
         self.assertIn("/api/chat/create", self.chat_js)
+
+
+class UploadOriginGateTest(unittest.TestCase):
+    """附件上传走原始字节 body，绕不过浏览器的 preflight —— 所以服务端必须自己先挡跨站 Origin。
+    2026-10-20 之前 /api/upload 在 Origin 校验之前就 return 了：任何网页都能往 uploads/ 塞文件。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        import os, socket, subprocess, tempfile, time
+        cls.tmp = tempfile.TemporaryDirectory(prefix="rw-upload-gate-")
+        cls.addClassCleanup(cls.tmp.cleanup)
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            cls.port = probe.getsockname()[1]
+        env = dict(os.environ, LANJI_ZHIYAN_HOME=cls.tmp.name, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+        cls.proc = subprocess.Popen([sys.executable, str(ROOT / "apps/desktop/server.py"),
+                                     "--port", str(cls.port), "--no-open"],
+                                    env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cls.addClassCleanup(cls.proc.kill)
+        for _ in range(80):                                  # 最多等 8s 起服务
+            try:
+                socket.create_connection(("127.0.0.1", cls.port), timeout=0.5).close()
+                return
+            except OSError:
+                time.sleep(0.1)
+
+    def _post(self, desc: str, origin: str | None, body: bytes = b"hi") -> int:
+        import urllib.error, urllib.request
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/api/upload?name=probe.txt", data=body,
+                                     headers={"Content-Type": "text/plain"})   # 跨站「简单请求」的形状
+        if origin:
+            req.add_header("Origin", origin)
+        try:
+            return urllib.request.urlopen(req, timeout=10).status
+        except urllib.error.HTTPError as exc:
+            return exc.code
+
+    def test_跨站来源被挡(self) -> None:
+        self.assertEqual(self._post("evil", "https://evil.example"), 403)
+
+    def test_本机来源放行(self) -> None:
+        self.assertIn(self._post("self", f"http://127.0.0.1:{self.port}"), (200, 400))
+
+    def test_没有_Origin_的本机进程照旧可用(self) -> None:
+        self.assertIn(self._post("none", None), (200, 400))
+
+
+class NoNativeDialogsTest(unittest.TestCase):
+    """全站弹窗都走 uiNotify / uiConfirm / uiPrompt（屏幕正中的自有卡片）。
+    浏览器自带的 alert/confirm 会弹在浏览器自己的位置、样式不跟主题走 —— 2026-10-20 全部替换掉了。"""
+
+    def test_没有裸的_alert_confirm_prompt(self) -> None:
+        bad = []
+        for f in sorted(WEB.glob("*.js")):
+            for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                if line.strip().startswith("//") or "uiNotify" in line:
+                    continue
+                if re.search(r"(?<![\w.$])alert\(", line) or re.search(r"(?<![\w.$])confirm\(", line) \
+                        or re.search(r"(?<![\w.$])prompt\(", line):
+                    bad.append("%s:%d %s" % (f.name, i, line.strip()[:90]))
+        self.assertEqual(bad, [], "这些地方还在用浏览器原生弹窗：\n" + "\n".join(bad))
+
+
+class ModelKeyGuardTest(unittest.TestCase):
+    """没配模型 Key 的新用户：发消息 / 中译英 / 出步骤计划都先弹「去设置配 Key」，别打到后端再回一句报错。
+    「编译 .tex」不在守卫里 —— 那是本地 xelatex，不需要任何 Key。"""
+
+    def test_发送入口都挂了守卫(self) -> None:
+        chat = (WEB / "chat-views.js").read_text(encoding="utf-8")
+        wf = (WEB / "workflow-view.js").read_text(encoding="utf-8")
+        core = (WEB / "app-core.js").read_text(encoding="utf-8")
+        self.assertIn("function hasModelKey", core)
+        self.assertIn("async function requireModelKey", core)
+        self.assertEqual(chat.count("requireModelKey()"), 1, "主页聊天发送缺守卫")
+        self.assertEqual(wf.count("requireModelKey()"), 3, "右栏发送 / 文档步发送 / 中译英 三处守卫")
+        self.assertIn("if(hasModelKey())", wf, "出步骤计划前也要判 Key，否则一直显示「正在读上一步的交付」")
 
 
 class MainScriptSyntaxTest(unittest.TestCase):

@@ -482,10 +482,10 @@ function trBind(){
 
 
 /* ==== 梳理精读（第 5 步）：左 2/3 谱系图（大纲小标题 → 精读结论 / 实验数据）+ 右 1/3 结构 agent ==== */
-const MP = { nodes:[], edges:[], sel:"", src:null, busy:false, poll:0, outline:"" };
+const MP = { nodes:[], edges:[], sel:"", src:null, busy:false, poll:0, outline:"", pos:{}, zoom:1 };
 const MP_COL = { section:"var(--muted)", paper:"var(--accent)", note:"#8f7fb5", data:"#4ade80" };
 const MP_TAG = { section:"小节", paper:"论文", note:"笔记", data:"数据" };
-const MP_W = { sec:250, ref:196, gapx:92, gapy:14, padx:34, pady:26 };
+const MP_W = { gapx: 84, gapy: 12, padx: 26, pady: 22 };   // 横向分层：层间距 84，同层卡片间距 12
 
 function mapPanelHTML(active){
   const proj = (S.tasks||[]).find(t=>t.id===curTask);
@@ -496,7 +496,8 @@ function mapPanelHTML(active){
           <b>🧩 谱系图</b><span class="ol-tag" id="mp-file">谱系.json</span>
           <span class="mp-meta" id="mp-meta"></span>
           <span class="mp-spacer"></span>
-          <button class="btn ghost" id="mp-refresh" title="从磁盘重新读">↻ 刷新</button>
+          <span class="mp-zoom"><button class="btn ghost" id="mp-zout" title="缩小">−</button><button class="btn ghost" id="mp-zin" title="放大">＋</button><button class="btn ghost" id="mp-zfit" title="适应画布">适应</button></span>
+          <button class="btn ghost" id="mp-refresh" title="重新整理：按层级重排，保留你拖过的位置（按住 Shift 点 = 全部重排）">↻ 重新整理</button>
           <button class="btn ghost" id="mp-edit" title="直接改那份 JSON">✎ 手改</button>
           <button class="btn ghost hidden" id="mp-save">保存</button>
         </div>
@@ -548,20 +549,17 @@ function mapPanelHTML(active){
 async function mpLoad(){
   if(!curTask) return;
   try{
-    const d = await api(`/api/map/state?id=${encodeURIComponent(curTask)}`);
+    let d = await api(`/api/map/state?id=${encodeURIComponent(curTask)}`);
+    // 大纲已经有了、图还没有 → 直接按大纲长一版，不用等用户开口（服务端不会覆盖已有图）
+    if(!(d.nodes||[]).length && /^###\s/m.test((d.outline&&d.outline.markdown)||"")){
+      await api("/api/map/seed", {task_id: curTask});
+      d = await api(`/api/map/state?id=${encodeURIComponent(curTask)}`);
+    }
     MP.nodes = d.nodes||[]; MP.edges = d.edges||[]; MP.src = d.sources||null; MP.outline = (d.outline&&d.outline.markdown)||"";
     MP.sig = JSON.stringify([MP.nodes, MP.edges]);
     $("mp-file").textContent = (d.path||"谱系.json").split(/[\\/]/).pop();
     $("mp-meta").textContent = `${d.sections||0} 小节 · ${d.refs||0} 关联${d.exists?"":" · 还没有图"}${d.broken?" · JSON 坏了":""}`;
-    const chips = [];
-    if(MP.src){
-      chips.push(`<span class="mp-chip">大纲小节 ${MP.src.sections.length}</span>`);
-      chips.push(`<span class="mp-chip">精读笔记 ${MP.src.notes.length}</span>`);
-      chips.push(`<span class="mp-chip">文献库 ${MP.src.papers.length}</span>`);
-      chips.push(`<span class="mp-chip">实验数据 ${MP.src.data.length}</span>`);
-      chips.push(`<span class="mp-chip">拖文件到画布 = 上传数据</span>`);
-    }
-    $("mp-src").innerHTML = chips.join("");
+    mpSrcPaint(MP.src);
     mpPaint();
     mpMsgs(d.messages||[]);
   }catch(e){
@@ -569,27 +567,88 @@ async function mpLoad(){
   }
 }
 
+function mpSize(n){
+  const ev = n.type !== "section";
+  const hasD = !ev && (n.detail || mpOutlineNote(n.label));
+  return { w: ev ? 190 : 216, h: ev ? 36 : (hasD ? 52 : 42) };
+}
+function mpDepth(){
+  /* 层级只看「包含」这类父子边；「下一章」是同级串联，不参与分层（否则第二章会被排到第三章右边） */
+  const hier = MP.edges.filter(e => !/下一章|下一节/.test(e.label || ""));
+  const incoming = {}, kids = {};
+  hier.forEach(e => { (incoming[e.to] = incoming[e.to] || []).push(e.from); (kids[e.from] = kids[e.from] || []).push(e.to); });
+  const depth = {}, q = MP.nodes.filter(n => !incoming[n.id]).map(n => [n.id, 0]);
+  while(q.length){
+    const [id, d] = q.shift();
+    if(depth[id] !== undefined) continue;
+    depth[id] = d;
+    (kids[id] || []).forEach(k => q.push([k, d + 1]));
+  }
+  MP.nodes.forEach(n => { if(depth[n.id] === undefined) depth[n.id] = 1; });   // 没挂上的孤点放第二列
+  return depth;
+}
+function mpOrder(){
+  /* 深度优先顺序：父下面紧跟它的子，这样每一列排下来，第二章会排在第一章的所有小节之后，
+     而不是跟第一章的小节抢位置（横向思维导图就是这个观感） */
+  const hier = MP.edges.filter(e => !/下一章|下一节/.test(e.label || ""));
+  const kids = {}, incoming = {};
+  hier.forEach(e => { (kids[e.from] = kids[e.from] || []).push(e.to); (incoming[e.to] = incoming[e.to] || []).push(e.from); });
+  const seen = {}, out = [];
+  const walk = (id) => { if(seen[id]) return; seen[id] = 1; out.push(id); (kids[id] || []).forEach(walk); };
+  MP.nodes.filter(n => !incoming[n.id]).forEach(n => walk(n.id));
+  MP.nodes.forEach(n => walk(n.id));
+  return out;
+}
 function mpLayout(){
-  /* 小节竖着一列，右挂它们的关联节点；同一小节下的关联分列排（每列最多 3 个） */
-  const secs = MP.nodes.filter(n=>n.type==="section");
-  const rest = MP.nodes.filter(n=>n.type!=="section");
-  const bySec = {};
-  MP.edges.forEach(e=>{ if(!bySec[e.from]) bySec[e.from]=[]; bySec[e.from].push(e.to); });
-  rest.forEach(n=>{ const hit = MP.edges.find(e=>e.to===n.id); (bySec[hit?hit.from:"__free__"] = bySec[hit?hit.from:"__free__"]||[]).push(n.id); });
-  const pos = {}; let y = MP_W.pady, maxy = y;
-  const rowH = 34, colH = rowH + MP_W.gapy;                 /* 关联节点单行 34px（方案 A） */
-  secs.forEach(sec=>{
-    const kids = (bySec[sec.id]||[]).filter((v,i,a)=>a.indexOf(v)===i);
-    const rows = Math.max(1, Math.ceil(kids.length/2));
-    const h = Math.max(58, rows*colH - MP_W.gapy + 16);
-    pos[sec.id] = {x:MP_W.padx, y, w:MP_W.sec, h, t:"section"};
-    const x1 = MP_W.padx + MP_W.sec;
-    kids.forEach((kid,i)=>{ pos[kid] = {x:x1 + MP_W.gapx + (i%2)*(MP_W.ref+28), y: y + 8 + Math.floor(i/2)*colH, w:MP_W.ref, h:rowH, t:"ref"}; });
-    y += h + 26; maxy = y;
+  /* 横向生长：根在左，子一层层往右。手动拖过的节点用它的 x/y，其余按层自动排。 */
+  const depth = mpDepth(), pos = {}, order = {};
+  const dfs = mpOrder();
+  dfs.forEach((id, i) => { order[id] = i; });
+  const byCol = {};
+  MP.nodes.forEach(n => { const d = depth[n.id] || 0; (byCol[d] = byCol[d] || []).push(n); });
+  let x = MP_W.padx;
+  Object.keys(byCol).map(Number).sort((a, b) => a - b).forEach(d => {
+    const col = byCol[d].slice().sort((a, b) => (order[a.id] ?? 0) - (order[b.id] ?? 0));
+    const cw = Math.max(...col.map(n => mpSize(n).w), 0);
+    let y = MP_W.pady;
+    col.forEach(n => {
+      const s = mpSize(n);
+      pos[n.id] = { x, y, w: s.w, h: s.h, t: n.type === "section" ? "section" : "ref" };
+      y += s.h + MP_W.gapy;
+    });
+    x += cw + MP_W.gapx;
   });
-  const free = (bySec["__free__"]||[]).filter((v,i,a)=>a.indexOf(v)===i);
-  free.forEach((id,i)=>{ pos[id] = {x:MP_W.padx, y: maxy + i*colH, w:MP_W.sec, h:40, t:"ref"}; });
-  return {pos, h: maxy + free.length*colH + MP_W.pady, w: MP_W.padx*2 + MP_W.sec + MP_W.gapx*2 + MP_W.ref*2 + 28};
+  // 父节点在自己的子节点中间垂直居中（思维导图的观感：章对齐到它那组小节的中线）
+  const maxD = Math.max(0, ...Object.values(depth));
+  for(let d = maxD - 1; d >= 0; d--){
+    const parents = MP.nodes.filter(n => (depth[n.id] || 0) === d)
+      .sort((a, b) => pos[a.id].y - pos[b.id].y);
+    parents.forEach(n => {
+      if(typeof n.x === "number" && typeof n.y === "number") return;      // 拖过的不动
+      const kids = MP.edges.filter(e => e.from === n.id && pos[e.to]).map(e => pos[e.to]);
+      if(!kids.length) return;
+      const top = Math.min(...kids.map(k => k.y)), bot = Math.max(...kids.map(k => k.y + k.h));
+      pos[n.id].y = Math.max(MP_W.pady, (top + bot) / 2 - pos[n.id].h / 2);
+    });
+  }
+  MP.nodes.forEach(n => {
+    if(typeof n.x === "number" && typeof n.y === "number"){ pos[n.id].x = n.x; pos[n.id].y = n.y; }
+  });
+  // 同一列里别互相压：拖过的保持原位，没拖过的往下让开
+  Object.keys(byCol).forEach(d => {
+    const col = MP.nodes.filter(n => (depth[n.id] || 0) === Number(d))
+      .sort((a, b) => pos[a.id].y - pos[b.id].y);
+    for(let i = 1; i < col.length; i++){
+      const prev = pos[col[i-1].id], cur = pos[col[i].id], n = col[i];
+      if(cur.y < prev.y + prev.h + MP_W.gapy){
+        if(typeof n.x === "number" && typeof n.y === "number") continue;   // 拖过的不动
+        cur.y = prev.y + prev.h + MP_W.gapy;
+      }
+    }
+  });
+  const xs = Object.values(pos).map(p => p.x + p.w), ys = Object.values(pos).map(p => p.y + p.h);
+  MP.pos = pos;
+  return { pos, w: Math.max(...xs, 320) + MP_W.padx, h: Math.max(...ys, 240) + MP_W.pady };
 }
 
 function mpOutlineNote(label){
@@ -620,6 +679,7 @@ function mpPaint(){
   }
   const L = mpLayout(), pos = L.pos;
   box.style.width = L.w + "px"; box.style.height = L.h + "px";
+  box.style.zoom = MP.zoom === 1 ? "" : String(MP.zoom);   // Chromium 的 zoom 连带改布局尺寸，滚动条才准
   const NEG = /反例|反驳|冲突|不支持|反证|相左|相反/;
   const paths = [], labels = [];
   MP.edges.forEach(e=>{
@@ -658,20 +718,44 @@ function mpCard(id){
   const wrap = $("mp-wrap");
   const div = document.createElement("div");
   div.className = "mp-card";
-  div.innerHTML = `<h4><span class="mp-dot" style="background:${MP_COL[n.type]||"var(--muted)"}"></span>${esc(n.label)}</h4>
-    <p>${esc(n.detail||"（没有说明）")}${n.ref?`\n来源：${esc(n.ref)}`:""}</p>
-    ${par.length?`<p>挂在小节：${esc(par.join("、"))}</p>`:""}
-    ${kids.length?`<p>它挂出去的：${esc(kids.join("、"))}</p>`:""}
+  div.innerHTML = `<h4><span class="mp-dot" style="background:${MP_COL[n.type]||"var(--muted)"}"></span>编辑节点</h4>
+    <label class="mp-f">标题<input id="mp-e-label" value="${esc(n.label||"")}"></label>
+    <label class="mp-f">说明<textarea id="mp-e-detail" rows="3">${esc(n.detail||"")}</textarea></label>
+    <label class="mp-f">类型<select id="mp-e-type">${Object.keys(MP_TAG).map(k=>`<option value="${k}"${n.type===k?" selected":""}>${MP_TAG[k]}</option>`).join("")}</select></label>
+    ${n.ref?`<p class="mp-rel">来源：${esc(n.ref)}</p>`:""}
+    ${par.length?`<p class="mp-rel">挂在小节：${esc(par.join("、"))}</p>`:""}
+    ${kids.length?`<p class="mp-rel">它挂出去的：${esc(kids.join("、"))}</p>`:""}
     <div class="row"><button class="btn ghost" id="mp-cx">关闭</button>
+      <button class="btn" id="mp-csave">保存</button>
       <button class="btn ghost" id="mp-cdel">删掉这个节点</button></div>`;
   wrap.appendChild(div);
   $("mp-cx").onclick = ()=>{ MP.sel=""; div.remove(); mpPaint(); };
+  $("mp-csave").onclick = async ()=>{
+    const label = ($("mp-e-label").value||"").trim();
+    if(!label) return docMsg("map", "标题不能空着");
+    n.label = label;
+    n.detail = $("mp-e-detail").value.trim();
+    n.type = $("mp-e-type").value;
+    MP.sel = "";
+    div.remove();
+    await mpSave();
+    docMsg("map", "节点已更新（谱系.json 已落盘）");
+  };
   $("mp-cdel").onclick = async ()=>{
     MP.nodes = MP.nodes.filter(x=>x.id!==id);
     MP.edges = MP.edges.filter(e=>e.from!==id && e.to!==id);
     MP.sel = "";
     await mpSave(); docMsg("map", "已删掉这个节点（谱系.json 已更新）");
   };
+}
+
+async function mpTidy(force){
+  /* 重新整理：按层级重排。默认保留你拖过的位置，只把没摆过的（含 agent 新加的）排进去；
+     按住 Shift 点 = 丢掉所有手动位置，整张图重排一遍。 */
+  if(force) MP.nodes.forEach(n=>{ delete n.x; delete n.y; });
+  mpPaint();
+  await mpSave();
+  docMsg("map", force ? "已按层级全部重排" : "已重新整理，保留你拖过的位置");
 }
 
 async function mpSave(){
@@ -686,7 +770,15 @@ async function mpSave(){
 
 function mpBind(m){
   docBind("map", m);                                  /* 右栏＝「确认大纲」那套（对话/轨迹/统计/附件），post 走 /api/map */
-  $("mp-refresh").onclick = ()=>mpLoad();
+  $("mp-refresh").onclick = (e)=>mpTidy(!!(e && e.shiftKey));
+  $("mp-zin").onclick = ()=>{ MP.zoom = Math.min(1.6, Math.round((MP.zoom + 0.1) * 10) / 10); mpPaint(); };
+  $("mp-zout").onclick = ()=>{ MP.zoom = Math.max(0.5, Math.round((MP.zoom - 0.1) * 10) / 10); mpPaint(); };
+  $("mp-zfit").onclick = ()=>{
+    const wrap = $("mp-wrap"); if(!wrap || !MP.nodes.length) return;
+    const L = mpLayout();
+    MP.zoom = Math.max(0.5, Math.min(1, Math.round((wrap.clientWidth / Math.max(L.w, 1)) * 100) / 100));
+    mpPaint();
+  };
   $("mp-edit").onclick = ()=>{
     const ta = $("mp-json"), show = ta.classList.contains("hidden");
     ta.classList.toggle("hidden", !show);
@@ -703,9 +795,39 @@ function mpBind(m){
       mpPaint();
     }catch(e){ docMsg("map", "JSON 有问题：" + e.message); }
   };
-  // 画布：点节点出信息卡；拖文件进来 = 上传实验数据
+  // 画布：点节点 = 打开编辑卡；拖动节点 = 挪位置（松手落盘）；拖文件进来 = 上传实验数据
   const wrap = $("mp-wrap");
-  wrap.onclick = (e)=>{ const n = e.target.closest("[data-mp]"); if(!n) return; MP.sel = n.dataset.mp; mpPaint(); };
+  let mdrag = null, dragged = false;
+  wrap.addEventListener("pointerdown", (e)=>{
+    const el = e.target.closest("[data-mp]"); if(!el) return;
+    const p = MP.pos[el.dataset.mp]; if(!p) return;
+    mdrag = { id: el.dataset.mp, el, sx: e.clientX, sy: e.clientY, ox: p.x, oy: p.y, moved: false };
+    try{ el.setPointerCapture(e.pointerId); }catch(_){}
+  });
+  wrap.addEventListener("pointermove", (e)=>{
+    if(!mdrag) return;
+    const z = MP.zoom || 1;
+    const dx = (e.clientX - mdrag.sx) / z, dy = (e.clientY - mdrag.sy) / z;
+    if(!mdrag.moved && Math.abs(dx) + Math.abs(dy) < 4) return;      // 手抖不算拖
+    mdrag.moved = true;
+    const n = MP.nodes.find(x=>x.id===mdrag.id); if(!n) return;
+    n.x = Math.round(mdrag.ox + dx); n.y = Math.round(mdrag.oy + dy);
+    mdrag.el.style.left = n.x + "px"; mdrag.el.style.top = n.y + "px";   // 拖动时只挪这块，松手再重算连线
+  });
+  const endDrag = async ()=>{
+    if(!mdrag) return;
+    const moved = mdrag.moved; mdrag = null; dragged = moved;
+    if(!moved) return;
+    mpPaint();
+    await mpSave();
+  };
+  wrap.addEventListener("pointerup", endDrag);
+  wrap.addEventListener("pointercancel", endDrag);
+  wrap.onclick = (e)=>{
+    const el = e.target.closest("[data-mp]"); if(!el) return;
+    if(dragged){ dragged = false; return; }                          // 刚拖完，别当成点击
+    MP.sel = el.dataset.mp; mpPaint();
+  };
   let depth = 0;
   ["dragenter","dragover"].forEach(t=>wrap.addEventListener(t,(e)=>{ e.preventDefault(); e.stopPropagation();
     if(t === "dragenter") depth++; wrap.classList.add("dragging"); }));
@@ -719,14 +841,28 @@ function mpBind(m){
     mpReloadQuiet();
   }, 3000);
 }
+function mpSrcPaint(src){
+  /* 能挂的源有多少：数字随时在变（精读会加笔记、上传会加数据），所以轮询每轮都重画这一段 */
+  const el = $("mp-src"); if(!el) return;
+  const html = src ? [
+    `<span class="mp-chip">大纲小节 ${src.sections.length}</span>`,
+    `<span class="mp-chip">精读笔记 ${src.notes.length}</span>`,
+    `<span class="mp-chip">文献库 ${src.papers.length}</span>`,
+    `<span class="mp-chip">实验数据 ${src.data.length}</span>`,
+    `<span class="mp-chip">拖文件到画布 = 上传数据</span>`,
+  ].join("") : "";
+  if(el.dataset.sig !== html){ el.dataset.sig = html; el.innerHTML = html; }
+}
 async function mpReloadQuiet(){
   if(MP.busy || !curTask) return;
   try{
     const d = await api(`/api/map/state?id=${encodeURIComponent(curTask)}`);
+    MP.src = d.sources || MP.src;
+    mpSrcPaint(MP.src);                                  // 数字紧跟事实，不等图变
+    $("mp-meta").textContent = `${d.sections||0} 小节 · ${d.refs||0} 关联${d.exists?"":" · 还没有图"}${d.broken?" · JSON 坏了":""}`;
     const sig = JSON.stringify([d.nodes, d.edges]);
     if(sig === MP.sig) return;
     MP.sig = sig; MP.nodes = d.nodes||[]; MP.edges = d.edges||[]; mpPaint();
-    $("mp-meta").textContent = `${d.sections||0} 小节 · ${d.refs||0} 关联`;
   }catch(_){}
 }
 async function mpUpload(files){

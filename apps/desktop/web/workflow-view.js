@@ -47,7 +47,7 @@ const DOC_UI = {
 const DOCS = {};                                   // 每一步一份状态
 function docState(k){
   DOCS[k] = DOCS[k] || { msgs: [], events: [], stat: { turns: 0, calls: 0, tok: 0 }, out: "", view: "conversation",
-                         atts: [], path: "", cand: "", marks: [], pen: false, color: "#FFE066", files: null };
+                         atts: [], path: "", cand: "", marks: [], pen: false, color: "#FFE066", files: null, outs: [] };
   return DOCS[k];
 }
 function docEl(k, id){ return $(k + "-" + id); }
@@ -344,6 +344,22 @@ function docBind(k, m){
     }
   }
   wireDrop(docEl(k, "composer")); docSetAtts(k); docGrow(k); docLoad(k);
+  docOutsTick();
+}
+let OUTS_TICK = 0;
+function docOutsTick(){
+  /* 「产出目录」纯展示：项目里落过盘的文件就该一直列在那，不靠这一轮事件里有 tool_result */
+  const pull = async () => {
+    if(!curTask) return;
+    const p = $("panel-" + wfStep); if(document.hidden || !p || p.style.display === "none") return;
+    try{
+      const d = await api(`/api/step/outs?id=${encodeURIComponent(curTask)}&step=${encodeURIComponent(wfStep)}`);
+      const st = docState(wfStep); st.out = d.out || st.out; st.outs = d.outs || [];
+      docStats(wfStep);
+    }catch(_){}
+  };
+  pull();
+  if(!OUTS_TICK) OUTS_TICK = setInterval(pull, 4000);
 }
 function docPaint(k){
   const st = docState(k), box = docEl(k, "msgs"); if(!box) return;
@@ -367,8 +383,10 @@ function docStats(k){
                                : `<div class="none">${esc(empty)}</div>`;
     el.scrollTop = el.scrollHeight; };
   log("tools", st.events.filter(e => e.type === "tool_call").map(e => e.name).slice(-40), "还没有工具调用");
-  const outs = [st.out].filter(Boolean).concat(st.events.filter(e => e.type === "tool_result" && e.path).map(e => e.path));
-  log("outs", outs.slice(-40), "还没有产出");
+  const files = (st.outs || []).map(o => o.path);
+  const evPaths = st.events.filter(e => e.type === "tool_result" && e.path).map(e => e.path);
+  const outs = [...new Set([...files, ...evPaths])];
+  log("outs", outs.slice(0, 40), "还没有产出");
 }
 function docSetAtts(k){
   const st = docState(k), host = docEl(k, "atts"); if(!host) return;
@@ -379,13 +397,13 @@ async function docAddFiles(k, files){
   const st = docState(k);
   if(!files || !files.length) return;
   for(const f of files){
-    if(!curTask && /\.pdf$/i.test(f.name)){ alert("先选或建一个项目 —— PDF 要入当前项目的文献库，agent 才读得到"); return; }
+    if(!curTask && /\.pdf$/i.test(f.name)){ uiNotify("先选或建一个项目 —— PDF 要入当前项目的文献库，agent 才读得到"); return; }
     try{
       const r = await fetch(`/api/upload?name=${encodeURIComponent(f.name)}&task_id=${encodeURIComponent(curTask || "")}`,
                             { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: f });
       const a = await r.json(); if(a.error) throw new Error(a.error);
       st.atts.push(a);
-    }catch(e){ alert("附加失败：" + e.message); }
+    }catch(e){ uiNotify("附加失败：" + e.message); }
   }
   docSetAtts(k);
 }
@@ -394,6 +412,7 @@ function docGrow(k){
   ta.style.height = Math.min(TA_MAX, Math.max(TA_MIN, measureAsk(ta))) + "px";
 }
 async function docSend(k){
+  if(!(await requireModelKey())) return;          // 没配 Key：先提示去设置，不发请求
   const st = docState(k);
   const ta = docEl(k, "ask"); const text = ta.value.trim();
   if(!text && !st.atts.length) return;
@@ -533,8 +552,9 @@ async function cvCompile(){
 function cvBind(){
   if(!$("cvList")) return;
   $("cvRefresh").onclick = cvLoad;
-  $("cvSave").onclick = cvSave;
-  $("cvCompile").onclick = cvCompile;
+  // ask 模式下，写盘 / 编译前先问一句（all 模式直接放行，见 needPerm）
+  $("cvSave").onclick = async () => { if (await needPerm("把这份文件写进项目目录")) cvSave(); };
+  $("cvCompile").onclick = async () => { if (await needPerm("用 xelatex 编译这份 .tex 生成 PDF")) cvCompile(); };
   $("cvOpenExt").onclick = () => { if(cvCur.path || $("cvPdfName").textContent)
     api("/api/conv/open", { path: cvCur.path }).catch(()=>{}); };
   cvLoad();
@@ -627,6 +647,7 @@ function enReadLocal(f){
   fr.readAsText(f, "utf-8");
 }
 async function enRun(){
+  if(!(await requireModelKey())) return;          // 没配 Key：先提示去设置，不发请求
   const inTa = $("en-in"), btn = $("en-run");
   const text = (inTa.value || "").trim();
   if(!text) return enMsg("还没有中文内容 —— 点左上 ＋ 选文件，或先去「论文撰写」写出正文");
@@ -634,7 +655,7 @@ async function enRun(){
   try{
     const r = await api("/api/en/run", { task_id: curTask, text, name: EN.name || "正文.md", style: $("en-style")?.value || "formal" });
     if(r.error) throw new Error(r.error);
-    if(!$("en-out").value.trim() || confirm("右边已经有译文了：覆盖它吗？")) $("en-out").value = r.text || "";
+    if(!$("en-out").value.trim() || await uiConfirm("右边已经有译文了：覆盖它吗？")) $("en-out").value = r.text || "";
     EN.path = r.path || EN.path; $("en-outname").textContent = r.name || "";
     enMsg(`${r.name} · ${r.chars} 字 · ${r.sections} 个标题 · ${r.chunks} 片 · ${(r.ms / 1000).toFixed(1)} 秒`, 12000);
     await enFill();
@@ -654,7 +675,7 @@ function enBind(){
   $("en-file").onchange = (e) => { const f = e.target.files[0]; e.target.value = ""; enReadLocal(f); };
   $("en-pick").onchange = (e) => enPickFile(e.target.value);
   $("en-run").onclick = enRun;
-  $("en-save").onclick = enSave;
+  $("en-save").onclick = async () => { if (await needPerm("把译文写回项目目录")) enSave(); };
   $("en-reload").onclick = () => { $("en-in").value = ""; $("en-out").value = ""; enLoad(); };
   $("en-copy").onclick = async () => {
     try{ await navigator.clipboard.writeText($("en-out").value || ""); enMsg("已复制", 2500); }
@@ -689,7 +710,7 @@ const PANELS = {
 };   // 有专门功能区的步骤；其余留白卡
 let wfStep=localStorage.getItem("rw-wf-step")||"idea";
 let wfMin=localStorage.getItem("rw-wf-min")==="1";
-let wfMsgs=[], wfEvents=[];   // 右栏「本步助手」的历史与事件
+let wfMsgs=[], wfEvents=[];   // 右栏「本步助手」的历史与事件（统计口径只算这个助手自己）
 
 /* ==== 三栏工作台：左十步 / 中展示区+确认交付 / 右本步助手 ==== */
 /* 每一步一个助手：emoji + 名字 + 一句话职责 + 聊天挂在哪个 scoped 端点 */
@@ -717,6 +738,20 @@ const WF_AGENT = {
 };
 /* 这五步的面板本来就自带对话 —— 三栏页里对话统一收到右栏，面板里那份藏掉，避免两个聊天 */
 const WF_OWN_CHAT = new Set(["idea", "map", "outline", "write", "review"]);
+/* 进入某一步时右栏先亮出来的「这一步打算怎么做」—— 用户点「同意」才真正开跑。
+   只写这一步的固定套路，具体条件都留给用户在对话里补，别在这里编数据。 */
+const WF_PLAN = {
+  idea: ["把你说的创新点拆成「问题 / 做法 / 凭什么新」三块", "对着现有文献和项目记忆，指出哪一块站不住", "出一版判定：能做 / 要收窄 / 换角度"],
+  search: ["把你的目标翻成检索式（关键词 + 同义词 + 排除词）", "按年限 / 来源 / 是否 OA 粗筛，重复的和跑题的剔掉", "能拿到 OA 直链的一并补上，入库到左边列表"],
+  download: ["先看队列里哪些还没全文", "有 OA 直链的直接下，没有的标成「待手动下载」给你链接", "下完逐页精读，结论写进项目笔记"],
+  notes: ["按你给的口径定术语表（保留排版 / 只译正文 / 双语对照）", "逐段译，公式、图注、参考文献格式不动", "术语前后不一致的地方回头统一一遍"],
+  outline: ["按题目 + 研究问题出「大标题 → 小标题 → 一句说明」", "每节标出要引哪几篇、哪个数据还缺", "定稿写进「框架.md」，左边立刻换新版"],
+  map: ["把已精读的论文按大纲挂到对应节点", "同一节点下把互相打架的结论标出来", "缺文献的节点留空提示，别硬凑"],
+  write: ["按框架逐节写正文，先写有数据的节", "缺数据的位置写「待补」，不编数字", "写完回头对一遍引用，正文编号和文献表对齐"],
+  review: ["以审稿人视角先挑大问题（逻辑 / 证据 / 创新性）", "再看小节：统计口径、图注、引用是否站得住", "按严重程度列问题清单，给改法"],
+  entrans: ["定目标期刊口径（美式拼写、时态、缩写首次展开）", "术语表先统一，再逐节译，图表标题一起译", "译完自查一遍中式表达"],
+  convert: ["确认要哪种格式：docx / md / html，样式跟模板走", "图片路径、编号、参考文献一起处理", "文件落到项目产出目录，左边可预览"]
+};
 
 function wfAgentHTML(step){
   const a = WF_AGENT[step] || WF_AGENT.idea;
@@ -740,8 +775,7 @@ function wfAgentHTML(step){
         <textarea id="wv-ask" rows="1" placeholder="${esc(a.ph)}（Enter 发送，Shift+Enter 换行）"></textarea>
         <div class="at-tools">
           <div class="at-tools-l"><button class="icon-btn" id="wv-plus" title="把这台机器上的文件以路径形式附上">＋</button></div>
-          <div class="at-tools-r"><span class="at-sel" title="本步助手署名">🤖 ${esc(a.name.replace("助手", ""))}</span>
-            <button class="send-btn" id="wv-send" title="发送" aria-label="发送">↑</button></div></div></div>
+          <div class="at-tools-r"><button class="send-btn" id="wv-send" title="发送" aria-label="发送">↑</button></div></div></div>
       <p class="at-hint">${esc(a.hint)}</p></div>`;
 }
 
@@ -773,20 +807,63 @@ async function wfAgentPaint(m, step){
 }
 
 let wfView = "conversation";
+/* 右栏空态 = 这一步的助手看着上一步的交付现写的「进度同步 + 本步计划」（后端 step_plan 落库，
+   已有就直接读消息，不会重复烧模型）。plan 消息的 events 带 {type:"plan"}，最后一条才挂「同意」。 */
+function wfPlanHTML(step, text, pending){
+  const a = WF_AGENT[step] || WF_AGENT.idea;
+  const body = text
+    ? `<div class="md wf-plan-md">${md(text)}</div>`
+    : `<p class="wf-plan-q">这一步我打算这么做，你看行不行：</p>
+       <ol>${(WF_PLAN[step]||[a.sub]).map(x=>`<li>${esc(x)}</li>`).join("")}</ol>`;
+  return `<div class="wf-plan">
+    <div class="wf-plan-h"><span class="wf-av">${a.emoji}</span><b>${esc(a.name)}</b><span class="wf-plan-tag">已同步进度</span></div>
+    ${body}
+    ${pending ? `<div class="wf-plan-b"><button class="btn" id="wvPlanOk">同意，按这个开始</button>
+      <button class="btn ghost" id="wvPlanNo">先说要改什么</button></div>` : ""}</div>`;
+}
+let wfPlanSeq = 0;
+async function wfPlanLoad(step){
+  const box = $("wv-msgs"); if(!box) return;
+  const a = WF_AGENT[step] || WF_AGENT.idea;
+  box.innerHTML = `<div class="wf-plan wf-plan-wait"><div class="wf-plan-h"><span class="wf-av">${a.emoji}</span><b>${esc(a.name)}</b></div>
+    <p class="wf-plan-sync">正在读上一步的交付，写这一步的计划…</p></div>`;
+  const my = ++wfPlanSeq;
+  let text = "";
+  try{
+    // 没配 Key 就别去敲后端（会静默失败，一直停在「正在读…」）→ 直接落到 WF_PLAN 静态兜底
+    if(hasModelKey()){ const d = await api("/api/step/plan", {task_id:curTask, step}); text = (d && d.text) || ""; }
+  }catch(e){}
+  if(my !== wfPlanSeq || wfStep !== step) return;          // 期间换步 / 又发了一轮 → 丢弃这次结果
+  if($("wv-msgs") !== box) return;
+  wfMsgs = [{role:"assistant", content:text, events:[{type:"plan"}], created_at:new Date().toISOString()}];
+  wfPaintMsgs(step);
+}
 function wfPaintMsgs(step){
   const box = $("wv-msgs"); if(!box) return;
   if(wfView === "trajectory"){ box.innerHTML = ""; renderTrajectory(box, wfEvents); return; }
-  if(!wfMsgs.length){
-    const a = WF_AGENT[step] || WF_AGENT.idea;
-    box.innerHTML = `<div class="wf-empty"><span>${a.emoji}</span><b>这是「${esc(STAGE[step].slice(STAGE[step].indexOf(" ")+1))}」的助手</b>
-      <p>${esc(a.sub)}。在下面说一句就能开始，产出会出现在中间。</p></div>`;
-    return;
-  }
+  if(!wfMsgs.length){ wfPlanLoad(step); return; }
   box.innerHTML = "";
-  wfMsgs.forEach(mv => appendOne(box, {type:mv.role, content:mv.content, events:mv.events, replay:true, at:mv.created_at}));
+  const who = WF_AGENT[step] || WF_AGENT.idea;          // 这一步的助手说话，不是智研管家
+  wfMsgs.forEach((mv, i) => {
+    if((mv.events||[]).some(e => e.type === "plan")){
+      box.insertAdjacentHTML("beforeend", wfPlanHTML(step, mv.content, i === wfMsgs.length-1));
+      return;
+    }
+    appendOne(box, {type:mv.role, content:mv.content, events:mv.events, replay:true, at:mv.created_at}, who);
+  });
+  const ok = $("wvPlanOk"), no = $("wvPlanNo"), ta = $("wv-ask");
+  if(ok) ok.onclick = ()=>{
+    ok.disabled = no.disabled = true;
+    const bar = ok.closest(".wf-plan-b"); if(bar) bar.remove();   // 同意后这排按钮就收起来
+    if(ta) ta.value = "同意，按这个计划开始。";
+    wfSend(null, step);
+  };
+  if(no) no.onclick = ()=>{ if(ta) ta.focus(); };
   box.scrollTop = box.scrollHeight;
 }
 function wfPaintStats(){
+  // 口径 = 这个助手自己（本步的对话 + 本步的事件流）。项目合计不再显示：
+  // 右栏标题写的是某个具体助手，混进别步/对话页的数字就定位不到「这一步花了多少」。
   const turns = wfMsgs.filter(x=>x.role==="user").length;
   const calls = wfEvents.filter(e=>e.type==="tool_call");
   const tok = wfEvents.filter(e=>e.type==="usage").reduce((n,e)=>n+(e.total||0),0);
@@ -803,17 +880,19 @@ function wfPaintStats(){
 async function wfSend(m, step){
   const ta = $("wv-ask"), btn = $("wv-send"), box = $("wv-msgs");
   const text = (ta.value||"").trim(); if(!text) return;
+  if(!(await requireModelKey())) return;          // 没配 Key：先提示去设置，不发请求
   const a = WF_AGENT[step] || WF_AGENT.idea;
   if(step === "idea" && typeof iwFlush === "function") await iwFlush();   // 上区刚改的字先落库，这一轮就读到最新的
   ta.value = ""; ta.style.height = "auto";
   if(box.querySelector(".wf-empty")) box.innerHTML = "";
   appendOne(box, {type:"user", content:text});
   wfMsgs.push({role:"user", content:text, events:[]});
+  wfPaintStats();                                  // 轮数当场 +1，不等这一轮跑完
   btn.disabled = true; btn.textContent = "■";
   const evs = [];
   try{
     const res = await fetch(a.api, {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({task_id:curTask, message:text})});
+      body: JSON.stringify({task_id:curTask, message:text, step:step})});
     if(!res.ok || !res.body) throw new Error("HTTP "+res.status);
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "", final = "";
@@ -827,16 +906,19 @@ async function wfSend(m, step){
         let ev; try{ ev = JSON.parse(line.slice(6)); }catch{ continue; }
         if(ev.type === "done"){ final = ev.content || ""; continue; }
         if(ev.type === "user") continue;                 // 本地已经先画了，回声不再画、也不进事件流
-        appendOne(box, ev); evs.push(ev);
+        appendOne(box, ev, a); evs.push(ev);
+        // 边跑边记账：wfEvents 是统计的唯一来源，所以进来就 push，别攒到这一轮结束。
+        // 只在这三种事件上重画（content 是逐段文本，每段都重画笔工具/产出列表太重）。
+        wfEvents.push(ev);
+        if(ev.type === "usage" || ev.type === "tool_call" || ev.type === "tool_result") wfPaintStats();
       }
     }
-    if(final && !evs.some(e=>e.type==="assistant")){ appendOne(box, {type:"assistant", content:final}); evs.push({type:"content", content:final}); }
+    if(final && !evs.some(e=>e.type==="assistant")){ appendOne(box, {type:"assistant", content:final}, a); evs.push({type:"content", content:final}); }
   }catch(err){
     appendOne(box, {type:"error", message:"发送失败：" + err.message});
   }finally{
     btn.disabled = false; btn.textContent = "↑";
-    wfMsgs.push({role:"assistant", content:"", events:evs});
-    wfEvents = wfEvents.concat(evs);
+    wfMsgs.push({role:"assistant", content:"", events:evs});   // evs 已经逐条进过 wfEvents，别再整份 concat（会双份）
     wfPaintStats();
     box.scrollTop = box.scrollHeight;
     if(step === "search") wsLoadState();      // 助手检索完 → 左边结果立刻回填
@@ -861,9 +943,11 @@ function renderWorkflow(m){
         <div class="wf-panels">${WF_ORDER.map(s=> PANELS[s] ? PANELS[s](s===wfStep)
           : `<div class="card" id="panel-${s}"${s===wfStep?"":' style="display:none"'}><h3>${STAGE[s]}</h3><div id="out-${s}"></div></div>`).join("")}</div>
         <div class="wf-foot">
+          <span class="wf-pill" id="wfFootPill">第 1 / 10 步</span>
           <span class="hint" id="wfFootHint">确认后这一步锁定，下一步才能拿它当输入。</span>
           <span style="flex:1"></span>
           <button class="btn ghost" id="wfBack">退回上一步</button>
+          <span class="wf-sep"></span>
           <button class="btn primary" id="wfDeliver">确认交付 →</button></div>
       </main>
       <aside class="wf-agent" id="wfAgent"></aside>
@@ -891,10 +975,20 @@ function renderWorkflow(m){
     const i = WF_ORDER.indexOf(wfStep); if(i > 0) m.querySelector(`.wf-step[data-step="${WF_ORDER[i-1]}"]`)?.click();
   };
   const deliver = $("wfDeliver"); if(deliver) deliver.onclick = async ()=>{
-    deliver.disabled = true; const old = deliver.textContent; deliver.textContent = "确认中…";
-    try{ await api("/api/step/done", {task_id:curTask, step:wfStep}); }
-    catch(e){ alert("确认失败：" + e.message); }
-    finally{ deliver.disabled = false; deliver.textContent = old; await loadTaskState(); }
+    deliver.disabled = true; const old = deliver.textContent;
+    const leaving = wfStep;
+    try{ await api("/api/step/done", {task_id:curTask, step:wfStep}); }catch(e){ deliver.disabled=false; return uiNotify("确认失败：" + e.message); }
+    // 论文搜索交付 = 进下载：勾中的这批当场提交自动下载（没勾就只跳步）
+    const downloading = leaving === "search" ? wsKickDownload() : false;
+    // 先让按钮绿一下（「点下去有反应」），再跳下一步；跳完 restoring 文字
+    deliver.classList.add("ok"); deliver.textContent = "已交付 ✓";
+    await loadTaskState();
+    await new Promise(r => setTimeout(r, 450));
+    const i = WF_ORDER.indexOf(wfStep), next = WF_ORDER[i+1];
+    deliver.classList.remove("ok"); deliver.textContent = next ? old : "已到最后一步 ✓";
+    deliver.disabled = false;
+    if(next) m.querySelector(`.wf-step[data-step="${next}"]`)?.click();   // 顺带把右栏换成下一步的进度同步 + 计划
+    if(downloading) startDlPoll();                                        // 下载进度条在「下载精读」页里转
   };
   bindStep();
   wfAgentPaint(m, wfStep);
@@ -903,8 +997,10 @@ function renderWorkflow(m){
 }
 function wfPaintFoot(){
   const a = WF_AGENT[wfStep];
-  const hint = $("wfFootHint");
-  if(hint && a) hint.textContent = `${STAGE[wfStep]}：产出由右边的「${a.name}」生成，看一眼没问题就确认交付。`;
+  const hint = $("wfFootHint"), pill = $("wfFootPill");
+  const name = (STAGE[wfStep]||wfStep).slice((STAGE[wfStep]||"").indexOf(" ")+1);
+  if(pill) pill.textContent = `第 ${WF_ORDER.indexOf(wfStep)+1} / ${WF_ORDER.length} 步 · ${name}`;
+  if(hint && a) hint.textContent = `右侧「${a.name}」的产出看着没问题就交付`;
 }
 function iwBind(m){
   const ta = $("iwMine"); if(!ta) return;
@@ -949,6 +1045,7 @@ const WS_LABEL = {openalex:"OpenAlex",crossref:"Crossref",arxiv:"arXiv",pubmed:"
 let wsRes=[], wsPage=1, wsRows=20, wsNote="";
 let wsPicked = new Set();                       // 论文搜索里勾选的 result id（进「下载精读」处理）
 let dlPoll = null, dlBusy = false;
+let dlSt = null, dlLastQueue = null;      // 最近一次精读状态 / 最近一次队列（进度刻格的事实来源）
 const wsFiltered = ()=> (wsRes||[]).slice();   // 没有手动筛选了：检索条件都交给右栏助手
 function searchPanelHTML(active){
   return `<div class="ws" id="panel-search"${active?"":' style="display:none"'}>
@@ -960,7 +1057,6 @@ function searchPanelHTML(active){
       <div class="ws-foot">
         <label class="ws-field"><input type="checkbox" id="wsAll" style="width:15px;height:15px;accent-color:var(--accent)"><span>全选本页</span></label>
         <span class="ws-pickinfo" id="wsPickN">已勾选 0</span>
-        <button class="btn" id="wsToDl" disabled>进入下载</button>
         <span id="wsNote"></span>
         <span class="ws-pageinfo" id="wsPageInfo"></span>
         <button class="ws-navbtn" id="wsPrev" title="上一页">‹</button>
@@ -982,7 +1078,7 @@ function downloadPanelHTML(active){
         <span class="hint" id="dlTip">无 OA 直链、或自动下载被挡（403/落地页）的论文都在这里</span></div>
       <div class="ws-list" id="dlList"></div>
     </div>
-    <div class="dl-foot"><button class="btn" id="dlRead">一键精读</button></div>
+    <div class="dl-foot"><div class="dl-prog" id="dlProg" hidden></div><button class="btn" id="dlRead">一键精读</button></div>
   </div>`;
 }
 function dlBind(m){
@@ -997,6 +1093,22 @@ function dlBind(m){
     };
   }
   dlRefresh();
+  dlResumeIfRunning();
+}
+async function dlResumeIfRunning(){
+  /* 后端在跑就绝不能装没在跑：进这一页先问一次状态，running 就直接接上轮询、按钮切成「停止精读」。
+     否则刷新或换页回来只看到「一键精读」+ 没进度，就像它自己停了 —— 实际它还在读。 */
+  if(!curTask || dlReadBusy) return;
+  try{
+    const st = await api("/api/deepread/status?task_id=" + encodeURIComponent(curTask));
+    dlSt = st && st.phase ? st : null;
+    dlProgPaint();
+    if(!dlSt || dlSt.phase !== "running") return;
+    dlReadBusy = true;
+    const b = $("dlRead");
+    if(b){ b.classList.add("stop"); b.textContent = "停止精读"; }
+    if(!dlReadTick) dlReadTick = setInterval(dlReadPoll, 2000);
+  }catch(e){ /* 读不到状态就等用户自己点 */ }
 }
 async function dlRefresh(){
   if(!curTask || !$("dlList")) return null;
@@ -1005,16 +1117,48 @@ async function dlRefresh(){
 }
 function dlPaint(d){
   if(!d) return;
+  dlLastQueue = d;
   if($("dlLoc")) $("dlLoc").textContent = d.location || "—";
   if($("dlSel")) $("dlSel").textContent = d.selected || 0;
   if($("dlDone")) $("dlDone").textContent = d.downloaded || 0;
+  dlProgPaint();
   const man = d.manual || [];
   if($("dlN")) $("dlN").textContent = man.length ? ` · ${man.length}` : "";
   const list = $("dlList"); if(!list) return;
   list.innerHTML = man.length ? man.map(r=>wsCard(r,"manual")).join("")
     : `<div style="display:grid;place-items:center;height:100%;padding:30px 16px;text-align:center">
         <div><p class="hint" style="font-size:13px;margin:0 0 6px">${d.selected? "这批论文全部自动下载成功 ✓" : "还没有勾选论文"}</p>
-        <p class="hint">${d.selected? `${d.downloaded} 篇已进「文献库」，可以直接点下面的「一键精读」。` : "在「论文搜索」里勾选论文，点最右边的「进入下载」。"}</p></div></div>`;
+        <p class="hint">${d.selected? `${d.downloaded} 篇已进「文献库」，可以直接点下面的「一键精读」。` : "在「论文搜索」里勾选论文，然后点底部「确认交付 →」，勾中的这批会直接开始下载。"}</p></div></div>`;
+}
+function dlProgPaint(){
+  /* 精读进度刻格：一格代表若干篇（篇数多就合并，最多 24 格），状态全部来自 /api/deepread/status：
+     绿=已精读完，红=失败过，青=正在读的那篇。没跑过精读就用「已下载篇数」画空格，不编造进度。 */
+  const box = $("dlProg"); if(!box) return;
+  const st = dlSt && dlSt.phase ? dlSt : null;
+  const total = (st && st.total) || (dlLastQueue && dlLastQueue.downloaded) || 0;
+  if(!total){ box.hidden = true; box.innerHTML = ""; return; }
+  const done = st ? (st.done || 0) : 0;          // done 把失败的也算进去了，所以要先刨掉
+  const failed = st ? (st.failed || 0) : 0;
+  const ok = Math.max(0, done - failed);
+  const running = !!st && st.phase === "running";
+  const cells = Math.min(total, 24);
+  const step = total / cells;
+  let html = "";
+  for(let i = 0; i < cells; i++){
+    const a = Math.round(i * step), b = Math.round((i + 1) * step);      // 这一格覆盖 [a,b) 篇
+    // 失败的那几篇排在 [ok, ok+failed)，成功的是 [0, ok) —— 取交集判这一格，不能用累计值直接比
+    const badIn = Math.max(0, Math.min(ok + failed, b) - Math.max(ok, a));
+    const okIn = Math.min(ok, b) - Math.min(ok, a);
+    const curIn = running && ok + failed >= a && ok + failed < b;
+    const cls = badIn > 0 ? "bad" : curIn ? "cur" : (b > a && okIn >= b - a ? "ok" : "");
+    html += `<i${cls ? ` class="${cls}"` : ""}></i>`;
+  }
+  const tail = st && st.phase === "running" ? " · 进行中"
+             : st && st.phase === "done" ? " · 已完成"
+             : st && st.phase === "stopped" ? " · 已停止" : "";
+  box.innerHTML = `<span class="dots">${html}</span><span class="n"><b>${ok}</b>/${total}${tail}</span>`
+                + (failed ? `<span class="bad-txt">${failed} 失败</span>` : "");
+  box.hidden = false;
 }
 function startDlPoll(){
   if(dlPoll) clearInterval(dlPoll);
@@ -1024,16 +1168,13 @@ function startDlPoll(){
     if(dlPoll && ((!dlBusy && (!d || !d.pending)) || Date.now()-t0 > 15*60*1000)){ clearInterval(dlPoll); dlPoll=null; }
   }, 1500);
 }
-async function wsEnterDownload(){
-  if(!wsPicked.size) return alert("先在论文搜索里勾选论文");
-  const ids = [...wsPicked];
-  wfStep = "download"; localStorage.setItem("rw-wf-step", wfStep);      // 直接跳到「下载精读」
+function wsKickDownload(){                     // 勾了的这批当场提交自动下载；跳步由「确认交付」负责
+  if(!curTask || !wsPicked.size) return false;
   dlBusy = true;
-  render();
-  api("/api/workflow/download",{task_id:curTask, result_ids:ids})
+  api("/api/workflow/download",{task_id:curTask, result_ids:[...wsPicked]})
     .then(r=>{ dlBusy=false; const t=$("dlTip"); if(t && r) t.textContent = `自动下载 ${r.downloaded}/${r.selected} 篇，待手动 ${r.manual} 篇`; })
-    .catch(e=>{ dlBusy=false; alert("自动下载失败：" + e.message); });
-  startDlPoll();
+    .catch(e=>{ dlBusy=false; uiNotify("自动下载失败：" + e.message); });
+  return true;
 }
 let dlReadBusy = false, dlReadTick = null;
 async function dlRead(){                       // 后台精读：起完就返回；进度靠轮询；按钮再点一次=停
@@ -1041,20 +1182,21 @@ async function dlRead(){                       // 后台精读：起完就返回
   const btn = $("dlRead"); if(!btn) return;
   if(dlReadBusy){
     try{ await api("/api/deepread/stop",{task_id:curTask}); btn.textContent = "正在停…（当前这篇读完就停）"; }
-    catch(e){ alert("停止失败：" + e.message); }
+    catch(e){ uiNotify("停止失败：" + e.message); }
     return;
   }
   try{
     const r = await api("/api/workflow/deepread",{task_id:curTask});
-    if(!r.started){ alert(r.reason || "这个项目已经在精读了"); return; }
-    dlReadBusy = true; btn.classList.add("stop"); btn.textContent = "停止精读";
+    if(!r.started){ uiNotify(r.reason || "这个项目已经在精读了"); return; }
+    dlReadBusy = true; dlSt = null; btn.classList.add("stop"); btn.textContent = "停止精读";
     dlReadTick = setInterval(dlReadPoll, 2000);
-  }catch(err){ alert("精读失败：" + err.message); }
+  }catch(err){ uiNotify("精读失败：" + err.message); }
 }
 async function dlReadPoll(){
   try{
     const st = await api("/api/deepread/status?task_id=" + encodeURIComponent(curTask));
     if(!st || !st.phase) return;
+    dlSt = st; dlProgPaint();
     const tip = $("dlTip"), b2 = $("dlRead");
     const head = "精读 " + st.done + "/" + (st.total || "?") + " 篇" + (st.failed ? "（失败 " + st.failed + "）" : "")
                + ((st.skipped && st.skipped.length) ? " · 跳过非论文 " + st.skipped.length : "");
@@ -1066,7 +1208,7 @@ async function dlReadPoll(){
       b2.textContent = st.phase === "done" ? "精读完了（去看笔记）" : (st.phase === "stopped" ? "已停止" : "精读失败");
       setTimeout(()=>{ const b3 = $("dlRead"); if(b3 && !dlReadBusy) b3.textContent = "一键精读"; }, 5000);
     }
-    if(st.phase === "failed" && st.error) alert("精读失败：" + st.error);
+    if(st.phase === "failed" && st.error) uiNotify("精读失败：" + st.error);
   }catch(e){ /* 轮询失败就等下一次 */ }
 }
 function wsCard(r, mode){
@@ -1089,9 +1231,8 @@ function wsCard(r, mode){
     </div>`;
 }
 function wsSyncPick(){
-  const n = wsPicked.size, el = $("wsPickN"), btn = $("wsToDl");
+  const n = wsPicked.size, el = $("wsPickN");
   if(el) el.textContent = `已勾选 ${n}`;
-  if(btn) btn.disabled = !n;
   const all = $("wsAll");
   if(all){ const vis = wsFiltered().slice((wsPage-1)*wsRows, wsPage*wsRows);
     all.checked = vis.length>0 && vis.every(r=>wsPicked.has(r.id));
@@ -1133,7 +1274,6 @@ function wsBind(m){
     vis.forEach(r=> e.target.checked ? wsPicked.add(r.id) : wsPicked.delete(r.id));
     wsPaint();
   };
-  $("wsToDl").onclick = wsEnterDownload;
   $("wsList").onclick = async (e)=>{
     const b = e.target.closest("[data-dl]"); if(!b) return;
     const act = b.parentElement; const old = b.textContent;
@@ -1196,14 +1336,14 @@ function renderTasks(m){
     const id=[...r.querySelectorAll("[data-go]")][0]?.dataset.go; if(!id) return;
     curTask = id; localStorage.setItem("rw-task",curTask); render();
   });
-  m.querySelectorAll("[data-go]").forEach(b=>b.onclick=(e)=>{          // 进入项目 → 切当前 + 跳工作流
-    e.stopPropagation(); curTask = b.dataset.go; localStorage.setItem("rw-task",curTask); openTab("space");
+  m.querySelectorAll("[data-go]").forEach(b=>b.onclick=(e)=>{          // 进入项目 → 切当前 + 进科研平台（十步工作流）
+    e.stopPropagation(); curTask = b.dataset.go; localStorage.setItem("rw-task",curTask); openTab("workflow");
   });
   m.querySelectorAll("[data-del]").forEach(b=>b.onclick=async (e)=>{    // 删除项目（连带数据，先确认）
     e.stopPropagation();
     const t = S.tasks.find(x=>x.id===b.dataset.del);
-    if(!confirm(`删除项目「${t?t.title:""}」？\n它的文献、证据、笔记、会话、日程、步骤都会一起删掉，不可撤销。`)) return;
-    try{ await api("/api/task/delete",{id:b.dataset.del}); }catch(err){ return alert("删除失败："+err.message); }
+    if(!await uiConfirm(`删除项目「${t?t.title:""}」？\n它的文献、证据、笔记、会话、日程、步骤都会一起删掉，不可撤销。`)) return;
+    try{ await api("/api/task/delete",{id:b.dataset.del}); }catch(err){ return uiNotify("删除失败："+err.message); }
     if(curTask===b.dataset.del){ curTask=null; localStorage.removeItem("rw-task"); }
     await refreshState(false); render();
   });
@@ -1215,17 +1355,17 @@ function renderTasks(m){
       const r = await api("/api/folder/pick?title=" + encodeURIComponent("选择项目位置") +
                           "&initial=" + encodeURIComponent(tDir||""), {method:"GET"});
       if(r && r.dir){ tDir = r.dir; $("t-dir").textContent = tDir; $("t-dir-box").classList.add("set"); }
-    }catch(e){ alert("打开文件夹选择框失败：" + e.message); }
+    }catch(e){ uiNotify("打开文件夹选择框失败：" + e.message); }
     btn.disabled = false; btn.textContent = old;
   };
   $("t-go").onclick = async ()=>{
     const title=$("t-title").value.trim(); const question=$("t-q").value.trim();
-    if(!title) return alert("标题必填");
+    if(!title) return uiNotify("标题必填");
     const r = await api("/api/task/create",{title,question,material_system:$("t-kw").value.trim(),base_dir:tDir});
     curTask = r.task_id; localStorage.setItem("rw-task",curTask);
     tDir = "";
     await refreshState(false); render();
-    if(r.dirs && r.dirs.length) alert(`项目已创建，并在项目位置里建好：\n${r.dirs.join(" / ")}\n（每个子文件夹里都写了 README.md）`);
+    if(r.dirs && r.dirs.length) uiNotify(`项目已创建，并在项目位置里建好：\n${r.dirs.join(" / ")}\n（每个子文件夹里都写了 README.md）`);
   };
 }
 
@@ -1347,7 +1487,7 @@ function renderCalendar(m){
   m.querySelectorAll("[data-cal-pref]").forEach(i=>i.onchange=()=>{ calPrefs[i.dataset.calPref]=i.checked; render(); });
   m.querySelectorAll(".cal-cell").forEach(c=>c.onclick=()=>{ const k=c.dataset.date; if(k===calSel) return; calSel=k; const n=new Date(k+"T00:00:00"); calY=n.getFullYear(); calM=n.getMonth(); render(); });
   m.querySelectorAll("[data-chk]").forEach(i=>i.onchange=async()=>{ await api("/api/calendar/toggle",{id:i.dataset.chk,done:i.checked}); await refreshState(); });
-  m.querySelectorAll("[data-del]").forEach(b=>b.onclick=async(ev)=>{ ev.stopPropagation(); if(!confirm("删除这一条？")) return; await api("/api/calendar/delete",{id:b.dataset.del}); await refreshState(); });
+  m.querySelectorAll("[data-del]").forEach(b=>b.onclick=async(ev)=>{ ev.stopPropagation(); if(!await uiConfirm("删除这一条？")) return; await api("/api/calendar/delete",{id:b.dataset.del}); await refreshState(); });
   const add = async()=>{ const v=$("todayInput").value.trim(); if(!v) return;
     await api("/api/calendar/add",{title:v,date:calSel,task_id:curTask||null,kind:"todo",time:$("todayTime").value});
     $("todayInput").value=""; $("todayTime").value=""; await refreshState(); };

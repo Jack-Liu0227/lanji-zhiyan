@@ -1,12 +1,15 @@
 // 主题色自检：node web/theme.test.mjs
-// 从 notes-and-settings.js 里抠出主题函数块，用假的 document/localStorage 跑真值检验。
+// 从 index.html 里抠出主题函数块，用假的 document/localStorage 跑真值检验。
 // 颜色数学（HSL 往返、对比度、明暗推导）最容易悄悄坏，所以留这一个可跑的检查。
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 
-const source = readFileSync(new URL("./notes-and-settings.js", import.meta.url), "utf8");
-const block = source.slice(source.indexOf("const DEFAULT_THEME"), source.indexOf("function bindSwatches"));
-
+const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
+const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+const external = readFileSync(new URL("./notes-and-settings.js", import.meta.url), "utf8");
+const js = [...inline, external].find(source => source.includes("const DEFAULT_THEME"));
+assert.ok(js, "theme implementation was not found in index.html or notes-and-settings.js");
+const block = js.slice(js.indexOf("const DEFAULT_THEME"), js.indexOf("function bindSwatches"));
 const shim = `
 const store = {};
 const localStorage = { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; } };

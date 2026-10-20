@@ -20,7 +20,10 @@ def start(db, project_id: str, workflow: str, *, idempotency_key: str = "") -> d
     if idempotency_key:
         old = conn.execute("SELECT * FROM workflow_runs WHERE project_id=? AND idempotency_key=?",
                            (project_id, idempotency_key)).fetchone()
-        if old and old["status"] in ("queued", "running", "succeeded"):
+        if old:
+            # A failed run is still a completed idempotent request. Callers that
+            # want a retry must supply a new attempt key; reusing the old key
+            # must never collide with the unique idempotency index.
             return dict(old)
     rid = "wrun-" + uuid.uuid4().hex
     stamp = _now()

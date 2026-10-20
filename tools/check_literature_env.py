@@ -8,7 +8,6 @@ import os
 import sys
 import sqlite3
 import urllib.request
-import urllib.error
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]

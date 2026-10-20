@@ -26,6 +26,7 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.request
 import time
 from pathlib import Path
 
@@ -139,7 +140,8 @@ DB_PATH = Path(_db_override).expanduser() if _db_override else DATA / "research.
 MAIL_FILE = USER / "mail.json"
 LAYOUT_FILE = HOME / "layout.json"
 
-_DIRS = (HOME, DATA, USER, EXECUTORS, BACKUP, CACHE, PAPERS, NOTES, OUT, UPLOADS, REF,
+LOWTMP = CACHE / "lowtmp"          # Low 子进程（xelatex/babeldoc）的 TEMP，必须跟着标 Low
+_DIRS = (HOME, DATA, USER, EXECUTORS, BACKUP, CACHE, LOWTMP, PAPERS, NOTES, OUT, UPLOADS, REF,
          EXECUTORS / "agents", EXECUTORS / "skills", EXECUTORS / "tools")
 
 _EXEC_README = {
@@ -171,8 +173,18 @@ def ensure_layout() -> dict:
             LAYOUT_FILE.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     except (OSError, ValueError):
         pass
-    _harden(USER)
+    _harden(USER)          # 凭据：只有当前用户可读写
+    try:                   # 工具的临时目录必须也是 Low，否则 xelatex 的 PDF 后端写不进 TEMP
+        import lowbox
+        lowbox.mark_low(LOWTMP, recursive=True)
+    except Exception:
+        pass
+    _harden(EXECUTORS)     # 模型能往这里写可执行文件：至少别让同机其他账号写
     return meta
+
+
+# 控制台程序（icacls/netstat/tasklist）不加这个就会在启动时闪黑框
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
 def _harden(path: Path) -> None:
@@ -185,8 +197,149 @@ def _harden(path: Path) -> None:
     try:
         subprocess.run(["icacls", str(path), "/inheritance:r",
                         "/grant:r", f"{user}:(OI)(CI)F"],
-                       capture_output=True, timeout=10)
+                       capture_output=True, timeout=10, creationflags=NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
+        pass
+
+
+# ---------------------------------------------------------------- 文件白名单（唯一闸门）
+def project_roots() -> list[Path]:
+    """用户自己指定的目录：项目 base_dir + 对话的产出目录（chats.out_dir）。
+    这两类都是用户在原生选择器里亲手选的，所以算白名单里的根。"""
+    import sqlite3
+    out: list[Path] = []
+    try:
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            for sql in ("SELECT base_dir FROM research_tasks WHERE base_dir<>''",
+                        "SELECT out_dir FROM chats WHERE out_dir<>''"):
+                try:
+                    out += [Path(r[0]) for r in conn.execute(sql)]
+                except sqlite3.Error:
+                    pass                       # 老库还没这列 → 跳过，别把白名单搞空
+        finally:
+            conn.close()
+    except Exception:
+        return out
+    return out
+
+
+def allowed_roots() -> list[Path]:
+    """允许碰的全部根：自己的数据根（data/ 里的 uploads、papers、notes、out）+ 用户建过的项目目录。
+    白名单只在这里定义一次 —— 别的地方要判，一律调 resolve_allowed()。"""
+    roots = [DATA, UPLOADS, PAPERS, NOTES, OUT, *project_roots()]
+    return [r.resolve() for r in roots if r and r.exists()]
+
+
+GRANT = os.environ.get("RW_GRANT", "")          # 窗口宿主（Medium）起的代建/授权通道
+GRANT_KEY = os.environ.get("RW_GRANT_KEY", "")
+
+
+def _grant_post(path: str, payload: dict) -> bool:
+    """走宿主（Medium）那条本机随机端口通道；没通道（同进程模式）返回 False 让调用方自己动手。"""
+    if not GRANT:
+        return False
+    body = json.dumps(payload).encode()
+    req = urllib.request.Request("http://" + GRANT + path, data=body,
+                                 headers={"Content-Type": "application/json", "X-RW-Key": GRANT_KEY})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return bool(json.loads(r.read() or b"{}").get("ok"))
+    except (OSError, ValueError):
+        return False
+
+
+def grant_dir(path: str | os.PathLike[str]) -> bool:
+    """让窗口宿主代建目录并标成 Low，再返回。
+
+    为什么需要：服务端跑在低完整性（Low IL）里，用户新选的目录（比如桌面）是 Medium ——
+    内核不允许 Low 在 Medium 目录下 mkdir，报 `[WinError 5] 拒绝访问`。
+    自己标 Low 也不行（改 ACL 要对象的 WRITE_DAC，同样是往上写）。所以只能请 Medium 那边动手。
+    通道：宿主在 127.0.0.1 的随机端口上，只认带随机 key 的请求；没通道（同进程模式）就直接建。
+    """
+    target = Path(str(path)).expanduser()
+    if not GRANT:
+        target.mkdir(parents=True, exist_ok=True)
+        return True
+    return _grant_post("/grant", {"path": str(target)})
+
+
+def host_open(target: str | os.PathLike[str]) -> bool:
+    """用系统默认程序打开文档/目录 —— **必须由宿主做**。
+
+    Low 进程里 ShellExecute 对文档和目录直接返回 SE_ERR_ACCESSDENIED(5)（实测），
+    只有 http/https 这类协议还能交出去。所以沙箱里请宿主（Medium）代开。
+    """
+    if not GRANT:
+        os.startfile(str(target))            # noqa: S606 —— 同进程模式（服务本身就是宿主）
+        return True
+    return _grant_post("/open", {"target": str(target)})
+
+
+def host_app(name: str) -> bool:
+    """请宿主起一个外部 GUI 程序（只认白名单名字，宿主自己解路径）。
+
+    为什么不能自己 Popen：Low 起的子进程继承 Low 令牌，Zotero 这类程序写自己的数据目录
+    会被内核拒（实测子进程 IL = Low）。
+    """
+    if not GRANT:
+        return False
+    return _grant_post("/app", {"name": str(name)})
+
+
+def resolve_allowed(path: str, extra_roots: list[Path] | None = None, *, must_be_file: bool = False,
+                    what: str = "文件") -> Path:
+    """文件闸门：必须绝对路径 + 必须落在白名单里。越界 → 记审计 + 抛一句人话。"""
+    if not str(path or "").strip():
+        raise ValueError("没给路径")
+    p = Path(path).expanduser()
+    if not p.is_absolute():
+        raise ValueError(f"{what}必须用绝对路径：{path}")
+    try:
+        p = p.resolve()
+    except OSError as exc:
+        raise ValueError(f"路径不可用：{exc}") from exc
+    roots = [*(extra_roots or []), *allowed_roots()]
+    if not any(p.is_relative_to(r) for r in roots):     # 前缀比较会让 data-evil/ 混进来，按层级判
+        _audit_deny(p, what)
+        raise ValueError(f"{what}不在允许范围里 —— 只能是程序自己的数据目录，或你建过的项目文件夹：{p}")
+    if must_be_file and not p.is_file():
+        raise ValueError(f"这不是一个文件：{p}")
+    return p
+
+
+def mark_write_roots_low(verbose: bool = False) -> dict[str, str]:
+    """把「允许 Low 子进程写」的目录标成低完整性：data/ 与每个用户项目目录。
+    Low 进程（xelatex / babeldoc）只有在这里才写得进去，其它地方内核直接拒。
+    幂等；失败只报不抛（不能让权限搞挂启动）。
+
+    **在沙箱服务里得请宿主标**：Low 进程对 Medium 目录跑 icacls 是 rc=5（实测），
+    只有宿主（Medium）改得动。所以有通道就逐目录转过去，没有通道（同进程模式）才自己标。
+    """
+    import lowbox
+    if not lowbox.available():
+        return {}
+    out: dict[str, str] = {}
+    for root in [HOME, DATA, *project_roots()]:      # HOME 一起标：user/ executors/ cache/ 都得让沙箱里的服务端写得进
+        try:
+            if root and Path(root).is_dir():
+                ok = _grant_post("/grant", {"path": str(root)}) if GRANT else lowbox.mark_low(root, recursive=True)
+                out[str(root)] = "low" if ok else "failed"
+                if verbose:
+                    print("mark_low", root, out[str(root)])
+        except OSError as exc:
+            out[str(root)] = f"error: {exc}"
+    return out
+
+
+def _audit_deny(p: Path, what: str) -> None:
+    """越界读写记一行（写 fileguard 那份 audit.jsonl；这里不能 import fileguard，会成环）。"""
+    try:
+        AUDIT.parent.mkdir(parents=True, exist_ok=True)
+        line = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "action": "deny", "path": str(p), "what": what}
+        with AUDIT.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(line, ensure_ascii=False) + "\n")
+    except OSError:
         pass
 
 

@@ -16,7 +16,7 @@ import tempfile
 import unittest
 
 _p = pathlib.Path(tempfile.gettempdir()) / "as_unit.sqlite3"
-os.environ["LANJI_ZHIYAN_DB"] = str(_p)
+os.environ["RESEARCH_WORKBENCH_DB"] = str(_p)
 
 import workflow  # noqa: E402
 

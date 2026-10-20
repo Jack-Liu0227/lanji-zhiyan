@@ -8,5 +8,8 @@
 - Added persistent workflow runs/nodes, idempotency keys, stale-run recovery and project-scoped cleanup.
 - Connected project-space search to the asset index while retaining legacy fallback scans.
 - Added team task checkpoints, retry metadata, run IDs, input/output asset links and output provenance.
+- Added dependency-aware team scheduling with downstream blocking, structured output contracts and Reviewer approval/return gates.
+- Linked paper-bound notes to paper assets, preserved one asset across project rebinds, archived deleted note mirrors and made legacy rebuilds prefer existing Markdown files.
+- Made failed workflow requests fully idempotent and surfaced migration failures instead of deferring them to misleading missing-column errors.
 - Added execution-boundary tool risk classification for read-only, workspace-write, local-execution, network-read and external-write actions.
 - Verification baseline: Python test suite and desktop web smoke tests pass in the development environment.

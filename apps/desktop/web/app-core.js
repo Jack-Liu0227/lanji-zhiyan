@@ -37,12 +37,12 @@ function paintProfilePreview(){
 }
 function readAvatarFile(file, cb){
   if(!file) return;
-  if(!/^image\//.test(file.type || "")){ alert("这不是图片文件"); return; }
+  if(!/^image\//.test(file.type || "")){ uiNotify("这不是图片文件"); return; }
   const fr = new FileReader();
-  fr.onerror = ()=>alert("读文件失败");
+  fr.onerror = ()=>uiNotify("读文件失败");
   fr.onload = ()=>{
     const im = new Image();
-    im.onerror = ()=>alert("这张图片读不了（格式可能不支持）");
+    im.onerror = ()=>uiNotify("这张图片读不了（格式可能不支持）");
     im.onload = ()=>{
       try{
         const S = 128, side = Math.min(im.width, im.height);
@@ -50,7 +50,7 @@ function readAvatarFile(file, cb){
         const g = c.getContext("2d");
         g.drawImage(im, (im.width-side)/2, (im.height-side)/2, side, side, 0, 0, S, S);
         cb(c.toDataURL("image/jpeg", 0.86));
-      }catch(e){ alert("这张图片处理失败：" + e.message); }
+      }catch(e){ uiNotify("这张图片处理失败：" + e.message); }
     };
     im.src = fr.result;
   };
@@ -212,6 +212,12 @@ function renderSidebar(){
 const FRAMELESS = new URLSearchParams(location.search).has("pw");
 let winZoom = true;                    // 窗口现在是不是铺满工作区 → 决定右上那个键画「最大化」还是「还原」
 let winStateAsked = false;
+function winCommand(action){
+  // 所有窗口命令都优先走 pywebview js_api（=宿主进程）。HTTP 服务跑在 Low IL 沙箱里，
+  // UIPI 会静默拦掉它对中完整性窗口的 ShowWindow / SetWindowPos / WM_CLOSE（全是「点了没反应」）。
+  const py = window.pywebview && window.pywebview.api;
+  return Promise.resolve(py && py.win ? py.win(action) : api("/api/win/" + action, {}));
+}
 function renderTopbar(){
   $("topbar").innerHTML = `
     <span class="date">${clock()}</span>
@@ -223,9 +229,9 @@ function renderTopbar(){
     </span>`:""}`;
   $("topbar").querySelectorAll("[data-w]").forEach(b=>{
     b.onmousedown = e => e.stopPropagation();          // 别让标题栏拖动吃掉按钮
-    b.onclick = () => api("/api/win/"+b.dataset.w, {}).then(r=>{
-      if(r && typeof r.zoomed === "boolean") winSet(r.zoomed);
-    }).catch(()=>{});
+    b.onclick = () => winCommand(b.dataset.w)
+      .then(r=>{ if(r && typeof r.zoomed === "boolean") winSet(r.zoomed); })
+      .catch(()=>{});
   });
   if(FRAMELESS && !winStateAsked){                     // 起来先问一次真实状态（还原回来可能不是铺满）
     winStateAsked = true;
@@ -262,4 +268,118 @@ function renderStatus(){
     <span>模型 ${S.active?esc(S.active.name):"未配置"}</span>
     <span>工具 ${S.tools.length}</span>
     <span>当前项目 ${t?esc(t.title):"—"}</span>`;
+}
+
+/* ---------------- 弹出卡片：确认 / 提示 / 输入 ----------------
+   全站别再用浏览器自带的 confirm/alert：样式跟界面脱节、还卡在浏览器自己的位置。
+   这里统一渲染成屏幕正中的卡片，用同一套 .modal 皮肤（见 app.css）。 */
+function uiNotify(text, ms = 3400) {
+  const t = String(text ?? "");
+  const bad = /失败|错误|不能|不允许|⚠|出错|拒绝/.test(t);
+  let box = document.getElementById("uiToast");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "uiToast";
+    box.onclick = () => box.remove();
+    document.body.appendChild(box);
+  }
+  box.className = "ui-toast" + (bad ? " bad" : "");
+  box.textContent = t;
+  clearTimeout(uiNotify._t);
+  uiNotify._t = setTimeout(() => box.remove(), ms);
+}
+                     // 全站 uiNotify(...) 一次性接到居中卡片（同步，不打断流程）
+
+function uiConfirm(text, opts = {}) {
+  return new Promise(resolve => {
+    const wrap = document.createElement("div");
+    wrap.className = "modal";
+    wrap.innerHTML = `
+      <div class="modal-mask"></div>
+      <div class="modal-dialog" style="width:${opts.width || 400}px">
+        <div class="modal-head"><h3>${esc(opts.title || "确认操作")}</h3></div>
+        <div class="modal-body"><p class="modal-text">${esc(text)}</p></div>
+        <div class="modal-foot">
+          <button class="btn ghost" data-no>${esc(opts.cancel || "取消")}</button>
+          <button class="btn ${opts.danger === false ? "" : "danger"}" data-ok>${esc(opts.ok || "确定")}</button>
+        </div>
+      </div>`;
+    const done = v => { wrap.remove(); document.removeEventListener("keydown", key, true); resolve(v); };
+    const key = e => {
+      if (e.key === "Escape") { e.preventDefault(); done(false); }
+      if (e.key === "Enter") { e.preventDefault(); done(true); }
+    };
+    wrap.querySelector("[data-ok]").onclick = () => done(true);
+    wrap.querySelector("[data-no]").onclick = () => done(false);
+    wrap.querySelector(".modal-mask").onclick = () => done(false);
+    document.addEventListener("keydown", key, true);
+    document.body.appendChild(wrap);
+    wrap.querySelector("[data-ok]").focus();
+  });
+}
+
+function uiPrompt(text, def = "") {
+  return new Promise(resolve => {
+    const wrap = document.createElement("div");
+    wrap.className = "modal";
+    wrap.innerHTML = `
+      <div class="modal-mask"></div>
+      <div class="modal-dialog" style="width:440px">
+        <div class="modal-head"><h3>${esc(text)}</h3></div>
+        <div class="modal-body"><input class="ui-input" id="uiPromptIn" value="${esc(def)}"></div>
+        <div class="modal-foot">
+          <button class="btn ghost" data-no>取消</button>
+          <button class="btn" data-ok>确定</button>
+        </div>
+      </div>`;
+    const done = v => { wrap.remove(); document.removeEventListener("keydown", key, true); resolve(v); };
+    const inp = wrap.querySelector("#uiPromptIn");
+    const key = e => {
+      if (e.key === "Escape") { e.preventDefault(); done(null); }
+      if (e.key === "Enter") { e.preventDefault(); done(inp.value); }
+    };
+    wrap.querySelector("[data-ok]").onclick = () => done(inp.value);
+    wrap.querySelector("[data-no]").onclick = () => done(null);
+    wrap.querySelector(".modal-mask").onclick = () => done(null);
+    document.addEventListener("keydown", key, true);
+    document.body.appendChild(wrap);
+    inp.focus(); inp.select();
+  });
+}
+
+/* ---------------- 权限模式 ----------------
+   首次启动问一次「允许所有 / 每次都要问」；ask 模式下编译、写文件这类动作逐次确认。
+   存在后端 service_settings（一台机器一份），不是 localStorage —— 换浏览器/换窗口不会丢。 */
+async function loadSecurity() {
+  try { S.sec = await api("/api/security"); } catch (e) { S.sec = S.sec || {}; }
+  return S.sec || {};
+}
+function uiChoice(title, text, okLabel, cancelLabel) {
+  return uiConfirm(text, { title, ok: okLabel, cancel: cancelLabel, danger: false });
+}
+/* 需要许可时返回 true；mode=all 直接放行 */
+async function needPerm(what) {
+  if (((S.sec || {}).permission_mode) === "all") return true;
+  return await uiChoice("需要你的许可", `这一次要${what}。允许吗？（「设置 → 权限」里可以改成不再逐次询问）`, "允许这一次", "先不要");
+}
+async function setPermissionMode(mode) {
+  try { S.sec = await api("/api/security", { permission_mode: mode }); } catch (e) { uiNotify("保存失败：" + e.message); }
+  return S.sec;
+}
+
+/* ---------------- 模型 Key 守卫 ----------------
+   新装用户没配 Key 时，发消息/翻译/出计划一律先拦下来，别让一轮请求打到后端再回一句报错。
+   「编译 .tex」不走这里：那是本地 xelatex，不需要任何 Key。 */
+function hasModelKey() {
+  if ((S.models || []).some(m => m.api_key)) return true;        // 任一档案填了 key（前端只会拿到 "***"）
+  if (S.active && S.active.api_key) return true;
+  return (S.providers || []).some(p => p.key_present);
+}
+async function requireModelKey() {
+  if (hasModelKey()) return true;
+  const go = await uiConfirm(
+    "还没有配置模型 API Key，助手任何一步都跑不起来。先去「设置 → 模型」填一家的 Key，再回来继续。",
+    { title: "需要先配 API Key", ok: "去设置", cancel: "知道了", danger: false });
+  if (go) openTab("settings");
+  return false;
 }

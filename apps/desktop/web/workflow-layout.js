@@ -159,7 +159,7 @@
     };
     const del=body.querySelector("[data-wfl-delete]");
     if(del) del.onclick=async()=>{
-      if(!confirm("删除工作流「"+draft.name+"」？绑定它的项目会退回剩余工作流，项目数据不删除。")) return;
+      if(!await uiConfirm("删除工作流「"+draft.name+"」？绑定它的项目会退回剩余工作流，项目数据不删除。")) return;
       del.disabled=true;
       try{ await api("/api/workflow/layouts/delete",{id:draft.id}); settingsData=await api("/api/workflow/layouts"); draft=null; if(body.isConnected) drawEditor(body,"工作流已删除"); }
       catch(error){ message("删除失败："+error.message); del.disabled=false; }

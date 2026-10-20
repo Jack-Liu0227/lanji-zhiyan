@@ -88,8 +88,57 @@ def remove_member(member_id: str) -> dict[str, Any]:
 
 
 # ---------------- 派活 ----------------
+def _task_ids(value: Any) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            value = [value]
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("depends_on 必须是任务 ID 列表")
+    return list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
+
+
+def _output_contract(value: Any) -> dict[str, Any]:
+    if not value:
+        return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("output_contract 必须是 JSON 对象") from exc
+    if not isinstance(value, dict):
+        raise ValueError("output_contract 必须是 JSON 对象")
+    return value
+
+
+def _validate_dependencies(db: Any, task_id: str, depends_on: list[str]) -> None:
+    if not depends_on:
+        return
+    rows = {row["id"]: row for row in db.db.execute(
+        "SELECT id, task_id, depends_on FROM team_tasks WHERE task_id=?", (task_id,))}
+    missing = [item for item in depends_on if item not in rows]
+    if missing:
+        raise ValueError("依赖任务不存在：" + ", ".join(missing))
+
+
+def _dependency_state(row: dict[str, Any], tasks: dict[str, dict[str, Any]]) -> str:
+    for dependency in _task_ids(row.get("depends_on")):
+        state = tasks.get(dependency)
+        if not state or state.get("status") in ("failed", "canceled", "blocked"):
+            return "blocked"
+        if state.get("status") != "done":
+            return "waiting"
+        if state.get("reviewer_id") and state.get("review_status") != "approved":
+            return "waiting"
+    return "ready"
+
+
 def assign(task_id: str, member: str, prompt: str, title: str = "", trigger: str = "leader",
-           origin: str = "") -> dict[str, Any]:
+           origin: str = "", depends_on: Any = None, output_contract: dict[str, Any] | None = None,
+           reviewer_id: str = "") -> dict[str, Any]:
     """把一件事派给某个成员 → 落一条 queued 任务，等队列 worker 串行跑。"""
     prompt = (prompt or "").strip()
     if not prompt:
@@ -102,7 +151,14 @@ def assign(task_id: str, member: str, prompt: str, title: str = "", trigger: str
         if not hit:
             names = "、".join(m["name"] for m in rows)
             raise ValueError(f"团队里没有成员「{member}」（现有：{names}）")
-        row = db.team_task_add(task_id, hit["id"], hit["name"], title or prompt[:40], prompt, trigger, origin)
+        deps = _task_ids(depends_on)
+        _validate_dependencies(db, task_id, deps)
+        contract = _output_contract(output_contract)
+        reviewer = (reviewer_id or "").strip()
+        if reviewer and not any(item["id"] == reviewer for item in rows):
+            raise ValueError("Reviewer 必须是当前项目团队成员")
+        row = db.team_task_add(task_id, hit["id"], hit["name"], title or prompt[:40], prompt,
+                               trigger, origin, deps, contract, reviewer)
         db.team_event_add(row["id"], task_id, "assign", f"{trigger} 派给「{hit['name']}」：{prompt[:160]}")
         db.team_member_update(hit["id"], status="queued")
         return row
@@ -152,6 +208,34 @@ def retry(task_id_row: str) -> dict[str, Any]:
         return {"queued": task_id_row}
 
 
+def review(task_id_row: str, approved: bool, reviewer_id: str = "", feedback: str = "") -> dict[str, Any]:
+    """Approve a gated team output or return it to the worker with feedback."""
+    with workflow.WorkflowDB(_db_path()) as db:
+        row = db.team_task(task_id_row)
+        if not row:
+            raise ValueError("任务不存在")
+        expected = (row.get("reviewer_id") or "").strip()
+        if not expected:
+            raise ValueError("任务未配置 Reviewer")
+        if expected and (reviewer_id or "").strip() != expected:
+            raise ValueError("当前成员不是该任务的 Reviewer")
+        if row.get("status") != "review":
+            raise ValueError("任务尚未进入验收阶段")
+        if approved:
+            db.team_task_mark(task_id_row, "done", review_status="approved", approved_at=_now(),
+                              review_feedback=feedback[:2000], checkpoint={"phase": "approved"})
+            db.team_member_update(row["member_id"], status="done")
+            db.team_event_add(task_id_row, row["task_id"], "review", "Reviewer 已通过产物")
+        else:
+            count = int(row.get("review_attempt") or 0) + 1
+            db.team_task_mark(task_id_row, "queued", review_status="rejected", review_attempt=count,
+                              approved_at="", review_feedback=feedback[:2000], reason=feedback[:500],
+                              checkpoint={"phase": "returned", "review_attempt": count}, retry_at="")
+            db.team_member_update(row["member_id"], status="queued")
+            db.team_event_add(task_id_row, row["task_id"], "review", "Reviewer 退回产物：" + feedback[:300])
+        return db.team_task(task_id_row) or {}
+
+
 # ---------------- 队列 worker（串行） ----------------
 def _run_one(row: dict[str, Any]) -> None:
     t_id = row["task_id"]
@@ -168,7 +252,7 @@ def _run_one(row: dict[str, Any]) -> None:
                           checkpoint={"phase": "started", "attempt": attempt}, run_id=team_run_id,
                           input_assets=input_assets)
         db.team_member_update(row["member_id"], status="running")
-        db.team_event_add(row["id"], t_id, "start", f"「{row['member_name']}」开始执行「{row['title']}」")
+        db.team_event_add(row["id"], t_id, "start", "开始执行")
         mem = db.team_member(row["member_id"]) or {}
         brief = (mem.get("prompt") or "").strip()
         step = mem.get("step") or ""
@@ -176,6 +260,14 @@ def _run_one(row: dict[str, Any]) -> None:
         if step:
             role += "，负责工作流里的「%s」环节" % step
         extra = role + "。只在这个项目范围内工作。\n" + (brief + "\n" if brief else "")
+        contract = row.get("output_contract") or "{}"
+        try:
+            contract = json.loads(contract) if isinstance(contract, str) else contract
+        except (TypeError, ValueError):
+            contract = {}
+        if contract:
+            extra += "交付契约（必须覆盖其中要求，无法满足的项目要明确标注）：\n"
+            extra += json.dumps(contract, ensure_ascii=False, indent=2) + "\n"
     outs: list[str] = []
 
     active_db: list[Any] = []
@@ -184,15 +276,14 @@ def _run_one(row: dict[str, Any]) -> None:
         t = ev.get("type")
         c_db = active_db[0] if active_db else None
         if t == "tool_call":
-            _ev(row, "tool", f"「{row['member_name']}」调用 {ev.get('name')}", db=c_db)
+            _ev(row, "tool", "调用 %s" % ev.get("name"), db=c_db)
         elif t == "tool_result":
-            summary = ev.get("summary") or ""
-            _ev(row, "tool", (f"「{row['member_name']}」{ev.get('name')}：{summary}") if ev.get("ok") else (f"「{row['member_name']}」调用失败：{summary}"), db=c_db)
+            _ev(row, "tool", ("%s：%s" % (ev.get("name"), ev.get("summary"))) if ev.get("ok") else ("失败：" + str(ev.get("summary"))), db=c_db)
         elif t == "assistant" and ev.get("content"):
             outs.append(ev["content"])
-            _ev(row, "assistant", f"「{row['member_name']}」发言：{str(ev['content'])[:360]}", db=c_db)
+            _ev(row, "assistant", str(ev["content"])[:400], db=c_db)
         elif t == "usage":
-            _ev(row, "note", f"「{row['member_name']}」tokens {ev.get('total')}", db=c_db)
+            _ev(row, "note", "tokens %s" % ev.get("total"), db=c_db)
 
     try:
         with workflow.WorkflowDB(_db_path()) as db:
@@ -229,13 +320,17 @@ def _run_one(row: dict[str, Any]) -> None:
                 db, output["id"], team_run_id, "team_task_complete",
                 actor=row["member_name"],
                 input_snapshot={"task_id": row["id"], "inputs": input_ids})
-            db.team_task_mark(row["id"], "done", ended_at=_now(),
+            needs_review = bool(row.get("reviewer_id"))
+            db.team_task_mark(row["id"], "review" if needs_review else "done", ended_at=_now(),
                               output_path=str(path), result=text[:500],
-                              checkpoint={"phase": "done", "attempt": attempt},
-                              output_assets=[output["id"]], review_status="pending")
+                              checkpoint={"phase": "review" if needs_review else "done", "attempt": attempt},
+                              output_assets=[output["id"]],
+                              review_status="pending" if needs_review else "not_required")
             run_service.finish(db, team_run_id, "succeeded")
-            db.team_member_update(row["member_id"], status="done", note="最近完成：" + row["title"])
-            db.team_event_add(row["id"], t_id, "done", f"「{row['member_name']}」完成「{row['title']}」→ {path.name}")
+            db.team_member_update(row["member_id"], status="review" if needs_review else "done",
+                                  note=("等待验收：" if needs_review else "最近完成：") + row["title"])
+            db.team_event_add(row["id"], t_id, "review" if needs_review else "done",
+                              "完成 → %s%s" % (path.name, "（等待 Reviewer）" if needs_review else ""))
     except Exception as exc:
         with workflow.WorkflowDB(_db_path()) as db:
             if team_run_id:
@@ -246,7 +341,7 @@ def _run_one(row: dict[str, Any]) -> None:
                               checkpoint={"phase": "failed", "attempt": attempt},
                               retry_at="")
             db.team_member_update(row["member_id"], status="failed")
-            db.team_event_add(row["id"], t_id, "fail", f"「{row['member_name']}」执行失败「{row['title']}」: {type(exc).__name__}: {exc}")
+            db.team_event_add(row["id"], t_id, "fail", "%s: %s" % (type(exc).__name__, exc))
 
 
 def _ev(row: dict[str, Any], kind: str, text: str, db: Any = None) -> None:
@@ -270,7 +365,21 @@ def tick() -> int:
             checkpoint='{"phase":"recovered"}'
             WHERE status='running' AND datetime(replace(started_at, 'T', ' ')) < datetime('now', '-15 minutes')""")
         db.db.commit()
-        rows = [t for t in db.team_tasks(None, 200) if t["status"] == "queued"]
+        all_tasks = db.team_tasks(None, None)
+        tasks_by_id = {task["id"]: task for task in all_tasks}
+        rows = []
+        for task in all_tasks:
+            if task["status"] != "queued":
+                continue
+            state = _dependency_state(task, tasks_by_id)
+            if state == "blocked":
+                reason = "依赖任务已失败或取消：" + ", ".join(_task_ids(task.get("depends_on")))
+                db.team_task_mark(task["id"], "blocked", reason=reason,
+                                  checkpoint={"phase": "blocked", "reason": reason})
+                db.team_member_update(task["member_id"], status="blocked", note=reason[:120])
+                db.team_event_add(task["id"], task["task_id"], "blocked", reason)
+            elif state == "ready":
+                rows.append(task)
     rows.sort(key=lambda r: r["created_at"])
     for row in rows:
         if row["id"] in RUNNING:
@@ -302,9 +411,9 @@ def _loop() -> None:
 
 if __name__ == "__main__":       # 手跑自检：python team.py
     import os, tempfile
-    os.environ.setdefault("LANJI_ZHIYAN_DB", str(tempfile.gettempdir() + "/team_selfcheck.sqlite3"))
+    os.environ.setdefault("RESEARCH_WORKBENCH_DB", str(tempfile.gettempdir() + "/team_selfcheck.sqlite3"))
     import pathlib
-    p = pathlib.Path(os.environ.get("LANJI_ZHIYAN_DB") or os.environ["RESEARCH_WORKBENCH_DB"])
+    p = pathlib.Path(os.environ["RESEARCH_WORKBENCH_DB"])
     if p.exists():
         p.unlink()
     DB_PATH = p
@@ -450,7 +559,8 @@ def _round(scope: str, turns: int) -> None:
                 if st.get("stop"):
                     db.add_message(scope, "assistant", "（已停止）", scope=history_scope, sender="系统")
                     return
-                hist = [dict(m) for m in db.messages(scope, history_scope)][-12:]
+                hist = workflow.recent_dialogue([dict(m) for m in db.messages(scope, history_scope)],
+                                                workflow.context_budget(db))
                 tail = "\n".join((h.get("content") or "") for h in hist[-2:])
                 speaker = next_speaker(tail, names, last)
                 if not speaker:
@@ -605,14 +715,8 @@ def teams(project_id: str | None = None) -> dict[str, Any]:
             ev = [{"text": r["text"], "kind": r["kind"], "at": r["created_at"]}
                   for r in db.db.execute("SELECT text,kind,created_at FROM team_events"
                                          " WHERE task_id=? ORDER BY created_at DESC LIMIT 4", (x["id"],))]
-            active_row = db.db.execute(
-                "SELECT id,member_id,member_name,title,status,created_at FROM team_tasks "
-                "WHERE task_id=? AND status IN ('running','queued') ORDER BY status='running' DESC, created_at DESC LIMIT 1",
-                (x["id"],)
-            ).fetchone()
-            active_task = dict(active_row) if active_row else None
             out.append({**x, "members": ms, "leader": next((m for m in rows if m["role"] == "leader"), None),
-                        "picks": len(ms), "events": ev, "active_task": active_task})
+                        "picks": len(ms), "events": ev})
         return {"teams": out, "max": MAX_TEAMS, "max_fixed": MAX_FIXED, "max_temp": MAX_TEMP,
                 "fixed": len([x for x in out if x["kind"] == "fixed"]),
                 "temp": len([x for x in out if x["kind"] == "temp"])}

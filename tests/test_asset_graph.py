@@ -56,6 +56,47 @@ class AssetGraphTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in hits], [a["id"]])
         self.assertEqual(asset_service.relations(self.db, b["id"])[0]["to_asset_id"], a["id"])
 
+    def test_note_paper_binding_creates_asset_edge(self):
+        paper = asset_service.register(
+            self.db, project_id=self.project, kind="paper", title="论文",
+            canonical_uri="db://paper/p1", storage="sqlite", body="source",
+            metadata={"paper_id": "p1"})
+        self.db.add_note(self.project, "精读笔记", "结论", "p1")
+        note_asset = asset_service.list_assets(self.db, self.project, "note")[0]
+        relations = asset_service.relations(self.db, note_asset["id"])
+        self.assertEqual(relations[0]["to_asset_id"], paper["id"])
+        self.assertEqual(relations[0]["relation"], "derived_from")
+
+        editable = self.db.save_md_note("", "编辑笔记", "正文", self.project, "p1")
+        editable_asset = next(item for item in asset_service.list_assets(self.db, self.project, "note")
+                              if item["canonical_uri"].endswith(editable["id"] + ".md"))
+        self.assertEqual(asset_service.relations(self.db, editable_asset["id"])[0]["to_asset_id"], paper["id"])
+        self.db.save_md_note(editable["id"], "编辑笔记", "解绑", None, "")
+        self.assertEqual(asset_service.relations(self.db, editable_asset["id"]), [])
+
+        moved_project = self.db.create_task(
+            "第二项目", "question", "material", str(Path(self.tmp.name) / "second")
+        )
+        moved = self.db.save_md_note("", "迁移笔记", "迁移前", self.project)
+        old_path = Path(moved["canonical_path"])
+        moved = self.db.save_md_note(moved["id"], "迁移笔记", "迁移后", moved_project)
+        new_path = Path(moved["canonical_path"])
+        self.assertNotEqual(old_path, new_path)
+        self.assertFalse(old_path.exists())
+        self.assertTrue(new_path.exists())
+        self.assertEqual(self.db.db.execute(
+            "SELECT COUNT(*) AS n FROM assets WHERE json_extract(metadata, '$.legacy_id')=?",
+            (moved["id"],)).fetchone()["n"], 1)
+
+        deleted_path = Path(self.db.save_md_note("", "待删", "删除我", self.project)["canonical_path"])
+        deleted_id = deleted_path.stem
+        self.db.delete_md_note(deleted_id)
+        self.assertFalse(deleted_path.exists())
+        deleted_asset = next(item for item in asset_service.list_assets(self.db, self.project, "note")
+                             if item["canonical_uri"] == str(deleted_path.resolve()))
+        self.assertEqual(deleted_asset["status"], "archived")
+        self.assertEqual(asset_service.search(self.db, "删除我", project_id=self.project), [])
+
     def test_workflow_run_idempotency_and_node(self):
         first = run_service.start(self.db, self.project, "paper_read", idempotency_key="paper-1")
         again = run_service.start(self.db, self.project, "paper_read", idempotency_key="paper-1")
@@ -64,6 +105,12 @@ class AssetGraphTest(unittest.TestCase):
         done = run_service.finish_node(self.db, node["id"], "succeeded", outputs=["note-1"])
         self.assertEqual(done["status"], "succeeded")
         self.assertEqual(run_service.get(self.db, first["id"])["status"], "succeeded")
+
+        failed = run_service.start(self.db, self.project, "paper_read", idempotency_key="paper-failed")
+        run_service.finish(self.db, failed["id"], "failed", error="provider timeout")
+        same_failed = run_service.start(self.db, self.project, "paper_read", idempotency_key="paper-failed")
+        self.assertEqual(same_failed["id"], failed["id"])
+        self.assertEqual(same_failed["status"], "failed")
 
     def test_recover_stale_run(self):
         self.db.db.execute(
@@ -103,6 +150,22 @@ class AssetGraphTest(unittest.TestCase):
         route = feature_routes.route("POST", "/api/assets/rebuild",
                                      {"project_id": self.project, "include_files": False}, {}, self.db)
         self.assertEqual(route["project_id"], self.project)
+
+    def test_rebuild_prefers_existing_note_mirror_over_db_uri(self):
+        note_id = "legacy-file-note"
+        mirror = self.db.pdir(self.project, "笔记") / f"{note_id}.md"
+        mirror.parent.mkdir(parents=True, exist_ok=True)
+        mirror.write_text("# file-backed legacy note\n", encoding="utf-8")
+        self.db.db.execute(
+            "INSERT INTO notes (id,task_id,paper_id,title,markdown,created_at) VALUES (?,?,?,?,?,?)",
+            (note_id, self.project, "", "Legacy mirror", "database copy", "2026-01-01"),
+        )
+        self.db.db.commit()
+        asset_service.rebuild_project_index(self.db, self.project, include_files=True)
+        active = [item for item in asset_service.list_assets(self.db, self.project, "note")
+                  if item["status"] == "active" and item["metadata"].find(note_id) >= 0]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["canonical_uri"], str(mirror.resolve()))
 
     def test_delete_project_removes_project_runs(self):
         run = run_service.start(self.db, self.project, "cleanup-check")

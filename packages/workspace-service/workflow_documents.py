@@ -80,13 +80,20 @@ def map_read(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
             "refs": sum(1 for n in nodes if n.get("type") != "section")}
 
 
-def map_write(db: "WorkflowDB", task_id: str, data: Any) -> dict[str, Any]:
-    """整份覆盖写（和 doc_write 同口径）。不合规的节点/边直接丢掉，不报错 —— 模型给脏数据也要能落盘。"""
+def map_write(db: "WorkflowDB", task_id: str, data: Any, keep_positions: bool = True) -> dict[str, Any]:
+    """整份覆盖写（和 doc_write 同口径）。不合规的节点/边直接丢掉，不报错 —— 模型给脏数据也要能落盘。
+
+    keep_positions=True（agent 重写时）保留磁盘上已有的手动坐标；前端「全部重排」要清坐标，
+    所以它传 False —— 否则用户按了重排，坐标又被服务端补回来，等于没重排。
+    """
     if isinstance(data, str):
         data = json.loads(data or "{}")
     if not isinstance(data, dict):
         raise ValueError("谱系要给 {nodes:[…], edges:[…]} 结构的 JSON")
     nodes, seen = [], set()
+    _dragged_positions = {} if not keep_positions else {
+        n["id"]: {k: n[k] for k in ("x", "y") if k in n}
+        for n in map_read(db, task_id)["nodes"] if "x" in n and "y" in n}
     for n in (data.get("nodes") or []):
         if not isinstance(n, dict) or not n.get("id") or not n.get("label"):
             continue
@@ -95,9 +102,19 @@ def map_write(db: "WorkflowDB", task_id: str, data: Any) -> dict[str, Any]:
             continue
         seen.add(nid)
         t = str(n.get("type") or "note")
-        nodes.append({"id": nid, "type": t if t in MAP_TYPES else "note",
-                      "label": str(n["label"])[:120], "detail": str(n.get("detail") or "")[:600],
-                      "ref": str(n.get("ref") or "")[:300]})
+        node = {"id": nid, "type": t if t in MAP_TYPES else "note",
+                "label": str(n["label"])[:120], "detail": str(n.get("detail") or "")[:600],
+                "ref": str(n.get("ref") or "")[:300]}
+        for k in ("x", "y"):                       # 手动拖过的位置
+            try:
+                node[k] = round(float(n.get(k)), 1)
+            except (TypeError, ValueError):
+                continue
+        if "x" not in node or "y" not in node:
+            keep = _dragged_positions.get(nid, {})   # 模型重写整份 JSON 时没带坐标 → 沿用用户拖过的位置
+            if keep:
+                node.update(keep)
+        nodes.append(node)
     edges = [{"from": str(e["from"]), "to": str(e["to"]), "label": str(e.get("label") or "")[:40]}
              for e in (data.get("edges") or [])
              if isinstance(e, dict) and str(e.get("from")) in seen and str(e.get("to")) in seen]
@@ -113,8 +130,69 @@ def map_write(db: "WorkflowDB", task_id: str, data: Any) -> dict[str, Any]:
     return map_read(db, task_id)
 
 
+def map_seed(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
+    """大纲已经有了、谱系图还没有 → 直接按大纲长出「章 → 节」两级，不用等用户开口。
+
+    只搬标题、不编内容：detail 留空，支撑结论 / 数据由助手后面挂上去。
+    已经有图就原样返回，绝不覆盖。
+    """
+    cur = map_read(db, task_id)
+    if cur["nodes"]:
+        return cur
+    md = doc_read(db, task_id, "outline")["markdown"]
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    chapter = ""
+    for line in md.splitlines():
+        m3 = re.match(r"^###\s+(\S.{0,80})$", line)
+        if m3:
+            sid = "s%d" % (len(nodes) + 1)
+            nodes.append({"id": sid, "type": "section", "label": m3.group(1).strip(), "detail": ""})
+            if chapter:
+                edges.append({"from": chapter, "to": sid, "label": "包含"})
+            continue
+        m2 = re.match(r"^##\s+(\S.{0,80})$", line)
+        if m2:
+            cid = "c%d" % (len(nodes) + 1)
+            nodes.append({"id": cid, "type": "section", "label": m2.group(1).strip(), "detail": ""})
+            if chapter:
+                edges.append({"from": chapter, "to": cid, "label": "下一章"})
+            chapter = cid
+    if not nodes:
+        return cur                                  # 大纲还是空的，别造一张空图
+    return map_write(db, task_id, {"nodes": nodes, "edges": edges})
+
+
+def project_outs(db: "WorkflowDB", task_id: str, limit: int = 40) -> list[dict[str, Any]]:
+    """项目里现在有哪些产出文件（论文正文 / 最终产物 / 其余 / 笔记），新的在前。
+
+    右栏那个「产出目录」只是展示：不靠这一轮事件里有 tool_result.path 才有东西，
+    落盘过的文件本来就该一直列在那里。
+    """
+    base = db.base_dir(task_id)
+    roots = [base / "论文正文", base / "最终产物", base / "其余", base / "笔记"] if base else [OUT, NOTES]
+    rows: list[tuple[float, str, str]] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for f in root.rglob("*"):
+            if not f.is_file() or f.name.lower() == "readme.md":
+                continue
+            try:
+                rel = f.relative_to(base if base else root).as_posix()
+                rows.append((f.stat().st_mtime, rel, f.suffix.lower()))
+            except OSError:
+                continue
+    rows.sort(reverse=True)
+    return [{"path": rel, "ext": ext} for _, rel, ext in rows[:limit]]
+
+
 def map_sources(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
-    """谱系图能挂哪些东西：大纲小标题 / 精读笔记 / 文献库 PDF / 实验数据（项目其余/数据 + 上传区）。"""
+    """谱系图能挂哪些东西：大纲小标题 / 精读笔记 / 文献库 PDF / 实验数据（项目其余/数据 + 上传区）。
+
+    笔记给「标题 + id」而不是文件名：文件名是哈希，助手只能挂出一串乱码，
+    读的人也不知道挂的是哪一篇。
+    """
     md = doc_read(db, task_id, "outline")["markdown"]
     secs = re.findall(r"(?m)^###\s+(.+)$", md) or re.findall(r"(?m)^##\s+(.+)$", md)
     base = db.base_dir(task_id)
@@ -125,7 +203,11 @@ def map_sources(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
                 if f.is_file() and any(f.match(x) for x in pats):
                     out.append(f.relative_to(d).as_posix())
         return out[:120]
-    notes = ls(base / "笔记") if base else ls(NOTES, ("*.md",))
+    titles = {n["id"]: (n["title"] or "") for n in db.notes(task_id)}
+    note_files = ls(base / "笔记") if base else ls(NOTES, ("*.md",))
+    notes = [{"id": Path(f).stem, "name": f, "title": titles.get(Path(f).stem) or Path(f).name}
+             for f in note_files
+             if Path(f).suffix.lower() == ".md" and Path(f).name.lower() != "readme.md"]
     papers = [p["filename"] for p in db.papers_of(task_id)]
     data = (ls(base / "其余" / "数据") if base else []) + ls(DATA / "uploads")
     return {"sections": [x.strip() for x in secs][:60], "notes": notes, "papers": papers[:60],
@@ -201,22 +283,12 @@ def doc_seed(db: "WorkflowDB", task_id: str, kind: str = "outline") -> dict[str,
 
 
 READ_MAX = 12000                                   # 附件一次最多读多少字（够 agent 判断，不炸上下文）
-_FILE_ROOTS = [DATA, DATA / "uploads", PAPERS, NOTES, OUT]
 
 
 def read_attachment(path: str, chars: int = 8000) -> dict[str, Any]:
-    """读用户上传/项目里的文件：PDF 用 pdfio 抓正文，其余按文本读。只允许 data/ 与项目目录里的文件。"""
-    if not path:
-        raise ValueError("没给路径")
-    p = Path(path).expanduser()
-    try:
-        p = p.resolve()
-    except OSError as exc:
-        raise ValueError(f"路径不可用：{exc}") from exc
-    roots = [r.resolve() for r in _FILE_ROOTS if r.exists()]
-    # 前缀比较（startswith）会让同级的 data-evil/ 混进来，必须按路径层级判断
-    if not p.is_file() or not any(p.is_relative_to(r) for r in roots):
-        raise ValueError(f"只读 data/ 与项目目录里的文件：{p}")
+    """读用户上传/项目里的文件：PDF 用 pdfio 抓正文，其余按文本读。
+    白名单不在这里再写一遍 —— 统一走 paths.resolve_allowed()（data/ + 用户建过的项目目录）。"""
+    p = paths.resolve_allowed(path, must_be_file=True, what="附件")
     cap = max(500, min(int(chars or 8000), READ_MAX))
     if p.suffix.lower() == ".pdf":
         text = pdfio.text(p)

@@ -27,7 +27,7 @@ window.addEventListener("message", e => {
     return;
   }
   if(d.rw === "openPath"){
-    if(d.path) api("/api/paper/open?path=" + encodeURIComponent(d.path)).catch(err => alert("打开失败：" + err.message));
+    if(d.path) api("/api/paper/open?path=" + encodeURIComponent(d.path)).catch(err => uiNotify("打开失败：" + err.message));
     return;
   }
   if(d.rw === "saveNoteFromZotero"){
@@ -40,16 +40,16 @@ window.addEventListener("message", e => {
         })
         .then(() => {
           if(typeof loadMdNotes === "function") loadMdNotes();
-          if(typeof toast === "function") toast("已成功存为大笔记！"); else alert("已保存至笔记！");
+          if(typeof toast === "function") toast("已成功存为大笔记！"); else uiNotify("已保存至笔记！");
         })
-        .catch(err => alert("存为笔记失败：" + err.message));
+        .catch(err => uiNotify("存为笔记失败：" + err.message));
     }
     return;
   }
   if(d.rw !== "open") return;
   if(d.kind === "post" || d.kind === "paper"){
     const param = d.ref ? "?id=" + encodeURIComponent(d.ref) : (d.path ? "?path=" + encodeURIComponent(d.path) : "");
-    if(param) api("/api/paper/open" + param).catch(err => alert("打开失败：" + err.message));
+    if(param) api("/api/paper/open" + param).catch(err => uiNotify("打开失败：" + err.message));
   } else if(d.kind === "note") openTab("notes");
 });
 

@@ -33,15 +33,15 @@ class GuardTest(unittest.TestCase):
     # ---------- 子进程环境 ----------
     def test_clean_env_drops_secrets_keeps_path(self):
         os.environ["OPENAI_API_KEY"] = "sk-should-not-leak"
-        os.environ["LANJI_ZHIYAN_DB"] = "C:/secret.sqlite3"
+        os.environ["RESEARCH_WORKBENCH_DB"] = "C:/secret.sqlite3"
         os.environ["GITHUB_TOKEN"] = "ghp_nope"
         try:
             env = fileguard.clean_env("C:/tex/bin")
         finally:
-            for k in ("OPENAI_API_KEY", "LANJI_ZHIYAN_DB", "GITHUB_TOKEN"):
+            for k in ("OPENAI_API_KEY", "RESEARCH_WORKBENCH_DB", "GITHUB_TOKEN"):
                 os.environ.pop(k, None)
         self.assertNotIn("OPENAI_API_KEY", env)
-        self.assertNotIn("LANJI_ZHIYAN_DB", env)
+        self.assertNotIn("RESEARCH_WORKBENCH_DB", env)
         self.assertNotIn("GITHUB_TOKEN", env)
         self.assertTrue(env["PATH"].startswith("C:/tex/bin"))
 

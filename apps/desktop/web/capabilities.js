@@ -751,7 +751,7 @@
     });
     host.querySelector("#cap-mcp-json")?.addEventListener("click", () => editMcp(meta));
     host.querySelectorAll("[data-cap-connect]").forEach(button => button.onclick = async () => {
-      if (!window.confirm("连接将运行配置中的本地命令（拥有当前用户权限）或访问远程 MCP，并可能读取敏感数据。确认信任该服务器并继续？")) return;
+      if (!await uiConfirm("连接将运行配置中的本地命令（拥有当前用户权限）或访问远程 MCP，并可能读取敏感数据。确认信任该服务器并继续？")) return;
       button.disabled = true;
       button.textContent = "正在连接…";
       try {
@@ -814,7 +814,7 @@
     dialog("MCP · JSON 配置", `<p class="hint">支持标准 mcpServers JSON：stdio（command/args/env/cwd）或 Streamable HTTP（url/headers）。默认隐藏已有密钥；保留 ******** 不会覆盖原值，清空字段则会删除。保存不会执行命令。Windows 下使用当前用户 DPAPI 加密。</p><div class="cap-toolbar"><button class="btn ghost" data-reveal>显示已保存密钥</button><button class="btn ghost" data-hide>隐藏密钥 / 撤销草稿</button><button class="btn ghost" data-format>校验 / 格式化</button><button class="btn ghost" data-example>查看格式示例</button></div><textarea class="control" data-json spellcheck="false" aria-label="MCP JSON 配置">${e(JSON.stringify(meta.mcp_config, null, 2))}</textarea><div class="cap-card-actions"><button class="btn" data-save>保存 JSON</button></div><details data-example-body hidden><summary>格式示例（不会自动写入）</summary><pre>${e(JSON.stringify(example, null, 2))}</pre></details>`, (host, close) => {
       const field = host.querySelector("[data-json]");
       host.querySelector("[data-reveal]").onclick = async () => {
-        if (!window.confirm("即将在当前屏幕显示所有 MCP 密钥和命令参数，并替换未保存草稿。请确认周围环境安全。")) return;
+        if (!await uiConfirm("即将在当前屏幕显示所有 MCP 密钥和命令参数，并替换未保存草稿。请确认周围环境安全。")) return;
         try { const result = await api("/api/capabilities/mcp/reveal", {confirm: true}); field.value = JSON.stringify(result.config, null, 2); }
         catch (error) { fail(host, error); }
       };

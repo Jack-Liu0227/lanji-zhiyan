@@ -21,13 +21,10 @@ class PathsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.home = Path(tempfile.mkdtemp(prefix="rw-paths-"))
         self._saved = {k: os.environ.get(k) for k in
-                       ("LANJI_ZHIYAN_HOME", "RW_HOME", "LANJI_ZHIYAN_DATA",
-                        "RESEARCH_WORKBENCH_DATA", "LANJI_ZHIYAN_DB", "RESEARCH_WORKBENCH_DB",
-                        "LOCALAPPDATA")}
-        os.environ["LANJI_ZHIYAN_HOME"] = str(self.home)
-        for name in ("RW_HOME", "LANJI_ZHIYAN_DATA", "RESEARCH_WORKBENCH_DATA",
-                     "LANJI_ZHIYAN_DB", "RESEARCH_WORKBENCH_DB"):
-            os.environ.pop(name, None)
+                       ("RW_HOME", "RESEARCH_WORKBENCH_DATA", "RESEARCH_WORKBENCH_DB")}
+        os.environ["RW_HOME"] = str(self.home)
+        os.environ.pop("RESEARCH_WORKBENCH_DATA", None)
+        os.environ.pop("RESEARCH_WORKBENCH_DB", None)
         import paths
         self.paths = importlib.reload(paths)
 
@@ -74,35 +71,38 @@ class PathsTest(unittest.TestCase):
         self.assertFalse(legacy.is_dir(), "旧目录应已改名保留")
         self.assertFalse(self.paths.migrate_legacy(legacy)["done"], "第二次应跳过")
 
+    def test_文件闸门只放行自己的目录和用户选过的目录(self) -> None:
+        """resolve_allowed 是唯一白名单闸门：data/ 里的放行，系统目录/相对路径一律拒。"""
+        inside = self.paths.DATA / "probe.txt"
+        inside.parent.mkdir(parents=True, exist_ok=True)
+        inside.write_text("x", encoding="utf-8")
+        self.assertEqual(self.paths.resolve_allowed(str(inside)), inside.resolve())
+        for bad in ("C:/Windows/win.ini", "relative/path.txt", ""):
+            with self.assertRaises(ValueError):
+                self.paths.resolve_allowed(bad)
+        with self.assertRaises(ValueError):                 # 越界要记一条 deny 审计
+            self.paths.resolve_allowed("C:/Windows/system.ini")
+        self.assertIn("deny", self.paths.AUDIT.read_text(encoding="utf-8"))
+
     def test_env_override_wins(self) -> None:
-        os.environ["LANJI_ZHIYAN_DB"] = str(self.home / "custom.sqlite3")
+        os.environ["RESEARCH_WORKBENCH_DB"] = str(self.home / "custom.sqlite3")
         paths = importlib.reload(self.paths)
         self.assertEqual(paths.DB_PATH, self.home / "custom.sqlite3")
-
-    def test_legacy_env_override_still_works(self) -> None:
-        os.environ["RESEARCH_WORKBENCH_DB"] = str(self.home / "legacy.sqlite3")
-        paths = importlib.reload(self.paths)
-        self.assertEqual(paths.DB_PATH, self.home / "legacy.sqlite3")
-
-    def test_new_env_override_has_priority(self) -> None:
-        os.environ["LANJI_ZHIYAN_DB"] = str(self.home / "new.sqlite3")
-        os.environ["RESEARCH_WORKBENCH_DB"] = str(self.home / "legacy.sqlite3")
-        paths = importlib.reload(self.paths)
-        self.assertEqual(paths.DB_PATH, self.home / "new.sqlite3")
-
-    def test_legacy_home_data_migrates_to_chinese_directory(self) -> None:
-        base = self.home / "localappdata"
-        old = base / "ResearchWorkbench" / "data"
-        old.mkdir(parents=True)
-        (old / "papers").mkdir()
-        (old / "papers" / "legacy.pdf").write_bytes(b"%PDF-1.4")
-        os.environ.pop("LANJI_ZHIYAN_HOME", None)
-        os.environ.pop("RW_HOME", None)
-        os.environ["LOCALAPPDATA"] = str(base)
-        paths = importlib.reload(self.paths)
-        self.assertEqual(paths.HOME, base / "览籍智研")
-        self.assertTrue((paths.DATA / "papers" / "legacy.pdf").is_file())
 
 
 if __name__ == "__main__":
     unittest.main()
+
+class GrantDirTest(unittest.TestCase):
+    """Low IL 服务端写不进用户新选的中等完整性目录 → 得先请窗口宿主代建并标 Low。"""
+
+    def test_没有通道时自己建目录(self):
+        import paths
+        old = paths.GRANT
+        paths.GRANT = ""
+        try:
+            target = Path(tempfile.mkdtemp()) / "新项目"
+            self.assertTrue(paths.grant_dir(target))
+            self.assertTrue(target.is_dir())
+        finally:
+            paths.GRANT = old
