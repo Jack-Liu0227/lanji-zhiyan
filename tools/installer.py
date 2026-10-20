@@ -2,8 +2,8 @@
 """览籍智研安装程序（单文件 exe）
 
 用户双击即装，装完是这一套布局（程序、数据、用户、执行器分开）：
-    %LOCALAPPDATA%\\ResearchWorkbench\\
-        app\\          程序（ResearchWorkbench.exe 与只读资源）
+    %LOCALAPPDATA%\\览籍智研\\
+        app\\          程序（览籍智研.exe 与只读资源）
         data\\         运行数据（库 / 文献 / 产物 / 备份），重装不覆盖
         user\\         用户资料与加密凭据
         executors\\    agents / skills / tools（模型和用户都能写）
@@ -11,7 +11,7 @@
 
 重新打包（改完程序代码后，在仓库根目录跑）：
     "%LOCALAPPDATA%\\Programs\\Python\\Python310\\python.exe" -m PyInstaller tools\\installer.spec --noconfirm --clean
-生成 dist\\ResearchWorkbench-Setup.exe，改名成「览籍智研-<版本>-安装程序.exe」发人即可。
+生成 dist\\览籍智研-安装程序.exe，改名成「览籍智研-<版本>-安装程序.exe」发人即可。
 """
 import os
 import shutil
@@ -19,12 +19,42 @@ import subprocess
 import sys
 import time
 
-APP = "ResearchWorkbench"
-TITLE = "览籍智研"
+APP = "览籍智研"
+TITLE = APP
+LEGACY_APPS = ("ResearchWorkbench",)
 
 
 def say(msg=""):
     print(msg, flush=True)
+
+
+def _copy_missing(src, dst):
+    """复制缺失项；目标已有文件不覆盖，保证升级不碰用户数据。"""
+    if os.path.isdir(src):
+        os.makedirs(dst, exist_ok=True)
+        for name in os.listdir(src):
+            _copy_missing(os.path.join(src, name), os.path.join(dst, name))
+    elif os.path.isfile(src) and not os.path.exists(dst):
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+
+
+def _migrate_legacy_data(root):
+    local = os.environ["LOCALAPPDATA"]
+    old_roots = [os.path.join(local, name) for name in LEGACY_APPS]
+    old_roots += [os.path.join(local, "Programs", name) for name in LEGACY_APPS]
+    copied = []
+    for old_root in old_roots:
+        for sub in ("data", "user", "executors"):
+            src = os.path.join(old_root, sub)
+            if not os.path.isdir(src):
+                continue
+            try:
+                _copy_missing(src, os.path.join(root, sub))
+                copied.append(sub)
+            except OSError:
+                pass
+    return sorted(set(copied))
 
 
 def main():
@@ -52,8 +82,9 @@ def main():
     say("程序装到：%s" % app_dir)
     say()
 
-    # 关掉正在运行的旧版本，否则文件被占用
-    subprocess.run(["taskkill", "/F", "/IM", APP + ".exe"], capture_output=True)
+    # 关掉正在运行的新旧版本，否则文件被占用
+    for image in (APP, *LEGACY_APPS):
+        subprocess.run(["taskkill", "/F", "/IM", image + ".exe"], capture_output=True)
     time.sleep(0.5)
 
     # 建树：data / user / executors 与程序分开，升级只换 app
@@ -65,16 +96,9 @@ def main():
         with open(layout, "w", encoding="utf-8") as fh:
             fh.write('{\n  "layout": 2\n}\n')
 
-    # 老版本（Programs\\ResearchWorkbench）里如果有真库，搬过来别丢
-    old_root = os.path.join(os.environ["LOCALAPPDATA"], "Programs", APP)
-    old_db = os.path.join(old_root, "data", "research.sqlite3")
-    new_db = os.path.join(root, "data", "research.sqlite3")
-    if os.path.isfile(old_db) and not os.path.exists(new_db):
-        try:
-            shutil.copy2(old_db, new_db)
-            say("  已把老版本的数据搬到新布局：%s" % new_db)
-        except Exception:
-            pass
+    migrated = _migrate_legacy_data(root)
+    if migrated:
+        say("  已补齐旧版本数据：%s" % "、".join(migrated))
 
     # 复制：跳过 data/（用户资料）与被占用的失败项
     os.makedirs(app_dir, exist_ok=True)

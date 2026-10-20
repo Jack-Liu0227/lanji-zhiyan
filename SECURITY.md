@@ -8,7 +8,7 @@
 
 **唯一的边界是操作系统。** 程序进程内的一切（路径白名单、打开扩展名白名单、出站脱敏、凭据加密、审计）都是**事故预防**，不是隔离：
 
-- 同一个 Windows 用户下的任何进程，都能读 `%LOCALAPPDATA%\ResearchWorkbench\`（`data/`、`user/`）、能用 DPAPI 解开里面的凭据、能 `curl 127.0.0.1:8765` 调 API。
+- 同一个 Windows 用户下的任何进程，都能读 `%LOCALAPPDATA%\览籍智研\`（`data/`、`user/`）、能用 DPAPI 解开里面的凭据、能 `curl 127.0.0.1:8765` 调 API。
 - 路径白名单（`workflow._safe_path`）挡的是"手滑把文件写到系统目录"，不是"挡住有心的本机程序"。
 - 出站脱敏（`guards.py`）是规则层（手机号/身份证/邮箱/银行卡/密钥/Bearer/私钥），**人名、机构、地址不做**；正则永远可以被绕过。
 - 审计（`data/_backup/audit.jsonl`）用于**事后查**，不阻止任何操作。
@@ -30,7 +30,7 @@
 
 ## 3. 文件
 
-- **读**：`workflow._safe_path()` —— 绝对路径 → `resolve()` → `is_relative_to` 白名单（`data/`、`data/uploads`、`papers/`、`notes/`、`out/` + 项目目录）。这些目录现在都在 `%LOCALAPPDATA%\ResearchWorkbench\data\`，不再在代码树里（`paths.py` 是唯一来源）。
+- **读**：`workflow._safe_path()` —— 绝对路径 → `resolve()` → `is_relative_to` 白名单（`data/`、`data/uploads`、`papers/`、`notes/`、`out/` + 项目目录）。这些目录现在都在 `%LOCALAPPDATA%\览籍智研\data\`，不再在代码树里（`paths.py` 是唯一来源）。
 - **写**：同上 + 覆盖前 `fileguard.before_write()` 留快照（`data/_backup/.rwbak/<日期>/`，每文件留 10 份），可用 `POST /api/file/rollback` 回滚；写/删/打开都记 `data/_backup/audit.jsonl`。
 - **打开外部程序**：`fileguard.open_document()` 只放行文档类扩展名；`.exe/.bat/.cmd/.ps1/.lnk/.url` 等一律拒绝。
 - **移动/删除**：没有通用 move 接口；`shutil` 只有两处 `copy2`（库备份、图产物）；唯一的删除是"删项目时连带删该项目在 `papers/` 下的文件"，且强制校验父目录是 `papers/`。

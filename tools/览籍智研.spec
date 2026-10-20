@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# 打包：build-app.bat（或 python -m PyInstaller tools/lanji-zhiyan.spec --noconfirm --clean）
+# 打包：build-app.bat（或 python -m PyInstaller "tools\览籍智研.spec" --noconfirm --clean）
 # 关键三条（少一条打出来的包就是坏的）：
 #   1) datas 必须带界面目录（apps/desktop/web）、Provider 目录（packages/contracts）和窗口图标，缺一个就坏
 #   2) contents_directory='.'：界面目录与 exe 同目录 —— 服务与工作流都按「自己所在目录往上找」定位资源
@@ -54,7 +54,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='ResearchWorkbench',
+    name='览籍智研',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -75,5 +75,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name='ResearchWorkbench',
+    name='览籍智研',
 )

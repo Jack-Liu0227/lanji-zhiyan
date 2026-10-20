@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""科研工作台 · 文献与运行环境一键自检工具。
+"""览籍智研 · 文献与运行环境一键自检工具。
 
 换机部署或排查「文献用不了」时运行：
     python tools/check_literature_env.py
@@ -18,16 +18,12 @@ sys.path.insert(0, str(_ROOT / "packages" / "connectors"))
 
 def run_check():
     print("=" * 60)
-    print("  Research Workbench 文献与运行环境诊断")
+    print("  览籍智研 文献与运行环境诊断")
     print("=" * 60)
 
     # 1. 本地数据库与文献
-    db_env = os.environ.get("RESEARCH_WORKBENCH_DB")
-    if db_env:
-        db_path = Path(db_env)
-    else:
-        appdata = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-        db_path = Path(appdata) / "ResearchWorkbench" / "data" / "research.sqlite3"
+    import paths
+    db_path = paths.DB_PATH
 
     print("\n[1/5] 本地数据库与文献数据 (P1)")
     print(f"  数据库路径: {db_path}")
@@ -43,8 +39,6 @@ def run_check():
                 except Exception: return 0
             n_papers = count("papers")
             n_pages = count("paper_pages")
-            n_prov = count("providers")
-            n_mdl = count("model_profiles")
             conn.close()
             papers_dir = db_path.parent / "papers"
             pdf_count = len(list(papers_dir.glob("*.pdf"))) if papers_dir.is_dir() else 0
@@ -73,9 +67,9 @@ def run_check():
                     raw_key = r["api_key"] or ""
                     if raw_key.startswith("dpapi:"):
                         try:
-                            dec = securestore.unprotect(raw_key)
+                            securestore.unprotect(raw_key)
                             print(f"  [+] Provider「{r['name']}」: DPAPI 密文解密成功。")
-                        except Exception as exc:
+                        except Exception:
                             print(f"  [!] Provider「{r['name']}」: DPAPI 解密失败 (Errno 87)。")
                             print("      原因: 该库从其他机器或不同 Windows 账户拷入，无法跨机解开。")
                             print("      修复动作: 在「设置 → 模型」中重新填写并保存该 Provider 的 API Key。")
@@ -134,7 +128,7 @@ def run_check():
     for name, url in [("Crossref", "https://api.crossref.org/works?rows=1"),
                       ("OpenAlex", "https://api.openalex.org/works?per-page=1")]:
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "ResearchWorkbench"})
+            req = urllib.request.Request(url, headers={"User-Agent": "LanjiZhiyan/0.1.0"})
             with urllib.request.urlopen(req, timeout=5) as resp:
                 print(f"  [+] {name}: 连通正常 (HTTP {resp.status})")
         except Exception as e:

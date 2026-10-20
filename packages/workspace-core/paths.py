@@ -2,7 +2,7 @@
 
 安装/运行后的布局（默认，Windows）：
 
-    %LOCALAPPDATA%\\ResearchWorkbench\\
+    %LOCALAPPDATA%\\览籍智研\\
         layout.json          布局版本（迁移用）
         app\\                 程序：exe 与只读资源
         data\\                运行数据：库、文献、产物、备份
@@ -13,9 +13,11 @@
 代码和数据分开，换个启动方式也不会再多出一份 data。
 
 环境变量（优先级从高到低）：
-    RW_HOME                 换整个数据根（测试/多实例用）
-    RESEARCH_WORKBENCH_DATA 只换 data 目录
-    RESEARCH_WORKBENCH_DB   只换主库文件
+    LANJI_ZHIYAN_HOME       换整个数据根（测试/多实例用）
+    LANJI_ZHIYAN_DATA       只换 data 目录
+    LANJI_ZHIYAN_DB         只换主库文件
+
+兼容旧环境变量：RW_HOME / RESEARCH_WORKBENCH_DATA / RESEARCH_WORKBENCH_DB。
 """
 from __future__ import annotations
 
@@ -27,16 +29,25 @@ import sys
 import time
 from pathlib import Path
 
-APP_NAME = "ResearchWorkbench"
+APP_NAME = "览籍智研"
+LEGACY_APP_NAMES = ("ResearchWorkbench",)
 LAYOUT_VERSION = 2
+
+HOME_ENV_VARS = ("LANJI_ZHIYAN_HOME", "RW_HOME")
+DATA_ENV_VARS = ("LANJI_ZHIYAN_DATA", "RESEARCH_WORKBENCH_DATA")
+DB_ENV_VARS = ("LANJI_ZHIYAN_DB", "RESEARCH_WORKBENCH_DB")
 
 # 从旧布局（仓库内 data/）搬过来时，只搬这些；webview 缓存和截图不搬
 LEGACY_ITEMS = ("research.sqlite3", "papers", "notes", "out", "uploads", "ref",
                 "demo-vault", "mail.json", "audit.jsonl", ".rwbak")
 
 
-def _env(name: str) -> str:
-    return (os.environ.get(name) or "").strip()
+def _env(*names: str) -> str:
+    for name in names:
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 def app_dir() -> Path:
@@ -47,19 +58,68 @@ def app_dir() -> Path:
     return Path(sys.executable).resolve().parent
 
 
+def _copy_missing(src: Path, dst: Path) -> int:
+    """递归复制缺失项；目标已有文件绝不覆盖。"""
+    copied = 0
+    if src.is_dir():
+        dst.mkdir(parents=True, exist_ok=True)
+        for child in src.iterdir():
+            copied += _copy_missing(child, dst / child.name)
+    elif src.is_file() and not dst.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied = 1
+    return copied
+
+
+def _migrate_legacy_home(home: Path) -> dict:
+    """把旧英文数据根里的数据补到新中文数据根，不覆盖现有文件。"""
+    marker = home / ".legacy-home-migrated"
+    if marker.exists():
+        return {}
+    base = Path(_env("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local"))
+    candidates = [base / name for name in LEGACY_APP_NAMES]
+    candidates += [base / "Programs" / name for name in LEGACY_APP_NAMES]
+    copied = {}
+    errors = []
+    found = False
+    for old in candidates:
+        if not old.is_dir() or old.resolve() == home.resolve():
+            continue
+        found = True
+        for name in ("data", "user", "executors"):
+            src = old / name
+            if not src.exists():
+                continue
+            try:
+                copied[name] = copied.get(name, 0) + _copy_missing(src, home / name)
+            except OSError as exc:
+                errors.append("%s: %s" % (src, exc))
+    if found and not errors:
+        try:
+            marker.write_text(time.strftime("%Y-%m-%dT%H:%M:%S"), encoding="utf-8")
+        except OSError:
+            pass
+    if errors:
+        copied["errors"] = errors
+    return copied
+
+
 def home_dir() -> Path:
-    """数据根：RW_HOME > %LOCALAPPDATA%\\ResearchWorkbench。"""
-    override = _env("RW_HOME")
+    """数据根：LANJI_ZHIYAN_HOME > RW_HOME > %LOCALAPPDATA%\\览籍智研。"""
+    override = _env(*HOME_ENV_VARS)
     if override:
         return Path(override).expanduser()
     base = _env("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(base) / APP_NAME
+    home = Path(base) / APP_NAME
+    _migrate_legacy_home(home)
+    return home
 
 
 APP = app_dir()
 HOME = home_dir()
 
-_user_override = _env("RESEARCH_WORKBENCH_DATA")
+_user_override = _env(*DATA_ENV_VARS)
 DATA = Path(_user_override).expanduser() if _user_override else HOME / "data"
 USER = HOME / "user"
 EXECUTORS = HOME / "executors"
@@ -74,7 +134,7 @@ REF = DATA / "ref"
 SNAP = BACKUP / ".rwbak"
 AUDIT = BACKUP / "audit.jsonl"
 
-_db_override = _env("RESEARCH_WORKBENCH_DB")
+_db_override = _env(*DB_ENV_VARS)
 DB_PATH = Path(_db_override).expanduser() if _db_override else DATA / "research.sqlite3"
 MAIL_FILE = USER / "mail.json"
 LAYOUT_FILE = HOME / "layout.json"
@@ -230,7 +290,7 @@ def info() -> dict:
 if __name__ == "__main__":                     # 自检：python paths.py
     meta = ensure_layout()
     print(json.dumps({"meta": meta, "paths": info()}, ensure_ascii=False, indent=2))
-    assert HOME.name == APP_NAME or _env("RW_HOME"), HOME
+    assert HOME.name == APP_NAME or _env(*HOME_ENV_VARS), HOME
     assert DATA.parent == HOME, DATA
     assert all(d.is_dir() for d in _DIRS), [str(d) for d in _DIRS if not d.is_dir()]
     assert LAYOUT_FILE.is_file(), LAYOUT_FILE

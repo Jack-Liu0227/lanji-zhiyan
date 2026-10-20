@@ -176,7 +176,7 @@ function renderSidebar(){
   $("sidebar").className = "sidebar"+(sidebarCollapsed?" collapsed":"");
   $("sidebar").innerHTML = `
     <div class="brand"><img class="mark" src="/mark.png" alt="">
-      <div class="lbl" style="min-width:0"><b>览籍智研</b><small>Research workspace</small></div>
+      <div class="lbl" style="min-width:0"><b>览籍智研</b><small>科研工作台</small></div>
       <button class="collapse" title="${sidebarCollapsed?"展开侧栏":"折叠侧栏"}">${sidebarCollapsed?"›":"‹"}</button></div>
     <div class="profile-card" id="profileCard" title="点击编辑个人资料">
       <span class="profile-avatar" id="profileAvatar">🎓</span>

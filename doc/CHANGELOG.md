@@ -2,6 +2,32 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 待发 PR（本轮：品牌统一 —— 数据根改名 + 旧数据迁移，只取学长分支里的品牌那部分）
+
+学长 fork 上还有一条 `codex/asset-workflow-upgrade`，是**另一条历史**（`initial commit: 览籍智研 0.1.0` + 一个资产统一提交），
+不能直接合：他那条把 #12 的实现又做了一遍、还删了 `migrations/006_team_task_dag.sql` 和 `test_team_scheduler.py`。
+这次只把其中真正缺的「品牌统一」搬过来，其余保持 main 现状。
+
+- `packages/workspace-core/paths.py`：`APP_NAME` `ResearchWorkbench` → `览籍智研`，数据根
+  `%LOCALAPPDATA%\ResearchWorkbench` → `%LOCALAPPDATA%\览籍智研`；环境变量新增 `LANJI_ZHIYAN_HOME/DATA/DB`
+  并**兼容**旧的 `RW_HOME / RESEARCH_WORKBENCH_DATA / RESEARCH_WORKBENCH_DB`；
+  首次启动把旧数据根里的 `data/ user/ executors/` **只补缺失、不覆盖**地复制过来，写 `.legacy-home-migrated` 标记只搬一次。
+- 打包链改名：`tools/lanji-zhiyan.spec` → `tools/览籍智研.spec`（`name='览籍智研'`）、
+  `installer.spec` `name='览籍智研-安装程序'`、`installer.py` `APP="览籍智研"` + 老版本目录迁移、
+  `build-app.bat` 同步；删掉已被 `installer.py` 取代的 `tools/install.ps1`。
+- 侧栏副标题 `Research workspace` → `科研工作台`；README / SECURITY 里的路径与变量名同步。
+- 新增 `tests/test_branding.py`（3 项）：`paths.APP_NAME` 是中文、打包 spec 用中文名、侧栏显示中文品牌。
+- **没照搬**的：`006_team_task_dag.sql`（#12 的团队依赖/审核门要用）、`test_team_scheduler.py`——
+  他那条分支缺这两样，属于回退，不跟。
+
+**迁移实测**（本机真库，先停应用再搬）：`%LOCALAPPDATA%\览籍智研\` 1.1G 落盘、marker 已写；
+新库里 papers 62 / paper_pages 1253 / chat 22，`active_model()` 仍是 DeepSeek 且 DPAPI 解出 35 位 key
+（同一 Windows 用户，密文搬过去照样能解）；`papers\` 下 36 个 PDF。
+旧目录 `%LOCALAPPDATA%\ResearchWorkbench\` 原样保留当回滚备份，确认没问题再删。
+
+**验**：全量 268 项测试 OK（skipped=8）；应用重启后 `/`、`/api/state`、`/api/workflow/layouts` 200；
+浏览器实测侧栏「览籍智研 / 科研工作台」，知识库页读出 3 项目 / 62 文献 / 18 笔记 / 198 候选。
+
 ## 待发 PR（本轮：修 3 条 flaky 测试 —— 根因是新项目默认工作流会随机变成「文献精读」）
 
 **现象**：`tests/test_workflow_layout.py` 里的 `test_definition_and_project_selection_survive_reopen` /
