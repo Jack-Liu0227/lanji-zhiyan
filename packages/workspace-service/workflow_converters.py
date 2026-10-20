@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import fileguard
+import lowbox          # 低完整性（Low IL）子进程：xelatex 只能写项目目录
 import paths
 from workflow_documents import doc_read, doc_path
 
@@ -204,10 +205,9 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "") -> dict
         build.mkdir(parents=True, exist_ok=True)
         tex_path = build / f"{safe}.tex"
         tex_path.write_text(md_to_tex(md, title), encoding="utf-8", newline="\n")   # 必须 LF：CR 会让 TeX 报 ^^M
-        env = fileguard.clean_env(str(Path(_xelatex()).parent))   # 子进程不需要我们的 key
-        proc = subprocess.run([_xelatex(), "-interaction=nonstopmode", "-halt-on-error", tex_path.name],
-                              cwd=str(build), env=env, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=180)
+        env = lowbox.sandbox_env(fileguard.clean_env(str(Path(_xelatex()).parent)), paths.LOWTMP)   # 子进程不需要我们的 key
+        proc = lowbox.run([_xelatex(), "-interaction=nonstopmode", "-halt-on-error", tex_path.name],
+                          cwd=str(build), env=env, timeout=180)
         made = build / f"{safe}.pdf"
         if proc.returncode != 0 or not made.is_file():
             tail = "\n".join((proc.stdout or "").splitlines()[-12:])
@@ -253,13 +253,17 @@ def conv_compile(path: str) -> dict[str, Any]:
     if p.suffix.lower() != ".tex" or not p.is_file():
         raise ValueError("只能编译 .tex 文件")
     pdf = p.with_suffix(".pdf")
-    env = fileguard.clean_env(str(Path(_xelatex()).parent))       # 子进程不需要我们的 key
+    env = lowbox.sandbox_env(fileguard.clean_env(str(Path(_xelatex()).parent)), paths.LOWTMP)       # 子进程不需要我们的 key
     try:
-        proc = subprocess.run([_xelatex(), "-interaction=nonstopmode", "-halt-on-error", p.name],
-                              cwd=str(p.parent), env=env, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=240)
-    except FileNotFoundError as exc:
-        raise RuntimeError("本机没找到 xelatex（装 MiKTeX 或把它加进 PATH）") from exc
+        proc = lowbox.run([_xelatex(), "-interaction=nonstopmode", "-halt-on-error", p.name],
+                          cwd=str(p.parent), env=env, timeout=240)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) in (2, 3, None) and "xelatex" not in str(exc):
+            raise RuntimeError("本机没找到 xelatex（装 MiKTeX 或把它加进 PATH）") from exc
+        if getattr(exc, "winerror", None) == 5:
+            raise RuntimeError("xelatex 没有写入权限：这份 .tex 所在的目录还没被标成可写"
+                               "（重启一次程序即可，或把文件放进项目文件夹）") from exc
+        raise
     if proc.returncode != 0 or not pdf.is_file():
         tail = "\n".join((proc.stdout or "").splitlines()[-10:])
         raise RuntimeError(f"xelatex 失败（退出码 {proc.returncode}）：{tail[-500:]}")

@@ -1892,6 +1892,9 @@ def main() -> int:
                 _db.seed_welcome()          # 新用户首启：种一条「小智」欢迎对话（能正常删掉，删了不再出现）
         import mail
         mail.encrypt_legacy()          # 老 mail.json 里的明文授权码 → DPAPI 密文（幂等，干净时是空转）
+        # 低完整性写边界：把 data/ 和项目目录标成 Low（Low 子进程只能写这些地方）。
+        # 放到后台线程，几百篇 PDF 的 /T 也不至于让启动卡住；幂等，每次启动跑一遍没代价。
+        threading.Thread(target=paths.mark_write_roots_low, daemon=True).start()
         srv = Server(("127.0.0.1", port), Handler)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         schedule.start()          # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）

@@ -139,7 +139,8 @@ DB_PATH = Path(_db_override).expanduser() if _db_override else DATA / "research.
 MAIL_FILE = USER / "mail.json"
 LAYOUT_FILE = HOME / "layout.json"
 
-_DIRS = (HOME, DATA, USER, EXECUTORS, BACKUP, CACHE, PAPERS, NOTES, OUT, UPLOADS, REF,
+LOWTMP = CACHE / "lowtmp"          # Low 子进程（xelatex/babeldoc）的 TEMP，必须跟着标 Low
+_DIRS = (HOME, DATA, USER, EXECUTORS, BACKUP, CACHE, LOWTMP, PAPERS, NOTES, OUT, UPLOADS, REF,
          EXECUTORS / "agents", EXECUTORS / "skills", EXECUTORS / "tools")
 
 _EXEC_README = {
@@ -172,6 +173,11 @@ def ensure_layout() -> dict:
     except (OSError, ValueError):
         pass
     _harden(USER)          # 凭据：只有当前用户可读写
+    try:                   # 工具的临时目录必须也是 Low，否则 xelatex 的 PDF 后端写不进 TEMP
+        import lowbox
+        lowbox.mark_low(LOWTMP, recursive=True)
+    except Exception:
+        pass
     _harden(EXECUTORS)     # 模型能往这里写可执行文件：至少别让同机其他账号写
     return meta
 
@@ -239,6 +245,26 @@ def resolve_allowed(path: str, extra_roots: list[Path] | None = None, *, must_be
     if must_be_file and not p.is_file():
         raise ValueError(f"这不是一个文件：{p}")
     return p
+
+
+def mark_write_roots_low(verbose: bool = False) -> dict[str, str]:
+    """把「允许 Low 子进程写」的目录标成低完整性：data/ 与每个用户项目目录。
+    Low 进程（xelatex / babeldoc）只有在这里才写得进去，其它地方内核直接拒。
+    幂等；失败只报不抛（不能让权限搞挂启动）。"""
+    import lowbox
+    if not lowbox.available():
+        return {}
+    out: dict[str, str] = {}
+    for root in [DATA, *project_roots()]:
+        try:
+            if root and Path(root).is_dir():
+                ok = lowbox.mark_low(root, recursive=True)
+                out[str(root)] = "low" if ok else "failed"
+                if verbose:
+                    print("mark_low", root, out[str(root)])
+        except OSError as exc:
+            out[str(root)] = f"error: {exc}"
+    return out
 
 
 def _audit_deny(p: Path, what: str) -> None:

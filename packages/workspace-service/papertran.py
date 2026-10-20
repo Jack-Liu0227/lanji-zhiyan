@@ -288,6 +288,9 @@ def _why(code: int) -> str:
 
 def _spawn(paper_id: str, cmd: list[str], env: dict[str, str], fh: Any, a: int, b: int) -> int:
     """跑一段 babeldoc：日志边写边刷新，状态里同步进度"""
+    # 暂不进 Low IL 沙箱：uv 要写 %LOCALAPPDATA%\uv\cache 与 uv\tools（Medium），
+    # 进了沙箱会 "Failed to initialize cache / 拒绝访问"。要沙箱就得把 uv 的 tool/cache
+    # 目录也搬到 Low 位置并重装一次 babeldoc —— 留作后续（见 doc/plan/2026-10-20_真边界spike.md）。
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
                             errors="replace", env=env,
