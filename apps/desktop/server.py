@@ -128,20 +128,46 @@ def _front(hwnd: int) -> None:
     u.BringWindowToTop(hwnd)
 
 
-def _maximize(hwnd: int) -> None:
-    """--start-maximized 有时不生效（窗口起来是近似全屏但没最大化）→ 补一刀。"""
-    import ctypes
-    u = ctypes.windll.user32
-    if not u.IsZoomed(hwnd):
-        u.ShowWindow(hwnd, 3)                        # SW_MAXIMIZE
+# ---------- 旧实例接管（以前这里退回 Edge --app，会先弹小窗再被拉满 = 用户报的「闪一个小卡片」）----------
+def _port_owner(port: int) -> int:
+    """谁在听这个端口：netstat 输出是 GBK，只认 ASCII 的 PID 列。"""
+    out = subprocess.run(["netstat", "-ano"], capture_output=True).stdout.decode("mbcs", "replace")
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) >= 5 and f[0].upper() == "TCP" and f[3].upper() == "LISTENING" and f[1].endswith(f":{port}"):
+            try:
+                return int(f[4])
+            except ValueError:
+                return 0
+    return 0
 
 
-def edge() -> str | None:
-    for cand in (os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Microsoft", "Edge", "Application", "msedge.exe"),
-                 os.path.join(os.environ.get("ProgramFiles", ""), "Microsoft", "Edge", "Application", "msedge.exe")):
-        if cand and Path(cand).is_file():
-            return cand
-    return None
+def _is_our_app(pid: int) -> bool:
+    """只杀自己人：python / pythonw / 打包后的 research-workbench.exe，绝不动浏览器。"""
+    if not pid:
+        return False
+    out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                         capture_output=True).stdout.decode("mbcs", "replace").strip().lower()
+    name = out.split(",")[0].strip('"') if out else ""
+    return name in ("python.exe", "pythonw.exe") or "research-workbench" in name
+
+
+def _takeover(port: int, wait: float = 5.0) -> bool:
+    """端口被一版老构建占着（改过前端但没重启）→ 杀掉老实例，让自己接管端口。"""
+    pid = _port_owner(port)
+    if not _is_our_app(pid):
+        return False
+    try:
+        os.kill(pid, 15)                     # Windows 上等于 TerminateProcess
+    except OSError:
+        return False
+    end = time.time() + wait
+    while time.time() < end:
+        with socket.socket() as probe:
+            if probe.connect_ex(("127.0.0.1", port)) != 0:
+                return True                  # 端口放开了
+        time.sleep(0.15)
+    return False
 
 
 def _work_area() -> tuple[int, int, int, int]:
@@ -276,8 +302,9 @@ def _webview_window(url: str, stamp: int) -> bool:
         webview.settings["REMOTE_DEBUGGING_PORT"] = int(os.environ["RW_DEBUG_CDP"])
     threading.Thread(target=_watch_restore, daemon=True).start()
     try:
-        webview.create_window(
+        win = webview.create_window(
             f"{APP_TITLE} · v{stamp}", url + "&pw=1",
+            hidden=True,                          # 先藏着，_show_pinned() 钉准客户区再露脸（否则能看到尺寸跳一下）
             frameless=True, easy_drag=False,      # 拖动靠 .pywebview-drag-region（顶栏），不是抓哪儿拖哪儿
             x=int(x / s), y=int(y / s), width=int(w / s), height=int(h / s),
             min_size=(int(420 / s), int(380 / s)), background_color="#0b0f14")   # 逻辑像素！专注模式的「窄栏」只有 580 物理，按 DPI 反算，否则会把窗口钳在 ~690 宽
@@ -285,12 +312,32 @@ def _webview_window(url: str, stamp: int) -> bool:
         webview.start(gui="edgechromium", private_mode=False,   # 关掉隐私模式，localStorage/头像才留得住
                       storage_path=str(paths.CACHE / "webview"),
                       icon=str(icon) if icon.is_file() else None,
-                      func=lambda: _fit_after())
+                      func=lambda: _show_pinned(win))
         return True                                   # 关窗 → 这里返回 → main 退出 → 服务一起停
     except Exception:
         log = paths.CACHE / "server-error.log"
         log.write_text(traceback.format_exc(), encoding="utf-8")
         return False
+
+
+def _show_pinned(win: Any) -> None:
+    """先把窗口钉准再露脸。以前是 show 之后每 100ms 才钉一次，肉眼能看到
+    2465×1543 → 2488×1600 的一下跳；现在 hidden=True 起来，钉完再 show()。
+    露脸之后仍留 _fit_after 兜底：WinForms 的 AutoScaleMode.Dpi 会在 show 后再重排一次。"""
+    h = 0                                  # func 线程可能比窗口本体早一步 → 等一下再认窗口
+    for _ in range(50):
+        h = _win_hwnd()
+        if h:
+            break
+        time.sleep(0.02)
+    if h:
+        _resizable(h)                      # 先补缩放边框（会把客户区缩掉 20px），再按客户区钉
+        _fit(h, True)
+    try:
+        win.show()
+    except Exception:
+        pass
+    threading.Thread(target=_fit_after, daemon=True).start()
 
 
 def _nudge(h: int) -> None:
@@ -334,14 +381,15 @@ def _fit_after() -> None:
     """窗口起来后把矩形钉到工作区。WinForms 的 AutoScaleMode.Dpi 会在窗口 show 之后
     自己重排一次尺寸（实测 2488x1600 被打回 1866x1200 居中），所以 4 秒内每隔 100ms
     检查一次，偏了就再钉一次；钉住了就不再碰（避免反复重排把页面刷花）。
-    没有开始卡片了，起来直接钉满工作区。"""
-    pinned = False
+    **补边框要排在任何钉框之前**：_resizable 会把客户区缩掉 20px，先钉后补边框等于白跳一下。"""
+    framed = False
     for _ in range(40):
         h = _win_hwnd()
-        if h and not _at_work_area(h):
-            _fit(h, True)
-        if h and not pinned:                     # 首次拿到窗口就补缩放边框（之后能拖边改宽窄）
-            pinned = _resizable(h)
+        if h:
+            if not framed:
+                framed = _resizable(h)
+            if not _at_work_area(h):
+                _fit(h, True)
         time.sleep(0.1)
 
 
@@ -1800,6 +1848,15 @@ def main() -> int:
     global STAMP
     STAMP = stamp
     url = f"http://127.0.0.1:{port}/?v={stamp}"
+    if busy and "--no-open" not in sys.argv:
+        same = [h for h, title in _app_windows() if f"v{stamp}" in title]
+        if same:                                  # 已经有一扇「这一版」的窗 → 只置前，绝不开第二扇
+            for h in same:
+                _front(h)
+            return 0
+        # 端口被老构建占着（改过前端没重启）：杀掉老实例让自己接管，不再退回 Edge --app 兜底 ——
+        # 那条路径 --start-maximized 时常不生效，先弹个小窗再被拉满，就是「闪一个小卡片」。
+        busy = not _takeover(port)
     if busy:
         print(f"览籍智研已在运行：{url}")
     else:
@@ -1818,30 +1875,11 @@ def main() -> int:
         team.start_worker()       # 团队派活队列（串行：一次跑一个成员）
         print(f"览籍智研已启动：{url}")
     if "--no-open" not in sys.argv:
-        # 已经有「这一版」的窗口 → 把它从最小化恢复并置前，不再开新的
-        same = [h for h, title in _app_windows() if f"v{stamp}" in title]
-        if same:
-            for h in same:
-                _front(h)
-        elif not busy and _webview_window(url, stamp):
-            # 自己的无边框窗口（没有系统标题栏，顶栏是页面自己画的）→ 关窗即退出
+        # 自己的无边框窗口；起不来（没装 pywebview / WebView2 运行时）才退回系统浏览器。
+        # Edge --app 兜底已删：它会先弹个小窗再被 _maximize 拉满（「闪一个小卡片」）。
+        if not busy and _webview_window(url, stamp):
             return 0
-        else:
-            exe = edge()
-            try:
-                if exe:
-                    # 退回 Edge --app（旧路径，会带一条系统标题栏）；默认铺满屏幕
-                    subprocess.Popen([exe, f"--app={url}", "--start-maximized"],
-                                     creationflags=0x00000008)  # DETACHED_PROCESS
-                    for _ in range(12):                       # 等窗口起来再置前（新开的也不保证在前）
-                        time.sleep(0.5)
-                        opened = [h for h, t in _app_windows() if f"v{stamp}" in t]
-                        if opened:
-                            _front(opened[0]); _maximize(opened[0]); break
-                else:
-                    webbrowser.open(url)
-            except OSError:
-                webbrowser.open(url)
+        webbrowser.open(url)
     if busy:
         return 0
     try:
