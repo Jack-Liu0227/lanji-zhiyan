@@ -1,7 +1,6 @@
 """Browser regressions for real provider/assistant/team settings and persistence."""
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 import socket
@@ -123,7 +122,7 @@ class AgentSettingsWebTest(unittest.TestCase):
         a = self.post("/api/agent-settings/assistant-save", {"name":"Team browser assistant", "enabled":False})["assistant"]
         self.post("/api/agent-settings/assistant-save", {"id":"builtin-searcher", "enabled":False})
         page.evaluate("refreshState(false)")
-        page.evaluate("openTab('team')")
+        page.evaluate("window.__teamMode='manage'; openTab('team')")
         page.locator("#ag-team-new").click()
         page.locator("#ag-t-name").fill("Browser durable team")
         page.locator("#ag-t-desc").fill("Editable team fixture")
@@ -148,6 +147,7 @@ class AgentSettingsWebTest(unittest.TestCase):
         page.wait_for_function("document.querySelector('#ag-team-session').value===document.querySelector('#ag-team-session option:checked').value")
         page.reload(wait_until="networkidle")
         page.wait_for_function("S.loaded")
+        page.evaluate("window.__teamMode='manage'; openTab('team')")
         page.wait_for_selector("#ag-team-session")
         self.assertEqual(page.locator("#ag-team-session").input_value(), previous)
         self.assertEqual(self.errors, [])
@@ -168,7 +168,7 @@ class AgentSettingsWebTest(unittest.TestCase):
                 assistant_id: body.assistant_id, session_id: 'session-' + body.assistant_id,
                 region: body.region, qr_url: 'https://accounts.feishu.cn/device?user_code=TEST',
                 qr_svg: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCI+PHJlY3Qgd2lkdGg9IjEwIiBoZWlnaHQ9IjEwIiBmaWxsPSIjMDAwIi8+PC9zdmc+',
-                interval: 30, expires_in: 60, status: 'pending'
+                interval: 1, expires_in: 60, status: 'pending'
               };
               if (path.endsWith('/poll')) return {status: 'pending', interval: 30, expires_in: 60};
               return {status: 'cancelled'};
@@ -182,6 +182,9 @@ class AgentSettingsWebTest(unittest.TestCase):
         page.locator("#fs-device-begin").click()
         page.wait_for_selector("#fs-device-qr img")
         self.assertIn(first, page.evaluate("__registrationCalls.find(c => c.path.endsWith('/begin')).body.assistant_id"))
+        page.wait_for_function("window.__registrationCalls.some(c => c.path.endsWith('/poll'))")
+        poll = page.evaluate("__registrationCalls.find(c => c.path.endsWith('/poll'))")
+        self.assertEqual(poll["body"], {"assistant_id": first, "session_id": "session-" + first})
 
         page.locator("#int-assistant").select_option(second)
         page.wait_for_function("document.querySelector('#fs-device-qr')?.innerText.includes('点击')")

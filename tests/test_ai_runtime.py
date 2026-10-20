@@ -5,13 +5,10 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-import runtime
 from runtime import (
-    AIRuntimeError,
     Budget,
     BudgetExceededError,
     CancelledError,
-    GLOBAL_TELEMETRY,
     RetryPolicy,
     Telemetry,
     call,

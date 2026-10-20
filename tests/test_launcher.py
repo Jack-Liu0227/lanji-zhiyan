@@ -13,7 +13,7 @@ import venv
 
 
 ROOT = Path(__file__).resolve().parents[1]
-LAUNCHER = ROOT / "tools" / "\u542f\u52a8\u89c8\u7c4d\u667a\u7814.bat"
+LAUNCHER = ROOT / "tools" / "start.bat"
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows batch launcher")

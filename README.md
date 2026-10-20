@@ -14,7 +14,7 @@
 
 ```powershell
 cd research-workbench
-tools\启动览籍智研.bat               # 自动选择本机 Python，打开无边框桌面窗口
+tools\start.bat                      # 自动选择本机 Python，打开无边框桌面窗口
 python apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开浏览器
 ```
 
@@ -22,9 +22,9 @@ python apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开
 
 如果启动检查失败，脚本会显示错误并暂停，详细信息保存在 `data/startup.log`；服务启动后的异常见 `apps/desktop/data/server-error.log`。按错误提示，用选中的 Python 执行 `-m pip install -r requirements.txt` 修复依赖。
 
-**下载安装**（GitHub Releases）：<https://github.com/3276166289-code/research-workbench/releases/latest> —— 两个资产：`ResearchWorkbench-Setup.exe`（单文件安装器，双击即装、自动建桌面快捷方式）与 `ResearchWorkbench.zip`（免安装，解压双击里面的 `ResearchWorkbench.exe`）。
+**下载安装**（GitHub Releases）：<https://github.com/Jack-Liu0227/lanji-zhiyan/releases/latest> —— 两个资产：`览籍智研-0.1.0-安装程序.exe`（单文件安装器，双击即装、自动建桌面快捷方式）与 `览籍智研-0.1.0-win64.zip`（免安装，解压双击里面的 `ResearchWorkbench.exe`）。
 
-**自己打包**：双击 `toolsuild.bat`（用 `tools\ResearchWorkbench.spec`，入口 `apps/desktop/server.py`）→ `dist\ResearchWorkbench\`；要单文件安装器再打 `tools\ResearchWorkbench-Setup.spec`（入口 `tools/installer.py`）。**必须用 3.10 打包**，否则运行时会静默退回带黑标题栏的 Edge 窗口。
+**自己打包**：双击 `tools\build-app.bat`（用 `tools\lanji-zhiyan.spec`，入口 `apps/desktop/server.py`）→ `dist\ResearchWorkbench\`；要单文件安装器再打 `tools\installer.spec`（入口 `tools/installer.py`）。**必须用 3.10 打包**，否则运行时会静默退回带黑标题栏的 Edge 窗口。
 
 ---
 
@@ -52,7 +52,7 @@ python apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开
 ## 三、怎么验（改完必跑）
 
 ```bash
-tools\自检.bat                                  # 一条命令跑完：Python 自检 + 前端主题自检 + 悬空 id 体检 + JS 语法
+tools\check.bat                                 # 一条命令跑完：Python 自检 + 前端主题自检 + 悬空 id 体检 + JS 语法
 python -m unittest discover -s tests -t .    # Python 自检（等价的第一条）
 node apps/desktop/web/theme.test.mjs            # 主题配色（HSL 往返 / 明暗推导 / 对比度 ≥ AA）
 node apps/desktop/web/ids.test.mjs              # 悬空 id（$("x") 引用了页面里没有的 id）
@@ -93,12 +93,13 @@ node apps/desktop/web/ids.test.mjs              # 悬空 id（$("x") 引用了�
 |---|---|
 | `apps/desktop/server.py` | 纯标准库 HTTP 服务（ThreadingHTTPServer）：静态页 + JSON API + `/api/agent` 等 SSE；启动即开无边框窗。**桌面快捷方式直接指这个文件** |
 | `packages/workspace-service/workflow.py` | 十步工作流、三源检索、OA 下载、精读、翻译、大纲/撰写/审查/谱系、引用台账、中译英、格式转换、日历、模型档案、Agent 工具循环（含子 agent 委派）、项目记忆与六子目录 |
-| `research_core.py` | 核心库：SQLite、任务、PDF 入库（SHA256 去重/逐页文本）、证据闸门、导出 |
-| `team.py` / `schedule.py` / `rss.py` / `vault.py` / `zotero.py` / `mail.py` / `papertran.py` / `pdfio.py` / `guards.py` / `integrations.py` | 团队、定时任务、情报日报、Obsidian、Zotero（只读本地 API）、邮箱、论文翻译、PDF 适配层、出站脱敏+引用核验、Obsidian 预览写入 |
-| `apps/desktop/web/` | 单文件前端 `index.html`（CSS/JS 全内联）+ `vendor/`（marked / DOMPurify / KaTeX / pdf.js / lunar / splash / kb3d）+ 主题自检 |
-| `tests/` | 自检 14 个文件（114 项） |
-| `tools/` | `自检.bat` / `build.bat` / `启动览籍智研.bat` / `*.spec` / `install.ps1` / `installer.py` / `hooks/` / `build/icon.ico`（打包与自检都在这里） |
-| `packages/` | 按目标仓的分包布局：`database`（research_core）/ `workspace-service`（workflow·team·schedule·papertran）/ `connectors`（zotero·vault·mail·rss·integrations）/ `workspace-core`（guards·pdfio）/ `contracts`（Provider 目录）/ `ai-runtime`（agent 运行时占位，见其 README） |
-| `docs/` | `交接.md`（内部交接，gitignore 外的说明在 README） |
+| `packages/database/research_core.py` | 核心库：SQLite、任务、PDF 入库（SHA256 去重/逐页文本）、证据闸门、导出 |
+| `packages/workspace-service/` | 工作流、团队、定时任务、论文翻译、项目待办、扩展路由（`feature_routes.py`） |
+| `packages/connectors/` | Zotero、Obsidian、邮箱、RSS、easyScholar、飞书等外部连接器 |
+| `apps/desktop/web/` | 单文件前端 `index.html`（CSS/JS 全内联）+ `vendor/`（marked / DOMPurify / KaTeX / pdf.js / lunar / starmap / neural）+ 主题自检 |
+| `tests/` | 单元测试与浏览器回归（`python -m unittest discover -s tests -t .`） |
+| `tools/` | `check.bat` / `build-app.bat` / `start.bat` / `*.spec` / `install.ps1` / `installer.py` / `hooks/` / `build/icon.ico`（打包与自检都在这里） |
+| `packages/` | 分包布局：`database` / `workspace-service` / `workspace-core` / `connectors` / `contracts` / `ai-runtime` |
+| `doc/` | 设计、计划、诊断与改动记录（`doc/CHANGELOG.md`） |
 | `data/` | 全部数据（`research.sqlite3` + `papers/` `notes/` `out/` `uploads/`） |
 | `交接.md` | 给下一个会话的交接（现状 / 坑 / 待办） |

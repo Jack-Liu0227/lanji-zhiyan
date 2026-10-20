@@ -49,7 +49,7 @@ import feishu
 import zotero_sync
 import agent_integrations
 import reproduction_routes
-import v130_routes
+import feature_routes
 from run_manager import RunManager
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
@@ -490,7 +490,7 @@ class Handler(BaseHTTPRequestHandler):
             return False
         try:
             with WorkflowDB(DB_PATH) as db:
-                for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync, reproduction_routes, v130_routes):
+                for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync, reproduction_routes, feature_routes):
                     result = extension.route(method, path, body, query, db)
                     if result is not None:
                         # These explicit user actions may reveal credentials; never put them in general state.

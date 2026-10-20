@@ -1,7 +1,6 @@
 """Tests for Section 5 RESTful API reproduction routes."""
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path

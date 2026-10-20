@@ -38,5 +38,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['build/icon.ico'],
+    icon=[os.path.join(_ROOT, 'tools', 'build', 'icon.ico')],
 )

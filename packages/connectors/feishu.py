@@ -127,6 +127,29 @@ def _registration_region(domain: str) -> str:
     return "lark" if REGISTRATION_LARK in str(domain or "") else "feishu"
 
 
+def _registration_qr_is_trusted(parsed: urllib.parse.ParseResult, region: str) -> bool:
+    """Validate the official device-authorization landing page URL.
+
+    Registration is served from ``accounts.*``, while current responses point
+    the QR at ``open.*`` (for example ``/page/launcher``).  Both are official;
+    constrain the host and path so an upstream response cannot inject an
+    arbitrary link into the desktop UI.
+    """
+    if parsed.scheme != "https":
+        return False
+    if region == "feishu":
+        hosts = {"accounts.feishu.cn", "open.feishu.cn"}
+    else:
+        hosts = {"accounts.larksuite.com", "open.larksuite.com"}
+    hostname = (parsed.hostname or "").lower()
+    if hostname not in hosts:
+        return False
+    if hostname.startswith("open."):
+        return parsed.path.rstrip("/") in {"/page/launcher", "/page/cli"}
+    # Older responses (and existing clients) use /device on accounts.*.
+    return parsed.path.startswith("/device")
+
+
 def _registration_http(domain: str, payload: dict[str, str]) -> dict:
     """Make a device-flow form request; non-2xx JSON can be a poll status."""
     endpoint = str(domain).rstrip("/") + REGISTRATION_PATH
@@ -197,7 +220,7 @@ def registration_begin(db: Any, aid: str, body: dict | None = None) -> dict:
     if not device_code or not qr_url:
         raise ValueError("飞书注册服务未返回完整扫码信息")
     parsed = urllib.parse.urlparse(qr_url)
-    if parsed.scheme != "https" or parsed.hostname not in {"accounts.feishu.cn", "accounts.larksuite.com"}:
+    if not _registration_qr_is_trusted(parsed, _registration_region(domain)):
         raise ValueError("飞书注册服务返回了不受信任的扫码地址")
     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
     query.update({"from": ["sdk"], "tp": ["sdk"], "source": ["research-workbench"]})

@@ -155,7 +155,6 @@ _p = pathlib.Path(tempfile.gettempdir()) / "teams_unit.sqlite3"
 os.environ["RESEARCH_WORKBENCH_DB"] = str(_p)
 
 import team  # noqa: E402
-import workflow  # noqa: E402
 
 team.DB_PATH = _p
 
@@ -304,7 +303,6 @@ _p = pathlib.Path(tempfile.gettempdir()) / "team2_unit.sqlite3"
 os.environ["RESEARCH_WORKBENCH_DB"] = str(_p)
 
 import team  # noqa: E402
-import workflow  # noqa: E402
 
 team.DB_PATH = _p
 

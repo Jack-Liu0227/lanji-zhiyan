@@ -131,7 +131,7 @@
       container.innerHTML = `<div class="ag-head"><div><h3>模型与 Provider</h3><p class="hint">先选择 Provider 配置，再拉取或手动添加模型。已配置的模型可在助手和团队中选择。</p></div></div>
         <div class="card ag-row"><label style="flex:1">支持的 Provider <select class="control" id="ag-provider-select"><option value="">选择 Provider…</option>${registry.catalog.map(p => `<option value="${h(p.id)}">${h(p.name)}${p.supported ? "" : "（请改选兼容协议）"}</option>`).join("")}<option value="custom">自定义兼容接口</option></select></label><button class="btn btn-primary" id="ag-provider-add">配置</button></div>
         <h4 style="margin-top:20px">可选模型 · ${S.models.length}</h4><div class="ag-model-grid">${S.models.map(mm => `<div class="card"><b>${h(mm.name)}</b><p class="ag-meta">${h(mm.api || "openai-completions")}</p><button class="btn ghost" data-ag-active="${h(mm.id)}">${S.active?.id === mm.id ? "当前默认" : "设为默认"}</button></div>`).join("") || `<p class="hint">还没有配置模型。请先添加 Provider。</p>`}</div>
-        <h4 style="margin-top:24px">已配置的 Provider · ${registry.providers.length}</h4><div class="ag-grid">${registry.providers.map(p => `<article class="card"><div class="ag-head"><b>${h(p.name)}</b><span class="pill">${p.models.length} 模型</span></div><p class="ag-meta">${h(p.base_url)}<br>${h(p.api)} · Key ${p.key_present ? "已保存" : "未设置"}</p><div class="ag-row"><button class="btn" data-ag-provider="${h(p.id)}">查看 / 编辑</button><button class="btn ghost" data-ag-provider-del="${h(p.id)}">移除</button></div></article>`).join("")}</div>`;
+        <h4 style="margin-top:24px">已配置的 Provider · ${registry.providers.length}</h4><div class="ag-grid">${registry.providers.map(p => `<article class="card"><div class="ag-head"><b>${h(p.name)}</b><span class="pill">${p.models.length} 模型</span></div><p class="ag-meta">${h(p.base_url)}<br>${h(p.api)} · Key ${p.key_invalid ? `<span style="color:var(--err,#bd3f34);font-weight:600">⚠️ 解密失败（请重填）</span>` : (p.key_present ? "已保存" : "未设置")}</p><div class="ag-row"><button class="btn" data-ag-provider="${h(p.id)}">查看 / 编辑</button><button class="btn ghost" data-ag-provider-del="${h(p.id)}">移除</button></div></article>`).join("")}</div>`;
       el("ag-provider-add").onclick = () => {
         const id = el("ag-provider-select").value;
         if (!id) return alert("请先选择 Provider。");
@@ -176,13 +176,19 @@
           const remove = document.createElement("button"); remove.className = "btn ghost"; remove.textContent = "删除助手";
           remove.onclick = async () => { if (!confirm("删除此助手？已有会话和历史消息仍保留。")) return; try { await api("/api/assistant/delete",{id:a.id}); assistantId = null; await saved(); render(); } catch(e) { alert(e.message); } }; actions.append(remove);
         }
-        el("ag-a-chat").onclick = async () => { try { const r = await api("/api/chat/create",{title:a.name}); curChat = r.id || r.chat?.id; await useAssistant(a.id); } catch(e) { alert(e.message); } };
+        el("ag-a-chat").onclick = async () => { try { const r = await api("/api/chat/create",{title:a.name}); curChat = r.id || r.chat?.id; await useAssistant(a.id === "builtin-steward" ? "" : a.id); } catch(e) { alert(e.message); } };
         if (el("ag-a-toggle")) el("ag-a-toggle").onclick = async () => { try { await request("assistant-save",{id:a.id,enabled:!a.enabled}); await saved(); render(); } catch(e) { alert(e.message); } };
         container.querySelectorAll("[data-ag-history]").forEach(b => b.onclick = async () => { curChat = b.dataset.agHistory; localStorage.setItem("rw-chat",curChat); await refreshState(false); openTab("agent"); });
         document.dispatchEvent(new CustomEvent("rw:assistant-detail",{detail:{assistant:a,container}}));
         return;
-      }
-      const list = S.assistants.filter(a => assistantFilter === "all" || (assistantFilter === "user" ? a.source === "user" : a.source !== "user"));
+        }
+      const list = S.assistants
+        .filter(a => assistantFilter === "all" || (assistantFilter === "user" ? a.source === "user" : (assistantFilter === "public" ? a.source !== "user" : true)))
+        .sort((x, y) => {
+          if (x.id === "builtin-steward") return -1;
+          if (y.id === "builtin-steward") return 1;
+          return (x.sort_order ?? 0) - (y.sort_order ?? 0);
+        });
       container.innerHTML = `<div class="ag-head"><div><p class="inst-label">EXPERTS</p><h3>专家</h3><p class="hint">所有我的专家和已启用系统专家均可被选择；没有数量截断。点击卡片右上角可立即启用/停用。</p></div><div class="ag-row"><button class="btn btn-sm" id="ag-as-all-on">全部启用</button><button class="btn btn-sm ghost" id="ag-as-all-off">全部停用</button><button class="btn btn-primary" id="ag-assistant-new">＋ 新建专家</button></div></div><div class="ag-row">${[["all","全部专家"],["public","系统专家"],["user","我的专家"]].map(([id,label]) => `<button class="btn ${assistantFilter === id ? "btn-primary" : ""}" data-ag-as-filter="${id}">${label}</button>`).join("")}</div><div class="ag-grid">${list.map(a => `<article class="card"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><h4>${h(a.avatar || "👨‍🔬")} ${h(a.name)}</h4><button class="as-toggle ${a.enabled !== 0 ? "on" : "off"}" data-ag-as-toggle="${h(a.id)}" title="${a.enabled !== 0 ? "已启用（点击停用）" : "未启用（点击启用）"}"><span class="as-knob"></span><span class="as-toggle-txt">${a.enabled !== 0 ? "已启用" : "未启用"}</span></button></div><p class="ag-meta">${h(a.description || "（暂无专长描述）")}</p><p class="ag-meta">${a.source === "user" ? "自建 · 始终可选" : (a.enabled ? "系统 · 已启用" : "系统 · 未启用")} · ${h(S.models.find(m => m.id === a.model_id)?.name || "自动模型")}</p><div class="ag-row" style="margin-top:8px;gap:8px"><button class="btn btn-primary as-go" data-ag-chat-as="${h(a.id)}">💬 去对话</button><button class="btn" data-ag-assistant="${h(a.id)}">查看 / 编辑</button></div></article>`).join("") || `<p class="hint">尚无专家，点击“新建专家”。</p>`}</div>`;
       el("ag-assistant-new").onclick = () => assistantEditor({id:"",name:"",rules:"",enabled:1});
       const bOn = el("ag-as-all-on"), bOff = el("ag-as-all-off");
@@ -222,13 +228,14 @@
       container.querySelectorAll("[data-ag-chat-as]").forEach(b => b.onclick = async (e) => {
         e.stopPropagation();
         const aid = b.dataset.agChatAs;
+        const targetAid = aid === "builtin-steward" ? "" : aid;
         if (typeof useAssistant === "function") {
-          await useAssistant(aid);
+          await useAssistant(targetAid);
         } else {
           try {
             const r = await api("/api/chat/create", {});
             const cid = r.id || r.chat?.id;
-            await api("/api/chat/assistant", {id: cid, assistant_id: aid});
+            await api("/api/chat/assistant", {id: cid, assistant_id: targetAid});
             curChat = cid; localStorage.setItem("rw-chat", cid);
             await refreshState(false);
             openTab("agent");
@@ -260,7 +267,7 @@
       await load();
       const all = (await api("/api/teams?project=" + encodeURIComponent(curTask || ""))).teams || [];
       if (!all.some(t => t.id === teamScope)) teamScope = all[0]?.id || "";
-      if (!teamScope) { container.innerHTML = `<div class="card"><h3>团队配置</h3><button class="btn" id="ag-team-empty">新建团队</button></div>`; el("ag-team-empty").onclick = () => teamEditor(); return; }
+      if (!teamScope) { container.innerHTML = `<div class="card"><h3>团队配置</h3><button class="btn" id="ag-team-new">新建团队</button></div>`; el("ag-team-new").onclick = () => teamEditor(); return; }
       const data = await api(endpoint + "team-detail?id=" + encodeURIComponent(teamScope) + (teamSession ? "&session_id=" + encodeURIComponent(teamSession) : ""));
       if (!container.isConnected || route() !== expectedRoute || epoch !== viewEpoch) return;
       const t = data.team || all.find(x => x.id === teamScope) || {}, running = data.running;
@@ -290,7 +297,7 @@
   renderAgent = function(container) {
     originalRenderAgent(container);
     const pick = el("assist"), chat = (S.chats || []).find(c => c.id === curChat);
-    if (pick) pick.innerHTML = `<option value="">智研管家（全局）</option>${(S.assistants || []).filter(eligible).map(a => `<option value="${h(a.id)}" ${chat?.assistant_id === a.id ? "selected" : ""}>${h(a.name)}</option>`).join("")}`;
+    if (pick) pick.innerHTML = `<option value="">智研管家（全局）</option>${(S.assistants || []).filter(a => eligible(a) && a.id !== "builtin-steward").map(a => `<option value="${h(a.id)}" ${chat?.assistant_id === a.id ? "selected" : ""}>${h(a.name)}</option>`).join("")}`;
     const model = el("modpick");
     if (model && chat) {
       const bound = S.assistants.find(a => a.id === chat.assistant_id);

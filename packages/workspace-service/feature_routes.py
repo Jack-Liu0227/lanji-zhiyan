@@ -1,4 +1,4 @@
-"""v1.3.0 业务扩展路由网关：easyScholar 分区、Zotero MCP、项目待办 (TODO)、项目空间搜索与笔记预览。"""
+"""业务扩展路由：easyScholar 分区、Zotero MCP、项目待办 (TODO)、项目空间搜索与笔记预览。"""
 from __future__ import annotations
 
 from typing import Any
@@ -90,7 +90,11 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[st
     if path == "/api/zotero/mcp/enable" and method == "POST":
         return capabilities.ensure_zotero_mcp(db)
 
-    # ---------------- 3. 项目待办 (TODO) ----------------
+    # ---------------- 3. 项目待办 (TODO) 与 看板概览 (Kanban) ----------------
+    if path == "/api/kanban/overview" and method == "GET":
+        task_id = (query.get("task_id") or [""])[0]
+        return project_todos.kanban_overview(db, task_id)
+
     if path == "/api/todos" and method == "GET":
         task_id = (query.get("task_id") or [""])[0]
         return {"todos": project_todos.list_todos(db, task_id)}
@@ -104,6 +108,7 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[st
             priority=str(body.get("priority", "P1")),
             assigned_assistant=str(body.get("assigned_assistant", "")),
             due_date=str(body.get("due_date", "")),
+            stage=str(body.get("stage", "")),
         )
 
     if path == "/api/todos/update" and method == "POST":

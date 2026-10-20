@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 import guards
 from workflow_documents import (
-    doc_read, doc_write, doc_tools, map_tools, outline_system,
+    doc_read, doc_tools, map_tools, outline_system,
     map_system, write_system, review_system, evidence_system,
     critic_system, EVIDENCE_TOOLS, CRITIC_TOOLS, PIPELINE_WORDS,
 )
@@ -66,7 +66,6 @@ def _audit(db: Any, task_id: str, online: bool = False) -> dict[str, Any]:
 
 
 def _run_write_pipeline(db: Any, task_id: str, text: str, emit: Any, system: str) -> dict[str, Any]:
-    import workflow
     say = emit or (lambda _e: None)
     events: list[dict[str, Any]] = []
     db.add_message(task_id, "user", text, scope="write")

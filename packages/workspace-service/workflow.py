@@ -2009,7 +2009,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                "跨项目的事让用户回首页 Agent（智研管家）做。\n"
                f"当前项目：{task['title']}\n研究问题：{task['question']}\n"
                f"关键词 / 材料体系：{task['material_system']}\n项目 ID：{task_id}\n产出目录：{db.out_dir(task_id)}")
-    if aid:                           # Also applies to each team's selected assistant.
+    # builtin-steward 的 rules 就是 AGENT_SYSTEM，首页/通用对话上面已经整段写过了，再套一层【当前助手】等于把同一段话重复一遍
+    if aid and aid != "builtin-steward":   # Also applies to each team's selected assistant.
         try:
             asst = db.require_assistant(aid)
         except Exception:

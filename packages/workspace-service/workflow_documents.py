@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import fileguard
 import paths
 import pdfio
 from research_core import now
 from workflow_prompts import OUTLINE_TEMPLATE, _schema, DELEGATE_TOOL, skill_text
+
+if TYPE_CHECKING:
+    from workflow import WorkflowDB
 
 DATA, PAPERS, NOTES, OUT = paths.DATA, paths.PAPERS, paths.NOTES, paths.OUT
 

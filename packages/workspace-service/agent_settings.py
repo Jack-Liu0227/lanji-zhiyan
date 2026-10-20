@@ -46,7 +46,10 @@ def validate_runtime_fields(db, fields):
 
 
 def public(row):
-    return {**{k: v for k, v in row.items() if k != "api_key"}, "key_present": bool(row.get("api_key"))}
+    return {**{k: v for k, v in row.items() if k != "api_key"},
+            "key_present": bool(row.get("api_key")),
+            "key_invalid": bool(row.get("key_invalid")),
+            "key_error": row.get("key_error") or ""}
 
 
 def sync_provider_models(db, pid):
@@ -107,8 +110,12 @@ def set_leader(db, team_id, member_id):
 
 def runtime_config(db, task_id, assistant_id="", member=None):
     aid = assistant_id or db.assistant_of_chat(task_id)
-    a = db.require_assistant(aid) if aid else {}
-    cfg = {"model_id": a.get("model_id", ""), "reasoning": a.get("reasoning", "auto"), "permission": a.get("permission", "auto"), "assistant_id": aid}
+    if not aid or aid == "builtin-steward":
+        steward = db.assistant("builtin-steward") or {}
+        cfg = {"model_id": steward.get("model_id", ""), "reasoning": steward.get("reasoning", "auto"), "permission": steward.get("permission", "auto"), "assistant_id": aid or "builtin-steward"}
+    else:
+        a = db.require_assistant(aid)
+        cfg = {"model_id": a.get("model_id", ""), "reasoning": a.get("reasoning", "auto"), "permission": a.get("permission", "auto"), "assistant_id": aid}
     if member is None:
         row = db.db.execute("SELECT model_id,reasoning,permission FROM chats WHERE id=?", (task_id,)).fetchone()
         if row:

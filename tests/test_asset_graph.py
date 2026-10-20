@@ -11,7 +11,7 @@ for name in ("database", "workspace-core", "workspace-service"):
     sys.path.insert(0, str(ROOT / "packages" / name))
 
 import asset_service
-import v130_routes as feature_routes
+import feature_routes
 import run_service
 import workflow
 

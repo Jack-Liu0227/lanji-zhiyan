@@ -239,20 +239,36 @@ function mdBind(m){
 }
 /* ---------------- Zotero 接入（只读；本机 Local API 127.0.0.1:23119） ----------------
    不读 zotero.sqlite、不写回、不后台同步。取到的条目走原有「新建笔记」，所以前台流程不变。 */
-let zotRows = [], zotStart = 0, zotMore = false;
+let zotRows = [], zotStart = 0, zotMore = false, zotSelectedKeys = new Set();
 const zotSub = (it)=>[ (it.creators||[]).slice(0,3).join(", "), it.year, it.venue ].filter(Boolean).join(" · ");
 function zotRowHTML(it){
-  const badge = it.type === "note" ? `<em class="md-bind">📝 Zotero 笔记</em>`
-              : (it.doi ? `<em class="md-bind">DOI</em>` : "");
-  return `<div class="md-note-item" data-zot-key="${esc(it.key)}">
-      <b>${esc(it.title || "(无标题)")}</b>${badge}<span>${esc(zotSub(it))}</span></div>`;
+  const badge = it.type === "note" ? `<em class="md-bind" style="background:#4ade8022;color:#4ade80">📝 笔记</em>`
+              : (it.doi ? `<em class="md-bind" style="background:#60a5fa22;color:#60a5fa" title="DOI: ${esc(it.doi)}">DOI</em>` : "");
+  const venue = it.venue ? `<span style="font-size:11px;background:var(--bg-sub);color:var(--muted);padding:1px 6px;border-radius:4px">${esc(it.venue)}</span>` : "";
+  const tags = (it.tags || []).slice(0, 4).map(t => `<span class="pill sm" style="font-size:10.5px">#${esc(t)}</span>`).join(" ");
+  const checked = zotSelectedKeys.has(it.key) ? "checked" : "";
+  return `<div class="zot-row-card" data-zot-key="${esc(it.key)}" style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--card)">
+      <input type="checkbox" class="zot-cb" data-zot-cb="${esc(it.key)}" ${checked} style="margin-top:4px;cursor:pointer">
+      <div style="flex:1;min-width:0;cursor:pointer" data-zot-select="${esc(it.key)}">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <b style="font-size:13.5px;color:var(--fg)">${esc(it.title || "(无标题)")}</b>
+          ${badge} ${venue}
+        </div>
+        <div style="color:var(--muted);font-size:12px;margin:3px 0">${esc(zotSub(it))}</div>
+        ${it.abstract ? `<div style="color:var(--muted);font-size:11.5px;line-height:1.4;max-height:2.8em;overflow:hidden;opacity:0.85">${esc(it.abstract)}</div>` : ""}
+        ${tags ? `<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">${tags}</div>` : ""}
+      </div>
+      <button class="btn sm ghost zot-single-note" data-zot-note="${esc(it.key)}" title="将题录与批注存为单篇本地笔记" style="padding:2px 8px;font-size:11.5px;white-space:nowrap">存为笔记</button>
+  </div>`;
 }
 function zotClose(){ $("zoteroModal")?.classList.add("hidden"); }
 async function zotOpen(){
   const box = $("zoteroModal"); if(!box) return;
   box.classList.remove("hidden");
-  $("zotStatus").textContent = "正在连接 Zotero…";
+  $("zotStatus").textContent = "正在连接 Zotero 本地库…";
   $("zotList").innerHTML = ""; $("zotCount").textContent = ""; $("zotCollection").innerHTML = "";
+  zotSelectedKeys.clear();
+  if($("zotSelectAll")) $("zotSelectAll").checked = false;
   try{
     const st = await api("/api/zotero/status");
     $("zotStatus").textContent = st.message || "";
@@ -263,8 +279,13 @@ async function zotOpen(){
     await zotLoad(true);
   }catch(e){ $("zotStatus").textContent = "读 Zotero 失败：" + e.message; }
 }
+window.zotOpen = zotOpen;
 async function zotLoad(reset){
-  if(reset) zotStart = 0;
+  if(reset){
+    zotStart = 0;
+    zotSelectedKeys.clear();
+    if($("zotSelectAll")) $("zotSelectAll").checked = false;
+  }
   const qs = new URLSearchParams({ collection: $("zotCollection").value,
     q: $("zotQuery").value.trim(), start: String(zotStart), limit: "30" });
   const d = await api("/api/zotero/items?" + qs.toString());
@@ -287,26 +308,74 @@ function zotBind(){
   const box = $("zoteroModal"); if(!box) return;
   box.querySelector(".modal-mask").onclick = zotClose;
   $("btnZotClose").onclick = zotClose;
-  // 页脚那个「关闭」按钮在 v1.2.0 的模态框重排里删掉了（只留标题栏 ✕ + 点遮罩关），
-  // 这里的绑定一并去掉 —— 它原来在顶层执行，取到 null 会抛错、把后面所有初始化全带没，整个界面起不来。
+  function updateZotSelectCount(){
+    const n = zotSelectedKeys.size;
+    const btn = $("zotToProject");
+    if(btn){
+      btn.textContent = n > 0 ? `导入所选 ${n} 篇到项目` : "导入当前分类到项目";
+    }
+  }
+  const selAll = $("zotSelectAll");
+  if(selAll){
+    selAll.onchange = (e)=>{
+      const on = e.target.checked;
+      zotRows.forEach(r => { if(on) zotSelectedKeys.add(r.key); else zotSelectedKeys.delete(r.key); });
+      box.querySelectorAll(".zot-cb").forEach(cb => { cb.checked = on; });
+      updateZotSelectCount();
+    };
+  }
   $("zotCollection").onchange = ()=>zotLoad(true).catch(e=>mdFail(e,"读条目"));
   $("zotSearch").onclick = ()=>zotLoad(true).catch(e=>mdFail(e,"搜索"));
   $("zotQuery").onkeydown = (e)=>{ if(e.key === "Enter") zotLoad(true).catch(err=>mdFail(err,"搜索")); };
-  $("zotToProject").onclick = async ()=>{                 // 分类 → 本项目队列：题录+本机PDF，不联网不下载
-    if(!curTask) return alert("先在上面选一个项目，再导入");
+  $("zotToProject").onclick = async ()=>{
+    if(!curTask) return alert("请先在顶部选择或新建一个项目，再导入文献");
     const btn = $("zotToProject"); btn.disabled = true;
-    $("zotStatus").textContent = "正在从 Zotero 导入…";
+    $("zotStatus").textContent = "正在导入题录并自动解析本机 PDF 附件…";
+    const selKeys = Array.from(zotSelectedKeys);
+    const body = {task_id: curTask};
+    if(selKeys.length){
+      body.keys = selKeys;
+    } else {
+      body.collection = $("zotCollection").value;
+    }
     try{
-      const d = await api("/api/workflow/zotero", {task_id: curTask, collection: $("zotCollection").value});
-      $("zotStatus").textContent = `导入 ${d.total} 条：入库 ${d.downloaded} 篇，无 PDF 附件 ${d.manual} 条（都在「下载精读」里）。`;
+      const d = await api("/api/workflow/zotero", body);
+      $("zotStatus").textContent = `✓ 成功导入 ${d.total} 条（已入库 ${d.downloaded} 篇，PDF 已就绪）。知识星图已同步更新！`;
       if(typeof dlRefresh === "function") dlRefresh().catch(()=>{});
+      try{
+        await api("/api/task/papergraph/build", {id: curTask});
+        const fr = document.getElementById("kbFrame");
+        if(fr) fr.src = "/kb.html?theme=" + (document.documentElement.dataset.theme||"dark") + "&rebuild=1";
+      }catch(_){}
+      await refreshState(false);
+      if(route() === "space" || route() === "library") render();
     }catch(e){ $("zotStatus").textContent = "导入失败：" + e.message; }
-    finally{ btn.disabled = false; }
+    finally{ btn.disabled = false; updateZotSelectCount(); }
   };
   $("zotList").onclick = (e)=>{
-    if(e.target.closest("#zotMore")) return;               // 「加载更多」自己有 onclick
-    const row = e.target.closest("[data-zot-key]");
-    if(row) zotImport(row.dataset.zotKey);
+    if(e.target.closest("#zotMore")) return;
+    const noteBtn = e.target.closest("[data-zot-note]");
+    if(noteBtn){
+      e.stopPropagation();
+      return zotImport(noteBtn.dataset.zotNote);
+    }
+    const cb = e.target.closest("[data-zot-cb]");
+    if(cb){
+      const k = cb.dataset.zotCb;
+      if(cb.checked) zotSelectedKeys.add(k); else zotSelectedKeys.delete(k);
+      updateZotSelectCount();
+      return;
+    }
+    const itemRow = e.target.closest("[data-zot-select]");
+    if(itemRow){
+      const k = itemRow.dataset.zotSelect;
+      const targetCb = itemRow.parentElement.querySelector(`[data-zot-cb="${k}"]`);
+      if(targetCb){
+        targetCb.checked = !targetCb.checked;
+        if(targetCb.checked) zotSelectedKeys.add(k); else zotSelectedKeys.delete(k);
+        updateZotSelectCount();
+      }
+    }
   };
 }
 zotBind();
@@ -509,13 +578,13 @@ function spBodyHTML(d){
   if(spTab === "papers"){
     const rows = d.paper_list||[];
     return `<div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">PAPERS / PROJECT</p><h3>${esc(t.title||"")} 的文献</h3></div>
-      <span class="pill">${rows.length} 条</span><button class="btn ghost" id="spToLib">去知识库 →</button></div>
+      <span class="pill">${rows.length} 条</span><button class="btn btn-primary" id="spZoteroBtn" style="margin-left:auto">从 Zotero 导入</button><button class="btn ghost" id="spToLib">去知识库 →</button></div>
       ${rows.length ? rows.map((r, idx)=>`<div class="sp-row"><span class="sp-ic">📄</span><div class="sp-main">
         <div class="sp-nm">${esc(r.title||r.filename||"未命名")}</div>
         <div class="sp-meta">${esc(r.authors||"作者未识别")}${r.doi?` · <span class="sp-doi">DOI ${esc(r.doi)}</span>`:" · DOI 未识别"}${r.year?` · ${esc(r.year)}`:""}${r.pages?` · ${String(r.pages).split(",").length} 页`:""}</div>
         <div class="es-badges" id="es-paper-${idx}" data-journal="${esc(r.journal || r.title || '')}" style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap"></div>
       </div></div>`).join("")
-      : `<div class="hint" style="margin-top:10px">这个项目还没有入库文献。到「知识库」或工作流的检索步加进来。</div>`}</div>`;
+      : `<div class="hint" style="margin-top:10px">这个项目还没有入库文献。<button class="btn btn-sm btn-primary" id="spZoteroBtnEmpty" style="margin-left:8px">从本机 Zotero 一键导入</button> 或到「知识库」检索入库。</div>`}</div>`;
   }
 
   // ---------- 3. 论文星图 ----------
@@ -615,6 +684,9 @@ function spBodyHTML(d){
 function spBind(d){
   const go = (id, route)=>{ const b=$(id); if(b) b.onclick = ()=>openTab(route); };
   go("spToFlow","workflow"); go("spToLib","library");
+  const zb = $("spZoteroBtn"), zbe = $("spZoteroBtnEmpty");
+  if(zb) zb.onclick = zotOpen;
+  if(zbe) zbe.onclick = zotOpen;
   const sg = $("spStarGen");                 // 论文星图是编译产物：点一下才算，算完落库
   if(sg) sg.onclick = async ()=>{
     const t0 = Date.now();

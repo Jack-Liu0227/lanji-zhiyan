@@ -283,7 +283,7 @@ node apps/desktop/web/ids.test.mjs
 1. Python 3.10+ 创建 `.venv`，执行 `pip install -r requirements.txt`。
 2. 设置可选的 `RESEARCH_WORKBENCH_DB` 指向用户数据目录，避免把测试库写入源码树。
 3. `python apps/desktop/server.py --port 8765 --no-open` 启动服务；pywebview/Edge WebView2 负责桌面壳。
-4. `tools/启动览籍智研.bat` 负责环境探测；`tools/自检.bat` 负责回归；PyInstaller 生成发布目录。
+4. `tools/start.bat` 负责环境探测；`tools/check.bat` 负责回归；PyInstaller 生成发布目录。
 5. 应用升级前备份 `data/research.sqlite3`、`data/papers`、`data/notes` 和 `data/out`。
 
 ### Docker（可选服务模式）

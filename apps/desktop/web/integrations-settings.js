@@ -242,14 +242,29 @@
     if (session.timer) clearTimeout(session.timer);
     session.timer = setTimeout(() => { session.timer = null; pollRegistration(session); }, Math.max(1000, Number(delay || session.intervalMs || 5000)));
   }
+  function registrationIntervalMs(result, fallback = 5000) {
+    const intervalMs = Number(result?.interval_ms);
+    if (Number.isFinite(intervalMs) && intervalMs > 0) return intervalMs;
+    const intervalSeconds = Number(result?.interval);
+    if (Number.isFinite(intervalSeconds) && intervalSeconds > 0) return intervalSeconds * 1000;
+    return fallback;
+  }
+  function registrationPollDelay(result, session) {
+    return registrationIntervalMs(result, session.intervalMs || 5000);
+  }
   async function pollRegistration(session) {
     if (!session || registrationSessions.get(session.assistantId) !== session || session.status !== "pending") return;
     try {
-      const result = await api(`/api/feishu/registration/poll?session_id=${encodeURIComponent(session.sessionId)}`);
+      // Poll is state-changing; send the assistant/session in the JSON body so
+      // the server enforces assistant-scoped sessions.
+      const result = await api("/api/feishu/registration/poll", {
+        assistant_id: session.assistantId,
+        session_id: session.sessionId
+      });
       const status = String(result.status || "pending").toLowerCase();
-      if (status === "pending") {
+      if (status === "pending" || status === "slow_down") {
         registrationStatus(result.message || "等待手机确认授权…", "pending");
-        scheduleRegistrationPoll(session, result.interval_ms || result.interval || session.intervalMs);
+        scheduleRegistrationPoll(session, registrationPollDelay(result, session));
       } else if (status === "success") {
         session.status = "success"; session.openId = result.open_id || "";
         session.message = "绑定成功"; if (session.timer) clearTimeout(session.timer);
@@ -307,12 +322,12 @@
       const session = {assistantId, sessionId: started.session_id || started.sessionId, region: started.region || region,
         qrUrl: started.qr_url || started.qrUrl || started.verification_uri_complete || started.verificationUriComplete || started.verification_uri || "",
         qrDataUri: started.qr_svg || started.qr_data_uri || started.qr_image || "",
-        verificationUriComplete: started.verification_uri_complete || started.verificationUriComplete || "", intervalMs: Math.max(1000, Number(started.interval || 5) * (Number(started.interval || 0) < 100 ? 1000 : 1)),
+        verificationUriComplete: started.verification_uri_complete || started.verificationUriComplete || "", intervalMs: registrationIntervalMs(started),
         expiresAt: Date.now() + Math.max(1, Number(started.expires_in || 600)) * 1000, status: String(started.status || "pending").toLowerCase()};
       registrationSessions.set(assistantId, session);
       renderRegistrationSession(session);
       startRegistrationCountdown(session);
-      scheduleRegistrationPoll(session, started.interval_ms || started.interval);
+      scheduleRegistrationPoll(session, registrationPollDelay(started, session));
     });
     field("fs-device-cancel").onclick = event => action(event.target, async () => {
       const session = registrationSessions.get(assistantId);

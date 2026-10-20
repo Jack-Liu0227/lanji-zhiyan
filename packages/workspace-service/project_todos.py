@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 PRIORITIES = ("P0", "P1", "P2")
-STATUSES = ("TODO", "IN_PROGRESS", "DONE")
+STATUSES = ("TODO", "IN_PROGRESS", "REVIEW", "DONE")
 
 
 def _conn(db: Any) -> sqlite3.Connection:
@@ -30,25 +30,34 @@ def ensure_table(db: Any) -> None:
       priority TEXT NOT NULL DEFAULT 'P1',
       assigned_assistant TEXT NOT NULL DEFAULT '',
       due_date TEXT NOT NULL DEFAULT '',
+      stage TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_project_todos_task_id ON project_todos(task_id, status);")
+    # 迁移检查：如果旧表没有 stage 字段，平滑添加
+    cols = [col[1] for col in conn.execute("PRAGMA table_info(project_todos)").fetchall()]
+    if "stage" not in cols:
+        try:
+            conn.execute("ALTER TABLE project_todos ADD COLUMN stage TEXT NOT NULL DEFAULT '';")
+        except Exception:
+            pass
     conn.commit()
 
 
 def list_todos(db: Any, task_id: str = "") -> list[dict[str, Any]]:
     ensure_table(db)
     conn = _conn(db)
+    order_sql = "ORDER BY CASE status WHEN 'IN_PROGRESS' THEN 1 WHEN 'TODO' THEN 2 WHEN 'REVIEW' THEN 3 ELSE 4 END, priority, updated_at DESC"
     if task_id:
         rows = conn.execute(
-            "SELECT * FROM project_todos WHERE task_id=? ORDER BY CASE status WHEN 'IN_PROGRESS' THEN 1 WHEN 'TODO' THEN 2 ELSE 3 END, priority, updated_at DESC",
+            f"SELECT * FROM project_todos WHERE task_id=? {order_sql}",
             (task_id,),
         ).fetchall()
     else:
         rows = conn.execute(
-            "SELECT * FROM project_todos ORDER BY CASE status WHEN 'IN_PROGRESS' THEN 1 WHEN 'TODO' THEN 2 ELSE 3 END, priority, updated_at DESC"
+            f"SELECT * FROM project_todos {order_sql}"
         ).fetchall()
     cols = [col[1] for col in conn.execute("PRAGMA table_info(project_todos)").fetchall()]
     return [dict(zip(cols, row)) for row in rows]
@@ -62,6 +71,7 @@ def add_todo(
     priority: str = "P1",
     assigned_assistant: str = "",
     due_date: str = "",
+    stage: str = "",
 ) -> dict[str, Any]:
     ensure_table(db)
     title = (title or "").strip()
@@ -74,10 +84,10 @@ def add_todo(
     conn = _conn(db)
     conn.execute(
         """
-        INSERT INTO project_todos (id, task_id, title, description, status, priority, assigned_assistant, due_date, created_at, updated_at)
-        VALUES (?, ?, ?, ?, 'TODO', ?, ?, ?, ?, ?)
+        INSERT INTO project_todos (id, task_id, title, description, status, priority, assigned_assistant, due_date, stage, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'TODO', ?, ?, ?, ?, ?, ?)
         """,
-        (todo_id, task_id or "", title, description or "", priority, assigned_assistant or "", due_date or "", now, now),
+        (todo_id, task_id or "", title, description or "", priority, assigned_assistant or "", due_date or "", stage or "", now, now),
     )
     conn.commit()
     return {
@@ -89,6 +99,7 @@ def add_todo(
         "priority": priority,
         "assigned_assistant": assigned_assistant or "",
         "due_date": due_date or "",
+        "stage": stage or "",
         "created_at": now,
         "updated_at": now,
     }
@@ -103,7 +114,7 @@ def update_todo(db: Any, todo_id: str, **kwargs: Any) -> dict[str, Any]:
     cols = [col[1] for col in conn.execute("PRAGMA table_info(project_todos)").fetchall()]
     cur_dict = dict(zip(cols, current))
 
-    allowed = {"title", "description", "status", "priority", "assigned_assistant", "due_date"}
+    allowed = {"title", "description", "status", "priority", "assigned_assistant", "due_date", "stage"}
     updates = {}
     for k, v in kwargs.items():
         if k in allowed:
@@ -162,3 +173,88 @@ def import_workflow_stages_as_todos(db: Any, task_id: str) -> list[dict[str, Any
     for title, desc in stages:
         created.append(add_todo(db, task_id, title=title, description=desc, priority="P1"))
     return created
+
+
+def kanban_overview(db: Any, task_id: str = "") -> dict[str, Any]:
+    ensure_table(db)
+    conn = _conn(db)
+
+    # 1. 确定当前目标任务
+    all_tasks = db.tasks() if hasattr(db, "tasks") else []
+    cur_t = None
+    if task_id and task_id != "all":
+        cur_t = next((t for t in all_tasks if (t.get("id") if isinstance(t, dict) else t["id"]) == task_id), None)
+    elif not task_id and all_tasks:
+        cur_t = all_tasks[0]
+        task_id = cur_t.get("id") if isinstance(cur_t, dict) else cur_t["id"]
+
+    # 2. 取待办列表 (如果 task_id == "all" 则取全部)
+    query_task_id = "" if task_id == "all" else task_id
+    todos = list_todos(db, query_task_id)
+
+    # 3. 统计状态
+    stats = {
+        "total": len(todos),
+        "todo": sum(1 for t in todos if t.get("status") == "TODO"),
+        "in_progress": sum(1 for t in todos if t.get("status") == "IN_PROGRESS"),
+        "review": sum(1 for t in todos if t.get("status") == "REVIEW"),
+        "done": sum(1 for t in todos if t.get("status") == "DONE"),
+        "p0_count": sum(1 for t in todos if t.get("priority") == "P0" and t.get("status") != "DONE"),
+    }
+    stats["completion_rate"] = round((stats["done"] / stats["total"] * 100) if stats["total"] > 0 else 0, 1)
+
+    # 4. 科研阶段概览 (10 步)
+    from workflow import STAGES, STAGE_LABEL
+    stage_list = []
+    step_rows = set()
+    if task_id:
+        try:
+            for r in conn.execute("SELECT step FROM workflow_steps WHERE task_id=?", (task_id,)).fetchall():
+                step_rows.add(r[0])
+            for r in conn.execute("SELECT step FROM workflow_results WHERE task_id=?", (task_id,)).fetchall():
+                step_rows.add(r[0])
+        except Exception:
+            pass
+
+    cur_stage_key = (cur_t.get("stage") if isinstance(cur_t, dict) else cur_t["stage"]) if cur_t else "idea"
+    cur_idx = STAGES.index(cur_stage_key) if cur_stage_key in STAGES else 0
+
+    for i, s_key in enumerate(STAGES):
+        is_done = s_key in step_rows or i < cur_idx
+        is_current = s_key == cur_stage_key
+        stage_list.append({
+            "key": s_key,
+            "label": STAGE_LABEL.get(s_key, s_key),
+            "index": i + 1,
+            "done": is_done,
+            "current": is_current,
+        })
+
+    # 5. 课题关联指标
+    papers_count = 0
+    notes_count = 0
+    if task_id:
+        try:
+            papers_count = conn.execute("SELECT count(*) FROM task_papers WHERE task_id=?", (task_id,)).fetchone()[0]
+        except Exception:
+            papers_count = 0
+        try:
+            notes_count = conn.execute("SELECT count(*) FROM notes WHERE task_id=?", (task_id,)).fetchone()[0]
+        except Exception:
+            notes_count = 0
+
+    stats["papers_count"] = papers_count
+    stats["notes_count"] = notes_count
+
+    # 6. 专家/助手列表
+    assistants = db.assistants() if hasattr(db, "assistants") else []
+
+    return {
+        "task": dict(cur_t) if cur_t else None,
+        "tasks": [dict(t) for t in all_tasks],
+        "stats": stats,
+        "stages": stage_list,
+        "current_stage": {"key": cur_stage_key, "label": STAGE_LABEL.get(cur_stage_key, cur_stage_key)},
+        "assistants": assistants,
+        "todos": todos,
+    }
