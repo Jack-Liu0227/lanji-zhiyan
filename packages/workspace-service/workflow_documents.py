@@ -170,31 +170,46 @@ def map_write(db: "WorkflowDB", task_id: str, data: Any, keep_positions: bool = 
     return map_read(db, task_id)
 
 
-def _norm_title(s: str) -> str:
-    """认框架只认标题本身：去掉行首编号（1.2 / 二、/（3））和所有空白。
+_NUM_RE = re.compile(r"^[\s　]*(?:[（(]?(\d+(?:[.．]\d+)*)[)）]?[.．、]?|([一二三四五六七八九十]+)[、.．)）])")
 
-    这样他把 2.1 和 1.1 调换、或者干脆重新编号，同一个节点的身份还是认得出。
-    """
-    t = re.sub(r"^[\s　]*(?:[（(]?\d+(?:[.．]\d+)*[)）]?[.．、]?|[一二三四五六七八九十]+[、.．])\s*", "", str(s or ""))
+
+def _num_key(s: str) -> str:
+    """行首序号本身（1 / 1.1 / 一）。认框架先认序号：他会手改小标题序号，
+    而「实验方法」这类同名小标题在不同章里很常见 —— 只按文字认会认错人、把挂好的笔记串到别的节。"""
+    m = _NUM_RE.match(str(s or ""))
+    if not m:
+        return ""
+    return (m.group(1) or m.group(2)).replace("．", ".")
+
+
+def _norm_title(s: str) -> str:
+    """去掉行首序号和所有空白，只剩标题文字（序号认不出来时用它兜底）。"""
+    t = re.sub(r"^[\s　]*(?:[（(]?\d+(?:[.．]\d+)*[)）]?[.．、]?|[一二三四五六七八九十]+[、.．)）])", "", str(s or ""))
     return re.sub(r"[\s　]+", "", t)
 
 
 def map_tidy(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
-    """「重新整理」= 按大纲**当前的**顺序重认一遍框架。
+    """「重新整理」= 按大纲**当前的**大标题 / 小标题顺序重认一遍框架。
 
-    他把 2.1 和 1.1 调换、改标题、加减小节之后点一下，这张图就该是新框架：
-    章/节顺序和层级照大纲重排，标题没变的节点沿用原 id（挂着的精读笔记跟着走），
-    大纲里已经没有的小节连它挂的东西一起摘掉；手动坐标全清，画布按新层级重排。
+    他把 2.1 和 1.1 调换、手改序号、改标题、加减小节之后点一下，这张图就该是新框架：
+    顺位和层级照大纲，节点身份**先认序号、再认标题文字**（序号没变的、哪怕标题改了也还是同一个节点；
+    序号认不出才按文字找），挂着的精读笔记跟着走；大纲里已经没有的小节连它挂的东西一起摘掉；
+    手动坐标全清，画布按新层级重排。节点标题一律照抄大纲 —— 他改成什么序号，图上就是什么序号。
     """
     md = doc_read(db, task_id, "outline")["markdown"]
     cur = map_read(db, task_id)
     olds = [n for n in cur["nodes"] if n.get("type") == "section"]
     refs = [dict(n) for n in cur["nodes"] if n.get("type") != "section"]
     old_order = [n["id"] for n in olds]
-    by_key: dict[str, dict[str, Any]] = {}
+    by_num: dict[str, dict[str, Any]] = {}
+    by_title: dict[str, dict[str, Any]] = {}
     for n in olds:
-        by_key.setdefault(_norm_title(n["label"]), n)
+        k = _num_key(n["label"])
+        if k:
+            by_num.setdefault(k, n)
+        by_title.setdefault(_norm_title(n["label"]), n)
     taken = {n["id"] for n in olds} | {n["id"] for n in refs}
+    used: set[str] = set()
 
     def fresh(prefix: str) -> str:
         i = len(taken) + 1
@@ -211,8 +226,11 @@ def map_tidy(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
         if not m:
             continue
         level, title = len(m.group(1)), m.group(2).strip()
-        old = by_key.get(_norm_title(title))
-        nid = old["id"] if old and old["id"] not in {n["id"] for n in nodes} else fresh("c" if level == 2 else "s")
+        old = by_num.get(_num_key(title)) or by_title.get(_norm_title(title))
+        if old is not None and old["id"] in used:
+            old = None
+        nid = old["id"] if old else fresh("c" if level == 2 else "s")
+        used.add(nid)
         nodes.append({"id": nid, "type": "section", "label": title,
                       "detail": (old or {}).get("detail") or ""})
         if level == 2:

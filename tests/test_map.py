@@ -137,6 +137,47 @@ class MapStepTest(unittest.TestCase):
         self.assertIn("氧空位梯度压低暗电流", detail)
         self.assertIn("响应度同时回升", detail)
 
+    def _seed_map(self, nodes=()):
+        workflow.map_seed(self.db, self.tid)
+        cur = workflow.map_read(self.db, self.tid)
+        extra = list(nodes)
+        edges = list(cur["edges"])
+        for nid, label, parent in extra:
+            edges.append({"from": parent, "to": nid, "label": "支撑"})
+        workflow.map_write(self.db, self.tid, {"nodes": cur["nodes"] + [
+            {"id": nid, "type": "note", "label": label, "ref": "精读-A.md"} for nid, label, _ in extra], "edges": edges})
+        return {n["label"]: n["id"] for n in workflow.map_read(self.db, self.tid)["nodes"] if n["type"] == "section"}
+
+    def test_tidy_recognises_section_by_number_not_text(self):
+        """他手改序号 / 改标题文字，都还是同一节 —— 只是认的依据不同：先序号，后文字。"""
+        ids = self._seed_map([("r1", "笔记一", "s2")])
+        out = Path(self.db.base_dir(self.tid)) / "论文正文" / "框架.md"
+        # 1) 序号没变、标题文字改了 → 认序号
+        out.write_text("# 题目\n\n## 1 引言\n\n### 1.1 背景（改写过的说法）\n- 说明：x\n\n### 1.2 现状\n- 说明：y\n",
+                       encoding="utf-8")
+        r = workflow.map_tidy(self.db, self.tid)
+        got = {n["label"]: n["id"] for n in r["nodes"] if n["type"] == "section"}
+        self.assertEqual(got["1.1 背景（改写过的说法）"], ids["1.1 背景"], "序号没变就是同一节")
+        self.assertIn({"from": ids["1.1 背景"], "to": "r1", "label": "支撑"}, r["edges"], "笔记照旧挂着")
+        # 2) 只改序号（文字不动）→ 按文字认回同一节
+        out.write_text("# 题目\n\n## 1 引言\n\n### 1.4 背景（改写过的说法）\n- 说明：x\n\n### 1.2 现状\n- 说明：y\n",
+                       encoding="utf-8")
+        r = workflow.map_tidy(self.db, self.tid)
+        self.assertEqual({n["label"]: n["id"] for n in r["nodes"] if n["type"] == "section"}["1.4 背景（改写过的说法）"],
+                         ids["1.1 背景"], "序号改了但文字还在 → 还是同一节")
+
+    def test_tidy_keeps_same_named_sections_apart(self):
+        """「实验方法」这种同名小标题在不同章里很常见，不能按文字认成同一节。"""
+        out = Path(self.db.base_dir(self.tid)) / "论文正文" / "框架.md"
+        out.write_text("# 题目\n\n## 1 引言\n\n### 1.1 实验方法\n- 说明：x\n\n"
+                       "## 2 讨论\n\n### 2.1 实验方法\n- 说明：y\n", encoding="utf-8")
+        ids = self._seed_map([("r1", "笔记一", "s2"), ("r2", "笔记二", "s4")])
+        self.assertEqual(len(ids), 4)
+        r = workflow.map_tidy(self.db, self.tid)
+        self.assertEqual(len([n for n in r["nodes"] if n["type"] == "section"]), 4, "两节都还在，没被并成一个")
+        self.assertIn({"from": ids["1.1 实验方法"], "to": "r1", "label": "支撑"}, r["edges"])
+        self.assertIn({"from": ids["2.1 实验方法"], "to": "r2", "label": "支撑"}, r["edges"])
+
     def test_map_system_renders_notes_list(self):
         """谱系 agent 的 system 必须能拼出来 —— 笔记源是 dict，join 错了整步 agent 直接 500。"""
         sys_txt = workflow_documents.map_system(self.db, self.tid)
