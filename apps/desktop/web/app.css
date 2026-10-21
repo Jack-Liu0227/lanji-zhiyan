@@ -13,9 +13,11 @@ a{color:var(--accent)}
 .sidebar{width:232px;flex:none;background:var(--side-bg,var(--panel2));border-right:1px solid var(--line);display:flex;flex-direction:column}
 .sidebar.collapsed{width:64px}
 .sidebar.collapsed .lbl,.sidebar.collapsed .swatches{display:none}
-.brand{display:flex;align-items:center;gap:10px;padding:12px 12px 10px}
+/* 方案 C 三段式：徽标钉左、标题真居中于整条、折叠键钉右 */
+.brand{position:relative;display:flex;align-items:center;padding:13px 12px 12px;border-bottom:1px solid var(--line)}
 .mark{width:30px;height:30px;flex:none;display:block}   /* 应用徽标：来自 mark.png（透明圆弧,无白底） */
-.brand .lbl{display:flex;flex-direction:column;justify-content:center;gap:1px;min-width:0;text-align:center}   /* 中文/英文共用同一条竖中线 */
+.brand .mark{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:28px;height:28px}
+.brand .lbl{display:flex;flex-direction:column;justify-content:center;gap:1px;min-width:0;flex:1;text-align:center;padding:0 40px}   /* flex:1 撑满整条，左 40 = 徽标占位，右 40 = 折叠键占位 */
 .brand b{font-size:16px;font-weight:700;display:block;line-height:1.2}
 .brand small{color:var(--muted);font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;display:block;line-height:1.2}
 .as-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;margin-top:12px}
@@ -49,7 +51,10 @@ a{color:var(--accent)}
 .profile-edit{color:var(--muted);font-size:12px}
 .sidebar.collapsed .profile-card{justify-content:center;padding:9px 0}
 .sidebar.collapsed .profile-info,.sidebar.collapsed .profile-edit{display:none}
-.collapse{margin-left:auto;background:none;border:1px solid var(--line);border-radius:6px;width:24px;height:24px;color:var(--muted);cursor:pointer}
+.sidebar.collapsed .brand{flex-direction:column;justify-content:center;gap:6px;padding:11px 0 8px}
+.sidebar.collapsed .brand .mark{position:static;transform:none}
+.sidebar.collapsed .collapse{position:static;transform:none}
+.collapse{position:absolute;right:9px;top:50%;transform:translateY(-50%);background:none;border:1px solid var(--line);border-radius:6px;width:24px;height:24px;color:var(--muted);cursor:pointer;line-height:1}
 .nav{padding:4px 8px;overflow:auto;flex:1}
 .nav-item{display:flex;align-items:center;gap:9px;width:100%;text-align:left;padding:8px 10px;border:0;border-radius:8px;background:none;cursor:pointer;color:var(--fg);margin-bottom:2px}
 .nav-item:hover{background:color-mix(in srgb,var(--accent) 12%,transparent)}
