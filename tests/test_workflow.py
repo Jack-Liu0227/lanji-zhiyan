@@ -784,6 +784,37 @@ class MapSeedTest(unittest.TestCase):
             td.cleanup()
 
 
+class KanbanProgressTest(unittest.TestCase):
+    """看板的阶段进度必须来自真正记录进度的 steps 表（以前查的 workflow_steps 这张表从没建过）。"""
+
+    def test_阶段进度来自steps表(self):
+        import tempfile
+        from pathlib import Path as P
+        import workflow
+        import project_todos
+        td = tempfile.TemporaryDirectory()
+        db = workflow.WorkflowDB(P(td.name) / "wb.sqlite3")
+        try:
+            tid = db.create_task("测试项目", "研究问题", "体系")
+            db.log_step(tid, "idea", "done", "判定出了")
+            db.log_step(tid, "search", "done", "检索完")
+            db.log_step(tid, "download", "running", "下载中")
+            db.log_step(tid, "agent", "done", "普通对话，不算阶段")
+            ov = project_todos.kanban_overview(db, tid)
+            stages = {s["key"]: s for s in ov["stages"]}
+            self.assertTrue(stages["idea"]["done"])
+            self.assertTrue(stages["search"]["done"])
+            self.assertFalse(stages["download"]["done"])
+            self.assertTrue(stages["download"]["current"], "正在跑的那一步要标成当前")
+            self.assertFalse(stages["outline"]["done"])
+            self.assertEqual(ov["current_stage"]["key"], "download")
+            self.assertEqual(ov["stats"]["stages_done"], 2)
+            self.assertEqual(ov["stats"]["stage_total"], len(workflow.STAGES))
+        finally:
+            db.close()
+            td.cleanup()
+
+
 class ChatJsonTest(unittest.TestCase):
     """模型先讲人话 / 把 JSON 截断 → 不能直接炸；截断要判成「没有 JSON」，好走一次重试。"""
 

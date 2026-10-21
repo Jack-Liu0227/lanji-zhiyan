@@ -48,11 +48,7 @@
 
   window.renderKanban = async function (container) {
     if (!container) return;
-
-    if (!kbState.data || (window.curTask && kbState.data.task && kbState.data.task.id !== window.curTask)) {
-      await fetchKanbanData(window.curTask);
-    }
-
+    await fetchKanbanData(window.curTask);      // 进度必须现取：缓存里那套是上次进来时的
     renderBoard(container);
   };
 
@@ -68,7 +64,7 @@
 
     const taskTitle = d.task ? d.task.title : (window.S && window.S.tasks && window.S.tasks.length ? '请选择项目' : '暂无项目');
     const stageNow = d.current_stage ? d.current_stage.label : '创新点构想';
-    const completionRate = d.stats.completion_rate || 0;
+    const stageRate = d.stats.stage_progress != null ? d.stats.stage_progress : 0;
 
     container.innerHTML = `
       <div class="kb-root">
@@ -102,15 +98,16 @@
           <div class="kb-kpi-grid">
             <div class="kb-kpi-card">
               <div class="kb-kpi-lbl">
-                <span>课题总完成度</span>
-                <span style="color:var(--kb-sky)">${completionRate}%</span>
+                <span>科研阶段进度</span>
+                <span style="color:var(--kb-sky)">${stageRate}%</span>
               </div>
               <div class="kb-kpi-val">
-                ${d.stats.done} <span class="kb-kpi-sub">/ ${d.stats.total} 项任务已完成</span>
+                ${d.stats.stages_done || 0} <span class="kb-kpi-sub">/ ${d.stats.stage_total || 10} 阶段已完成</span>
               </div>
               <div class="kb-progress-bar">
-                <div class="kb-progress-fill" style="width: ${completionRate}%"></div>
+                <div class="kb-progress-fill" style="width: ${stageRate}%"></div>
               </div>
+              <div class="kb-kpi-sub" style="margin-top:4px">待办 ${d.stats.done || 0}/${d.stats.total || 0} 项</div>
             </div>
 
             <div class="kb-kpi-card">
