@@ -57,7 +57,7 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
                       outline_read, outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
-                      map_seed, project_outs,
+                      map_seed, project_outs, map_tidy,
                       cite_read, cite_add, conv_files, conv_run, conv_compile, conv_open,
                       en_state, en_run, _safe_path, step_plan,
                       stage_download_selected, stage_zotero_import, test_provider,
@@ -1571,6 +1571,9 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json(map_write(db, (data.get("task_id") or "").strip(),
                                                     data.get("data") or {},
                                                     keep_positions=bool(data.get("keep_positions", False))))
+                if path == "/api/map/tidy":                # 重新整理：按大纲当前的顺序重认一遍框架
+                    with WorkflowDB(DB_PATH) as db:
+                        return self._json(map_tidy(db, (data.get("task_id") or "").strip()))
                 if path == "/api/map/seed":                # 谱系图还没有 → 直接按大纲长出「章 → 节」，不用等用户开口
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(map_seed(db, (data.get("task_id") or "").strip()))

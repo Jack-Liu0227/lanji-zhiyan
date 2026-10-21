@@ -61,6 +61,36 @@ def map_path(db: "WorkflowDB", task_id: str) -> Path:
     return (base / "论文正文" / MAP_FILE) if base else (OUT / f"谱系_{task_id[:8]}.json")
 
 
+def _note_brief(db: "WorkflowDB", task_id: str, ref: str) -> str:
+    """笔记节点「连线后面那行字」：取笔记正文最前面两条实质要点（照抄，不改写、没有就空着）。
+
+    精读笔记本身会被重读 / 补写，所以这行字不存死在谱系.json 里，每次读图都按文件现取。
+    """
+    stem = Path(str(ref)).stem
+    base = db.base_dir(task_id)
+    for root in ([base / "笔记"] if base else []) + [NOTES]:
+        if not root.is_dir():
+            continue
+        try:
+            f = next((p for p in root.rglob(stem + ".md")), None)
+        except OSError:
+            f = None
+        if not f:
+            continue
+        lines: list[str] = []
+        for raw in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            t = raw.strip()
+            if not t or t.startswith("#") or t.upper().startswith("**PAGE"):
+                continue
+            if re.search(r"本文标题|DOI|开放获取|许可|收稿|收到|接受日期|作者包括", t):
+                continue                           # 出版信息不是精读结论，跳过
+            lines.append(re.sub(r"^[-*+]\s*", "", t))
+            if len(lines) == 2:
+                break
+        return ("；".join(lines))[:200]
+    return ""
+
+
 def map_read(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     p = map_path(db, task_id)
     raw: dict[str, Any] = {"nodes": [], "edges": []}
@@ -74,6 +104,16 @@ def map_read(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     ids = {n["id"] for n in nodes}
     edges = [e for e in (raw.get("edges") or [])
              if isinstance(e, dict) and e.get("from") in ids and e.get("to") in ids]
+    linked = [n for n in nodes if n.get("type") == "note" and n.get("ref")]
+    if linked:                                     # 笔记改了名 / 重读了 → 图上那行字跟着更新
+        titles = {x["id"]: (x.get("title") or "") for x in db.notes(task_id)}
+        for n in linked:
+            stem = Path(str(n["ref"])).stem
+            if titles.get(stem):
+                n["label"] = titles[stem]
+            brief = _note_brief(db, task_id, n["ref"])
+            if brief:
+                n["detail"] = brief
     return {"path": str(p), "exists": p.is_file(), "broken": broken, "nodes": nodes, "edges": edges,
             "updated": raw.get("updated") or "",
             "sections": sum(1 for n in nodes if n.get("type") == "section"),
@@ -128,6 +168,100 @@ def map_write(db: "WorkflowDB", task_id: str, data: Any, keep_positions: bool = 
     asset_service.register_file(db, p, project_id=task_id, kind="document", title=MAP_FILE,
                                 source="workflow", body=content, metadata={"document_kind": "map"})
     return map_read(db, task_id)
+
+
+def _norm_title(s: str) -> str:
+    """认框架只认标题本身：去掉行首编号（1.2 / 二、/（3））和所有空白。
+
+    这样他把 2.1 和 1.1 调换、或者干脆重新编号，同一个节点的身份还是认得出。
+    """
+    t = re.sub(r"^[\s　]*(?:[（(]?\d+(?:[.．]\d+)*[)）]?[.．、]?|[一二三四五六七八九十]+[、.．])\s*", "", str(s or ""))
+    return re.sub(r"[\s　]+", "", t)
+
+
+def map_tidy(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
+    """「重新整理」= 按大纲**当前的**顺序重认一遍框架。
+
+    他把 2.1 和 1.1 调换、改标题、加减小节之后点一下，这张图就该是新框架：
+    章/节顺序和层级照大纲重排，标题没变的节点沿用原 id（挂着的精读笔记跟着走），
+    大纲里已经没有的小节连它挂的东西一起摘掉；手动坐标全清，画布按新层级重排。
+    """
+    md = doc_read(db, task_id, "outline")["markdown"]
+    cur = map_read(db, task_id)
+    olds = [n for n in cur["nodes"] if n.get("type") == "section"]
+    refs = [dict(n) for n in cur["nodes"] if n.get("type") != "section"]
+    old_order = [n["id"] for n in olds]
+    by_key: dict[str, dict[str, Any]] = {}
+    for n in olds:
+        by_key.setdefault(_norm_title(n["label"]), n)
+    taken = {n["id"] for n in olds} | {n["id"] for n in refs}
+
+    def fresh(prefix: str) -> str:
+        i = len(taken) + 1
+        while f"{prefix}{i}" in taken:
+            i += 1
+        taken.add(f"{prefix}{i}")
+        return f"{prefix}{i}"
+
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    chapter = ""
+    for line in md.splitlines():
+        m = re.match(r"^(#{2,3})\s+(\S.{0,80})$", line)
+        if not m:
+            continue
+        level, title = len(m.group(1)), m.group(2).strip()
+        old = by_key.get(_norm_title(title))
+        nid = old["id"] if old and old["id"] not in {n["id"] for n in nodes} else fresh("c" if level == 2 else "s")
+        nodes.append({"id": nid, "type": "section", "label": title,
+                      "detail": (old or {}).get("detail") or ""})
+        if level == 2:
+            if chapter:
+                edges.append({"from": chapter, "to": nid, "label": "下一章"})
+            chapter = nid
+        elif chapter:
+            edges.append({"from": chapter, "to": nid, "label": "包含"})
+    if not nodes:
+        out = dict(cur)
+        out["changed"] = ["大纲还是空的 —— 没有可整理的框架"]
+        return out
+
+    sec_ids = {n["id"] for n in nodes}
+    ref_ids = {n["id"] for n in refs}
+    for e in cur["edges"]:                         # 挂着的资料跟着小节走；小节被删了 → 这条也没处挂了
+        if e.get("from") in sec_ids and e.get("to") in ref_ids:
+            edges.append({"from": e["from"], "to": e["to"], "label": e.get("label") or "支撑"})
+    hung = {e["to"] for e in edges}
+    refs = [n for n in refs if n["id"] in hung]
+    for n in refs:
+        n.pop("x", None)
+        n.pop("y", None)
+        nodes.append(n)
+
+    lab = {n["id"]: n["label"] for n in nodes}
+    new_order = [n["id"] for n in nodes if n.get("type") == "section"]
+    kept_old = [i for i in old_order if i in sec_ids]
+    kept_new = [i for i in new_order if i in old_order]
+    changed: list[str] = []
+    added = [lab[i] for i in new_order if i not in old_order]
+    dropped = [n["label"] for n in olds if n["id"] not in sec_ids]
+    if added:
+        changed.append(f"按大纲新增 {len(added)} 节：{'、'.join(added[:6])}")
+    if dropped:
+        changed.append(f"大纲里已经删掉 {len(dropped)} 节：{'、'.join(dropped[:6])}（连它挂的资料一起摘了）")
+    moved = [(i, kept_old.index(i), kept_new.index(i)) for i in kept_new]
+    moved = [(i, a, b) for i, a, b in moved if a != b]
+    if moved:
+        detail = "、".join(f"「{lab[i]}」第 {a + 1} → 第 {b + 1}" for i, a, b in moved[:5])
+        changed.append(f"顺序按大纲重排：{detail}" + (f" 等 {len(moved)} 处" if len(moved) > 5 else ""))
+
+    out = map_write(db, task_id, {"nodes": nodes, "edges": edges}, keep_positions=False)
+    out["changed"] = changed
+    attached = {Path(str(n.get("ref") or "")).stem for n in out["nodes"] if n.get("ref")}
+    notes = map_sources(db, task_id)["notes"]
+    pick = [x for x in notes if "精读" in x["name"] or "阅读" in x["name"]] or notes
+    out["unattached"] = list(dict.fromkeys(x["title"] for x in pick if x["id"] not in attached))
+    return out
 
 
 def map_seed(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
@@ -409,7 +543,7 @@ def map_system(db: "WorkflowDB", task_id: str) -> str:
 
 【可以挂上来的东西】
 - 大纲小标题：{'; '.join(src['sections']) or '（无）'}
-- 精读笔记：{'; '.join(src['notes'][:20]) or '（无）'}
+- 精读笔记：{'; '.join(f"{x['title']}（{x['name']}）" for x in src['notes'][:20]) or '（无）'}
 - 文献库 PDF：{'; '.join(src['papers'][:20]) or '（无）'}
 - 实验数据：{'; '.join(src['data'][:20]) or '（无）'}
 

@@ -1202,6 +1202,7 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .mp-node.ref{display:block;padding:8px 10px;height:auto;min-height:34px}
 .mp-node.ref .t{-webkit-line-clamp:3;font-weight:400;font-size:12px;padding-right:46px}
 .mp-node.ref .t>span.lbl{overflow-wrap:anywhere}
+.mp-node.ref .d{-webkit-line-clamp:3;padding-right:4px}
 .mp-pill{position:absolute;right:8px;top:7px;font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:0 6px;background:var(--panel2)}
 .mp-node.sec .d{-webkit-line-clamp:4;margin-top:2px}
 .mp-node.sec .t{padding-right:18px}

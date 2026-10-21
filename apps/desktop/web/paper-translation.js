@@ -497,7 +497,7 @@ function mapPanelHTML(active){
           <span class="mp-meta" id="mp-meta"></span>
           <span class="mp-spacer"></span>
           <span class="mp-zoom"><button class="btn ghost" id="mp-zout" title="缩小">−</button><button class="btn ghost" id="mp-zin" title="放大">＋</button><button class="btn ghost" id="mp-zfit" title="适应画布">适应</button></span>
-          <button class="btn ghost" id="mp-refresh" title="重新整理：按层级重排，保留你拖过的位置（按住 Shift 点 = 全部重排）">↻ 重新整理</button>
+          <button class="btn ghost" id="mp-refresh" title="重新整理：按大纲当前的顺序重认框架（调换 2.1/1.1、改标题、加减小节之后就点它；手动拖过的位置会一并重排）">↻ 重新整理</button>
           <button class="btn ghost" id="mp-edit" title="直接改那份 JSON">✎ 手改</button>
           <button class="btn ghost hidden" id="mp-save">保存</button>
         </div>
@@ -562,7 +562,7 @@ async function mpLoad(){
     $("mp-meta").textContent = `${d.sections||0} 小节 · ${d.refs||0} 关联${d.exists?"":" · 还没有图"}${d.broken?" · JSON 坏了":""}`;
     mpSrcPaint(MP.src);
     mpPaint();
-    mpMsgs(d.messages||[]);
+    docRestore("map", d.messages, d.out);
   }catch(e){
     $("mp-meta").textContent = "读取失败：" + e.message;
   }
@@ -577,7 +577,8 @@ function mpNodeInner(n){
     return `<div class="t">${dot}${esc(n.label)}</div>${d?`<div class="d">${esc(d)}</div>`:""}
       <button class="mp-add" data-add="${esc(n.id)}" title="挂资料（精读笔记 / 实验数据 / 文献）">＋</button>`;
   }
-  return `<div class="t" title="${esc(n.detail||"")}">${dot}<span class="lbl">${esc(n.label)}</span></div>
+  return `<div class="t" title="${esc(n.label||"")}">${dot}<span class="lbl">${esc(n.label)}</span></div>
+    ${n.detail?`<div class="d">${esc(n.detail)}</div>`:""}
     <span class="mp-pill">${MP_TAG[n.type]||""}</span>`;
 }
 function mpSize(n){
@@ -774,43 +775,69 @@ function mpCard(id){
     MP.edges.push({from:id, to:nid, label:"支撑"});
     add.value = "";
     await mpSave();
-    docMsg("map", `已把「${label}」挂到这一节（谱系.json 已更新）`);
+    mpSay(`已把「${label}」挂到这一节（谱系.json 已更新）`);
   };
   div.querySelectorAll("[data-un]").forEach(b=>{
     b.onclick = async ()=>{
       const cid = b.dataset.un;
       MP.edges = MP.edges.filter(e=>!(e.from===id && e.to===cid));
       if(!MP.edges.some(e=>e.to===cid)) MP.nodes = MP.nodes.filter(x=>x.id!==cid);   // 没别处挂着就一起清掉
-      await mpSave(); docMsg("map", "已摘掉这条关联（谱系.json 已更新）");
+      await mpSave(); mpSay("已摘掉这条关联（谱系.json 已更新）");
     };
   });
   $("mp-cx").onclick = ()=>{ MP.sel=""; div.remove(); mpPaint(); };
   $("mp-csave").onclick = async ()=>{
     const label = ($("mp-e-label").value||"").trim();
-    if(!label) return docMsg("map", "标题不能空着");
+    if(!label) return mpSay("标题不能空着");
     n.label = label;
     n.detail = $("mp-e-detail").value.trim();
     n.type = $("mp-e-type").value;
     MP.sel = "";
     div.remove();
     await mpSave();
-    docMsg("map", "节点已更新（谱系.json 已落盘）");
+    mpSay("节点已更新（谱系.json 已落盘）");
   };
   $("mp-cdel").onclick = async ()=>{
     MP.nodes = MP.nodes.filter(x=>x.id!==id);
     MP.edges = MP.edges.filter(e=>e.from!==id && e.to!==id);
     MP.sel = "";
-    await mpSave(); docMsg("map", "已删掉这个节点（谱系.json 已更新）");
+    await mpSave(); mpSay("已删掉这个节点（谱系.json 已更新）");
   };
 }
 
-async function mpTidy(force){
-  /* 重新整理：按层级重排。默认保留你拖过的位置，只把没摆过的（含 agent 新加的）排进去；
-     按住 Shift 点 = 丢掉所有手动位置，整张图重排一遍。 */
-  if(force) MP.nodes.forEach(n=>{ delete n.x; delete n.y; });
-  mpPaint();
-  await mpSave();
-  docMsg("map", force ? "已按层级全部重排" : "已重新整理，保留你拖过的位置");
+function mpSay(t){
+  /* 谱系图这步没有 map-meta 那个元素（右栏 meta 是 mp-meta 计数），所以整理/挂资料的结果
+     直接说进右栏对话里 —— 以前这些提示全写到一个不存在的节点上，点了按钮就像没反应 */
+  const st = DOCS["map"]; if(!st || !t) return;
+  st.msgs.push({ role: "assistant", content: t, events: [] });
+  docPaint("map");
+}
+
+async function mpTidy(){
+  /* 重新整理 = 按大纲**当前的**顺序重认一遍框架：他把 2.1 和 1.1 调换、改标题、加减小节后点这里。
+     结构性重排交给服务端（标题认身份、挂着的资料跟着走、手动坐标全清 → 一定看得见变化）；
+     剩下「哪条精读笔记挂哪一节」要读内容判断，那一半交给右边谱系助手，拿不准它会问他。 */
+  try{
+    const d = await api("/api/map/tidy", {task_id: curTask});
+    if(d.error) throw new Error(d.error);
+    MP.nodes = d.nodes || []; MP.edges = d.edges || []; MP.sel = ""; MP_MEAS.clear();
+    MP.sig = JSON.stringify([MP.nodes, MP.edges]);
+    $("mp-meta").textContent = `${d.sections||0} 小节 · ${d.refs||0} 关联`;
+    mpPaint();
+    (d.changed||[]).forEach(t=>mpSay("↻ " + t));
+    if(!(d.changed||[]).length) mpSay(`跟大纲对过了（${d.sections||0} 节没变），位置已按层级重排`);
+    const miss = d.unattached || [];
+    if(miss.length && hasModelKey()){
+      $("map-ask").value = "框架刚按大纲重新整理过。请把这些还没挂上的精读笔记按标题挂到对应小节下面："
+        + "不要读附件、不要检索，判断完直接一次 map_write 写完整份谱系图；标题看不出归属的先别挂，最后列出来问我：\n"
+        + miss.slice(0, 20).map(x=>"- " + x).join("\n");
+      await docSend("map");
+    }else if(miss.length){
+      mpSay(`还有 ${miss.length} 条精读笔记没挂上 —— 点小节右上角 ＋ 手动挂，或跟我说「把精读笔记挂到各节下面」`);
+    }
+  }catch(e){
+    mpSay("重新整理失败：" + e.message);
+  }
 }
 
 async function mpSave(){
@@ -820,12 +847,12 @@ async function mpSave(){
     MP.nodes = d.nodes; MP.edges = d.edges;
     $("mp-meta").textContent = `${d.sections} 小节 · ${d.refs} 关联`;
     mpPaint();
-  }catch(e){ docMsg("map", "保存失败：" + e.message); }
+  }catch(e){ mpSay("保存失败：" + e.message); }
 }
 
 function mpBind(m){
   docBind("map", m);                                  /* 右栏＝「确认大纲」那套（对话/轨迹/统计/附件），post 走 /api/map */
-  $("mp-refresh").onclick = (e)=>mpTidy(!!(e && e.shiftKey));
+  $("mp-refresh").onclick = ()=>mpTidy();
   $("mp-zin").onclick = ()=>{ MP.zoom = Math.min(1.6, Math.round((MP.zoom + 0.1) * 10) / 10); mpPaint(); };
   $("mp-zout").onclick = ()=>{ MP.zoom = Math.max(0.5, Math.round((MP.zoom - 0.1) * 10) / 10); mpPaint(); };
   $("mp-zfit").onclick = ()=>{
@@ -848,7 +875,7 @@ function mpBind(m){
       MP.nodes = r.nodes; MP.edges = r.edges;
       $("mp-json").classList.add("hidden"); $("mp-save").classList.add("hidden"); $("mp-wrap").classList.remove("hidden");
       mpPaint();
-    }catch(e){ docMsg("map", "JSON 有问题：" + e.message); }
+    }catch(e){ mpSay("JSON 有问题：" + e.message); }
   };
   // 画布：点节点 = 打开编辑卡；拖动节点 = 挪位置（松手落盘）；拖文件进来 = 上传实验数据
   const wrap = $("mp-wrap");
@@ -929,9 +956,9 @@ async function mpUpload(files){
                             {method:"POST", headers:{"Content-Type":"application/octet-stream"}, body: buf});
       const d = await r.json();
       if(d.error) throw new Error(d.error);
-      docMsg("map", `📎 已上传 ${f.name} → ${d.path||""}`);
-    }catch(e){ docMsg("map", "上传失败：" + e.message); }
+      mpSay(`📎 已上传 ${f.name} → ${d.path||""}`);
+    }catch(e){ mpSay("上传失败：" + e.message); }
   }
   await mpLoad();
-  docMsg("map", "数据文件进来了 —— 跟 agent 说一句「把刚上传的这份挂到某一节下面」它就会画进谱系图。");
+  mpSay("数据文件进来了 —— 跟 agent 说一句「把刚上传的这份挂到某一节下面」它就会画进谱系图。");
 }

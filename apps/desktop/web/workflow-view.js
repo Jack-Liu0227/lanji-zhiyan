@@ -152,15 +152,23 @@ function docShow(k, d){
   }
   const mb = docEl(k, "meta"); if(mb) mb.textContent = md.trim() ? `${d.sections || 0} 个大标题 · ${d.subs || 0} 个小标题 · ${d.chars || 0} 字` : "";
 }
+function docRestore(k, msgs, out){
+  /* 把存下来的对话装回右栏：doc 三步和谱系图那步共用（以前 mpLoad 调了个早就没了的 mpMsgs，
+     整段 throw 掉 → 重新整理之后右栏一句话不显示，看着就像按钮没反应） */
+  const st = docState(k);
+  st.msgs = msgs || []; st.out = out || "";
+  st.events = st.msgs.flatMap(x => x.events || []);
+  st.stat = { turns: st.msgs.filter(x => x.role === "user").length,
+              calls: st.events.filter(e => e.type === "tool_call").length,
+              tok: st.events.filter(e => e.type === "usage").reduce((n, e) => n + (e.total || 0), 0) };
+  docStats(k); docPaint(k);
+}
 async function docLoad(k){
   const st = docState(k);
   try{
     const d = await api(`/api/doc/state?id=${encodeURIComponent(curTask)}&step=${encodeURIComponent(k)}`);
-    st.msgs = d.messages || []; st.out = d.out || "";
-    st.events = st.msgs.flatMap(x => x.events || []);
-    st.stat = { turns: st.msgs.filter(x => x.role === "user").length,
-                calls: st.events.filter(e => e.type === "tool_call").length,
-                tok: st.events.filter(e => e.type === "usage").reduce((n, e) => n + (e.total || 0), 0) };
+    st.out = d.out || "";
+    docRestore(k, d.messages, d.out);
     docShow(k, d);
     if(!st.files) st.files = JSON.parse(localStorage.getItem("rw-marks-" + k + "-" + (curTask || "")) || "[]");
     docPaintMarks(k); docMarks(k);
