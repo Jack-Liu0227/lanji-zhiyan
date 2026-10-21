@@ -142,6 +142,7 @@ MAIL_FILE = USER / "mail.json"
 LAYOUT_FILE = HOME / "layout.json"
 
 LOWTMP = CACHE / "lowtmp"          # Low 子进程（xelatex/babeldoc）的 TEMP，必须跟着标 Low
+_LOW_STAMP = CACHE / "lowroots.json"   # 上次标过 Low 的根 + 当时的文件数（见 mark_write_roots_low）
 _DIRS = (HOME, DATA, USER, EXECUTORS, BACKUP, CACHE, LOWTMP, PAPERS, NOTES, OUT, UPLOADS, REF,
          EXECUTORS / "agents", EXECUTORS / "skills", EXECUTORS / "tools")
 
@@ -372,20 +373,46 @@ def mark_write_roots_low(verbose: bool = False) -> dict[str, str]:
 
     **在沙箱服务里得请宿主标**：Low 进程对 Medium 目录跑 icacls 是 rc=5（实测），
     只有宿主（Medium）改得动。所以有通道就逐目录转过去，没有通道（同进程模式）才自己标。
+
+    **不在每次启动都跑 /T**：递归 icacls 是逐文件设 ACL，三千个文件 1.5s，而这一步同步
+    挡在「起子进程」之前（用户感受就是点图标后半天没反应）。一个根整棵树标过一次就记进
+    lowroots.json，以后每次只做非递归标：(OI)(CI) 挂在新目录上，之后新建的文件自动继承 Low。
     """
     import lowbox
     if not lowbox.available():
         return {}
+    try:
+        full_done = set(json.loads(_LOW_STAMP.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        full_done = set()
     out: dict[str, str] = {}
+    full_marked: list[Path] = []
     for root in [HOME, DATA, *project_roots()]:      # HOME 一起标：user/ executors/ cache/ 都得让沙箱里的服务端写得进
+        root = Path(root)
+        if not root.is_dir():
+            continue
+        if any(root.is_relative_to(m) for m in full_marked):   # /T 已经把整棵子树标过了
+            out[str(root)] = "covered"
+            full_done.add(str(root))          # 子树也算整树标过 → 以后同样只做非递归
+            continue
+        full = str(root) not in full_done
         try:
-            if root and Path(root).is_dir():
-                ok = _grant_post("/grant", {"path": str(root)}) if GRANT else lowbox.mark_low(root, recursive=True)
-                out[str(root)] = "low" if ok else "failed"
-                if verbose:
-                    print("mark_low", root, out[str(root)])
+            ok = (_grant_post("/grant", {"path": str(root), "recursive": full}) if GRANT
+                  else lowbox.mark_low(root, recursive=full))
         except OSError as exc:
             out[str(root)] = f"error: {exc}"
+            continue
+        out[str(root)] = "low" if ok else "failed"
+        if ok:
+            if full:
+                full_done.add(str(root))
+                full_marked.append(root)
+        if verbose:
+            print("mark_low", root, out[str(root)], "full" if full else "shallow")
+    try:
+        _LOW_STAMP.write_text(json.dumps(sorted(full_done), ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
     return out
 
 

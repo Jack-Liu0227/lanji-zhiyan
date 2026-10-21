@@ -12,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packages" / "workspace-core"))
@@ -88,6 +89,39 @@ class PathsTest(unittest.TestCase):
         os.environ["RESEARCH_WORKBENCH_DB"] = str(self.home / "custom.sqlite3")
         paths = importlib.reload(self.paths)
         self.assertEqual(paths.DB_PATH, self.home / "custom.sqlite3")
+
+
+class WriteRootsStampTest(unittest.TestCase):
+    """标 Low 只该跑一次：文件数没变就不再递归 icacls —— 那 1.5s 挡在「起子进程」之前。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        os.environ["LANJI_ZHIYAN_HOME"] = str(Path(self.tmp.name) / "home")
+        self.addCleanup(os.environ.pop, "LANJI_ZHIYAN_HOME", None)
+        import paths
+        self.p = importlib.reload(paths)              # 换 HOME → 戳文件也落在临时目录
+        for d in (self.p.HOME, self.p.DATA, self.p.CACHE):
+            d.mkdir(parents=True, exist_ok=True)
+        (self.p.DATA / "a.txt").write_text("x", encoding="utf-8")
+        self.p.GRANT = ""                             # 无通道 → 自己标
+
+    def _run(self):
+        with patch("lowbox.available", return_value=True), \
+             patch("lowbox.mark_low", return_value=True) as m:
+            return self.p.mark_write_roots_low(), m
+
+    def test_整棵树只标一次_之后只做非递归(self) -> None:
+        res, m = self._run()
+        self.assertEqual(m.call_count, 1, "HOME 的 /T 已经覆盖 data/，不该再标第二遍")
+        self.assertEqual(str(m.call_args_list[0].args[0]), str(self.p.HOME))
+        self.assertTrue(m.call_args_list[0].kwargs.get("recursive"), "首次要把整棵树标掉")
+        self.assertEqual(res[str(self.p.DATA)], "covered")
+
+        _res, m = self._run()
+        self.assertEqual(m.call_count, 2, "HOME + data 各一次非递归标")
+        self.assertFalse(any(c.kwargs.get("recursive") for c in m.call_args_list),
+                         "戳记里已有 → 以后不该再跑 /T（那 1.5s 就是启动慢的元凶）")
 
 
 if __name__ == "__main__":
