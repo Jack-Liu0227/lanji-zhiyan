@@ -498,8 +498,15 @@ def doc_tools(kind: str) -> list[dict[str, Any]]:
         _schema("library_overview", "看项目现状：文献数、证据候选、检索结果、已入库 PDF、笔记。", {}, []),
         _schema("knowledge_query", "在项目知识库（笔记 + 证据）里检索关键词。",
                 {"query": {"type": "string", "description": "关键词"}}, ["query"]),
-        _schema("memory_save", "把值得长期记住的结论/约束/导师要求记一条到项目长期记忆。",
-                {"text": {"type": "string", "description": "一句话"}}, ["text"]),
+        _schema("memory", "把值得长期记住的结论/约束/导师要求记一条（add）。做法与流程不属于这里。",
+                {"ops": {"type": "array", "description": "批量，一条也行", "items": {
+                    "type": "object",
+                    "properties": {"action": {"type": "string", "enum": ["add", "patch", "remove"]},
+                                   "text": {"type": "string", "description": "一句话"},
+                                   "old_text": {"type": "string", "description": "patch/remove：原文片段"},
+                                   "kind": {"type": "string", "enum": ["fact", "constraint", "preference", "decision"]},
+                                   "importance": {"type": "integer", "description": "0-3"}},
+                    "required": ["action"]}}}, ["ops"]),
     ]
 
 
@@ -508,7 +515,7 @@ OUTLINE_TOOLS = doc_tools("outline")
 
 def map_tools() -> list[dict[str, Any]]:
     """梳理精读这一步的工具：读写谱系 + 看数据源 + 附件/项目速览/检索/记忆（沿用 doc_tools 里那几个）。"""
-    keep = {"read_attachment", "library_overview", "knowledge_query", "memory_save"}
+    keep = {"read_attachment", "library_overview", "knowledge_query", "memory"}
     return [t for t in doc_tools("outline") if t["function"]["name"] in keep] + [
         _schema("map_write", "把**整份**谱系图 JSON 覆盖写进项目那一份 谱系.json（就地改，不新建）。"
                              "结构：{nodes:[{id,type,label,detail,ref}], edges:[{from,to,label}]}；"
@@ -772,7 +779,7 @@ def review_system(db: "WorkflowDB", task_id: str) -> str:
 4. **产出是审稿意见，不是正文**：把审稿意见整份 markdown 用 doc_write 写进 `{rep['path']}`（左边展示区就是它，写完整份、不要只给片段），**不要覆盖正文**；正文要改就让用户回「论文撰写」那一步改。
 4.1 **能写就直接写**：用户说「审一遍」「给点意见」「放到左边」就是让你现在写出整份审查意见并 doc_write 落盘 —— 不要先反问「要不要我写成一份」；落盘后用一两句说清决议和最关键的三条。确实没正文才问。
 5. 不编造文献与数据；页码/数字对不上的不当结论。你的意见是草稿式判断，最终以导师与证据为准。
-6. 出现值得长期记住的结论/约束/导师要求时调用 memory_save 记一条。
+6. 出现值得长期记住的结论/约束/导师要求时调用 memory 记一条（add）；做法留给 skill。
 7. 被审的正文：`{cur['path']}`（{'已有正文' if cur['exists'] else '还没有正文 —— 提醒他先去「论文撰写」写一版'}）。
 
 【审查框架（取自本机 skill）】

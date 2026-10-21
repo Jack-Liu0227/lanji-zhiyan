@@ -382,6 +382,26 @@ TOOL_SPECS = [
              "depends_on": {"type": "array", "items": {"type": "string"}, "description": "IDs of prerequisite team tasks"},
              "output_contract": {"type": "object", "description": "Expected output shape"},
              "reviewer_id": {"type": "string", "description": "Reviewer member ID"}}, ["member", "prompt"]),
+    _schema("memory", "记忆：跨会话留存的事实/偏好/约束/决定。ops 一次可给多条；给 query 就是检索。"
+            "「做法/流程/踩坑」不属于这里 —— 那是 skill_write。",
+            {"ops": {"type": "array", "description": "批量操作", "items": {
+                "type": "object", "properties": {
+                    "action": {"type": "string", "enum": ["add", "patch", "remove", "archive", "restore"]},
+                    "id": {"type": "string", "description": "patch/remove/archive 用：先用 query 拿 id"},
+                    "old_text": {"type": "string", "description": "没记 id 就用原文片段定位"},
+                    "text": {"type": "string", "description": "add/patch 用：一句话，陈述式，别写过程"},
+                    "kind": {"type": "string", "enum": ["fact", "preference", "constraint", "decision", "episode"]},
+                    "scope": {"type": "string", "enum": ["project", "global"],
+                              "description": "默认 project；只有跨项目都成立的口径/偏好才用 global"},
+                    "tags": {"type": "string", "description": "空格分隔的两个词以内"},
+                    "importance": {"type": "integer", "description": "0-3，默认 1；硬约束/导师口径给 2-3"},
+                    "archived": {"type": "boolean"}},
+                "required": ["action"]}},
+             "query": {"type": "string", "description": "给了就检索（忽略 ops）"},
+             "limit": {"type": "integer"}}),
+    _schema("recall", "回想：按关键词检索 记忆 + 过往对话 + 笔记/证据原文块。引用旧结论之前先查，别凭印象。",
+            {"query": {"type": "string", "description": "关键词，两三个词最好；两字也能搜"},
+             "limit": {"type": "integer", "description": "每类最多几条，默认 8"}}, ["query"]),
 ]
 
 TOOL_NAMES = [t["function"]["name"] for t in TOOL_SPECS]
@@ -390,8 +410,14 @@ TOOL_NAMES = [t["function"]["name"] for t in TOOL_SPECS]
 IDEA_TOOLS = [
     _schema("idea_review", "对当前创新点出正式判定（五维评分 1-10 + 致命缺陷 + 三档结论），会落成项目笔记并写入长期记忆。",
             {"idea": {"type": "string", "description": "用户要审查的创新点原文（可带上刚补充的约束）"}}, ["idea"]),
-    _schema("memory_save", "把值得长期记住的结论/约束/用户偏好记一条到项目长期记忆。",
-            {"text": {"type": "string", "description": "一句话，例如「用户只有 8 周 + 单卡 8G，算力受限」"}}, ["text"]),
+    _schema("memory", "把值得长期记住的结论/约束/用户偏好记一条（add）。",
+            {"ops": {"type": "array", "description": "批量，一条也行", "items": {
+                "type": "object",
+                "properties": {"action": {"type": "string", "enum": ["add"]},
+                               "text": {"type": "string", "description": "一句话，例如「用户只有 8 周 + 单卡 8G，算力受限」"},
+                               "kind": {"type": "string", "enum": ["fact", "constraint", "preference", "decision"]},
+                               "importance": {"type": "integer"}},
+                "required": ["action", "text"]}}}, ["ops"]),
 ]
 
 

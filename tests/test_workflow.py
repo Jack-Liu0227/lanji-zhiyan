@@ -583,7 +583,7 @@ class WorkflowTest(unittest.TestCase):
             workflow.chat_raw, workflow._tool_impl = old_raw, old_impl
         self.assertIn("Partner Agent", bound_ctx)
         self.assertIn("绑项目测试", bound_ctx)
-        self.assertIn("项目长期记忆", bound_ctx)                        # 绑了才注入项目记忆
+        self.assertIn("【项目记忆】", bound_ctx)                        # 绑了才注入项目记忆
         self.assertIn("智研管家", free_ctx)
         self.assertIn("全局简报", free_ctx)
         self.assertNotIn("你是《", free_ctx)          # Leader 文案本身会提到 Partner Agent，用开头的「你是《项目》」判定

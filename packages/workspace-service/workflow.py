@@ -17,6 +17,7 @@ import os
 
 import fileguard        # 文件安全：子进程环境洗白 / 写前快照 / 打开白名单 / 审计
 import guards          # 出站脱敏 + 引用核验（见 guards.py）
+import memory_store    # 记忆体系：全局/项目两层，可改可删，FTS 检索（见 memory_store.py 顶部口径）
 import paths            # 唯一路径来源（data / user / executors 都在 HOME 下）
 import securestore      # 凭据保护（DPAPI，见 securestore.py）
 import re
@@ -1009,53 +1010,31 @@ class WorkflowDB(ResearchDB):
         self.db.execute("UPDATE chats SET assistant_id=?, updated_at=? WHERE id=?", (aid, now(), cid))
         self.db.commit()
 
-    # ---------- 项目记忆（长期 = 项目要点与结论；短期 = 对话内容与细节） ----------
+    # ---------- 记忆（全局/项目两层；真实现全在 memory_store） ----------
     def memory(self, task_id: str, kind: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        sql, args = "SELECT * FROM project_memory WHERE task_id=?", [task_id]
-        if kind:
-            sql += " AND kind=?"; args.append(kind)
-        sql += " ORDER BY created_at LIMIT ?"; args.append(limit)
-        return [dict(r) for r in self.db.execute(sql, args)]
+        """老接口保持形状不变（kind 回映射成 long/short），server 和前端不用改。
+        kind='long' → 非 episode；'short' → episode。"""
+        memory_store.ready(self)
+        if kind == "short":
+            sql, args = "SELECT * FROM memory WHERE scope_id=? AND kind='episode'", [task_id]
+        elif kind == "long":
+            sql, args = "SELECT * FROM memory WHERE scope_id=? AND kind<>'episode'", [task_id]
+        else:
+            sql, args = "SELECT * FROM memory WHERE scope_id=?", [task_id]
+        rows = self.db.execute(sql + " ORDER BY importance DESC, updated_at LIMIT ?", args + [limit])
+        out = []
+        for row in rows:
+            item = dict(row)
+            item["kind"] = "short" if item["kind"] == "episode" else "long"
+            out.append(item)
+        return out
 
     def add_memory(self, task_id: str, kind: str, text: str) -> dict[str, Any]:
-        text = (text or "").strip()
-        if not text:
-            raise ValueError("记忆内容不能为空")
-        row = (uuid.uuid4().hex, task_id, "short" if kind == "short" else "long", text, now())
-        self.db.execute("INSERT INTO project_memory VALUES (?,?,?,?,?)", row)
-        self.db.commit()
-        self.dump_memory(task_id)                       # 项目位置里同步一份可读文件
-        return {"id": row[0], "kind": row[2], "text": text, "created_at": row[4]}
+        return memory_store.add(self, text, scope_id=task_id,
+                                kind="episode" if kind == "short" else "fact")
 
     def dump_memory(self, task_id: str) -> None:
-        """把长期/短期记忆落盘到项目位置的「记忆」目录；没设项目位置就只留在库里。"""
-        base = self.base_dir(task_id)
-        if not base:
-            return
-        folder = self.pdir(task_id, "记忆")
-        for filename in ("长期记忆.md", "短期记忆.md"):
-            if not (folder / filename).resolve().is_relative_to(base.resolve()):
-                raise ValueError("记忆文件越过项目目录")
-        long = [m["text"] for m in self.memory(task_id, "long")]
-        shorts = [m["text"] for m in self.memory(task_id, "short")]
-        msgs = self.messages(task_id)
-        lines = [f"- {x}" for x in shorts] + [
-            f"- {'我' if m['role'] == 'user' else '助手'}（{m['created_at'][:16]}）：{' '.join((m['content'] or '').split())[:300]}"
-            for m in msgs]
-        long_path = folder / "长期记忆.md"
-        existing = long_path.read_text(encoding="utf-8") if long_path.is_file() else ""
-        if existing:
-            missing = [x for x in long if f"- {x}" not in existing]
-            if missing:
-                with long_path.open("a", encoding="utf-8") as stream:
-                    stream.write("\n" + "\n".join(f"- {x}" for x in missing) + "\n")
-        else:
-            long_path.write_text(
-                "# 长期记忆\n\n项目要点与重要结论（自动维护，可直接编辑，下次运行会读回来）。\n\n"
-                + ("\n".join(f"- {x}" for x in long) or "- （暂无）") + "\n", encoding="utf-8")
-        (folder / "短期记忆.md").write_text(
-            "# 短期记忆\n\n这个项目的对话内容与细节（按时间顺序，越靠下越新）。\n\n"
-            + ("\n".join(lines) or "- （暂无）") + "\n", encoding="utf-8")
+        memory_store.dump(self, task_id)
 
     def seed_long_memory(self, task_id: str) -> int:
         """长期记忆的底子：新建项目时填的那几个点（只在空的时候种一次）。"""
@@ -1069,28 +1048,14 @@ class WorkflowDB(ResearchDB):
         n = 0
         for k, v in points:
             if (v or "").strip():
-                self.add_memory(task_id, "long", f"{k}：{v.strip()}"); n += 1
+                memory_store.add(self, f"{k}：{v.strip()}", scope_id=task_id, source="seed", importance=2)
+                n += 1
         return n
 
     def memory_block(self, task_id: str, now_window: int = 10, line: int = 120) -> str:
-        """拼给模型看的记忆块：长期全给，短期给窗口外的老对话（窗口内的走正常 messages）。"""
-        self.seed_long_memory(task_id)
-        long = [m["text"] for m in self.memory(task_id, "long")]
-        base = self.base_dir(task_id)
-        memory_file = base / "记忆" / "长期记忆.md" if base else None
-        if memory_file and not memory_file.resolve().is_relative_to(base.resolve()):
-            raise ValueError("记忆文件越过项目目录")
-        if memory_file and memory_file.is_file():
-            for item in memory_file.read_text(encoding="utf-8").splitlines():
-                if item.startswith("- ") and item[2:].strip() not in long:
-                    long.append(item[2:].strip())
-        msgs = self.messages(task_id)
-        older = msgs[:-now_window] if len(msgs) > now_window else []
-        short = [f"{m['role']}: {' '.join((m['content'] or '').split())[:line]}" for m in older]
-        parts = ["【项目长期记忆】" + ("\n".join(f"- {x}" for x in long[-40:]) if long else "（空）")]
-        if short:
-            parts.append("【更早的对话（短期记忆）】\n" + "\n".join("- " + x for x in short[-20:]))
-        return "\n\n".join(parts)
+        """拼给模型看的记忆块：全局 → 项目 → 窗口外的老对话。"""
+        self.seed_long_memory(task_id)                  # 新项目先种三条底子（幂等）
+        return memory_store.block(self, task_id, now_window, line)
 
 
     def stage_map(self, task_id: str) -> dict[str, str]:
@@ -1866,7 +1831,7 @@ def idea_system(db: "WorkflowDB", task_id: str) -> str:
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做「创新点审查」这一件事；不下载文献、不精读、不撰写、不导出格式，用户要这些就说明去别的步骤。
 2. 默认多轮：先问清硬约束（能拿到的数据 / 算力 / 时间 / 技能 / 目标期刊或学位要求），一次只问 1-3 个最关键的问题，别一口气拷问。
 3. 信息够了再调用 idea_review 出正式判定（会落成项目笔记 + 长期记忆）；结论要落到「下一步做什么」。
-4. 出现值得长期记住的结论、约束或用户偏好时，调用 memory_save 记一条（一句话，别刷屏）。
+4. 出现值得长期记住的结论、约束或用户偏好时，调用 memory 记一条（一句话，别刷屏）；判断和评分这类能复用的做法留给 skill，不写进记忆。
 5. 不编造文献与数据；没有检索能力就写「未核实，需查文献」。你是草稿式意见，最终以导师与证据为准。
 
 【评估框架（取自本机 skill）】
@@ -2055,6 +2020,7 @@ TOOL_RISK = {
     "paper_download": "network_read", "download": "network_read",
     "outline_write": "workspace_write", "map_write": "workspace_write", "doc_write": "workspace_write",
     "cite_add": "workspace_write", "memory_save": "workspace_write", "notes": "workspace_write",
+    "memory": "workspace_write", "recall": "read_only", "skill_write": "workspace_write",
     "notes_compose": "workspace_write", "idea_review": "workspace_write", "paper_read": "workspace_write",
     "read": "workspace_write", "draft_write": "workspace_write", "draft_review": "workspace_write",
     "calendar_add": "workspace_write", "team_assign": "workspace_write", "team_form": "workspace_write",
@@ -2307,8 +2273,20 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         return _team.assign(tid, args.get("member", ""), args.get("prompt", ""), trigger="leader",
                             origin="leader@" + task_id[:8], depends_on=args.get("depends_on"),
                             output_contract=args.get("output_contract"), reviewer_id=args.get("reviewer_id", ""))
-    if name == "memory_save":
-        return db.add_memory(task_id, args.get("kind", "long"), args.get("text", ""))
+    if name == "memory":
+        return memory_store.apply(db, task_id, args)
+    if name == "recall":
+        q = str(args.get("query") or "")
+        found = memory_store.recall(db, q, task_id, int(args.get("limit") or 8))
+        try:                                   # 笔记/证据的原文块也一起给（那里带页码出处）
+            found["notes"] = _knowledge_query(db, task_id, q)["hits"][:8]
+        except Exception:
+            found["notes"] = []
+        return found
+    if name == "memory_save":                 # 老工具名：老对话/老提示词还在用，等价于 memory add
+        return memory_store.add(db, args.get("text", ""), scope_id=task_id,
+                                kind="episode" if args.get("kind") == "short" else "fact",
+                                source="agent", importance=2)
     if name == "library_overview":
         return _overview(db, task_id)
     if name == "knowledge_query":
@@ -2627,6 +2605,11 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     elif db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone():
         bound = task_id
     ctx_id = bound or task_id                       # 工具按这个 id 干活：绑了项目就落在项目里
+    if publish and bound:                           # 用户当场定的口径：不等下轮，先记成一条约束
+        try:
+            memory_store.capture(db, bound, text)
+        except Exception:
+            pass
     if bound:
         root = db.base_dir(bound)
         if not root:
@@ -2685,6 +2668,12 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     ctx += "\n\n" + capabilities.skill_context(db, aid, project_dir)
     if tools is None:
         ctx += capabilities.steward_context(db, aid, project_dir)
+    ctx += ("\n\n【记忆纪律】记忆分两层：全局（跨项目的口径/偏好，scope=global）与项目（这个项目的事实、决定、约束）。\n"
+            "- 值得留下的结论、用户偏好、导师要求、口径 → 用 memory 工具记（add；同一件事改已有的用 patch，不堆重复）。\n"
+            "- 用户纠正你、或当场定了规矩（「以后都…」「不要…」）→ 立刻 memory add(kind=constraint)，别等下一轮。\n"
+            "- 「做法/流程/踩坑」不是记忆，是 skill → skill_write 写进 SKILL.md；下次同类任务自己会被索引到。\n"
+            "- 要用到以前说过的事 → 先 recall 检索（记忆 + 历史对话 + 笔记），不要凭印象编。\n"
+            "- 记忆块满了会提示条数；要腾地方就 patch 合并或 archive，不要直接放弃旧约束。")
     ctx += "\n\n权限模式：%s。%s" % (permission, {
         "auto": "Choose actions for the user goal. Sending mail or messages and remote writes require user enabled Full Access.",
         "read_only": "只允许只读工具，禁止写入文件、数据库、邮件或外部服务。",
@@ -2697,8 +2686,10 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     if tools is None:
         tool_specs += agent_integrations.tool_specs()
         tool_specs += capabilities.capability_tool_specs(db, aid, project_dir)
-    elif any(t.get("function", {}).get("name") == "skill_read" for t in capabilities.capability_tool_specs(db, aid, project_dir)):
-        tool_specs += [t for t in capabilities.capability_tool_specs(db, aid, project_dir) if t.get("function", {}).get("name") == "skill_read"]
+    elif any(t.get("function", {}).get("name") in ("skill_read", "skill_write")
+             for t in capabilities.capability_tool_specs(db, aid, project_dir)):
+        tool_specs += [t for t in capabilities.capability_tool_specs(db, aid, project_dir)
+                       if t.get("function", {}).get("name") in ("skill_read", "skill_write")]
     tool_specs = capabilities.filter_tools(db, aid, tool_specs, project_dir)
     if bound and permission != "full_access":
         tool_specs = [t for t in tool_specs if t.get("function", {}).get("name") == "mcp_register"
@@ -2802,7 +2793,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 enforce_project_scope(db, bound, name, args)
                 if name in integration_names:
                     result = agent_integrations.invoke(name, db, ctx_id, args, assistant_id=aid, permission=permission)
-                elif name == "skill_read" or (name.startswith("mcp_") and name != "mcp_register"):
+                elif name in ("skill_read", "skill_write") or (name.startswith("mcp_") and name != "mcp_register"):
                     result = capabilities.invoke_tool(db, aid, name, args, project_dir)
                 else:
                     result = _tool_impl(name, db, ctx_id, args, scope, emit=emit, profile=profile)
@@ -2903,6 +2894,20 @@ def _brief(name: str, result: Any) -> str:
         return f"文献 {result.get('文献')} 篇 / 检索结果 {len(result.get('检索结果') or [])} 条 / 笔记 {len(result.get('笔记') or [])} 篇"
     if name == "memory_save":
         return f"已记入长期记忆：{result.get('text','')[:60]}"
+    if name == "memory":
+        rows = result.get("results") or []
+        bad = [r.get("error") for r in rows if isinstance(r, dict) and r.get("error")]
+        if result.get("hits") is not None:
+            return "检索记忆 %d 条" % len(result["hits"])
+        if bad:
+            return "记忆写入失败：%s" % bad[0]
+        dup = sum(1 for r in rows if isinstance(r, dict) and r.get("duplicate"))
+        return "记忆已更新 %d 条%s" % (len(rows), "（%d 条本来就记着）" % dup if dup else "")
+    if name == "recall":
+        return "回想：记忆 %d 条 / 历史对话 %d 条 / 笔记 %d 条" % (
+            len(result.get("memory") or []), len(result.get("chats") or []), len(result.get("notes") or []))
+    if name == "skill_write":
+        return "已写入 skill「%s」（%s）" % (result.get("id", ""), result.get("scope", ""))
     return "完成"
 
 

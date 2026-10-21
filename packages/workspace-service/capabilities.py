@@ -111,6 +111,52 @@ def list_skills(project_dir: str = "") -> list[dict]:
     return sorted(found.values(), key=lambda item: item["name"].casefold())
 
 
+SKILL_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+
+
+def write_skill(name: str, description: str, content: str, scope: str = "project",
+                project_dir: str = "", mode: str = "replace") -> dict:
+    """模型自己写 skill —— 这是「自我升级」的落点：跑完一类活儿，把做法沉淀成 SKILL.md，
+    下次同类任务靠 description 被索引到、按需读全文。
+
+    边界（别松）：名字只能是 [a-z0-9._-]，只能写 skill 根下自己的目录，正文 1 MiB 上限，
+    frontmatter 的 name 必须等于目录名 —— 否则已有的助手绑定会找不到它。
+    """
+    name = str(name or "").strip().lower()
+    if not SKILL_NAME.match(name):
+        raise ValueError("skill 名字只能用小写字母/数字/-/._，且不超过 64 字符")
+    scope = "user" if scope == "user" else "project"
+    if scope == "project" and not project_dir:
+        raise ValueError("这个项目没设文件夹，写不了项目级 skill；先设项目位置")
+    root = (Path(project_dir).expanduser().resolve() / ".agents" / "skills") if scope == "project" \
+        else (Path.home() / ".agents" / "skills")
+    folder = (root / name).resolve()
+    if not folder.is_relative_to(root.resolve()):
+        raise ValueError("skill 路径越界")
+    target = folder / "SKILL.md"
+    body = str(content or "")
+    if body.startswith("---"):                    # 模型自己带了 frontmatter：只校验名字，别动它的字
+        head_name, _ = _skill_frontmatter(body, name)
+        if head_name != name:
+            raise ValueError("frontmatter 里的 name 必须等于 skill 名字：" + name)
+        text = body
+    else:
+        if not str(description or "").strip():
+            raise ValueError("新建 skill 必须有 description（一行说清什么时候用它）")
+        text = "---\nname: %s\ndescription: %s\n---\n\n%s\n" % (name, " ".join(description.split()), body.strip())
+    if len(text.encode("utf-8")) > MAX_SKILL_BYTES:
+        raise ValueError("skill 正文超过 1 MiB")
+    folder.mkdir(parents=True, exist_ok=True)
+    exists = target.is_file()
+    if exists and mode == "create":
+        raise ValueError("同名 skill 已存在；要改它用 mode=append/replace")
+    if exists and mode == "append":
+        text = target.read_text(encoding="utf-8-sig").rstrip() + "\n\n" + body.strip() + "\n"
+    target.write_text(text, encoding="utf-8")
+    return {"id": name, "name": name, "scope": scope, "path": str(target),
+            "created": not exists, "chars": len(text)}
+
+
 def _skill(item_id: str, project_dir: str) -> dict:
     item = next((item for item in list_skills(project_dir) if item["id"] == item_id), None)
     if not item:
@@ -640,6 +686,19 @@ def capability_tool_specs(db, assistant_id: str, project_dir: str = "") -> list[
                       "description": "Read an enabled skill or one of its relative text resources.",
                       "parameters": {"type": "object", "properties": {"skill_id": {"type": "string"},
                           "resource": {"type": "string", "description": "Relative path inside the skill, default SKILL.md"}}, "required": ["skill_id"]}}})
+    if enabled(db, assistant_id, "tool", "skill_write"):
+        specs.append({"type": "function", "function": {
+            "name": "skill_write",
+            "description": "把一个可复用的做法写成 skill（SKILL.md）：跑完一类活儿、踩过坑、或用户定了处理流程时用。"
+                           "description 写「什么时候该用它」，下次同类任务会按它被索引到。不是记事实（那是 memory）。",
+            "parameters": {"type": "object", "properties": {
+                "name": {"type": "string", "description": "小写字母/数字/-，例如 paper-figure-style"},
+                "description": {"type": "string", "description": "一行：什么场景下该读这个 skill"},
+                "content": {"type": "string", "description": "Markdown 正文：步骤、判据、坑、可复制的命令"},
+                "scope": {"type": "string", "enum": ["project", "user"],
+                          "description": "project=只在这个项目用；user=跨项目（放 ~/.agents/skills）"},
+                "mode": {"type": "string", "enum": ["create", "replace", "append"], "description": "默认 replace"}},
+                "required": ["name", "description", "content"]}}})
     return filter_tools(db, assistant_id, specs, project_dir)
 
 
@@ -659,6 +718,12 @@ def invoke_mcp_tool(db, assistant_id: str, name: str, args: dict, project_dir: s
 
 
 def invoke_tool(db, assistant_id: str, name: str, args: dict, project_dir: str = "") -> Any:
+    if name == "skill_write":
+        if not enabled(db, assistant_id, "tool", name):
+            raise PermissionError("This tool is disabled for the assistant")
+        return write_skill(str(args.get("name") or ""), str(args.get("description") or ""),
+                           str(args.get("content") or ""), str(args.get("scope") or "project"),
+                           project_dir, str(args.get("mode") or "replace"))
     if name == "skill_read":
         item_id = str(args.get("skill_id", ""))
         if not enabled(db, assistant_id, "tool", name) or not enabled(db, assistant_id, "skill", item_id):
@@ -752,7 +817,7 @@ def route(method: str, path: str, body: dict, query: dict, db) -> dict | None:
             raise ValueError("Supply kind (skill/tool/mcp), item_id and a boolean enabled")
         valid = ({item["id"] for item in list_skills(project_dir)} if kind == "skill" else
                  set(_config(db)["mcpServers"]) if kind == "mcp" else
-                 {item["id"] for item in list_tools(db)} | {"skill_read"} | {_mcp_name(s, t["name"]) for s, t in _cached_tools(db)})
+                 {item["id"] for item in list_tools(db)} | {"skill_read", "skill_write"} | {_mcp_name(s, t["name"]) for s, t in _cached_tools(db)})
         if item_id not in valid:
             raise ValueError("Capability not found")
         conn.execute("INSERT OR REPLACE INTO capability_bindings VALUES(?,?,?,?)", (aid, kind, item_id, int(body["enabled"])))
