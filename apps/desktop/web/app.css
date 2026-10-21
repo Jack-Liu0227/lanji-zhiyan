@@ -1112,7 +1112,7 @@ body.md-narrow .wctl button:hover { background: #eee; }
 .cv{display:flex;flex-direction:column;height:100%;min-height:0;gap:10px}
 .cv-spacer{flex:1}
 .cv-msg{font-size:12px;color:var(--muted);max-width:46ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cv-grid{display:grid;grid-template-columns:minmax(190px,20fr) minmax(0,80fr);gap:10px;flex:1;min-height:0}
+.cv-grid{display:grid;grid-template-columns:minmax(180px,214px) minmax(0,1fr);gap:10px;flex:1;min-height:0}
 .cv-side{max-width:280px}
 .cv-fname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cv-ren{flex:none;width:20px;height:20px;border:1px solid var(--line);border-radius:5px;background:var(--panel2);

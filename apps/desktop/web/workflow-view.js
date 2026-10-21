@@ -520,8 +520,12 @@ function convPanelHTML(active){
       <div class="cv-col">
         <div class="cv-h"><b id="cvName">展示区</b><span class="cv-msg" id="cvMsg"></span><span class="cv-spacer"></span>
           <select class="cv-sel" id="cvPick" title="最终产物里要展示的文件"><option value="">最终产物…</option></select>
-          <button class="cv-ib" id="cvPdf" title="正文.md → LaTeX → PDF（本机 MiKTeX）">📄 转 PDF</button>
-          <button class="cv-ib" id="cvWord" title="正文.md → Word(.docx)">📄 Word</button>
+          <select class="cv-sel" id="cvFmt" title="要导出的成品格式">
+            <option value="pdf">PDF</option><option value="docx">Word (.docx)</option><option value="doc">Word 97 (.doc)</option></select>
+          <select class="cv-sel" id="cvTpl" title="PDF 用哪套期刊模板">
+            <option value="plain">通用模板</option><option value="elsevier">Elsevier</option>
+            <option value="ieee">IEEE</option><option value="revtex">APS (revtex)</option></select>
+          <button class="cv-ib" id="cvBuild" title="按选的格式与模板编译，产物写进「最终产物」">⚙ 编译</button>
           <button class="cv-ib hidden" id="cvOpenExt" title="用系统默认程序打开">↗</button></div>
         <div class="cv-stage" id="cvStage">
           <iframe class="cv-frame hidden" id="cvFrame" src="about:blank"></iframe>
@@ -635,29 +639,20 @@ async function cvLoad(){
   }catch(e){ cvMsg("读目录失败：" + e.message); }
 }
 
-async function cvToPdf(){
-  const btn = $("cvPdf"); if(btn) btn.disabled = true;
+async function cvBuild(){
+  const btn = $("cvBuild"); if(btn) btn.disabled = true;
+  const fmt = ($("cvFmt") && $("cvFmt").value) || "pdf";
+  const tpl = ($("cvTpl") && $("cvTpl").value) || "plain";
   try{
-    cvMsg("正文 → LaTeX → PDF…");
-    const r = await api("/api/conv/run", { task_id: curTask, format: "pdf" });
+    cvMsg(fmt === "pdf" ? `正文 → LaTeX（${tpl}）→ PDF…` : `正文 → ${fmt}…`);
+    const r = await api("/api/conv/run", { task_id: curTask, format: fmt, template: tpl });
     if(r.error) throw new Error(r.error);
-    cvMsg(`出 PDF 了：${r.name}（${Math.round((r.size || 0) / 1024)} KB）`, 8000);
+    const tail = r.template_fallback ? `（${r.template_fallback} 模板编不过，已退回通用模板）` : "";
+    cvMsg(`出 ${String(r.format || fmt).toUpperCase()} 了：${r.name}（${Math.round((r.size || 0) / 1024)} KB）${tail}`, 9000);
     await cvLoad(); if(r.path) cvPreview(r.path);
-  }catch(e){ cvMsg("转 PDF 失败：" + e.message); }
+  }catch(e){ cvMsg("编译失败：" + e.message); }
   if(btn) btn.disabled = false;
 }
-async function cvToWord(){
-  const btn = $("cvWord"); if(btn) btn.disabled = true;
-  try{
-    cvMsg("正文 → Word…");
-    const r = await api("/api/conv/run", { task_id: curTask, format: "docx" });
-    if(r.error) throw new Error(r.error);
-    cvMsg(`出 Word 了：${r.name}（${Math.round((r.size || 0) / 1024)} KB）`, 8000);
-    await cvLoad(); if(r.path) cvPreview(r.path);
-  }catch(e){ cvMsg("转 Word 失败：" + e.message); }
-  if(btn) btn.disabled = false;
-}
-
 function cvBind(){
   if(!$("figList")) return;
   $("figRefresh").onclick = ()=>{ figLoad(); cvLoad(); };
@@ -674,8 +669,7 @@ function cvBind(){
     const fs = [...((e.dataTransfer && e.dataTransfer.files) || [])];
     if(fs.length) figUpload(fs);
   });
-  $("cvPdf").onclick = async () => { if (await needPerm("用 xelatex 出 PDF（正文会先转成 LaTeX）")) cvToPdf(); };
-  $("cvWord").onclick = async () => { if (await needPerm("导出 Word(.docx) 到最终产物")) cvToWord(); };
+  $("cvBuild").onclick = async () => { if (await needPerm("按当前格式与模板编译，产物写进「最终产物」")) cvBuild(); };
   $("cvOpenExt").onclick = () => { if(cvCur.path) api("/api/conv/open", { path: cvCur.path }).catch(()=>{}); };
   figLoad(); cvLoad();
 }

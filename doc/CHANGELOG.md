@@ -10,7 +10,7 @@
 
 **3. 审查交付 → 格式转换先问三件事**：`open_convert()` 在 step=review 交付时往 convert 对话写一条开场白 —— ①图：正文 N 处 [图位] vs「图」文件夹 M 张，对不对；②成品：docx / doc / pdf；③范本：四个模板（带说明）还是上传自己的 .docx/.tex。只写一次。
 
-**4. UI 三版待他挑**：`Desktop\科研agent\格式转换_三版.html`（?v=A|B|C）+ 三张 PNG。A=左胶片+右白纸浮动工具条，B=顶部三步引导+缩略图网格，C=图库列表+三问问询卡。选定后按那版落地前端的模板/格式选择。
+**4. UI 定版 A 已落地**（他选 A）：`图（214px）| 展示区` 两列，右栏**沿用真实格式助手**（全局 aside，385px：对话/轨迹 tabs、轮数/工具数/token、工具名与产出目录、附件、模型与署名、composer —— 与其它步骤同一份 DOM 与 CSS，不另做简化版）。展示区标题栏新增「成品格式（PDF/docx/doc）+ 模板（通用/Elsevier/IEEE/APS）+ ⚙ 编译」；`cvBuild()` 打 `/api/conv/run` 并显示 `template_fallback` 提示；删掉旧的 cvToPdf / cvToWord 死代码。实测 1600 宽：panel 754（214+529）+ aside 385，与写作用同一尺寸；选 PDF+Elsevier 编译 → 127 KB PDF 落最终产物并在右侧 iframe 显示。
 
 ## 2026-10-21（晚 4：项目「图」文件夹 + 格式转换改成「左图 / 右成品」两栏 + 撰写落图位图题）
 
