@@ -178,6 +178,23 @@ class MapStepTest(unittest.TestCase):
         self.assertIn({"from": ids["1.1 实验方法"], "to": "r1", "label": "支撑"}, r["edges"])
         self.assertIn({"from": ids["2.1 实验方法"], "to": "r2", "label": "支撑"}, r["edges"])
 
+    def test_open_write_is_once(self):
+        """谱系图交付 → 文章撰写接手只留一条开场白（重复交付不刷屏）。"""
+        r1 = workflow_documents.open_write(self.db, self.tid)
+        self.assertTrue(r1["opened"])
+        r2 = workflow_documents.open_write(self.db, self.tid)
+        self.assertFalse(r2["opened"])
+        msgs = [m for m in self.db.messages(self.tid, "write") if m["role"] == "assistant"]
+        self.assertEqual(len(msgs), 1)
+        self.assertIn("谱系图我已经看过了", msgs[0]["content"])
+
+    def test_write_system_carries_map_evidence(self):
+        """写作助手说「我已经看过谱系图」，那 system 里就得真有谱系图挂着的东西。"""
+        self._seed_map([("r1", "笔记一", "s2")])
+        txt = workflow_documents.write_system(self.db, self.tid)
+        self.assertIn("谱系图", txt)
+        self.assertIn("笔记一", txt)
+
     def test_map_system_renders_notes_list(self):
         """谱系 agent 的 system 必须能拼出来 —— 笔记源是 dict，join 错了整步 agent 直接 500。"""
         sys_txt = workflow_documents.map_system(self.db, self.tid)

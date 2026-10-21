@@ -2344,7 +2344,7 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
 from workflow_documents import (
     doc_path, doc_read, doc_write,
     outline_read, outline_write, doc_tools, map_tools, doc_seed, read_attachment, map_path, map_read, map_write, map_sources,
-    map_seed, project_outs, map_tidy,
+    map_seed, project_outs, map_tidy, open_write,
 )
 from workflow_runners import (
     run_idea, run_map, run_outline, run_write, run_review, _wants_draft,

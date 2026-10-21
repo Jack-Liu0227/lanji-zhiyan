@@ -282,6 +282,19 @@ def map_tidy(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     return out
 
 
+WRITE_OPENING = ("谱系图我已经看过了。你还有什么要修改的吗？撰写上有什么特殊要求吗"
+                 "（投哪里 / 中文还是英文 / 篇幅 / 图表怎么安排），或者有可以参照的语料吗？")
+
+
+def open_write(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
+    """谱系图交付 → 下一步「文章撰写」接手：给写作对话留一条开场白（只留一次）。"""
+    for m in db.messages(task_id, "write"):
+        if (m.get("content") or "").startswith("谱系图我已经看过了"):
+            return {"opened": False}
+    db.add_message(task_id, "assistant", WRITE_OPENING, scope="write", sender="写作")
+    return {"opened": True, "message": WRITE_OPENING}
+
+
 def map_seed(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     """大纲已经有了、谱系图还没有 → 直接按大纲长出「章 → 节」两级，不用等用户开口。
 
@@ -583,6 +596,13 @@ def write_system(db: "WorkflowDB", task_id: str) -> str:
     out = doc_read(db, task_id, "outline")
     cur = doc_read(db, task_id, "write")
     cite = cite_sync(db, task_id)                    # 每次进这一步都按当前正文重算台账状态
+    mp = map_read(db, task_id)                       # 上一步交付的谱系图：每节挂着哪些证据
+    lab = {n["id"]: (n.get("label") or "") for n in mp["nodes"]}
+    hung: dict[str, list[str]] = {}
+    for e in mp["edges"]:
+        if e.get("from") in lab and e.get("to") in lab and (e.get("label") or "") not in ("包含", "下一章"):
+            hung.setdefault(e["from"], []).append(f"{lab[e['to']]}（{e.get('label') or '支撑'}）")
+    evid = "\n".join(f"- {lab[k]} ← {'；'.join(v)}" for k, v in hung.items()) or "（谱系图还没挂证据）"
 
     skills = "\n\n".join(x for x in (
         skill_text("academic-writing", "paper-spine", "SKILL.md", cap=4000, db=db, task_id=task_id),
@@ -605,6 +625,9 @@ def write_system(db: "WorkflowDB", task_id: str) -> str:
 
 【框架（上一步敲定的，必须遵守）】
 {out['markdown'][:6000] or '（还没有框架 —— 提醒用户先去「确认大纲」敲定框架）'}
+
+【谱系图（上一步交付：每个小节挂着哪些证据，写这一节时就按它取用；没有出处的写「待补」）】
+{evid[:2500]}
 
 【引用台账（后台文档，已有 {cite['count']} 条；正文里不写标号，引用都记这里）】
 {(cite['markdown'][:2500] + ('…' if len(cite['markdown']) > 2500 else '')) if cite['count'] else '（还没有引用记录 —— 需要引用文献时用 cite_add 登记）'}

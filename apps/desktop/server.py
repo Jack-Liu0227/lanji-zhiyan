@@ -57,7 +57,7 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
                       outline_read, outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
-                      map_seed, project_outs, map_tidy,
+                      map_seed, project_outs, map_tidy, open_write,
                       cite_read, cite_add, conv_files, conv_run, conv_compile, conv_open,
                       en_state, en_run, _safe_path, step_plan,
                       stage_download_selected, stage_zotero_import, test_provider,
@@ -1621,7 +1621,13 @@ class Handler(BaseHTTPRequestHandler):
                     if not tid or step not in ("idea", "search", "download", "notes", "outline",
                                                "map", "write", "review", "entrans", "convert"):
                         return self._json({"error": "缺 task_id 或 step 不认识"}, 400)
-                    return self._json(db.log_step(tid, step, "done", str(data.get("summary") or "用户确认交付")[:200]))
+                    res = db.log_step(tid, step, "done", str(data.get("summary") or "用户确认交付")[:200])
+                    if step == "map":                     # 交付谱系图 → 文章撰写接手，先说一句开场白
+                        try:
+                            res["write_opening"] = open_write(db, tid)
+                        except Exception:
+                            pass
+                    return self._json(res)
                 if path == "/api/security":
                     sec = kv_store.read(db, "security")
                     if "permission_mode" in data:
