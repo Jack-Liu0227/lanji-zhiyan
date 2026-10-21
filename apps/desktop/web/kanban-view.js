@@ -60,7 +60,33 @@
     kbEmbed = !!(opts && opts.embedded);
     await fetchKanbanData(window.curTask);      // 进度必须现取：缓存里那套是上次进来时的
     renderBoard(container);
+    kbStartLive(container);
   };
+
+  // 页面开着的时候别处（科研台记一步、写笔记、导文献）会改数：挂个 8s 轻轮询，
+  // 数字真变了才整块重画。弹窗开着 / 正在拖拽时跳过，免得把用户手上的操作冲掉。
+  // ponytail: 8s 轮询，不是 SSE —— 写入也可能来自别的进程；真嫌慢再换推送。
+  let kbLive = null;
+  function kbStopLive() { if (kbLive) { clearInterval(kbLive); kbLive = null; } }
+
+  function kbSig() {
+    const d = kbState.data || {}, s = d.stats || {};
+    return [s.stage_progress, s.stages_done, s.completion_rate, s.total, s.done,
+      s.papers_count, s.notes_count, d.current_stage ? d.current_stage.key : '',
+      (d.todos || []).map(t => t.id + ':' + t.status).join(',')].join('|');
+  }
+
+  function kbStartLive(container) {
+    kbStopLive();
+    kbLive = setInterval(async () => {
+      if (!container.isConnected) return kbStopLive();          // 切走了就别再画
+      const modal = container.querySelector('#kbModalContainer');
+      if ((modal && modal.children.length) || kbState.draggedId) return;
+      const before = kbSig();
+      await fetchKanbanData(window.curTask);
+      if (container.isConnected && kbSig() !== before) renderBoard(container);
+    }, 8000);
+  }
 
   function renderBoard(container) {
     const d = kbState.data || {
@@ -326,8 +352,8 @@
             <div class="kb-stage-card ${st.current ? 'is-current' : ''} ${st.done ? 'is-done' : ''}">
               <div class="kb-stage-card-head">
                 <span class="kb-stage-num">STAGE ${String(st.index).padStart(2, '0')}</span>
-                <span class="kb-stage-status-badge ${st.current ? 'current' : st.done ? 'done' : 'pending'}">
-                  ${st.current ? '🔥 当前阶段' : st.done ? '✓ 已达成' : '待推进'}
+                <span class="kb-stage-status-badge ${st.done ? 'done' : st.current ? 'current' : 'pending'}">
+                  ${st.done ? '✓ 已达成' : st.current ? '🔥 当前阶段' : '待推进'}
                 </span>
               </div>
               <h4 class="kb-stage-title">${escapeHtml(st.label)}</h4>

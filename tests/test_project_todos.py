@@ -48,5 +48,41 @@ class ProjectTodosTest(unittest.TestCase):
         self.assertEqual(len(todos_after), 10)
 
 
+class CurrentStageTest(unittest.TestCase):
+    """当前阶段口径：十步里「按顺序最靠后的已完成步」，不是「第一处缺口」。
+
+    用户跳着做（先写正文/转格式，精读还没补完），缺口口径会永远停在缺口那一步。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="rw-stage-test-")
+        self.db_path = Path(self.tmp.name) / "test.sqlite3"
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        migrations.run_migrations(self.conn, db_path=self.db_path)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _step(self, i, stage, status):
+        self.conn.execute(
+            "INSERT INTO steps (id,task_id,stage,status,summary,created_at) VALUES (?,?,?,?,?,?)",
+            (f"s{i}", "t1", stage, status, "", f"2026-10-{i + 1:02d}T00:00:00+00:00"),
+        )
+
+    def test_last_done_step_wins_over_first_gap(self):
+        import workflow
+        for i, (stage, status) in enumerate([("idea", "done"), ("search", "done"), ("download", "done"),
+                                             ("write", "done"), ("convert", "done"), ("notes", "running")]):
+            self._step(i, stage, status)
+        self._step(9, "agent", "done")            # agent 之类不属于十步，不能干扰
+        self.assertEqual(workflow.current_stage_key(self.conn, "t1"), "convert")
+
+    def test_nothing_done_falls_back_to_first_step(self):
+        import workflow
+        self.assertEqual(workflow.current_stage_key(self.conn, "t1"), "idea")
+
+
 if __name__ == "__main__":
     unittest.main()

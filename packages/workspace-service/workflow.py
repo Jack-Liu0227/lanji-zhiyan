@@ -178,6 +178,39 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def current_stage_key(conn: Any, task_id: str) -> str:
+    """当前阶段 = 十步里「按顺序最靠后的已完成步」（用户 2026-10-21 定的口径）。
+
+    他跳着做：正文写了、格式转了，精读/翻译还没补完。按「第一处缺口」算会永远停在
+    缺口那一步，跟他真实进度对不上。正在跑且排在其后的那一步优先；一步都没做完就退回
+    正在跑的那步、再退回第一步。
+    项目空间的页头 pill 与「进度与计划」看板都走这一个函数，别各算一套。
+    """
+    done: set[str] = set()
+    running: list[str] = []
+    try:
+        for row in conn.execute("SELECT stage,status FROM steps WHERE task_id=? ORDER BY rowid", (task_id,)):
+            if row["stage"] not in STAGE_LABEL:
+                continue                       # agent 之类不属于十步
+            if row["status"] == "done":
+                done.add(row["stage"])
+            elif row["status"] == "running":
+                running.append(row["stage"])
+    except Exception:
+        pass
+    ordered = [s for s in STAGES if s in done]
+    pending = [k for k in running if k not in done]
+    # 正在跑、且排在最后一个已完成步之后的那一步，比它更「当前」；排在已经做完的步
+    # 之前的 running 是崩溃/中断留下的残迹，不算。
+    last_done_idx = STAGES.index(ordered[-1]) if ordered else -1
+    frontier = [k for k in pending if STAGES.index(k) >= last_done_idx]
+    if frontier:
+        return frontier[-1]
+    if ordered:
+        return ordered[-1]
+    return pending[-1] if pending else (STAGES[0] if STAGES else "")
+
+
 def _text(value: str) -> str:
     """去标签 + 折叠空白，用于解析 Crossref/OpenAlex/arXiv 返回。"""
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", value or "")).strip()
@@ -1063,12 +1096,11 @@ class WorkflowDB(ResearchDB):
         return out
 
     def stage_now(self, task_id: str, fallback: str = "") -> str:
-        """项目现在走到七步的哪一步：取最近一条步骤记录；一条都没有就按任务自身阶段兜底。"""
-        row = self.db.execute(
-            "SELECT stage FROM steps WHERE task_id=? ORDER BY created_at DESC LIMIT 1", (task_id,)
-        ).fetchone()
-        if row and row["stage"] in STAGE_LABEL:
-            return STAGE_LABEL[row["stage"]]
+        """项目现在走到哪一步：十步里「按顺序最靠后的已完成步」（和看板同一个口径）。
+        一条步骤记录都没有的项目才按任务自身阶段兜底。"""
+        has_step = self.db.execute("SELECT 1 FROM steps WHERE task_id=? LIMIT 1", (task_id,)).fetchone()
+        if has_step:
+            return STAGE_LABEL.get(current_stage_key(self.db, task_id), "未开始")
         return {"definition": STAGE_LABEL["idea"], "reading": STAGE_LABEL["download"]}.get(fallback, "未开始")
 
     def delete_task(self, task_id: str) -> dict[str, Any]:

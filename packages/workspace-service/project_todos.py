@@ -207,28 +207,20 @@ def kanban_overview(db: Any, task_id: str = "") -> dict[str, Any]:
     # 原来查的 workflow_steps / workflow_results 这两张表从来没建过，查询一直静默失败，
     # 所以看板永远显示「第一步」；research_tasks.stage 存的是 definition/reading 这类旧口径，
     # 跟 STAGES 对不上，也不能拿来当当前步骤。
-    from workflow import STAGES, STAGE_LABEL
+    from workflow import STAGES, STAGE_LABEL, current_stage_key
     stage_list = []
-    done_keys, running_keys = set(), []
+    done_keys = set()
     if task_id and task_id != "all":
         try:
             for row in conn.execute(
                     "SELECT stage, status FROM steps WHERE task_id=? ORDER BY rowid", (task_id,)).fetchall():
-                key = row["stage"]
-                if key not in STAGES:
-                    continue                       # agent 之类不属于十步
-                if row["status"] == "done":
-                    done_keys.add(key)
-                elif row["status"] == "running":
-                    running_keys.append(key)
+                if row["stage"] in STAGES and row["status"] == "done":
+                    done_keys.add(row["stage"])
         except Exception:
             pass
 
-    # 当前阶段：正在跑且还没完成的那一步 > 第一个还没完成的 > 最后一步（十步都做完了）。
-    # 「还在跑但后面已经记了 done」的行是崩溃/中断留下的残迹，不能当当前阶段。
-    pending_running = [k for k in running_keys if k not in done_keys]
-    cur_stage_key = (pending_running[-1] if pending_running else
-                     next((s for s in STAGES if s not in done_keys), STAGES[-1]))
+    # 当前阶段：和页头 pill 同一个口径（十步里最靠后的已完成步），别再各算一套。
+    cur_stage_key = current_stage_key(conn, task_id) if task_id and task_id != "all" else STAGES[0]
 
     for i, s_key in enumerate(STAGES):
         stage_list.append({
@@ -236,7 +228,7 @@ def kanban_overview(db: Any, task_id: str = "") -> dict[str, Any]:
             "label": STAGE_LABEL.get(s_key, s_key),
             "index": i + 1,
             "done": s_key in done_keys,
-            "current": s_key == cur_stage_key and s_key not in done_keys,
+            "current": s_key == cur_stage_key,
         })
 
     # 5. 课题关联指标
