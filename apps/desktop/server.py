@@ -333,6 +333,10 @@ def _webview_window(url: str, stamp: int) -> bool:
     s = _dpi_scale()      # pywebview 把 x/y/宽高当逻辑像素再乘 DPI，先除回去，起来后再钉准
     if os.environ.get("RW_DEBUG_CDP"):     # 给验证用的：RW_DEBUG_CDP=9333 就能用 CDP 连进这扇窗读 DOM
         webview.settings["REMOTE_DEBUGGING_PORT"] = int(os.environ["RW_DEBUG_CDP"])
+    # WebView2 默认吃 WinINET 的系统代理：代理开着又没给 127.0.0.1 放行时，窗口里每个请求都被
+    # 丢进代理，页面直接报「127.0.0.1 发送了无效的响应」。这条让窗口自己的回环流量直连。
+    os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                          "--proxy-bypass-list=127.0.0.1;localhost;::1;<local>")
     threading.Thread(target=_watch_restore, daemon=True).start()
     try:
         win = webview.create_window(
