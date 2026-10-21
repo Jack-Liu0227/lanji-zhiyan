@@ -330,7 +330,7 @@
               <h3 class="cap-detail-title">${e(item.label || item.name)}</h3>
               <div class="cap-detail-tags">
                 <span class="pill cap-scope-pill ${item.scope === 'project' ? 'proj' : 'user'}">
-                  ${item.scope === 'project' ? '项目技能 (.agents/skills)' : '全局用户技能 (~/.agents/skills)'}
+                  ${item.scope === 'project' ? '项目技能 (.agents/skills)' : item.scope === 'builtin' ? '应用内置技能 (.agents/skills)' : '全局用户技能 (~/.agents/skills)'}
                 </span>
                 <span class="pill">${categoryLabel(item)}</span>
                 ${section === 'mcp' ? `<span class="pill ${item.enabled ? 'on' : 'off'}">${item.enabled ? '已启用' : '已停用'}</span>` : ''}

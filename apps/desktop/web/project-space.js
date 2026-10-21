@@ -80,7 +80,7 @@
     function update() {
       const md = editorEl.value || "";
       if (window.marked && window.DOMPurify) {
-        previewEl.innerHTML = window.DOMPurify.sanitize(window.marked.parse(md));
+        previewEl.innerHTML = renderMarkdown(md);
       } else {
         previewEl.textContent = md;
       }

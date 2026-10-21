@@ -77,6 +77,7 @@ function faceOf(a, px, rotate){
 function atSubHTML(room){
   const a = (S.assistants||[]).find(x=>x.id===((room&&room.assistant_id)||"")) || null;
   const out = `产出 ${esc(room?outName(room.out_dir):"默认产出目录")}`;
+  if(room&&room.task_id) return `${esc(a?a.name:"智研管家")} · 绑定「${esc(projName(room.task_id)||"项目")}」· 产出限项目目录`;
   if(!a) return `智研管家 · 全局（不限项目）· ${out}`;
   return `${esc(a.name)} · ${room&&room.task_id ? `Partner · 绑定《${esc(projName(room.task_id)||"项目")}》` : "专家按项目工作 · 当前未绑项目"} · ${out}`;
 }
@@ -483,6 +484,7 @@ function renderHistory(){
 
 function asEmpty(){                       // 空状态：没绑专家 = 智研管家 Q 版小人居中；绑了 = 专家头像
   const a = (S.assistants||[]).find(x=>x.id === (((S.chats||[]).find(c=>c.id===curChat)||{}).assistant_id||"")) || null;
+  const project = ((S.chats||[]).find(c=>c.id===curChat)||{}).task_id;
   let ps = []; try{ ps = JSON.parse((a&&a.prompts)||"[]"); }catch(e){ ps = []; }
   const chips = document.getElementById("msgs");
   const face = faceOf(a, 72);          // 没绑专家也是 72px 的同一块方框，不再放大
@@ -490,7 +492,7 @@ function asEmpty(){                       // 空状态：没绑专家 = 智研�
     ${face}
     <div style="display:flex;flex-direction:column;gap:6px">
       <span style="font-size:16px;font-weight:600">${esc(a?a.name:"智研管家")}</span>
-      <span style="font-size:13px;color:var(--muted)">${esc(a&&a.description ? a.description : "全局工作台助手 · 不限项目，帮你查资料、排日程、改论文、把活派给专家。直接说你要做什么。")}</span></div>
+      <span style="font-size:13px;color:var(--muted)">${esc(project ? `已绑定「${projName(project)||"项目"}」· 使用该项目的资料与记忆，产出保存在项目文件夹。` : (a&&a.description ? a.description : "全局工作台助手 · 不限项目，帮你查资料、排日程、改论文、把活派给专家。直接说你要做什么。"))}</span></div>
     ${ps.length?`<div class="as-chips">${ps.map(p=>`<button class="as-chip" data-chip="${esc(p)}">${esc(p)}</button>`).join("")}</div>`:""}</div>`;
 }
 function bindChips(){
@@ -546,24 +548,25 @@ function renderAgent(m){
                   <div class="tip">提示：把文件直接拖到输入框也能附加。</div>
                 </div>
               </div>
-              <label class="at-sel" title="把当前对话绑到一个项目上（绑了：记忆/文献/产出都跟项目走；不绑：跨项目的全局对话）">🧭<select id="projbind">
-                <option value="">不绑项目</option>
+              <label class="at-sel" title="选择已添加的项目，绑定后文件处理与产出限定在项目文件夹">🧭<select id="projbind" aria-label="选择已有项目">
+                <option value="">选择已有项目（当前未绑定）</option>
                 ${(S.tasks||[]).map(t=>`<option value="${t.id}" ${cur&&cur.task_id===t.id?"selected":""}>${esc(t.title)}</option>`).join("")}</select></label>
-              <button class="at-sel at-outbtn" id="outpick" title="选择这个对话的产出文件夹（原生文件夹选择框）">📁
-                <span id="outdir-txt">${esc(cur?outName(cur.out_dir):"默认产出目录")}</span></button>
+               <button class="at-sel at-outbtn" id="outpick" ${cur&&cur.task_id?"disabled":""} title="${cur&&cur.task_id?"绑定项目后固定写入项目目录":"选择这个对话的产出文件夹"}">📁
+                 <span id="outdir-txt">${cur&&cur.task_id?"项目目录 / 其余":esc(cur?outName(cur.out_dir):"默认产出目录")}</span></button>
               <label class="at-sel" title="这个对话用哪个模型档案">🔌<select id="modpick"><option value="">未配置模型</option>
                 ${S.models.map(mm=>`<option value="${mm.id}" ${S.active&&mm.id===S.active.id?"selected":""}>${esc(mm.name)}</option>`).join("")}</select></label>
             </div>
             <div class="at-tools-r">
               <label class="at-sel" title="这个对话用哪个专家（在「专家」页增删改）">${boundA?esc(boundA.avatar||"👨‍🔬"):`<img src="${Q_AV}" alt="" width="16" height="16" style="object-fit:contain;vertical-align:-3px">`}<select id="assist">
-                <option value="">智研管家（全局）</option>
+                <option value="">智研管家${cur&&cur.task_id?"（当前项目）":"（全局）"}</option>
                 ${(S.assistants||[]).filter(a=>a.enabled!==0 && a.id!=="builtin-steward").map(a=>`<option value="${a.id}" ${cur&&cur.assistant_id===a.id?"selected":""}>${esc(a.name)}</option>`).join("")}</select></label>
-              <button class="send-btn" id="send" title="发送" aria-label="发送">↑</button>
+               <button class="send-btn" id="send" title="发送；运行中点击中断" aria-label="发送">↑</button>
             </div>
           </div>
           <input type="file" id="filepick" multiple style="display:none">
         </div>
-        <p class="at-hint">Enter 发送 · Shift + Enter 换行 · 附件用左侧 <code>＋</code> 或直接把文件拖进输入框 · 权限：自动批准（本地任务/日历/笔记写入直接生效）</p>
+          ${cur&&cur.task_id?`<p class="at-hint at-project-scope" title="${esc(((S.tasks||[]).find(t=>t.id===cur.task_id)||{}).base_dir||"")}">📁 当前项目：${esc(projName(cur.task_id)||"项目")} · 文件与产出限项目目录 · Zotero 附件复制后处理</p>`:""}
+          <p class="at-hint">Enter 发送 · Shift + Enter 换行 · ↑↓ 翻找输入历史 · 运行中点击 ■ 或按 Esc 中断</p>
       </div>
     </section></div>`;
   const tEl = $("at-title");
@@ -633,14 +636,35 @@ function renderAgent(m){
      };
   const pb = $("projbind");
   if(pb) pb.onchange = async ()=>{
-    if(!curChat){ const r = await api("/api/chat/create", {}); curChat = r.id || (r.chat&&r.chat.id); localStorage.setItem("rw-chat", curChat); }
-    try{ await api("/api/chat/bind", {id:curChat, task_id:pb.value}); }catch(e){ return uiNotify("绑定失败："+e.message); }
+    const projectId=pb.value;
+    pb.disabled=true;
+    try{
+      if(!curChat){ const r = await api("/api/chat/create", {}); curChat = r.id || (r.chat&&r.chat.id); localStorage.setItem("rw-chat", curChat); }
+      await api("/api/chat/bind", {id:curChat, task_id:projectId});
+    }catch(e){ pb.value=cur?.task_id||""; uiNotify("绑定失败："+e.message); return; }
+    finally{ pb.disabled=!!activeAgentRun; }
     await refreshState(false); render();
   };
   // 输入区（我们自己的：＋ 菜单 / 拖放 / 粘贴 / 自动长高）
-  $("send").onclick = send;
-  $("ask").onkeydown = (e)=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();} };
-  $("ask").oninput = grow;
+   $("send").onclick = ()=>activeAgentRun ? cancelAgentRun() : send();
+   $("send").classList.toggle("stop", !!activeAgentRun);
+   $("send").textContent = activeAgentRun ? "■" : "↑";
+   if(pb) pb.disabled = !!activeAgentRun;
+   $("ask").onkeydown = (e)=>{
+     if(e.key==="Escape" && activeAgentRun){ e.preventDefault(); cancelAgentRun(); return; }
+     if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();return;}
+     if((e.key==="ArrowUp" || e.key==="ArrowDown") && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.isComposing){
+       const ta=e.target, atEdge=e.key==="ArrowUp" ? ta.selectionStart===0 : ta.selectionStart===ta.value.length;
+       if(!atEdge && agentHistoryIndex<0) return;
+       const history=(S.chat||[]).filter(m=>m.role==="user").map(m=>m.content);
+       if(!history.length) return;
+       if(agentHistoryIndex<0) agentHistoryDraft=ta.value;
+       agentHistoryIndex=e.key==="ArrowUp" ? Math.min(history.length-1,agentHistoryIndex+1) : Math.max(-1,agentHistoryIndex-1);
+       ta.value=agentHistoryIndex<0 ? agentHistoryDraft : history[history.length-1-agentHistoryIndex];
+       ta.setSelectionRange(ta.value.length,ta.value.length); grow(); e.preventDefault();
+     }
+   };
+  $("ask").oninput = ()=>{ agentHistoryIndex=-1; agentHistoryDraft=""; grow(); };
   $("ask").onpaste = (e)=>{ const fs=[...(e.clipboardData?.files||[])]; if(fs.length){ e.preventDefault(); addFiles(fs); } };
   $("plus").onclick = (e)=>{ e.stopPropagation(); const mm=$("attmenu"); mm.style.display = mm.style.display==="none" ? "block" : "none"; };
   $("attmenu").querySelectorAll("[data-a]").forEach(b=>b.onclick=()=>pick(b.dataset.a));
@@ -658,15 +682,22 @@ function renderAgent(m){
 /* 新用户第一次进来：问候后面问一句「允许所有 / 每次都要问」，存在后端，问过就不再问 */
 async function maybeAskPermission(){
   if(((S.sec||{}).permission_mode)) return;
-  const all = await uiChoice("先定一下权限",
-    "我可以在你自己的项目文件夹里读写、编译 PDF、导出文件。你希望我怎么处理这些动作？\n\n允许所有：直接做，不再问。\n每次都要问：编译、写文件这类动作，每次先问你一句。",
-    "允许所有", "每次都要问");
-  await setPermissionMode(all ? "all" : "ask");
-  uiNotify(all ? "已设为「允许所有」。可在「设置 → 权限」里改。" : "已设为「每次都要问」。编译和写文件前都会先问你。");
+   await setPermissionMode("ask");
 }
 async function loadChat(){
+  const requestedChat = curChat;
   try{
     const {messages} = await api(`/api/chat?id=${encodeURIComponent(curChat)}`);
+    if(curChat!==requestedChat) return;
+    if(activeAgentRun && activeAgentChat===curChat){
+      const box=$("msgs");
+      if(box){
+        box.innerHTML="";
+        activeAgentBase.forEach(m=>appendOne(box,{type:m.role,content:m.content,events:m.events,replay:true,at:m.created_at}));
+        activeAgentEvents.forEach(ev=>appendOne(box,ev));
+      }
+      return;
+    }
     S.chat = messages || [];
     S.chatEvents = S.chat.flatMap(m=> m.events || []);
     const tb = document.querySelector('[data-v="trajectory"]');
@@ -691,8 +722,8 @@ function renderTrajectory(box, evs = S.chatEvents){  // 轨迹：把 tool_call /
   const results = evs.filter(e=>e.type==="tool_result");
   box.innerHTML = `<div style="display:grid;gap:12px;width:100%">
     <div class="st-row" style="justify-content:flex-start;gap:14px;height:26px"><span>运行 1</span><span>${calls.length} 次工具调用</span><span>${fmtDate(new Date().toISOString())}</span></div>
-    ${calls.map((c,i)=>{ const r = results[i] || {};
-      return `<details class="tool-card ${r.ok===false?"bad":""}" open>
+    ${calls.map((c,i)=>{ const r = results.find(r=>c.id && r.id===c.id) || results[i] || {};
+      return `<details class="tool-card ${r.ok===false?"bad":""}">
         <summary><span>🔧</span><span class="tool-name">#${i+1} ${esc(c.name)}</span>
           <span class="tool-detail">${esc(r.summary||"")}</span>
           <span class="tool-dur">${r.ok===false?"失败":(r.summary?"完成":"进行中")}</span></summary>
@@ -701,19 +732,46 @@ function renderTrajectory(box, evs = S.chatEvents){  // 轨迹：把 tool_call /
   </div>`;
 }
 function appendOne(box,ev,who){
+  if(ev.type.startsWith("reasoning_")){
+    let card=[...box.querySelectorAll(".reasoning-card")].find(n=>n.dataset.reasoningId===ev.id);
+    if(ev.type==="reasoning_done" && !ev.content){ if(card) card.remove(); return; }
+    if(!card){
+      card=document.createElement("details"); card.className="reasoning-card";
+      card.dataset.reasoningId=ev.id||"";
+      card.innerHTML='<summary><span class="reasoning-icon">◌</span><span class="reasoning-label">等待模型响应…</span><span class="disclosure-arrow">›</span></summary><div class="md reasoning-body"></div>';
+      box.appendChild(card);
+    }
+    card.classList.toggle("running",ev.type!=="reasoning_done");
+    card.__content=ev.type==="reasoning_delta" ? (card.__content||"")+(ev.content||"") : (ev.content||card.__content||"");
+    card.querySelector(".reasoning-label").textContent=ev.type==="reasoning_done" ? `思考摘要 · ${(Number(ev.duration_ms||0)/1000).toFixed(1)} 秒` : (card.__content?"思考摘要生成中…":"等待模型响应…");
+    card.querySelector(".reasoning-body").innerHTML=md(card.__content);
+    box.scrollTop=box.scrollHeight; return;
+  }
+  if(ev.type==="assistant_delta"){
+    let row=box.querySelector(".msg-assistant.streaming:last-child");
+    if(!row){
+      row=document.createElement("div"); row.className="msg-row msg-assistant streaming";
+      row.innerHTML=`<div class="msg-meta"><span class="msg-ava">🤖</span><strong>智研管家</strong><span class="msg-chip">输出中…</span><button class="msg-copy" title="复制回复">复制</button></div><div class="md"></div>`;
+      box.appendChild(row);
+    }
+    row.__content=(row.__content||"")+(ev.content||"");
+    row.querySelector(".md").innerHTML=md(row.__content);
+    row.querySelector(".msg-copy").onclick=()=>navigator.clipboard.writeText(row.__content||"");
+    box.scrollTop=box.scrollHeight; return;
+  }
   if(ev.replay && ev.type==="assistant" && (ev.events||[]).length){
     // 事件流里已经含这条回复的 assistant 文本事件；再按整条消息渲染一次就会重复一整行，
     // 所以嵌套事件里只要渲染出了 assistant 行，就不再画外层那一条。没有 assistant 事件的
     // 老消息（只有 usage / 空回复）照旧走下面整条渲染，内容不丢。
     const before = box.querySelectorAll(".msg-row.msg-assistant").length;
     ev.events.forEach(e=>appendOne(box,e,who));
-    if(box.querySelectorAll(".msg-row.msg-assistant").length > before) return;
+    if((ev.events||[]).some(e=>e.type==="assistant" && e.content===ev.content) && box.querySelectorAll(".msg-row.msg-assistant").length > before) return;
   }
   const el=document.createElement("div");
   if(ev.sub) el.style.marginLeft="14px";                 // 子 agent 的行缩进一层
   if(ev.type==="user"){
     el.className="msg-row msg-user";
-    el.innerHTML=`<div class="msg-meta"><span class="msg-ava">👤</span><strong>你</strong><time>${esc(ev.at?fmtDate(ev.at):clock())}</time></div><p>${esc(ev.content)}</p>`;
+     el.innerHTML=`<div class="msg-meta"><span class="msg-ava">👤</span><strong>你</strong><time>${esc(ev.at?fmtDate(ev.at):clock())}</time><button class="msg-copy" title="复制消息">复制</button></div><p>${esc(ev.content)}</p>`;
   }
   else if(ev.type==="assistant"){
     const cur = (S.chats||[]).find(t=>t.id===curChat);
@@ -721,8 +779,10 @@ function appendOne(box,ev,who){
     // who = 页面自己指定这一步是谁在答（科研平台十步各有自己的助手）；不给才回落到当前对话绑的专家/管家
     const avHtml = who ? `<span class="msg-ava">${who.emoji||"🤖"}</span>` : faceOf(boundA, 22, true);
     const aName = who ? who.name : (boundA ? boundA.name : "智研管家");
-    el.className="msg-row msg-assistant";
-    el.innerHTML=`<div class="msg-meta">${avHtml}<strong>${esc(aName)}</strong>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}<span class="msg-chip">${esc(assistantKey())}</span><span class="msg-chip">完成</span></div><div class="md">${md(ev.content||"…")}</div>`;
+     const streaming=box.querySelector(".msg-assistant.streaming:last-child");
+     if(streaming) streaming.remove();
+     el.className="msg-row msg-assistant";
+     el.innerHTML=`<div class="msg-meta">${avHtml}<strong>${esc(aName)}</strong>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}<span class="msg-chip">${esc(assistantKey())}</span><span class="msg-chip">完成</span><button class="msg-copy" title="复制回复">复制</button></div><div class="md">${md(ev.content||"…")}</div>`;
   }
   else if(ev.type==="error"){ el.className="msg-err"; el.textContent="⚠ "+(ev.message||"出错了"); }
   else if(ev.type==="sub"){
@@ -741,15 +801,15 @@ function appendOne(box,ev,who){
     box.scrollTop=box.scrollHeight; return;
   }
   else if(ev.type==="tool_call"){
-    el.className="tool-card"; el.id="tc"+(seq++);
-    el.innerHTML=`<details open><summary><span>🔧</span><span class="tool-name">${esc(ev.name)}</span>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}
+    el.className="tool-card"; el.id="tc"+(seq++); el.dataset.callId=ev.id||"";
+    el.innerHTML=`<details><summary><span class="disclosure-arrow">›</span><span class="tool-name">查看步骤 · ${esc(ev.name)}</span>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}
       <span class="tool-detail">调用中…</span><span class="tool-dur">进行中</span></summary>
       <div class="tool-body"><p class="tool-blk">Input</p><pre>${esc(JSON.stringify(ev.args||{},null,2))}</pre></div></details>`;
     box.appendChild(el); box.scrollTop=box.scrollHeight; return;
   }
   else if(ev.type==="tool_result"){
     const cards=box.querySelectorAll(".tool-card");
-    const card=cards.length?cards[cards.length-1]:null;
+    const card=[...cards].find(c=>ev.id && c.dataset.callId===ev.id) || (cards.length?cards[cards.length-1]:null);
     if(card){
       if(!ev.ok) card.classList.add("bad");
       const d=card.querySelector(".tool-detail"); if(d) d.textContent=ev.summary||"";
@@ -760,6 +820,8 @@ function appendOne(box,ev,who){
     box.scrollTop=box.scrollHeight; return;
   }
   else return;
+  const copy=el.querySelector(".msg-copy");
+  if(copy) copy.onclick=()=>navigator.clipboard.writeText(ev.content||"").then(()=>uiNotify("已复制"),()=>uiNotify("复制失败"));
   box.appendChild(el); box.scrollTop=box.scrollHeight;
 }
 /* ---------------- 附件（+ 菜单 / 拖放 / 粘贴，同一套入口） ---------------- */
@@ -856,7 +918,19 @@ document.addEventListener("click",(e)=>{          // 点菜单外面收起（监
   if(mm && mm.style.display!=="none" && !mm.contains(e.target) && e.target.id!=="plus") mm.style.display="none";
 });
 
+let activeAgentRun = "", activeAgentChat = "", activeAgentBase = [], activeAgentEvents = [];
+let agentHistoryIndex = -1, agentHistoryDraft = "";
+async function cancelAgentRun(){
+  if(!activeAgentRun) return;
+  const key=activeAgentRun;
+  try{ await api("/api/agent/cancel",{idempotency_key:key}); }
+  catch(e){ uiNotify("中断失败："+e.message); }
+}
+document.addEventListener("keydown",e=>{ if(e.key==="Escape" && activeAgentRun && route()==="agent"){
+  e.preventDefault(); cancelAgentRun();
+} });
 async function send(){
+  if(activeAgentRun) return cancelAgentRun();
   if(!(await requireModelKey())) return;          // 没配 Key：先提示去设置，不发请求
   const ta=$("ask"); const text=ta.value.trim(); if(!text && !atts.length) return;
   // 没对话（或 localStorage 里那条已经删了）就直接发 → 自动新建一条不绑项目的对话，不弹框拦人
@@ -869,13 +943,15 @@ async function send(){
   }
   const msg = atts.length ? (text?text+"\n\n":"") + "[附件]\n" + atts.map(a=> a.url ? `- ${a.url}`
       : `- ${a.name}${a.paper_id?`（已入库 PDF，paper_id=${a.paper_id}，${a.pages} 页）`:`（本地文件：${a.path}）`}`).join("\n") : text;
-  ta.value=""; grow(); atts.length=0; setAtts();
-  const box=$("msgs"); if(box.querySelector(".muted")) box.innerHTML="";
+   ta.value=""; grow(); atts.length=0; setAtts(); agentHistoryIndex=-1; agentHistoryDraft="";
+  const box=$("msgs"); if(box.querySelector(".muted,.at-empty-wrap")) box.innerHTML="";
+  activeAgentChat=curChat; activeAgentBase=[...(S.chat||[])]; activeAgentEvents=[{type:"user",content:msg}];
   appendOne(box,{type:"user",content:msg});
-  const btn=$("send"); btn.disabled=true; btn.classList.add("stop"); btn.textContent="■";
+   const btn=$("send"); activeAgentRun=crypto.randomUUID(); btn.classList.add("stop"); btn.textContent="■";
+  if($("projbind")) $("projbind").disabled=true;
   let errMsg="";
   try{
-    const res = await fetch("/api/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({task_id:curChat,message:msg})});
+     const res = await fetch("/api/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({task_id:curChat,message:msg,idempotency_key:activeAgentRun})});
     if(!res.ok || !res.body) throw new Error("HTTP "+res.status);
     const reader=res.body.getReader(); const dec=new TextDecoder(); let buf="";
     for(;;){
@@ -886,13 +962,19 @@ async function send(){
         const chunk=buf.slice(0,i); buf=buf.slice(i+2);
         const line=chunk.split("\n").find(l=>l.startsWith("data: ")); if(!line) continue;
         let ev; try{ ev=JSON.parse(line.slice(6)); }catch{ continue; }
-        if(ev.type!=="done" && ev.type!=="user") appendOne(box,ev);  // user 已经本地先画了，服务端回声不再画一遍
+         if(ev.type!=="done" && ev.type!=="user"){
+           activeAgentEvents.push(ev);
+           const liveBox=route()==="agent" && curChat===activeAgentChat ? $("msgs") : null;
+           if(liveBox) appendOne(liveBox,ev);
+         }
         stEvent(ev);
       }
     }
   }catch(e){ errMsg = e.message; appendOne(box,{type:"error",message:e.message}); }
-  btn.disabled=false; btn.classList.remove("stop"); btn.textContent="↑";
-  await refreshState(false); loadChat();
+   activeAgentRun=""; activeAgentEvents=[]; activeAgentBase=[];
+   const liveButton=$("send"); if(liveButton){ liveButton.classList.remove("stop"); liveButton.textContent="↑"; }
+   if($("projbind")) $("projbind").disabled=false;
+  await refreshState(false); await loadChat();
   if(errMsg) appendOne(box,{type:"error",message:errMsg});   // loadChat 重渲染会把报错行刷掉，补回去
 }
 /* 展示区：对话轮数 / 调用工具数 / 消耗 token（各一行）+ 工具名称、产出目录（各三行滚动） */

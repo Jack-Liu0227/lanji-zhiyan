@@ -18,23 +18,30 @@ import lowbox  # noqa: E402
 
 @unittest.skipUnless(lowbox.available() and os.environ.get("RW_TEST_LOWBOX"), "需要 Windows 且显式开启（会改临时目录完整性等级）")
 class LowBoxTest(unittest.TestCase):
-    def test_授权目录可写_桌面不可写(self) -> None:
+    def test_granted_directory_writable_protected_directory_denied(self) -> None:
         import tempfile
-        base = tempfile.mkdtemp(prefix="lowbox_t_", dir=os.environ.get("LOCALAPPDATA"))
+        from pathlib import Path
+        temporary = tempfile.TemporaryDirectory(prefix="lowbox_t_", dir=os.environ.get("LOCALAPPDATA"))
+        self.addCleanup(temporary.cleanup)
+        base = str(Path(temporary.name) / "granted")
+        protected = Path(temporary.name) / "protected"
+        Path(base).mkdir()
+        protected.mkdir()
         self.assertTrue(lowbox.mark_low(base, recursive=True), "mark_low 失败")
         probe = (
             "import os,sys\n"
             "open(os.path.join(sys.argv[1],'ok.txt'),'w').write('x')\n"
             "print('granted=ok')\n"
             "try:\n"
-            "    open(os.path.join(os.path.expanduser('~'),'Desktop','lowbox_test.txt'),'w').write('x')\n"
-            "    print('desktop=WROTE')\n"
+            "    open(os.path.join(sys.argv[2],'denied.txt'),'w').write('x')\n"
+            "    print('protected=WROTE')\n"
             "except PermissionError:\n"
-            "    print('desktop=denied')\n"
+            "    print('protected=denied')\n"
         )
-        res = lowbox.run([sys.executable, "-c", probe, base], timeout=120)
+        res = lowbox.run([sys.executable, "-c", probe, base, str(protected)], timeout=120)
         self.assertIn("granted=ok", res.stdout)
-        self.assertIn("desktop=denied", res.stdout, "桌面居然写得进去 → Low IL 边界没生效")
+        self.assertIn("protected=denied", res.stdout, "Low IL failed to block writes to the protected directory")
+        self.assertFalse((protected / "denied.txt").exists())
 
 
 if __name__ == "__main__":

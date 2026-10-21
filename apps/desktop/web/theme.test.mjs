@@ -14,7 +14,7 @@ const shim = `
 const store = {};
 const localStorage = { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; } };
 const document = { documentElement: { dataset: { theme: "dark" }, style: { v: {}, setProperty(k, v) { this.v[k] = v; } } } };
-function alert(m) { throw new Error("alert:" + m); }
+function uiNotify(m) { throw new Error("alert:" + m); }
 ${block}
 export { applyTheme, hexToHsl, hslToHex, luminance, themeSwatches, currentPrimary, DEFAULT_THEME, THEME_PRESETS, document };
 `;

@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 REASONING = ("auto", "none", "minimal", "low", "medium", "high", "xhigh")
 PERMISSIONS = ("auto", "read_only", "workspace_write", "full_access")
-READ_TOOLS = frozenset(("library_overview", "knowledge_query", "calendar_list", "outline_read", "map_read", "map_sources", "doc_read", "cite_read", "read_attachment", "skill_read", "mail_accounts", "mail_list", "mail_read", "zotero_collections"))
+READ_TOOLS = frozenset(("library_overview", "knowledge_query", "calendar_list", "outline_read", "map_read", "map_sources", "doc_read", "cite_read", "read_attachment", "skill_read", "mail_accounts", "mail_list", "mail_read", "zotero_collections", "project_note_list", "project_note_read"))
 
 
 def migrate(db):

@@ -90,6 +90,7 @@ class RunManager:
     def __init__(self):
         self.runs: dict[str, RunState] = {}
         self.idempotency_map: dict[str, str] = {}
+        self.pending_cancels: set[str] = set()
 
     @classmethod
     def get_instance(cls) -> RunManager:
@@ -117,11 +118,23 @@ class RunManager:
                         db.create_background_job(job_id=run_id, task_id=task_id, status="running", progress=0.0, last_event_id=0)
                 except Exception:
                     pass
+            if idempotency_key in self.pending_cancels:
+                self.pending_cancels.discard(idempotency_key)
+                state.cancel(db=db)
             return state
 
     def get_run(self, run_id: str) -> RunState | None:
         with self._lock:
             return self.runs.get(run_id)
+
+    def cancel_by_key(self, key: str, db: Any = None) -> bool:
+        with self._lock:
+            run_id = self.idempotency_map.get(key) if key else None
+            if key and not run_id:
+                if len(self.pending_cancels) >= 256:
+                    self.pending_cancels.clear()
+                self.pending_cancels.add(key)
+        return self.cancel_run(run_id, db=db) if run_id else bool(key)
 
     def cancel_run(self, run_id: str, db: Any = None) -> bool:
         run = self.get_run(run_id)

@@ -58,6 +58,8 @@ class CapabilityTests(unittest.TestCase):
         self.db.commit()
         self.home_patch = patch.object(capabilities.Path, "home", return_value=self.home)
         self.home_patch.start()
+        self.app_patch = patch.object(capabilities.paths, "APP", self.base / "app")
+        self.app_patch.start()
         self.tools_patch = patch.object(capabilities, "_builtin_specs", return_value=[
             {"type": "function", "function": {"name": "read", "description": "Original", "parameters": {"type": "object"}}},
             {"type": "function", "function": {"name": "write", "description": "Write", "parameters": {"type": "object"}}},
@@ -65,6 +67,7 @@ class CapabilityTests(unittest.TestCase):
         self.tools_patch.start()
 
     def tearDown(self):
+        self.app_patch.stop()
         self.tools_patch.stop()
         self.home_patch.stop()
         self.db.close()

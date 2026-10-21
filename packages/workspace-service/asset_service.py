@@ -47,6 +47,8 @@ def sha256_file(path: str | Path) -> str:
 def atomic_write_text(path: str | Path, text: str) -> Path:
     """Write a file atomically so a killed process cannot leave a partial Markdown file."""
     target = Path(path)
+    import fileguard
+    fileguard.assert_writable(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, raw = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
     tmp = Path(raw)
