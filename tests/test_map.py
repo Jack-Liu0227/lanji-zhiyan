@@ -205,6 +205,19 @@ class MapStepTest(unittest.TestCase):
         self.assertIn("谱系图", txt)
         self.assertIn("笔记一", txt)
 
+    def test_write_system_lists_figures_and_asks_for_captions(self):
+        """文章撰写要读「图」文件夹，并要求在正文里落 [图位 N] 图题（格式转换左栏读的就是这个夹）。"""
+        fig = Path(self.db.base_dir(self.tid)) / "图"
+        fig.mkdir(parents=True, exist_ok=True)
+        (fig / "fig1_器件结构.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        txt = workflow_documents.write_system(self.db, self.tid)
+        self.assertIn("fig1_器件结构.png", txt)
+        self.assertIn("图位", txt)
+        self.assertIn("图题", txt)
+        import workflow_converters
+        listed = workflow_converters.fig_list(self.db, self.tid)["files"]
+        self.assertEqual([x["name"] for x in listed], ["fig1_器件结构.png"])
+
     def test_map_system_renders_notes_list(self):
         """谱系 agent 的 system 必须能拼出来 —— 笔记源是 dict，join 错了整步 agent 直接 500。"""
         sys_txt = workflow_documents.map_system(self.db, self.tid)

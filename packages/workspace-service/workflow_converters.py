@@ -9,6 +9,7 @@ import shutil
 import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 from typing import TYPE_CHECKING, Any
 
 import fileguard
@@ -25,6 +26,7 @@ ROOT = HERE.parents[1] if (HERE.parents[1] / "packages").is_dir() else HERE
 OUT = paths.OUT
 DATA, PAPERS, NOTES = paths.DATA, paths.PAPERS, paths.NOTES     # 唯一路径来源（_safe_path 的白名单根）
 EN_LIMIT = 2400
+FIG_DIR = "图"          # 项目里的成图夹：格式转换左栏、文章撰写的图位都读它
 
 EN_PROMPT = """你是资深学术英语审稿人兼专业学术翻译。将以下中文学术论文段落翻译为地道、精确、简练的学术英文（Nature / IEEE 风格）。
 保持原义，术语统一，句式紧凑，避免中式英语。只输出英文翻译结果，不包含任何解释、前言或总结。"""
@@ -277,6 +279,101 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "") -> dict
 
 
 CONV_EXT = (".md", ".tex", ".txt", ".json", ".csv", ".html", ".docx", ".pdf")
+
+
+def fig_dir(db: "WorkflowDB", task_id: str) -> Path:
+    """项目里的「图」文件夹：论文最终要用成图放这儿（没有就建）。没设项目位置的按项目 id 分夹。"""
+    base = db.base_dir(task_id)
+    d = (base / FIG_DIR) if base else (OUT / f"{FIG_DIR}_{task_id[:8]}")
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+FIG_EXT = (".png", ".svg", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp", ".pdf")
+
+
+def fig_list(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
+    """「格式转换」左栏：图文件夹里的图（新的在前），一份给前端直接用的清单。"""
+    d = fig_dir(db, task_id)
+    rows = []
+    for p in sorted(d.glob("*"), key=lambda x: -x.stat().st_mtime if x.is_file() else 0):
+        if not p.is_file() or p.suffix.lower() not in FIG_EXT:
+            continue
+        st = p.stat()
+        rows.append({"name": p.name, "path": str(p), "ext": p.suffix.lower()[1:], "size": st.st_size,
+                     "at": datetime.fromtimestamp(st.st_mtime).strftime("%m-%d %H:%M")})
+    return {"dir": str(d), "files": rows}
+
+
+def fig_rename(db: "WorkflowDB", task_id: str, path: str, name: str) -> dict[str, Any]:
+    """给图改名（只允许动「图」文件夹里的文件；没写扩展名就沿用原来的）。"""
+    d = fig_dir(db, task_id).resolve()
+    p = Path(str(path)).resolve()
+    if d != p.parent:
+        raise ValueError("只能改「图」文件夹里的文件")
+    if not p.is_file():
+        raise ValueError("文件不存在")
+    clean = re.sub(r'[\\/:*?"<>|]+', "_", (name or "").strip()).strip(". ")
+    if not clean:
+        raise ValueError("新名字不能空")
+    if not Path(clean).suffix:
+        clean += p.suffix
+    dest = p.with_name(clean)
+    if dest != p:
+        if dest.exists():
+            raise ValueError("已经有同名文件")
+        p.rename(dest)
+        fileguard.audit("rename", dest, note=f"{p.name} → {clean}")
+    return {"renamed": str(dest), **fig_list(db, task_id)}
+
+
+def _soffice() -> str:
+    """LibreOffice（docx → PDF 预览用；沙箱里也能跑，只要把用户配置指到可写目录）。"""
+    cand = Path(r"C:\Program Files\LibreOffice\program\soffice.exe")
+    return str(cand) if cand.is_file() else "soffice"
+
+
+def docx_to_pdf(src: Path) -> Path | None:
+    """把 .docx 转成 PDF 给右栏预览。按 mtime 缓存在 data/cache/preview，转失败返回 None。"""
+    cache = paths.CACHE / "preview"
+    out = cache / f"{src.stem}-{int(src.stat().st_mtime)}.pdf"
+    if out.is_file() and out.stat().st_size > 0:
+        return out
+    cache.mkdir(parents=True, exist_ok=True)
+    env = lowbox.sandbox_env(fileguard.clean_env(), paths.LOWTMP)
+    env["HOME"] = str(paths.LOWTMP)
+    try:
+        proc = lowbox.run([_soffice(), "--headless", "--norestore", "--convert-to", "pdf",
+                           "--outdir", str(cache), f"-env:UserInstallation=file:///{paths.LOWTMP.as_posix()}/lo",
+                           str(src)], env=env, timeout=180)
+    except OSError:
+        return None
+    made = cache / f"{src.stem}.pdf"
+    if proc.returncode != 0 or not made.is_file():
+        return None
+    made.replace(out)
+    return out
+
+
+def conv_preview(path: str) -> dict[str, Any]:
+    """右栏展示区要什么：PDF/图片直接给 /api/file 的地址；Word 先转成 PDF 再展示。"""
+    p = Path(str(path))
+    if not p.is_file():
+        raise ValueError("文件不存在")
+    ext = p.suffix.lower()
+    if ext in (".png", ".svg", ".jpg", ".jpeg", ".webp", ".gif"):
+        return {"kind": "image", "name": p.name, "url": f"/api/file?path={quote(str(p))}&inline=1", "path": str(p)}
+    if ext == ".pdf":
+        return {"kind": "pdf", "name": p.name, "url": f"/api/file?path={quote(str(p))}&inline=1", "path": str(p)}
+    if ext in (".docx", ".doc"):
+        pdf = docx_to_pdf(p)
+        if pdf:
+            return {"kind": "pdf", "name": p.name, "url": f"/api/file?path={quote(str(pdf))}&inline=1",
+                    "path": str(p), "converted": str(pdf)}
+        return {"kind": "docx", "name": p.name, "path": str(p)}
+    if ext in (".html", ".htm"):
+        return {"kind": "html", "name": p.name, "url": f"/api/file?path={quote(str(p))}&inline=1", "path": str(p)}
+    return {"kind": "other", "name": p.name, "path": str(p)}
 
 
 def conv_files(db: "WorkflowDB", task_id: str) -> dict[str, Any]:

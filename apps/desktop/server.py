@@ -61,6 +61,7 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       outline_read, outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
                       map_seed, project_outs, map_tidy, open_write,
                       cite_read, cite_add, conv_files, conv_run, conv_compile, conv_open,
+                      fig_list, fig_rename, conv_preview,
                       en_state, en_run, _safe_path, step_plan,
                       stage_download_selected, stage_zotero_import, test_provider,
                       deepread_kick, deepread_state, deepread_stop)
@@ -1088,9 +1089,17 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/doc/cite":                   # 后台引用台账（读之前先按当前正文同步状态）
                 with WorkflowDB(DB_PATH) as db:
                     return self._json(cite_read(db, q["id"][0]))
-            if path == "/api/conv/files":                 # 格式转换：左边文件区
+            if path == "/api/conv/files":                 # 格式转换：可导出的成品（右栏下拉用）
                 with WorkflowDB(DB_PATH) as db:
                     return self._json(conv_files(db, q["id"][0]))
+            if path == "/api/fig/list":                   # 格式转换：左栏「图」文件夹
+                with WorkflowDB(DB_PATH) as db:
+                    return self._json(fig_list(db, q["id"][0]))
+            if path == "/api/conv/preview":               # 右栏展示区：PDF/图片直给，Word 先转 PDF
+                try:
+                    return self._json(conv_preview(q.get("path", [""])[0]))
+                except Exception as exc:
+                    return self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
             if path == "/api/conv/read":                  # 打开一个文件（代码区）
                 with WorkflowDB(DB_PATH) as db:
                     p = _safe_path(q.get("path", [""])[0])
@@ -1571,6 +1580,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"ok": True, "path": str(p), "bytes": p.stat().st_size})
                 if path == "/api/file/rollback":            # 回滚到最近一次写前快照
                     return self._json(fileguard.rollback(_safe_path(data.get("path", ""))))
+                if path == "/api/fig/rename":                # 格式转换左栏：给「图」文件夹里的图改名
+                    with WorkflowDB(DB_PATH) as db:
+                        try:
+                            return self._json(fig_rename(db, (data.get("task_id") or "").strip(),
+                                                         data.get("path") or "", data.get("name") or ""))
+                        except Exception as exc:
+                            return self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
                 if path == "/api/conv/run":                 # 一键格式转换（latex 会编译出 PDF）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(conv_run(db, (data.get("task_id") or "").strip(),
@@ -1983,6 +1999,29 @@ def _start_inproc(port: int, url: str) -> None:
     print(f"览籍智研已启动：{url}")
 
 
+def _compile_tex_host(tex: Path) -> dict[str, Any]:
+    """宿主（Medium）里跑 xelatex。
+
+    沙箱（Low IL）里 dvipdfmx 写不了 MiKTeX 自己的 log/cache，实测整段崩（退出码 3221226505）：
+    页都排出来了，PDF 却没写成。宿主是正常 Medium 进程，本地编译交给它最省事。
+    """
+    from workflow_converters import _xelatex
+
+    exe = _xelatex()
+    env = fileguard.clean_env(str(Path(exe).parent))
+    try:
+        proc = subprocess.run([exe, "-interaction=nonstopmode", "-halt-on-error", tex.name],
+                              cwd=str(tex.parent), env=env, capture_output=True, text=True,
+                              timeout=300, creationflags=0x08000000)      # CREATE_NO_WINDOW，不闪黑框
+    except OSError as exc:
+        return {"error": f"起不来 xelatex：{exc}"}
+    pdf = tex.with_suffix(".pdf")
+    if proc.returncode != 0 or not pdf.is_file():
+        tail = "\n".join(((proc.stdout or "") + (proc.stderr or "")).splitlines()[-10:])
+        return {"error": f"xelatex 失败（退出码 {proc.returncode}）：{tail[-600:]}"}
+    return {"pdf": str(pdf), "name": pdf.name, "size": pdf.stat().st_size}
+
+
 def _host_open(target: str) -> bool:
     """宿主（Medium）里用 ShellExecute 打开文档/目录/链接。
 
@@ -2044,6 +2083,13 @@ def _start_grant_helper():
                             target.mkdir(parents=True, exist_ok=True)
                             import lowbox
                             ok = lowbox.mark_low(target)
+                    elif self.path == "/tex":           # 编译 .tex：沙箱里 dvipdfmx 会崩，交给宿主
+                        target = Path(str(data.get("tex") or ""))
+                        if target.is_absolute() and target.suffix.lower() == ".tex" and can_grant(target):
+                            result = _compile_tex_host(target)
+                            ok = "error" not in result
+                        else:
+                            result = {"error": "只允许编译项目目录里的 .tex"}
                     elif self.path == "/open":          # 文档/目录只有 Medium 开得动
                         target = str(data.get("target") or "")
                         ok = bool(target) and _host_open(target)
@@ -2056,7 +2102,7 @@ def _start_grant_helper():
                                 ok = True
                 except (OSError, ValueError, KeyError):
                     ok = False
-            body = json.dumps(result if self.path == "/pick" and 'result' in locals() else {"ok": ok}).encode()
+            body = json.dumps(result if self.path in ("/pick", "/tex") and 'result' in locals() else {"ok": ok}).encode()
             self.send_response(200 if ok else 403)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

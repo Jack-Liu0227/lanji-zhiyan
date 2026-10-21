@@ -597,6 +597,7 @@ WRITE_FALLBACK = ("按框架逐节展开成正式论文正文：每节先给要�
 
 
 def write_system(db: "WorkflowDB", task_id: str) -> str:
+    from workflow_converters import fig_list        # 反向 import 会成环，用时再拿
     from workflow_converters import cite_sync
     task = db.summary(task_id)["task"]
     out = doc_read(db, task_id, "outline")
@@ -609,6 +610,9 @@ def write_system(db: "WorkflowDB", task_id: str) -> str:
         if e.get("from") in lab and e.get("to") in lab and (e.get("label") or "") not in ("包含", "下一章"):
             hung.setdefault(e["from"], []).append(f"{lab[e['to']]}（{e.get('label') or '支撑'}）")
     evid = "\n".join(f"- {lab[k]} ← {'；'.join(v)}" for k, v in hung.items()) or "（谱系图还没挂证据）"
+    figs = fig_list(db, task_id)["files"]        # 「图」文件夹：正文的图位只能从此处挑
+    fig_txt = "\n".join(f"- {f['name']}（{f['ext'].upper()}，{max(1, f['size'] // 1024)} KB）" for f in figs[:40]) \
+        or "（图文件夹还是空的 —— 让他先把成图放进项目的「图」文件夹；没有的就写「待补图」）"
 
     skills = "\n\n".join(x for x in (
         skill_text("academic-writing", "paper-spine", "SKILL.md", cap=4000, db=db, task_id=task_id),
@@ -625,6 +629,7 @@ def write_system(db: "WorkflowDB", task_id: str) -> str:
 6. 用户上传的文件会以「[附件] … 路径」出现，需要内容就调 read_attachment（PDF 自动抓正文）。
 7. 正文文件：`{cur['path']}`（{'已有正文' if cur['exists'] else '还没有正文'}）。
 7.1 **左栏就是这份正文**：用户说「写在左边」「在左边展示正文」「生成到左边」——都是叫你把整份正文调 doc_write 落盘，写完左边立刻换成新内容；不要在聊天里贴全文当交付。工具调用要带完整 `markdown` 参数，空参数会被服务端拒写。
+7.2 **图位与图题**：凡是要配图的地方，**另起一行单独写**（不要塞进句子里）：`[图位 1] 图1 <一句话图题> | 文件：<图文件名>`。序号按全文出现顺序；文件名只能用下面【图文件夹】里有的，没有对应图就写 `[图位 N] 待补图：<该画什么> | 文件：待补`；图题自己拟、说清这张图讲什么、什么条件，别写「如图所示」这种空占位。
 8. **引用不要写进正文**：正文里**不出现** `[1]` `[2]` 这类标号（也不要写「(Smith et al., 2024)」这种行内引用）；需要引用文献时，调 **cite_add** 把「这一处落在哪一节 + 被引用的那句原话（照抄，用来对锚点）+ 文献题目/作者/出处/年/DOI/页数/引用页」记进后台的引用台账。正文保持流畅通顺，引用关系由台账负责。
 
 【本机写作工作流（按它的规范写）】
@@ -635,6 +640,9 @@ def write_system(db: "WorkflowDB", task_id: str) -> str:
 
 【谱系图（上一步交付：每个小节挂着哪些证据，写这一节时就按它取用；没有出处的写「待补」）】
 {evid[:2500]}
+
+【图文件夹（项目里的「图」；图位只能引用这里的文件名）】
+{fig_txt[:1500]}
 
 【引用台账（后台文档，已有 {cite['count']} 条；正文里不写标号，引用都记这里）】
 {(cite['markdown'][:2500] + ('…' if len(cite['markdown']) > 2500 else '')) if cite['count'] else '（还没有引用记录 —— 需要引用文献时用 cite_add 登记）'}

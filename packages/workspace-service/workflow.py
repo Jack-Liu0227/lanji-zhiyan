@@ -231,6 +231,7 @@ PROJ_DIRS: list[tuple[str, str]] = [
     ("论文正文", "章节草稿 Markdown：draft-*.md，按章节名命名，是「文章撰写」这一步的直接产物。"),
     ("对话", "对话与过程记录：按日期分 YYYY-MM-DD 子目录，当天产生的记录都落在当天那一层。"),
     ("最终产物", "最终交付件：中文 Word(.docx)、LaTeX(.tex)、参考文献(.bib)、成稿 PDF(.pdf)、图片(PNG/SVG) 和画图代码(.py) 都放这里。"),
+    ("图", "论文里要用的图（PNG/SVG/JPG/PDF）：文件名就是图题里引用的名字；「格式转换」左栏列出这里，可改名、点开看；「文章撰写」会读这份清单来落图位与图题。"),
     ("其余", "工作流产生的其它杂项文件：中间态导出、脚本、临时数据等，不影响主流程。"),
 ]
 
@@ -647,7 +648,7 @@ class WorkflowDB(ResearchDB):
     def pdir(self, task_id: str, kind: str) -> Path:
         """按用途拿目录。设了项目位置就落到那固定子夹里，没设就退回工作区默认目录（老项目不受影响）。"""
         names = {n for n, _ in PROJ_DIRS}
-        fallback = {"文献库": PAPERS, "笔记": NOTES, "论文正文": OUT, "最终产物": OUT, "其余": OUT, "记忆": OUT, "对话": OUT}
+        fallback = {"文献库": PAPERS, "笔记": NOTES, "论文正文": OUT, "最终产物": OUT, "其余": OUT, "记忆": OUT, "对话": OUT, "图": OUT}
         base = self.base_dir(task_id)
         folder = (base / kind) if (base and kind in names) else fallback.get(kind, OUT)
         if base:
@@ -1795,6 +1796,7 @@ from workflow_stages import (
 
 from workflow_converters import (
     cite_read, cite_add, conv_run, conv_files, conv_compile, conv_open, _safe_path,
+    fig_dir, fig_list, fig_rename, conv_preview,
     en_state, en_run, compose_draft
 )
 

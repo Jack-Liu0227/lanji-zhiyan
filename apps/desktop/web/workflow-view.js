@@ -504,102 +504,149 @@ async function docSend(k){
   await refreshState(false);
 }
 
-/* ==== 格式转换：文件区 / 编译区 / PDF 预览 三张卡片；转换本身交给右栏「格式助手」 ==== */
-let cvCur = { path: "", ext: "" };
+/* ==== 格式转换：左窄栏 = 项目「图」文件夹（改名 / 点开看），右大区 = 成品展示（Word / PDF / 图） ==== */
+let cvCur = { path: "", ext: "" };      // 展示区当前文件
 
 function convPanelHTML(active){
   return `<section class="cv" id="panel-convert"${active ? "" : ' style="display:none"'}>
     <div class="cv-grid">
+      <aside class="cv-col cv-side">
+        <div class="cv-h"><b>图</b><span class="cv-spacer"></span><span class="cv-tag" id="figDir" title=""></span>
+          <button class="cv-ib" id="figRefresh" title="重新读「图」文件夹">↻</button></div>
+        <div class="cv-list" id="figList"></div>
+      </aside>
       <div class="cv-col">
-        <div class="cv-h"><b>文件</b><span class="cv-spacer"></span><button class="cv-ib" id="cvRefresh" title="重新读目录">↻</button></div>
-        <div class="cv-list" id="cvList"></div>
-      </div>
-      <div class="cv-col">
-        <div class="cv-h"><b id="cvName">编译区</b><span class="cv-msg" id="cvMsg"></span><span class="cv-spacer"></span>
-          <button class="cv-ib hidden" id="cvCompile" title="用 xelatex 编译这份 .tex">⚙ 编译</button>
-          <button class="cv-ib" id="cvSave" title="保存到磁盘">💾 保存</button></div>
-        <textarea class="cv-src" id="cvSrc" spellcheck="false"
-          placeholder="左边点一个 .md / .tex 文件 → 这里显示内容，可以直接改，改完点「保存」；.tex 可以点「编译」出 PDF。"></textarea>
-      </div>
-      <div class="cv-col">
-        <div class="cv-h"><b>PDF 预览</b><span class="cv-spacer"></span><span class="cv-tag" id="cvPdfName"></span>
+        <div class="cv-h"><b id="cvName">展示区</b><span class="cv-msg" id="cvMsg"></span><span class="cv-spacer"></span>
+          <select class="cv-sel" id="cvPick" title="最终产物里要展示的文件"><option value="">最终产物…</option></select>
+          <button class="cv-ib" id="cvPdf" title="正文.md → LaTeX → PDF（本机 MiKTeX）">📄 转 PDF</button>
+          <button class="cv-ib" id="cvWord" title="正文.md → Word(.docx)">📄 Word</button>
           <button class="cv-ib hidden" id="cvOpenExt" title="用系统默认程序打开">↗</button></div>
-        <iframe class="cv-frame" id="cvFrame" src="about:blank"></iframe>
-        <div class="cv-empty" id="cvEmpty">还没有 PDF —— 打开一个 .tex 点「⚙ 编译」，编出来就显示在这里。</div>
+        <div class="cv-stage" id="cvStage">
+          <iframe class="cv-frame hidden" id="cvFrame" src="about:blank"></iframe>
+          <img class="cv-img hidden" id="cvImg" alt="">
+          <div class="cv-empty" id="cvEmpty">左边点一张图，或上面选一个最终产物（Word / PDF）—— 都在这儿看。</div>
+        </div>
       </div>
     </div>
   </section>`;
 }
 
 function cvMsg(t, ms){ const el = $("cvMsg"); if(el) el.textContent = t || ""; if(ms) setTimeout(()=>{ if(el && el.textContent === t) el.textContent = ""; }, ms); }
-function cvShowPdf(path){
-  const f = $("cvFrame"), e = $("cvEmpty"), n = $("cvPdfName"), o = $("cvOpenExt");
-  if(!path){ f.src = "about:blank"; e.classList.remove("hidden"); return; }
-  e.classList.add("hidden");
-  n.textContent = path.split(/[\\/]/).pop();
-  o.classList.remove("hidden");
-  f.src = `/api/file?path=${encodeURIComponent(path)}&inline=1&t=${Date.now()}`;
+
+function cvClearStage(){
+  const f = $("cvFrame"), i = $("cvImg"), e = $("cvEmpty"), o = $("cvOpenExt");
+  if(f){ f.classList.add("hidden"); f.src = "about:blank"; }
+  if(i){ i.classList.add("hidden"); i.removeAttribute("src"); }
+  if(e){ e.classList.remove("hidden"); e.innerHTML = ""; }
+  if(o) o.classList.add("hidden");
 }
+function cvStageKind(){
+  /* 右栏现在展示的是哪类东西：pdf/html 用 iframe，图用 img，Word 没转成就只给个卡片 */
+  return "pdf";
+}
+async function cvPreview(path, label){
+  if(!path) return;
+  cvCur.path = path;
+  cvMsg("打开中…");
+  try{
+    const d = await api(`/api/conv/preview?path=${encodeURIComponent(path)}`);
+    if(d.error) throw new Error(d.error);
+    const f = $("cvFrame"), i = $("cvImg"), e = $("cvEmpty"), o = $("cvOpenExt");
+    $("cvName").textContent = d.name || label || "展示区";
+    if(d.kind === "image"){
+      f.classList.add("hidden"); f.src = "about:blank";
+      i.src = d.url + "&t=" + Date.now(); i.classList.remove("hidden");
+      e.classList.add("hidden");
+    }else if(d.kind === "pdf" || d.kind === "html"){
+      i.classList.add("hidden"); i.removeAttribute("src");
+      f.src = d.url + "&t=" + Date.now(); f.classList.remove("hidden");
+      e.classList.add("hidden");
+    }else{
+      f.classList.add("hidden"); i.classList.add("hidden");
+      e.classList.remove("hidden");
+      e.innerHTML = `<div class="cv-card"><b>${esc(d.name)}</b>
+        <p>${d.kind === "docx" ? "Word 文档没能转成 PDF 预览（本机 LibreOffice 转换失败）—— 点右边「↗」用 Word 打开。" : "这类文件不在这儿预览。"}</p></div>`;
+      o.classList.remove("hidden"); o.onclick = ()=>api("/api/conv/open", { path: d.path }).catch(()=>{});
+    }
+    if(d.kind !== "other" && d.kind !== "docx"){ o.classList.remove("hidden"); o.onclick = ()=>api("/api/conv/open", { path: d.path }).catch(()=>{}); }
+    cvMsg(d.converted ? `（Word 已转 PDF 预览）${d.name}` : "", 6000);
+  }catch(e){ cvMsg("打开失败：" + e.message); cvClearStage(); }
+}
+
+async function figLoad(){
+  if(!curTask) return;
+  try{
+    const d = await api(`/api/fig/list?id=${encodeURIComponent(curTask)}`);
+    const rows = d.files || [];
+    $("figDir").textContent = (d.dir || "").split(/[\\/]/).pop() || "图";
+    $("figDir").title = d.dir || "";
+    $("figList").innerHTML = rows.length
+      ? rows.map(r => `<div class="cv-f" data-p="${esc(r.path)}" title="${esc(r.path)}">
+           <span class="cv-ext">${esc(r.ext)}</span><span class="cv-fname">${esc(r.name)}</span>
+           <button class="cv-ren" data-ren="${esc(r.path)}" title="改名">✎</button></div>`).join("")
+      : `<div class="cv-none">「图」文件夹还是空的 —— 把成图（PNG/SVG/JPG/PDF）放进项目里的「图」目录就会列在这里</div>`;
+    $("figList").querySelectorAll(".cv-f").forEach(el => el.onclick = (e)=>{
+      if(e.target.closest("[data-ren]")) return;
+      $("figList").querySelectorAll(".cv-f").forEach(x => x.classList.toggle("on", x === el));
+      cvPreview(el.dataset.p);
+    });
+    $("figList").querySelectorAll("[data-ren]").forEach(b => b.onclick = async (e)=>{
+      e.stopPropagation();
+      const cur = b.closest(".cv-f").dataset.p;
+      const old = cur.split(/[\\/]/).pop();
+      const name = await uiPrompt("新文件名（不带扩展名也行）：", { title: "改图名", value: old.replace(/\.[^.]+$/, "") });
+      if(!name || name === old) return;
+      try{
+        const r = await api("/api/fig/rename", { task_id: curTask, path: cur, name });
+        if(r.error) throw new Error(r.error);
+        await figLoad(); cvMsg(`已改名：${r.renamed.split(/[\\/]/).pop()}`, 5000);
+      }catch(err){ cvMsg("改名失败：" + err.message); }
+    });
+  }catch(e){ cvMsg("读「图」文件夹失败：" + e.message); }
+}
+
 async function cvLoad(){
   if(!curTask) return;
   try{
     const d = await api(`/api/conv/files?id=${encodeURIComponent(curTask)}`);
-    const rows = d.files || [];
-    const groups = {};
-    rows.forEach(r => { (groups[r.group] = groups[r.group] || []).push(r); });
-    $("cvList").innerHTML = Object.keys(groups).length
-      ? Object.entries(groups).map(([g, list]) => `<div class="cv-g">${esc(g)}</div>` + list.map(r =>
-          `<div class="cv-f" data-p="${esc(r.path)}" title="${esc(r.path)}"><span class="cv-ext">${esc(r.ext || "•")}</span>${esc(r.name)}</div>`).join("")).join("")
-      : `<div class="cv-none">项目里还没有文件 —— 先在「论文撰写」写出正文</div>`;
-    $("cvList").querySelectorAll(".cv-f").forEach(el => el.onclick = () => cvOpen(el.dataset.p));
-    if(d.pdf && !$("cvFrame").src.includes("api/file")) cvShowPdf(d.pdf);     // 默认预览最新那份 PDF
-    if(d.pdf) $("cvPdfName").textContent = d.pdf.split(/[\\/]/).pop();
+    const rows = (d.files || []).filter(r => r.group === "最终产物" && ["pdf", "docx", "html"].includes(r.ext));
+    $("cvPick").innerHTML = `<option value="">最终产物…</option>` +
+      rows.map(r => `<option value="${esc(r.path)}">${esc(r.name)}</option>`).join("");
+    $("cvPick").onchange = (e)=>{ if(e.target.value) cvPreview(e.target.value); };
+    if(d.pdf) cvPreview(d.pdf);                       // 默认看最新那份 PDF
   }catch(e){ cvMsg("读目录失败：" + e.message); }
 }
-async function cvOpen(path){
+
+async function cvToPdf(){
+  const btn = $("cvPdf"); if(btn) btn.disabled = true;
   try{
-    const d = await api(`/api/conv/read?path=${encodeURIComponent(path)}`);
-    if(d.error) throw new Error(d.error);
-    cvCur = { path: d.path, ext: d.ext || "" };
-    $("cvList").querySelectorAll(".cv-f").forEach(el => el.classList.toggle("on", el.dataset.p === d.path));
-    $("cvName").textContent = "编译区 · " + (d.name || "") + (d.bytes ? ` · ${d.bytes} 字` : "");
-    $("cvSrc").value = d.binary ? "" : (d.text || "");
-    $("cvSrc").readOnly = !!d.binary;
-    $("cvCompile").classList.toggle("hidden", d.ext !== "tex");
-    $("cvSave").classList.toggle("hidden", !!d.binary);
-    if(d.binary && d.ext === "pdf") cvShowPdf(d.path);
-    cvMsg(d.binary ? "二进制文件（不能在这里改）" : "已打开", 2500);
-  }catch(e){ cvMsg("打开失败：" + e.message); }
-}
-async function cvSave(){
-  if(!cvCur.path) return cvMsg("先选一个文件");
-  try{
-    const r = await api("/api/conv/save", { path: cvCur.path, text: $("cvSrc").value });
-    cvMsg(`已保存 ${r.bytes} 字节`, 3000);
-  }catch(e){ cvMsg("保存失败：" + e.message); }
-}
-async function cvCompile(){
-  if(!cvCur.path) return;
-  const btn = $("cvCompile");
-  btn.disabled = true; cvMsg("xelatex 编译中…");
-  try{
-    const r = await api("/api/conv/compile", { path: cvCur.path });
+    cvMsg("正文 → LaTeX → PDF…");
+    const r = await api("/api/conv/run", { task_id: curTask, format: "pdf" });
     if(r.error) throw new Error(r.error);
-    cvMsg(`编译好了：${r.name}`, 6000);
-    await cvLoad();
-    if(r.pdf) cvShowPdf(r.pdf);
-  }catch(e){ cvMsg("编译失败：" + e.message); }
-  btn.disabled = false;
+    cvMsg(`出 PDF 了：${r.name}（${Math.round((r.size || 0) / 1024)} KB）`, 8000);
+    await cvLoad(); if(r.path) cvPreview(r.path);
+  }catch(e){ cvMsg("转 PDF 失败：" + e.message); }
+  if(btn) btn.disabled = false;
 }
+async function cvToWord(){
+  const btn = $("cvWord"); if(btn) btn.disabled = true;
+  try{
+    cvMsg("正文 → Word…");
+    const r = await api("/api/conv/run", { task_id: curTask, format: "docx" });
+    if(r.error) throw new Error(r.error);
+    cvMsg(`出 Word 了：${r.name}（${Math.round((r.size || 0) / 1024)} KB）`, 8000);
+    await cvLoad(); if(r.path) cvPreview(r.path);
+  }catch(e){ cvMsg("转 Word 失败：" + e.message); }
+  if(btn) btn.disabled = false;
+}
+
 function cvBind(){
-  if(!$("cvList")) return;
-  $("cvRefresh").onclick = cvLoad;
-  // ask 模式下，写盘 / 编译前先问一句（all 模式直接放行，见 needPerm）
-  $("cvSave").onclick = async () => { if (await needPerm("把这份文件写进项目目录")) cvSave(); };
-  $("cvCompile").onclick = async () => { if (await needPerm("用 xelatex 编译这份 .tex 生成 PDF")) cvCompile(); };
-  $("cvOpenExt").onclick = () => { if(cvCur.path || $("cvPdfName").textContent)
-    api("/api/conv/open", { path: cvCur.path }).catch(()=>{}); };
-  cvLoad();
+  if(!$("figList")) return;
+  $("figRefresh").onclick = ()=>{ figLoad(); cvLoad(); };
+  $("cvPdf").onclick = async () => { if (await needPerm("用 xelatex 出 PDF（正文会先转成 LaTeX）")) cvToPdf(); };
+  $("cvWord").onclick = async () => { if (await needPerm("导出 Word(.docx) 到最终产物")) cvToWord(); };
+  $("cvOpenExt").onclick = () => { if(cvCur.path) api("/api/conv/open", { path: cvCur.path }).catch(()=>{}); };
+  figLoad(); cvLoad();
 }
 
 /* ==== 中译英：左上 ＋（选文件/拖进来）+ 右上 ⚡ 一键翻译，下面左英文 / 右中文 对照 ==== */
