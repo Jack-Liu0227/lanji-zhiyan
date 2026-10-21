@@ -248,6 +248,7 @@ def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None
                 return finish("blocked", reason="绑定的专家不存在或已停用")
             folder = output_dir_for(db, sched)
             prompt = sched["prompt"]
+            db.quiet_steps = True         # 定时任务的产出不算科研台十步，别往进度账上写
             out = workflow.run_agent(db, sched["project_id"], prompt, emit=emit,
                                      publish=False, assistant_id=sched["assistant_id"])
             text = str(out.get("reply") or "").strip() or "（模型没有返回内容）"

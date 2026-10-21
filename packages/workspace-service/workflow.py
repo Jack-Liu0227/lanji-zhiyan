@@ -425,6 +425,10 @@ class WorkflowDB(ResearchDB):
 
     # ---------- 任务 / 步骤 ----------
     def log_step(self, task_id: str, stage: str, status: str, summary: str = "") -> dict[str, Any]:
+        # quiet_steps：定时任务那类「不是科研台某一步」的后台跑，不往十步账上记账
+        # （日报导出写进来过 write/convert，进度被虚高，2026-10-21 清过一次）。
+        if getattr(self, "quiet_steps", False):
+            return {"id": "", "stage": stage, "status": status, "summary": summary, "created_at": now(), "skipped": True}
         row = (uuid.uuid4().hex, task_id, stage, status, summary, now())
         self.db.execute("INSERT INTO steps VALUES (?,?,?,?,?,?)", row)
         self.db.commit()

@@ -83,6 +83,20 @@ class CurrentStageTest(unittest.TestCase):
         import workflow
         self.assertEqual(workflow.current_stage_key(self.conn, "t1"), "idea")
 
+    def test_定时任务不往十步账上记账(self):
+        """quiet_steps（定时任务）写进来的 write/convert 不能算进度 —— 日报曾把进度虚高 2 步。"""
+        import workflow
+        db = workflow.WorkflowDB(Path(self.db_path))
+        try:
+            db.quiet_steps = True
+            self.assertTrue(db.log_step("t1", "write", "done", "每日文献推送 草稿 500 字")["skipped"])
+            self.assertEqual(len(db.steps("t1")), 0)
+            db.quiet_steps = False
+            db.log_step("t1", "write", "done", "引言 草稿 500 字")
+            self.assertEqual(len(db.steps("t1")), 1)
+        finally:
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

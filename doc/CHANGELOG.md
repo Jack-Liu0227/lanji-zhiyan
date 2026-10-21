@@ -14,6 +14,8 @@
 影响面：改了 `.py` → 已重启 8765；`kanban-view.js` → 窗口 F5。
 遗留（等他定）：`write`/`convert` 两条 done 是「每日文献推送/日报导出」写进来的，不是论文的撰写/转换；清掉的话进度 5/10 → 3/10、阶段变「下载精读」。
 
+**4. 清掉脏记录 + 堵住源头（他确认「需要清掉」）**：删 4 条（`write` 草稿 ×3、`convert` 每日资讯 ×1，全带 `每日文献推送/每日资讯推送` 摘要），`材料信息学综述` 回到 **3/10、阶段 下载精读**；删前 `PRAGMA wal_checkpoint(FULL)` + 整库备份到 `data/_backup/research.sqlite3.bak-20261021-204216`。源头：定时任务跑的是同一个 agent + 同一批工具，`draft_write`/`format_convert` 顺手记了十步 → `WorkflowDB.quiet_steps`（只由 `schedule.py` 置 True）让 `log_step` 直接跳过；调度任务的产出不再进科研台进度账。
+
 ## 2026-10-22（格式转换：未编译态、期刊模板库、交付后三问；UI 三版待选）
 
 **1. 右栏未编译态**：`.cv-stage` 底色改纯白，中间一行「还未编译 / 在右边跟格式助手说要什么（PDF / Word），或点上面『📄 转 PDF / 📄 Word』」。
