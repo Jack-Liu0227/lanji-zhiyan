@@ -505,6 +505,7 @@ function mapPanelHTML(active){
         <div class="mp-canvas-wrap" id="mp-wrap">
           <div class="mp-canvas" id="mp-canvas"></div>
         </div>
+        <textarea class="ol-src hidden" id="mp-json" spellcheck="false"></textarea>
       </div>
       <div class="mp-right">
         <div class="at-head">
@@ -542,7 +543,6 @@ function mapPanelHTML(active){
         </div>
       </div>
     </div>
-    <textarea class="ol-src hidden" id="mp-json" spellcheck="false"></textarea>
   </section>`;
 }
 
@@ -556,6 +556,7 @@ async function mpLoad(){
       d = await api(`/api/map/state?id=${encodeURIComponent(curTask)}`);
     }
     MP.nodes = d.nodes||[]; MP.edges = d.edges||[]; MP.src = d.sources||null; MP.outline = (d.outline&&d.outline.markdown)||"";
+    MP_MEAS.clear();                                 // 大纲/说明变了，卡片尺寸得重新量
     MP.sig = JSON.stringify([MP.nodes, MP.edges]);
     $("mp-file").textContent = (d.path||"谱系.json").split(/[\\/]/).pop();
     $("mp-meta").textContent = `${d.sections||0} 小节 · ${d.refs||0} 关联${d.exists?"":" · 还没有图"}${d.broken?" · JSON 坏了":""}`;
@@ -567,10 +568,38 @@ async function mpLoad(){
   }
 }
 
+let mpGauge = null;                                  // 量字用的隐藏盒（挂在 #mp-wrap 上，不会被重绘冲掉）
+const MP_MEAS = new Map();                            // type|label|detail → {w,h}
+function mpNodeInner(n){
+  const dot = `<span class="mp-dot" style="background:${MP_COL[n.type]||"var(--muted)"}"></span>`;
+  if(n.type === "section"){
+    const d = n.detail || mpOutlineNote(n.label);
+    return `<div class="t">${dot}${esc(n.label)}</div>${d?`<div class="d">${esc(d)}</div>`:""}
+      <button class="mp-add" data-add="${esc(n.id)}" title="挂资料（精读笔记 / 实验数据 / 文献）">＋</button>`;
+  }
+  return `<div class="t" title="${esc(n.detail||"")}">${dot}<span class="lbl">${esc(n.label)}</span></div>
+    <span class="mp-pill">${MP_TAG[n.type]||""}</span>`;
+}
 function mpSize(n){
-  const ev = n.type !== "section";
-  const hasD = !ev && (n.detail || mpOutlineNote(n.label));
-  return { w: ev ? 190 : 216, h: ev ? 36 : (hasD ? 52 : 42) };
+  /* 卡片大小按内容真量（以前写死 216×52 / 190×36，长标题直接被折掉）：
+     宽度 = 文字自然宽度，最长夹到一个上限；高度 = 真排出来的行高 */
+  const detail = n.type === "section" ? (n.detail || mpOutlineNote(n.label)) : (n.detail || "");
+  const key = `${n.type}\u0001${n.label}\u0001${detail}`;
+  const hit = MP_MEAS.get(key); if(hit) return hit;
+  const host = $("mp-wrap");
+  if(!mpGauge || !mpGauge.isConnected){
+    mpGauge = document.createElement("div");
+    mpGauge.style.cssText = "position:absolute;left:-9999px;top:0;visibility:hidden;pointer-events:none";
+    (host || document.body).appendChild(mpGauge);
+  }
+  const maxW = n.type === "section" ? 320 : 340, minW = n.type === "section" ? 216 : 190;
+  mpGauge.innerHTML = `<div class="mp-node ${n.type==="section"?"sec":"ref"}"
+    style="position:static;width:max-content;max-width:${maxW}px;height:auto">${mpNodeInner(n)}</div>`;
+  const card = mpGauge.firstElementChild;
+  const s = { w: Math.max(minW, Math.ceil(card.offsetWidth)), h: Math.max(34, Math.ceil(card.offsetHeight)) };
+  mpGauge.innerHTML = "";
+  MP_MEAS.set(key, s);
+  return s;
 }
 function mpDepth(){
   /* 层级只看「包含」这类父子边；「下一章」是同级串联，不参与分层（否则第二章会被排到第三章右边） */
@@ -691,30 +720,28 @@ function mpPaint(){
   });
   const cards = MP.nodes.map(n=>{
     const p = pos[n.id]; if(!p) return "";
-    const dot = `<span class="mp-dot" style="background:${MP_COL[n.type]||"var(--muted)"}"></span>`;
-    if(n.type === "section"){
-      const d = n.detail || mpOutlineNote(n.label);
-      return `<div class="mp-node sec${MP.sel===n.id?" on":""}" data-mp="${esc(n.id)}"
-        style="left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px">
-        <div class="t">${dot}${esc(n.label)}</div>
-        ${d?`<div class="d">${esc(d)}</div>`:""}
-      </div>`;
-    }
-    return `<div class="mp-node ref${MP.sel===n.id?" on":""}" data-mp="${esc(n.id)}"
-      style="left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px">
-      <div class="t" title="${esc(n.detail||"")}">${dot}<span class="lbl">${esc(n.label)}</span></div>
-      <span class="mp-pill">${MP_TAG[n.type]||""}</span>
-    </div>`;
+    return `<div class="mp-node ${n.type==="section"?"sec":"ref"}${MP.sel===n.id?" on":""}" data-mp="${esc(n.id)}"
+      style="left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px">${mpNodeInner(n)}</div>`;
   }).join("");
   box.innerHTML = `<svg class="mp-svg" width="${L.w}" height="${L.h}">${paths.join("")}${labels.join("")}</svg>${cards}`;
   if(MP.sel) mpCard(MP.sel);
 }
 
+function mpPickHTML(){
+  /* 能挂的东西来自 /api/map/state 的 sources（精读笔记 / 实验数据 / 文献库） */
+  const src = MP.src || {};
+  const grp = (name, rows) => rows.length
+    ? `<optgroup label="${name}">${rows.map(([v,t])=>`<option value="${esc(v)}">${esc(t)}</option>`).join("")}</optgroup>` : "";
+  return grp("精读笔记", (src.notes||[]).map(x=>[`note|${x.id}`, x.title||x.name]))
+       + grp("实验数据", (src.data||[]).map(x=>[`data|${x}`, String(x).split(/[\\/]/).pop()]))
+       + grp("文献库", (src.papers||[]).map(x=>[`paper|${x}`, String(x).replace(/\.pdf$/i,"")]));
+}
 function mpCard(id){
   const n = MP.nodes.find(x=>x.id===id); if(!n) return;
   const old = document.querySelector(".mp-card"); if(old) old.remove();
-  const kids = MP.edges.filter(e=>e.from===id).map(e=>(MP.nodes.find(x=>x.id===e.to)||{}).label).filter(Boolean);
-  const par = MP.edges.filter(e=>e.to===id).map(e=>(MP.nodes.find(x=>x.id===e.from)||{}).label).filter(Boolean);
+  const lab = (x)=>(MP.nodes.find(k=>k.id===x)||{}).label||x;
+  const kidEdges = MP.edges.filter(e=>e.from===id);
+  const par = MP.edges.filter(e=>e.to===id).map(e=>lab(e.from)).filter(Boolean);
   const wrap = $("mp-wrap");
   const div = document.createElement("div");
   div.className = "mp-card";
@@ -722,13 +749,41 @@ function mpCard(id){
     <label class="mp-f">标题<input id="mp-e-label" value="${esc(n.label||"")}"></label>
     <label class="mp-f">说明<textarea id="mp-e-detail" rows="3">${esc(n.detail||"")}</textarea></label>
     <label class="mp-f">类型<select id="mp-e-type">${Object.keys(MP_TAG).map(k=>`<option value="${k}"${n.type===k?" selected":""}>${MP_TAG[k]}</option>`).join("")}</select></label>
+    ${n.type==="section"?`<label class="mp-f">挂一条资料<select id="mp-e-add"><option value="">— 精读笔记 / 实验数据 / 文献库 —</option>${mpPickHTML()}</select></label>`:""}
+    ${kidEdges.length?`<div class="mp-rel">挂出去的：${kidEdges.map(e=>`<button class="mp-unl" data-un="${esc(e.to)}" title="从这一节上摘掉">${esc(lab(e.to))} ✕</button>`).join("")}</div>`:""}
     ${n.ref?`<p class="mp-rel">来源：${esc(n.ref)}</p>`:""}
     ${par.length?`<p class="mp-rel">挂在小节：${esc(par.join("、"))}</p>`:""}
-    ${kids.length?`<p class="mp-rel">它挂出去的：${esc(kids.join("、"))}</p>`:""}
     <div class="row"><button class="btn ghost" id="mp-cx">关闭</button>
       <button class="btn" id="mp-csave">保存</button>
       <button class="btn ghost" id="mp-cdel">删掉这个节点</button></div>`;
   wrap.appendChild(div);
+  const add = $("mp-e-add");
+  if(add) add.onchange = async ()=>{
+    const v = add.value; if(!v) return;
+    const i = v.indexOf("|");
+    const kind = v.slice(0, i);
+    let ref = v.slice(i + 1);
+    const src = MP.src || {};
+    let label = ref.split(/[\\/]/).pop().replace(/\.[a-z0-9]+$/i, "");
+    if(kind === "note"){
+      const o = (src.notes||[]).find(x=>x.id===ref);
+      if(o){ label = o.title || o.name || label; ref = o.name || ref; }
+    }
+    let nid = "r1"; while(MP.nodes.some(x=>x.id===nid)) nid = "r" + (Number(nid.slice(1)) + 1);
+    MP.nodes.push({id:nid, type:kind === "paper" ? "paper" : kind, label, detail:"", ref});
+    MP.edges.push({from:id, to:nid, label:"支撑"});
+    add.value = "";
+    await mpSave();
+    docMsg("map", `已把「${label}」挂到这一节（谱系.json 已更新）`);
+  };
+  div.querySelectorAll("[data-un]").forEach(b=>{
+    b.onclick = async ()=>{
+      const cid = b.dataset.un;
+      MP.edges = MP.edges.filter(e=>!(e.from===id && e.to===cid));
+      if(!MP.edges.some(e=>e.to===cid)) MP.nodes = MP.nodes.filter(x=>x.id!==cid);   // 没别处挂着就一起清掉
+      await mpSave(); docMsg("map", "已摘掉这条关联（谱系.json 已更新）");
+    };
+  });
   $("mp-cx").onclick = ()=>{ MP.sel=""; div.remove(); mpPaint(); };
   $("mp-csave").onclick = async ()=>{
     const label = ($("mp-e-label").value||"").trim();
