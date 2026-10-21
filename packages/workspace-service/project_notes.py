@@ -66,46 +66,87 @@ def note_path(db: Any, project_id: str, relative: str, *, create: bool = False) 
     return path
 
 
+_LEGACY_TITLE_CATEGORY = (("精读 · ", "文献精读笔记"), ("笔记 · ", "文献精读笔记"),
+                          ("创新点审查", "研究计划"), ("稿件审查", "写作投稿"))
+
+
+def rehome_legacy(db: Any, project_id: str, notes: Path) -> int:
+    """老版本把项目笔记直接写在 笔记/ 根上（笔记页只能把它们算「未分类」）。按标题前缀搬进分类目录，
+    顺带把 assets 的规范路径指过去。认不出类别的原地不动，留在未分类里等人自己归。"""
+    rows = [dict(r) for r in db.notes(project_id)] + [n for n in db.md_notes() if n.get("task_id") == project_id]
+    conn = getattr(db, "db", None)
+    moved = 0
+    for row in rows:
+        old = notes / f"{row['id']}.md"
+        if conn is None or not old.is_file():
+            continue
+        name = next((c for p, c in _LEGACY_TITLE_CATEGORY if str(row.get("title") or "").startswith(p)), "")
+        if not name:
+            continue
+        new = notes / name / old.name
+        new.parent.mkdir(exist_ok=True)
+        old.replace(new)
+        conn.execute("UPDATE assets SET canonical_uri=? WHERE canonical_uri=?",
+                     (str(new.resolve()), str(old.resolve())))
+        moved += 1
+    if moved:
+        conn.commit()
+    return moved
+
+
+def _file_rows(folder: Path, notes_root: Path, titles: dict[str, str]) -> list[dict]:
+    """一个分类目录下的 .md 清单。标题优先取数据库里的（文件名是 uuid，直接显示等于一串乱码）。"""
+    files = []
+    for path in folder.rglob("*.md"):
+        if path.is_symlink() or not path.is_file() or path.name.lower() == "readme.md":
+            continue
+        try:
+            rel = path.resolve().relative_to(notes_root).as_posix()
+        except ValueError:
+            continue
+        files.append({"path": rel, "title": titles.get(path.stem) or path.stem,
+                      "updated_at": path.stat().st_mtime})
+    files.sort(key=lambda item: item["updated_at"], reverse=True)
+    return files
+
+
 def dashboard(db: Any, project_id: str) -> dict:
     notes = ensure_categories(db, project_id)
+    rehome_legacy(db, project_id, notes)
+    titles = {r["id"]: r["title"] for r in db.notes(project_id)}
+    titles.update({n["id"]: n["title"] for n in db.md_notes() if n.get("task_id") == project_id})
+
     groups = []
     for name, description in CATEGORIES:
-        folder = notes / name
-        files = []
-        for path in folder.rglob("*.md"):
-            if path.is_symlink() or not path.is_file():
-                continue
-            try:
-                rel = path.resolve().relative_to(notes.parent).as_posix()
-            except ValueError:
-                continue
-            files.append({"path": rel, "title": path.stem, "updated_at": path.stat().st_mtime})
-        files.sort(key=lambda item: item["updated_at"], reverse=True)
+        files = _file_rows(notes / name, notes.parent, titles)
         groups.append({"name": name, "path": f"笔记/{name}", "description": description, "count": len(files), "files": files})
     known = {name for name, _ in CATEGORIES}
     for folder in notes.iterdir():
         if not folder.is_dir() or folder.is_symlink() or folder.name in known or folder.name.startswith("."):
             continue
-        files = []
-        for path in folder.rglob("*.md"):
-            if path.is_symlink() or not path.is_file():
-                continue
-            try:
-                rel = path.resolve().relative_to(notes.parent).as_posix()
-            except ValueError:
-                continue
-            files.append({"path": rel, "title": path.stem, "updated_at": path.stat().st_mtime})
-        files.sort(key=lambda item: item["updated_at"], reverse=True)
+        files = _file_rows(folder, notes.parent, titles)
         groups.append({"name": folder.name, "path": f"笔记/{folder.name}", "description": "已有笔记分类", "count": len(files), "files": files})
     legacy = []
     for path in notes.glob("*.md"):
         if path.name == "README.md" or path.is_symlink():
             continue
-        legacy.append({"path": f"笔记/{path.name}", "title": path.stem, "updated_at": path.stat().st_mtime})
+        legacy.append({"path": f"笔记/{path.name}", "title": titles.get(path.stem) or path.stem,
+                       "updated_at": path.stat().st_mtime})
     legacy.sort(key=lambda item: item["updated_at"], reverse=True)
-    groups.append({"name": "未分类", "path": "笔记", "description": "已有笔记", "count": len(legacy), "files": legacy})
+    groups.append({"name": "未分类", "path": "笔记", "description": "笔记根目录下的散落笔记", "count": len(legacy), "files": legacy})
     return {"project_id": project_id, "path_format": "笔记/<分类>/<文件名>.md",
             "groups": groups, "total": sum(g["count"] for g in groups)}
+
+
+def _title_of(db: Any, project_id: str, stem: str) -> str:
+    """笔记文件名叫 uuid，标题得回数据库取（笔记页和编辑器标题框都靠它）。"""
+    for row in db.notes(project_id):
+        if row["id"] == stem:
+            return row["title"]
+    for note in db.md_notes():
+        if note["id"] == stem and note.get("task_id") == project_id:
+            return note["title"]
+    return ""
 
 
 def read(db: Any, project_id: str, relative: str) -> dict:
@@ -114,7 +155,8 @@ def read(db: Any, project_id: str, relative: str) -> dict:
         raise FileNotFoundError(relative)
     if path.stat().st_size > MAX_NOTE_BYTES:
         raise ValueError("笔记超过 5 MB")
-    return {"path": relative, "title": path.stem, "content": path.read_text(encoding="utf-8")}
+    return {"path": relative, "title": _title_of(db, project_id, path.stem) or path.stem,
+            "content": path.read_text(encoding="utf-8")}
 
 
 def write(db: Any, project_id: str, relative: str, content: str) -> dict:

@@ -935,6 +935,8 @@ html[data-theme="light"] .quick-add .quick-time{color-scheme:light}
 .md-view { display: grid; grid-template-columns: 238px minmax(0, 1fr); min-height: 0; background: var(--panel); }
 .md-note-side { min-width: 0; border-right: 1px solid var(--line); background: var(--panel2); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .md-note-side-head { display: flex; gap: 7px; }
+.md-back-dash { align-self: flex-start; padding: 4px 8px; font-size: 12px; color: var(--muted); }
+.md-back-dash:hover { color: var(--accent); border-color: var(--accent); }
 .md-note-side-head .btn { flex: 1 1 0; min-width: 0; padding: 8px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }   /* 三个挤 213px：只 flex:1 会被各自 min-content 顶住 → 第三个按钮被右边界切掉（2026-10-12 修） */
 .md-note-list { min-height: 0; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
 .md-note-item { border: 1px solid transparent; border-radius: 6px; padding: 9px 10px; cursor: pointer; min-width: 0; }

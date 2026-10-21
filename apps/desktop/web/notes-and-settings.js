@@ -1065,6 +1065,13 @@ function pnBindCats(host){
 /* 「独立笔记」整页（存程序文件夹，和项目笔记两套）：编辑器壳搬回 .md-note-main 再显示整页。
    就地搬 DOM —— 同一套工具栏/导出/分栏代码，两种保存目标。 */
 function mdMountEditor(host){ const sh = $("mdEditorShell"); if(sh && host && sh.parentElement !== host) host.appendChild(sh); }
+function pnBackToDash(){
+  mdMountEditor(document.querySelector("#mdView .md-note-main"));
+  $("mdView").style.display = "none";
+  $("mdDashboard").style.display = "";
+  mdDashPath = ""; mdDraft = false; mdProj = null;
+  mdDashLoad();
+}
 function pnOpenLegacy(){
   mdProj = null;
   mdMountEditor(document.querySelector("#mdView .md-note-main"));
@@ -1073,7 +1080,9 @@ function pnOpenLegacy(){
   mdPaint();
 }
 async function mdSaveProj(){
-  const title = $("mdNoteTitle").value.trim() || "未命名笔记";
+  const rawTitle = $("mdNoteTitle").value.trim();
+  if(!mdProj.path && !rawTitle && !$("mdSource").value.trim()) return;   // 空草稿不落盘：点了新建又立刻返回，别留个「未命名笔记.md」
+  const title = rawTitle || "未命名笔记";
   let content = $("mdSource").value;
   if(!mdProj.path){                                    // 第一次保存才定文件名：标题即文件名
     const safe = title.replace(/[\\/:*?"<>|]/g,"_").slice(0,100);
@@ -1174,6 +1183,7 @@ async function renderNotes(m){
   m.style.padding = "";
   m.innerHTML = `<div id="mdDashboard" class="md-dashboard pn"><div class="md-dash-head"><h2>项目笔记</h2><select id="mdDashProject"><option value="">选择项目</option>${(S.tasks||[]).map(t=>`<option value="${esc(t.id)}" ${t.id===(mdDashProject||curTask)?"selected":""}>${esc(t.title)}</option>`).join("")}</select><input id="mdDashSearch" class="pn-search" type="search" placeholder="🔍 搜索标题"></div><div id="mdDashboardBody"></div></div><div class="md-view" id="mdView" style="display:none">
     <aside class="md-note-side">
+      <button class="btn ghost md-back-dash" id="mdBackDash" title="回项目笔记（笔记存在项目文件夹里的那套）">← 项目笔记</button>
       <div class="md-note-side-head">
         <button class="btn" id="btnMdNew">＋ 新建</button>
         <button class="btn ghost" id="btnMdImport">导入 .md</button>
@@ -1237,6 +1247,7 @@ async function renderNotes(m){
   $("mdDashSearch").oninput = e => { mdDashQuery = e.target.value; clearTimeout(pnT); pnT = setTimeout(()=>{ mdDashPath=""; mdDashLoad(); }, 180); };
   mdDashLoad();
   mdFocus(localStorage.getItem("rw-md-focus")==="true", true);     // 上次在专注模式就还在专注模式
+  $("mdBackDash").onclick = pnBackToDash;
   if(mdNarrowOn){ $("mdView")?.classList.add("narrow"); document.body.classList.add("md-narrow"); }
   const nb = $("btnMdNarrow"); if(nb && mdNarrowOn) nb.textContent = "▯ 铺满";
 }

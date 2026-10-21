@@ -65,7 +65,7 @@ def stage_idea(db: WorkflowDB, task_id: str, idea: str) -> dict[str, Any]:
         "> 模型意见是草稿式审查，最终判断以导师与证据为准。",
     ]
     md = "\n".join(md_parts)
-    note = db.add_note(task_id, f"创新点审查 · {task['title']}", md)
+    note = db.add_note(task_id, f"创新点审查 · {task['title']}", md, category="研究计划")
     db.log_step(task_id, "idea", "done", f"判定 {out.get('verdict','')}")
     db.add_memory(task_id, "long", f"创新点审查结论：{out.get('verdict','')}｜理由：{out.get('reason','')[:160]}")
     return {"verdict": out, "note_id": note["id"], "markdown": md}
@@ -413,7 +413,7 @@ def stage_review(db: WorkflowDB, task_id: str, draft: str) -> dict[str, Any]:
         "## 证据缺口", *[f"- {x}" for x in out.get("missing_evidence", [])], "",
         "> 审查意见为草稿，是否采纳由作者判断。",
     ])
-    note = db.add_note(task_id, "稿件审查", md)
+    note = db.add_note(task_id, "稿件审查", md, category="写作投稿")
     db.log_step(task_id, "review", "done", f"结论 {out.get('verdict','')}")
     return {"review": out, "markdown": md, "note_id": note["id"]}
 

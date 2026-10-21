@@ -35,6 +35,8 @@ from research_core import ResearchDB
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1] if (HERE.parents[1] / "packages").is_dir() else HERE   # 程序根（只读资源）
 DATA, PAPERS, NOTES, OUT = paths.DATA, paths.PAPERS, paths.NOTES, paths.OUT   # 唯一路径来源
+NOTE_CATEGORY = "文献精读笔记"    # 项目笔记按分类落盘（同 project_notes.CATEGORIES）：精读/翻译产出的走这一类
+
 UA = {"User-Agent": "research-workbench-1.0 (mailto:local@localhost)"}
 
 
@@ -466,8 +468,14 @@ class WorkflowDB(ResearchDB):
     def _md_note_path(self, note: dict[str, Any] | None) -> Path | None:
         if not note:
             return None
-        folder = self.pdir(note["task_id"], "笔记") if note["task_id"] else NOTES
-        return folder / f"{note['id']}.md"
+        if not note["task_id"]:
+            return NOTES / f"{note['id']}.md"
+        return self._project_note_dir(note["task_id"]) / f"{note['id']}.md"
+
+    def _project_note_dir(self, task_id: str, category: str = NOTE_CATEGORY) -> Path:
+        """项目笔记按分类落盘（=project_notes.CATEGORIES 里的目录名）。都写进子目录，
+        否则笔记页只能把它们算成「未分类」。"""
+        return self.pdir(task_id, "笔记") / category
 
     def _rehome_md_note_asset(self, previous: dict[str, Any] | None, note: dict[str, Any],
                               old_path: Path | None, new_path: Path) -> None:
@@ -1376,12 +1384,14 @@ class WorkflowDB(ResearchDB):
         return [dict(r) for r in rows]
 
     # ---------- 笔记 ----------
-    def add_note(self, task_id: str, title: str, markdown: str, paper_id: str | None = None) -> dict[str, Any]:
+    def add_note(self, task_id: str, title: str, markdown: str, paper_id: str | None = None,
+                 category: str = NOTE_CATEGORY) -> dict[str, Any]:
         nid = uuid.uuid4().hex
         self.db.execute("INSERT INTO notes VALUES (?,?,?,?,?,?)", (nid, task_id, paper_id, title.strip() or "未命名笔记", markdown, now()))
         self.db.commit()
         import asset_service
-        path = self.pdir(task_id, "笔记") / f"{nid}.md"
+        path = self._project_note_dir(task_id, category) / f"{nid}.md"
+
         asset_service.atomic_write_text(path, markdown)
         asset_service.register_file(self, path, project_id=task_id, kind="note",
                                     title=title.strip() or "未命名笔记", source="workflow", body=markdown,
@@ -2334,7 +2344,7 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
 from workflow_documents import (
     doc_path, doc_read, doc_write,
     outline_read, outline_write, doc_tools, map_tools, doc_seed, read_attachment, map_path, map_read, map_write, map_sources,
-    map_seed, project_outs,
+    map_seed, project_outs, map_tidy,
 )
 from workflow_runners import (
     run_idea, run_map, run_outline, run_write, run_review, _wants_draft,
