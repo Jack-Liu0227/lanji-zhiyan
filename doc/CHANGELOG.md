@@ -2,6 +2,15 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 2026-10-21（晚 3：格式转换补 PDF 与「现成 .tex → PDF」）
+
+`format_convert` 工具的 enum 只有 `docx/md/html` —— 跟格式助手说「转成 PDF」它没法调；而 `conv_run` 其实早就会 md→tex→xelatex。
+- 新增 `format=pdf`（= 正文 → tex → PDF）和 `format=tex`（编手边现成的 .tex，可给 `source` 路径，不给就取项目里最新的 .tex，走本机 MiKTeX xelatex）。docx/html/md 仍走 `stage_convert`。
+- `CONV_FORMATS` 补 pdf / tex 两项；顺手修了导出文件名带上「题目：」前缀的毛病（`题目_基于局部电阻…pdf` → `基于局部电阻…pdf`）。
+- 前端「📄 转 PDF」本来就两种活都干（选中 .tex 就编它、否则正文转 LaTeX 再编），这次只是把后端能力和助手工具补齐。
+实测（真实项目）：`format=pdf` → 115993 B PDF，1.1s；`format=tex` + source → 116257 B；`format=tex` 不带 source → 自动取最新 .tex 也编出来了。
+验证：`tests/test_convert_tex.py` 新增路由测试（pdf/tex 必须走 conv_run、tex 要带 source），`359 tests OK`。
+
 ## 2026-10-21（晚 2：「稿件审查」左边改成审查意见）
 
 `DOC_STEPS["review"]` 以前指向 `正文.md` —— 于是这一步左边永远是原文，而且 `doc_write` 还会把正文覆盖掉。现在：

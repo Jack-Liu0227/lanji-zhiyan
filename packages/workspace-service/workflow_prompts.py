@@ -324,7 +324,10 @@ TOOL_SPECS = [
     _schema("notes_compose", "把一条精读笔记整理成带证据表的知识库笔记，可选写入 Obsidian。", {"note_id": {"type": "string"}, "vault": {"type": "string"}}, ["note_id"]),
     _schema("draft_write", "用当前任务的笔记与证据起草一个章节。", {"section": {"type": "string"}, "title": {"type": "string"}}),
     _schema("draft_review", "以审稿人视角审查稿件，给出结论/评分/问题清单/证据缺口。", {"draft": {"type": "string"}}),
-    _schema("format_convert", "把稿件导出为 docx / md / html。", {"format": {"type": "string", "enum": ["docx", "md", "html"]}, "name": {"type": "string"}}, ["format"]),
+    _schema("format_convert", "把稿件导出为 docx / md / html / pdf，或把一份现成的 .tex 编成 PDF（format=tex，走本机 MiKTeX xelatex）。用户说「转成 PDF」用 pdf；说「这份 tex 转 PDF」用 tex。",
+            {"format": {"type": "string", "enum": ["docx", "md", "html", "pdf", "tex"]},
+             "source": {"type": "string", "description": "tex 才用：要编译的 .tex 绝对路径；不给就取项目里最新的 .tex"},
+             "name": {"type": "string"}}, ["format"]),
     _schema("calendar_add", "在日历里加一条日程并关联当前任务。用户说了钟点就把 time 填上，别说「14:00 开会」这种把时间写进标题的写法。", {"title": {"type": "string", "description": "日程标题，不要带钟点"}, "date": {"type": "string", "description": "YYYY-MM-DD"}, "time": {"type": "string", "description": "24 小时制 HH:MM，例如 14:00；用户没给时间就留空"}, "kind": {"type": "string"}}, ["title", "date"]),
     _schema("project_create", "新建一个科研项目（课题），返回 project_id。用户说「新建一个项目 / 课题」时用它；"
             "建完把 project_id 记下来，后面的检索、下载、精读、加日程、派活都用这个 id。",

@@ -128,7 +128,8 @@ def cite_add(db: "WorkflowDB", task_id: str, args: dict[str, Any]) -> dict[str, 
 
 
 # ---------------- 格式转换（照 Overleaf：文件 / 代码 / 编译 → PDF） ----------------
-CONV_FORMATS = {"docx": "Word (.docx)", "html": "HTML", "md": "Markdown", "latex": "LaTeX (.tex → PDF，本机 MiKTeX)"}
+CONV_FORMATS = {"docx": "Word (.docx)", "html": "HTML", "md": "Markdown", "pdf": "PDF（正文.md → PDF）",
+                "latex": "LaTeX (.tex → PDF，本机 MiKTeX)", "tex": "现成 .tex → PDF（本机 MiKTeX）"}
 
 
 def md_to_tex(md: str, title: str) -> str:
@@ -167,6 +168,24 @@ def md_to_tex(md: str, title: str) -> str:
 _TEX_MAP = {"\\": r"\textbackslash{}", "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_",
             "{": r"\{", "}": r"\}", "~": r"\textasciitilde{}", "^": r"\textasciicircum{}"}
 
+# lmodern 里没有希腊字母/上下标/数学符号这些字形，直接写进 tex 会静默丢字（实测 β-Ga₂O₃ 全部消失）。
+# 换数学模式才打得出来 —— 字符 → 命令名，值的 $...$ 在下面拼。
+_MATH_SYMS = {
+    "α": r"\alpha", "β": r"\beta", "γ": r"\gamma", "δ": r"\delta", "ε": r"\varepsilon", "θ": r"\theta",
+    "κ": r"\kappa", "λ": r"\lambda", "μ": r"\mu", "ν": r"\nu", "ρ": r"\rho", "σ": r"\sigma",
+    "τ": r"\tau", "φ": r"\varphi", "χ": r"\chi", "ψ": r"\psi", "ω": r"\omega",
+    "Δ": r"\Delta", "Ω": r"\Omega", "Σ": r"\Sigma", "Γ": r"\Gamma", "Θ": r"\Theta",
+    "Λ": r"\Lambda", "Π": r"\Pi", "Φ": r"\Phi",
+    "≤": r"\le", "≥": r"\ge", "≠": r"\neq", "≈": r"\approx", "±": r"\pm", "×": r"\times",
+    "÷": r"\div", "→": r"\rightarrow", "∞": r"\infty", "°": r"^\circ",
+    "₀": "_0", "₁": "_1", "₂": "_2", "₃": "_3", "₄": "_4", "₅": "_5", "₆": "_6", "₇": "_7",
+    "₈": "_8", "₉": "_9", "⁻": "^-",
+    "⁰": "^0", "¹": "^1", "²": "^2", "³": "^3", "⁴": "^4", "⁵": "^5", "⁶": "^6", "⁷": "^7",
+    "⁸": "^8", "⁹": "^9",
+}
+for _ch, _cmd in _MATH_SYMS.items():
+    _TEX_MAP[_ch] = "$" + _cmd + "$"
+
 
 def tex_escape(s: str) -> str:
     return "".join(_TEX_MAP.get(c, c) for c in (s or ""))    # 逐字符换，避免把插入的反斜杠再转义一遍
@@ -180,17 +199,49 @@ def _xelatex() -> str:
     return "xelatex"
 
 
+def _newest_tex(db: "WorkflowDB", task_id: str) -> Path | None:
+    """项目里最新的 .tex（最终产物 / _tex 构建夹、论文正文都算）。"""
+    folder = db.pdir(task_id, "最终产物")
+    cands = sorted(folder.rglob("*.tex"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return cands[0] if cands else None
+
+
 def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "") -> dict[str, Any]:
-    """一键格式转换：以正文.md（或指定文件）为源，导出到「最终产物」。latex 会就地编译出 PDF。"""
+    """一键格式转换：以正文.md（或指定文件）为源，导出到「最终产物」。
+
+    pdf = 正文 → tex → PDF；latex = 同上但留一份 .tex；tex = 直接编手边那份现成 .tex
+    （组内 revtex 稿、overleaf 导出、审改留下的 .tex 都走这条）。都是本机 MiKTeX 的 xelatex。
+    """
     fmt = (fmt or "docx").lower()
+    if fmt == "pdf":
+        fmt = "latex"                                     # 同一条 md→tex→xelatex 路，产出都是 PDF
+    folder = db.pdir(task_id, "最终产物")
+    if fmt == "tex":                                      # 现成 .tex → PDF（不读正文.md）
+        src_tex = Path(source) if source else _newest_tex(db, task_id)
+        if not src_tex or not src_tex.is_file():
+            raise ValueError("找不到要编译的 .tex：把 path 指到文件，或者先导出一份 LaTeX")
+        safe = re.sub(r"[^\w\-. ]+", "_", src_tex.stem)[:60] or "paper"
+        done = host_compile(src_tex)
+        pdf = Path(done["pdf"]) if done and done.get("pdf") else src_tex.with_suffix(".pdf")
+        if not pdf.is_file():
+            env = lowbox.sandbox_env(fileguard.clean_env(str(Path(_xelatex()).parent)), paths.LOWTMP)
+            proc = lowbox.run([_xelatex(), "-interaction=nonstopmode", "-halt-on-error", src_tex.name],
+                              cwd=str(src_tex.parent), env=env, timeout=180)
+            if proc.returncode != 0 or not pdf.is_file():
+                tail = "\n".join((proc.stdout or "").splitlines()[-12:])
+                raise RuntimeError(f"xelatex 失败（退出码 {proc.returncode}）：{tail[-600:]}")
+        out = folder / f"{safe}.pdf"
+        shutil.copy2(pdf, out)
+        db.log_step(task_id, "convert", "done", f"导出 {out.name}")
+        return {"path": str(out), "name": out.name, "format": fmt, "size": out.stat().st_size,
+                "pdf": True, "source": str(src_tex)}
     src = Path(source) if source else doc_path(db, task_id, "write")
     md = src.read_text(encoding="utf-8", errors="replace") if src.is_file() else ""
     if not md.strip():
         raise ValueError(f"源文件是空的：{src}（先在「论文撰写」写出正文）")
     title = doc_read(db, task_id, "outline")["markdown"].splitlines()
-    title = next((l.lstrip("# ").strip() for l in title if l.strip().startswith("#")),
+    title = next((re.sub(r"^(题目|标题)[：:]\s*", "", l.lstrip("# ").strip()) for l in title if l.strip().startswith("#")),
                  db.summary(task_id)["task"]["title"] or Path(src).stem)      # 没框架就用项目名，别叫「正文」
-    folder = db.pdir(task_id, "最终产物")
     safe = re.sub(r"[^\w\-. ]+", "_", title)[:60] or "paper"
     out = folder / f"{safe}.{'pdf' if fmt == 'latex' else fmt}"
     if fmt == "md":
@@ -204,13 +255,19 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "") -> dict
         build.mkdir(parents=True, exist_ok=True)
         tex_path = build / f"{safe}.tex"
         tex_path.write_text(md_to_tex(md, title), encoding="utf-8", newline="\n")   # 必须 LF：CR 会让 TeX 报 ^^M
-        env = lowbox.sandbox_env(fileguard.clean_env(str(Path(_xelatex()).parent)), paths.LOWTMP)   # 子进程不需要我们的 key
-        proc = lowbox.run([_xelatex(), "-interaction=nonstopmode", "-halt-on-error", tex_path.name],
-                          cwd=str(build), env=env, timeout=180)
         made = build / f"{safe}.pdf"
-        if proc.returncode != 0 or not made.is_file():
-            tail = "\n".join((proc.stdout or "").splitlines()[-12:])
-            raise RuntimeError(f"xelatex 失败（退出码 {proc.returncode}）：{tail[-600:]}")
+        done = host_compile(tex_path)
+        if done and not done.get("pdf") and done.get("error"):
+            raise RuntimeError(done["error"])
+        if done and done.get("pdf"):
+            made = Path(done["pdf"])                  # 宿主编出来的就在原位
+        else:
+            env = lowbox.sandbox_env(fileguard.clean_env(str(Path(_xelatex()).parent)), paths.LOWTMP)
+            proc = lowbox.run([_xelatex(), "-interaction=nonstopmode", "-halt-on-error", tex_path.name],
+                              cwd=str(build), env=env, timeout=180)
+            if proc.returncode != 0 or not made.is_file():
+                tail = "\n".join((proc.stdout or "").splitlines()[-12:])
+                raise RuntimeError(f"xelatex 失败（退出码 {proc.returncode}）：{tail[-600:]}")
         shutil.copy2(made, out)
     else:
         raise ValueError(f"不支持的格式：{fmt}（可用 {'/'.join(CONV_FORMATS)}）")
@@ -246,12 +303,42 @@ def conv_files(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     return {"files": rows[:80], "dirs": [str(d) for _, d in dict.fromkeys(labels)], "pdf": newest_pdf}
 
 
+def host_compile(tex: Path) -> dict[str, Any] | None:
+    """让窗口宿主（Medium 权限）去跑 xelatex。
+
+    沙箱（Low IL）里 dvipdfmx 写不了 MiKTeX 自己的 log/cache，实测直接崩（退出码 3221226505），
+    页都排出来了 PDF 却没写成。宿主是正常 Medium 进程，本地编译交给它最省事。
+    宿主没起（纯 CLI）或通道不通 → 返回 None，调用方退回沙箱编译。
+    """
+    import urllib.request
+
+    addr, key = os.environ.get("RW_GRANT"), os.environ.get("RW_GRANT_KEY")
+    if not (addr and key):
+        return None
+    try:
+        req = urllib.request.Request(
+            "http://%s/tex" % addr,
+            data=json.dumps({"tex": str(tex)}, ensure_ascii=False).encode("utf-8"),
+            headers={"X-RW-Key": key, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=320) as r:
+            got = json.loads(r.read() or b"{}")
+        return got if isinstance(got, dict) else None
+    except Exception:
+        return None
+
+
+
 def conv_compile(path: str) -> dict[str, Any]:
     """编译任意一份 .tex（代码区「⚙ 编译」用）：产物 PDF 放在同目录。"""
     p = _safe_path(path)
     if p.suffix.lower() != ".tex" or not p.is_file():
         raise ValueError("只能编译 .tex 文件")
     pdf = p.with_suffix(".pdf")
+    done = host_compile(p)                       # 宿主能编就别在沙箱里编（dvipdfmx 在 Low IL 下会崩）
+    if done and done.get("pdf"):
+        return {"pdf": str(done["pdf"]), "name": done.get("name") or pdf.name, "size": done.get("size") or 0}
+    if done and done.get("error"):
+        raise RuntimeError(done["error"])
     env = lowbox.sandbox_env(fileguard.clean_env(str(Path(_xelatex()).parent)), paths.LOWTMP)       # 子进程不需要我们的 key
     try:
         proc = lowbox.run([_xelatex(), "-interaction=nonstopmode", "-halt-on-error", p.name],

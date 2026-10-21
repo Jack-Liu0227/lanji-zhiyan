@@ -2338,7 +2338,10 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
     if name == "draft_review":
         return stage_review(db, task_id, args.get("draft") or compose_draft(db, task_id))
     if name == "format_convert":
-        return stage_convert(db, task_id, args.get("markdown") or compose_draft(db, task_id), args.get("format", "docx"), args.get("name", "paper"))
+        fmt = (args.get("format") or "docx").lower()
+        if fmt in ("pdf", "latex", "tex"):        # PDF / LaTeX 走本机 MiKTeX（正文 md→tex→pdf，或直接编现成 .tex）
+            return conv_run(db, task_id, fmt, str(args.get("source") or ""))
+        return stage_convert(db, task_id, args.get("markdown") or compose_draft(db, task_id), fmt, args.get("name", "paper"))
     raise ValueError(f"未知工具：{name}")
 
 
