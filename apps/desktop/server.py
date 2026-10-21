@@ -58,9 +58,9 @@ from run_manager import RunManager
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
-                      outline_read, outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
+                      outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
                       map_seed, project_outs, map_tidy, open_write,
-                      cite_read, cite_add, conv_files, conv_run, conv_compile, conv_open,
+                      cite_read, conv_files, conv_compile, conv_open,
                       fig_list, fig_rename, conv_preview, open_convert, convert_system,
                       en_state, en_run, _safe_path, step_plan,
                       stage_download_selected, stage_zotero_import, test_provider,
@@ -1613,11 +1613,6 @@ class Handler(BaseHTTPRequestHandler):
                                                          data.get("path") or "", data.get("name") or ""))
                         except Exception as exc:
                             return self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
-                if path == "/api/conv/run":                 # 一键格式转换（latex 会编译出 PDF）
-                    with WorkflowDB(DB_PATH) as db:
-                        return self._json(conv_run(db, (data.get("task_id") or "").strip(),
-                                                   data.get("format") or "docx", data.get("source") or "",
-                                                   data.get("template") or ""))
                 if path == "/api/doc/seed":                # 起稿（确认大纲=模板；撰写=按框架搭骨架）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(doc_seed(db, (data.get("task_id") or "").strip(),

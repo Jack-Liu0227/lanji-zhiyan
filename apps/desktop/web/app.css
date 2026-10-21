@@ -380,8 +380,6 @@ details[open]>summary>.disclosure-arrow{transform:rotate(90deg)}
 .sp-kpi strong{display:block;font-size:26px;font-weight:700;letter-spacing:-.01em;margin:2px 0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sp-kpi-note{color:var(--muted);font-size:12px;margin:0;line-height:1.5}
 .sp-kpi-text strong{font-size:13.5px;font-weight:600;line-height:1.5;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.sp-bar{height:6px;border-radius:999px;background:var(--panel2);margin-top:8px;overflow:hidden}
-.sp-bar>div{height:100%;background:var(--accent);border-radius:999px}
 .sp-stbar{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
 .sp-sttl{font-size:13.5px;font-weight:600}
 .sp-smeta{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
@@ -395,9 +393,6 @@ details[open]>summary>.disclosure-arrow{transform:rotate(90deg)}
 .sp-main{min-width:0;flex:1}
 .sp-nm{font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sp-meta{color:var(--muted);font-size:11.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sp-dot{width:9px;height:9px;border-radius:50%;flex:none;margin-top:5px;background:color-mix(in srgb,var(--fg) 18%,transparent)}
-.sp-dot.run{background:color-mix(in srgb,var(--accent) 45%,transparent)}
-.sp-dot.on{background:var(--accent)}
 .sp-kv{display:flex;gap:10px;border-top:1px solid var(--line);padding:7px 0;font-size:12.5px}
 .sp-kv:first-of-type{border-top:0}
 .sp-kv span{color:var(--muted);flex:none;width:9em}
@@ -1029,7 +1024,7 @@ body.md-narrow .wctl button:hover { background: #eee; }
 .intel .it-head h3{margin:0}
 .intel .it-head .btn{margin-left:auto}
 .it-bar{display:grid;grid-template-columns:minmax(150px,210px) minmax(0,1fr) 110px;gap:10px;align-items:center}
-.it-bar select,.it-bar input,.it-add input{height:36px;box-sizing:border-box;padding:0 10px;border:1px solid var(--line);
+.it-bar select,.it-bar input{height:36px;box-sizing:border-box;padding:0 10px;border:1px solid var(--line);
   border-radius:8px;background:var(--panel2);color:var(--fg)}
 .it-list{margin-top:6px}
 .it-row{padding:11px 0;border-top:1px solid var(--line)}
@@ -1119,8 +1114,6 @@ body.md-narrow .wctl button:hover { background: #eee; }
   color:var(--muted);font-size:11px;line-height:1;padding:0;cursor:pointer;opacity:0}
 .cv-f:hover .cv-ren{opacity:1}
 .cv-ren:hover{color:var(--accent);border-color:var(--accent)}
-.cv-sel{height:24px;max-width:26ch;border:1px solid var(--line);border-radius:6px;background:var(--panel2);
-  color:var(--fg);font-size:12px;padding:0 6px}
 .cv-stage{flex:1;min-height:0;display:flex;flex-direction:column;overflow:auto;background:#fff}
 .cv-empty{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:#8a8f98;font-size:13.5px;line-height:2;background:#fff}
 .cv-empty .cv-ph{font-size:15px;color:#6b7280}
@@ -1135,14 +1128,11 @@ body.md-narrow .wctl button:hover { background: #eee; }
 .cv-list{flex:1;min-height:0;overflow:auto;padding:6px}
 .cv-list.drop-on{outline:2px dashed var(--accent);outline-offset:-4px;
   background:color-mix(in srgb,var(--accent) 10%,transparent)}
-.cv-g{padding:6px 6px 2px;font-size:11.5px;color:var(--muted)}
 .cv-f{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:7px;font-size:12.5px;color:var(--fg);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cv-f:hover{background:var(--panel2)}
 .cv-f.on{background:color-mix(in srgb,var(--accent) 18%,transparent);border:1px solid var(--accent)}
 .cv-ext{flex:none;width:26px;text-align:center;font-size:10.5px;color:var(--muted);text-transform:uppercase}
 .cv-none{color:var(--muted);font-size:12.5px;padding:10px}
-.cv-src{flex:1;min-height:0;margin:0;padding:12px 14px;border:0;background:transparent;color:var(--fg);
-        font:12.5px/1.65 ui-monospace,Consolas,"Courier New",monospace;resize:none;outline:none;-webkit-user-select:text;user-select:text}
 .cv-frame{flex:1;min-height:0;border:0;background:#fff}
 
 /* ---- 确认大纲：左 2/3 框架 + 右 1/3 框架 agent（聊天壳沿用创新点审查那套 at-* 样式）---- */

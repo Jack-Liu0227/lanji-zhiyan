@@ -540,10 +540,6 @@ function cvClearStage(){
   if($("cvName")) $("cvName").textContent = "展示区";   // 没成品时标题不挂着上一份的名字
   if(o) o.classList.add("hidden");
 }
-function cvStageKind(){
-  /* 右栏现在展示的是哪类东西：pdf/html 用 iframe，图用 img，Word 没转成就只给个卡片 */
-  return "pdf";
-}
 async function cvPreview(path, label){
   if(!path) return;
   cvCur.path = path;

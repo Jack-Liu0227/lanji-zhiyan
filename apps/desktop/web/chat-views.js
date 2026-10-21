@@ -29,21 +29,6 @@ function needTask(){
   return "";
 }
 
-async function initDefaultProject(){
-  try{
-    const res = await api("/api/task/create", {
-      title: "锂金属固态电池界面反应动力学与多尺度演化研究",
-      question: "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
-      material_system: "固态锂电池, 复合固态电解质, 锂金属负极"
-    });
-    curTask = res.id;
-    localStorage.setItem("rw-task", curTask);
-    await refreshState(false);
-    render();
-  }catch(e){ uiNotify("初始化项目失败: " + e.message); }
-}
-
-
 /* ---------------- 助手（个人资料 + 编辑器 ----------------
    我的助手 / 公开助手 两栏；点卡片进编辑器（身份 / 提示词 / 规则 / 默认模型）。
    公开助手只读，只能「复制为我的」。 ---------------- */

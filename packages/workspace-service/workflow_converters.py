@@ -415,7 +415,7 @@ def open_convert(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     slots = re.findall(r"\[图位\s*(\d+)\]", body)
     figs = fig_list(db, task_id)["files"]
     msg = (
-        f"审查意见我看了，开始排版。先对第一件事 —— **图**：" + chr(10) + chr(10) +
+        "审查意见我看了，开始排版。先对第一件事 —— **图**：" + chr(10) + chr(10) +
         f"正文里有 {len(slots)} 处 [图位]，项目「图」文件夹里有 {len(figs)} 张成图"
         + (f"（{'、'.join(f['name'] for f in figs[:6])}{'…' if len(figs) > 6 else ''}）" if figs else "（还是空的）")
         + "。" + chr(10) + chr(10) +
@@ -436,7 +436,7 @@ def convert_system(db: "WorkflowDB", task_id: str) -> str:
     tpl_lines = chr(10).join(f"- `{k}`：{v['name']} —— {v['note']}" + (f"（来源 {v['repo']}）" if v["repo"] else "")
                              for k, v in TEMPLATES.items())
     return (
-        f"你是「览籍智研」里「格式转换」这一步的格式助手，用中文工作，站在排版工的位置。" + chr(10) + chr(10) +
+        "你是「览籍智研」里「格式转换」这一步的格式助手，用中文工作，站在排版工的位置。" + chr(10) + chr(10) +
         f"项目《{task['title']}》，你只做一件事：把「论文正文/正文.md」按用户要的格式与期刊模板导成成品，"
         "放进「最终产物」。" + chr(10) + chr(10) +
         "**开场必须依次问三件事，一次只问一件，拿到回答再问下一件**（不要一口气问完，也不要自己替用户定）：" + chr(10) +
@@ -453,7 +453,7 @@ def convert_system(db: "WorkflowDB", task_id: str) -> str:
 
 def conv_preview(path: str) -> dict[str, Any]:
     """右栏展示区要什么：PDF/图片直接给 /api/file 的地址；Word 先转成 PDF 再展示。"""
-    p = Path(str(path))
+    p = _safe_path(str(path))          # 只认项目 / data 目录里的文件（以前这里没校验，任意路径都能拉去转换）
     if not p.is_file():
         raise ValueError("文件不存在")
     ext = p.suffix.lower()

@@ -125,7 +125,7 @@ _TERM_STOP = {
     "the", "and", "for", "with", "from", "into", "using", "based", "via", "under", "their", "this", "that",
     "study", "studies", "analysis", "review", "effect", "effects", "novel", "new", "toward", "towards",
     "approach", "method", "methods", "model", "models", "system", "systems", "high", "low", "between",
-    "performance", "application", "applications", "using", "results", "based", "through", "during",
+    "performance", "application", "applications", "results", "through", "during",
 }
 _GRAPH_CACHE: dict[str, dict[str, Any]] = {}     # ponytail: 进程内缓存（键含结果条数，变了就重算）；要跨会话缓存再加表
 
