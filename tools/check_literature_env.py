@@ -98,7 +98,7 @@ def run_check():
     if cache_ok:
         print(f"  [+] ~/.cache/babeldoc 模型缓存就绪: {cache_dir}")
     else:
-        print(f"  [-] ~/.cache/babeldoc 缓存为空或不存在。")
+        print("  [-] ~/.cache/babeldoc 缓存为空或不存在。")
         print("      修复动作: 联网状态下运行 `uv tool run babeldoc 任意文件.pdf` 进行一次离线初始化。")
 
     # 4. Zotero 7 本地接口 (P4)
