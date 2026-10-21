@@ -518,19 +518,11 @@ function convPanelHTML(active){
         <div class="cv-list" id="figList"></div>
       </aside>
       <div class="cv-col">
-        <div class="cv-h"><b id="cvName">展示区</b><span class="cv-msg" id="cvMsg"></span><span class="cv-spacer"></span>
-          <select class="cv-sel" id="cvPick" title="最终产物里要展示的文件"><option value="">最终产物…</option></select>
-          <select class="cv-sel" id="cvFmt" title="要导出的成品格式">
-            <option value="pdf">PDF</option><option value="docx">Word (.docx)</option><option value="doc">Word 97 (.doc)</option></select>
-          <select class="cv-sel" id="cvTpl" title="PDF 用哪套期刊模板">
-            <option value="plain">通用模板</option><option value="elsevier">Elsevier</option>
-            <option value="ieee">IEEE</option><option value="revtex">APS (revtex)</option></select>
-          <button class="cv-ib" id="cvBuild" title="按选的格式与模板编译，产物写进「最终产物」">⚙ 编译</button>
-          <button class="cv-ib hidden" id="cvOpenExt" title="用系统默认程序打开">↗</button></div>
+        <div class="cv-h"><b id="cvName">展示区</b><span class="cv-msg" id="cvMsg"></span></div>
         <div class="cv-stage" id="cvStage">
           <iframe class="cv-frame hidden" id="cvFrame" src="about:blank"></iframe>
           <img class="cv-img hidden" id="cvImg" alt="">
-          <div class="cv-empty" id="cvEmpty"><div class="cv-ph">还未编译<br><span>在右边跟格式助手说要什么（PDF / Word），或点上面「📄 转 PDF / 📄 Word」；成品会显示在这里</span></div></div>
+          <div class="cv-empty" id="cvEmpty">${CV_BLANK}</div>
         </div>
       </div>
     </div>
@@ -539,11 +531,13 @@ function convPanelHTML(active){
 
 function cvMsg(t, ms){ const el = $("cvMsg"); if(el) el.textContent = t || ""; if(ms) setTimeout(()=>{ if(el && el.textContent === t) el.textContent = ""; }, ms); }
 
+const CV_BLANK = '<div class="cv-ph">未生成<br><span>在右边跟格式助手说清楚要什么（成品格式 + 期刊模板），编好的成品会显示在这里</span></div>';
 function cvClearStage(){
-  const f = $("cvFrame"), i = $("cvImg"), e = $("cvEmpty"), o = $("cvOpenExt");
+  const f = $("cvFrame"), i = $("cvImg"), e = $("cvEmpty"), o = $("cvOpenExt");   // 工具行已删，o 可能不存在
   if(f){ f.classList.add("hidden"); f.src = "about:blank"; }
   if(i){ i.classList.add("hidden"); i.removeAttribute("src"); }
-  if(e){ e.classList.remove("hidden"); e.innerHTML = ""; }
+  if(e){ e.classList.remove("hidden"); e.innerHTML = CV_BLANK; }
+  if($("cvName")) $("cvName").textContent = "展示区";   // 没成品时标题不挂着上一份的名字
   if(o) o.classList.add("hidden");
 }
 function cvStageKind(){
@@ -557,7 +551,7 @@ async function cvPreview(path, label){
   try{
     const d = await api(`/api/conv/preview?path=${encodeURIComponent(path)}`);
     if(d.error) throw new Error(d.error);
-    const f = $("cvFrame"), i = $("cvImg"), e = $("cvEmpty"), o = $("cvOpenExt");
+    const f = $("cvFrame"), i = $("cvImg"), e = $("cvEmpty"), o = $("cvOpenExt");   // 工具行已删，o 可能不存在
     $("cvName").textContent = d.name || label || "展示区";
     if(d.kind === "image"){
       f.classList.add("hidden"); f.src = "about:blank";
@@ -571,10 +565,9 @@ async function cvPreview(path, label){
       f.classList.add("hidden"); i.classList.add("hidden");
       e.classList.remove("hidden");
       e.innerHTML = `<div class="cv-card"><b>${esc(d.name)}</b>
-        <p>${d.kind === "docx" ? "Word 文档没能转成 PDF 预览（本机 LibreOffice 转换失败）—— 点右边「↗」用 Word 打开。" : "这类文件不在这儿预览。"}</p></div>`;
-      o.classList.remove("hidden"); o.onclick = ()=>api("/api/conv/open", { path: d.path }).catch(()=>{});
+        <p>${d.kind === "docx" ? "Word 文档没能转成 PDF 预览（本机 LibreOffice 转换失败）—— 去「最终产物」文件夹用 Word 打开。" : "这类文件不在这儿预览。"}</p></div>`;
+      if(o){ o.classList.remove("hidden"); o.onclick = ()=>api("/api/conv/open", { path: d.path }).catch(()=>{}); }
     }
-    if(d.kind !== "other" && d.kind !== "docx"){ o.classList.remove("hidden"); o.onclick = ()=>api("/api/conv/open", { path: d.path }).catch(()=>{}); }
     cvMsg(d.converted ? `（Word 已转 PDF 预览）${d.name}` : "", 6000);
   }catch(e){ cvMsg("打开失败：" + e.message); cvClearStage(); }
 }
@@ -632,27 +625,10 @@ async function cvLoad(){
   try{
     const d = await api(`/api/conv/files?id=${encodeURIComponent(curTask)}`);
     const rows = (d.files || []).filter(r => r.group === "最终产物" && ["pdf", "docx", "html"].includes(r.ext));
-    $("cvPick").innerHTML = `<option value="">最终产物…</option>` +
-      rows.map(r => `<option value="${esc(r.path)}">${esc(r.name)}</option>`).join("");
-    $("cvPick").onchange = (e)=>{ if(e.target.value) cvPreview(e.target.value); };
-    if(d.pdf) cvPreview(d.pdf);                       // 默认看最新那份 PDF
+    if(d.pdf) cvPreview(d.pdf);                       // 默认看最新那份 PDF（没有就保持纯白「未生成」）
   }catch(e){ cvMsg("读目录失败：" + e.message); }
 }
 
-async function cvBuild(){
-  const btn = $("cvBuild"); if(btn) btn.disabled = true;
-  const fmt = ($("cvFmt") && $("cvFmt").value) || "pdf";
-  const tpl = ($("cvTpl") && $("cvTpl").value) || "plain";
-  try{
-    cvMsg(fmt === "pdf" ? `正文 → LaTeX（${tpl}）→ PDF…` : `正文 → ${fmt}…`);
-    const r = await api("/api/conv/run", { task_id: curTask, format: fmt, template: tpl });
-    if(r.error) throw new Error(r.error);
-    const tail = r.template_fallback ? `（${r.template_fallback} 模板编不过，已退回通用模板）` : "";
-    cvMsg(`出 ${String(r.format || fmt).toUpperCase()} 了：${r.name}（${Math.round((r.size || 0) / 1024)} KB）${tail}`, 9000);
-    await cvLoad(); if(r.path) cvPreview(r.path);
-  }catch(e){ cvMsg("编译失败：" + e.message); }
-  if(btn) btn.disabled = false;
-}
 function cvBind(){
   if(!$("figList")) return;
   $("figRefresh").onclick = ()=>{ figLoad(); cvLoad(); };
@@ -669,8 +645,6 @@ function cvBind(){
     const fs = [...((e.dataTransfer && e.dataTransfer.files) || [])];
     if(fs.length) figUpload(fs);
   });
-  $("cvBuild").onclick = async () => { if (await needPerm("按当前格式与模板编译，产物写进「最终产物」")) cvBuild(); };
-  $("cvOpenExt").onclick = () => { if(cvCur.path) api("/api/conv/open", { path: cvCur.path }).catch(()=>{}); };
   figLoad(); cvLoad();
 }
 
