@@ -27,7 +27,7 @@ const DOC_UI = {
     hint: "Enter 发送 · 说「更新框架」→ 左边立刻换成新版本（文件就地覆盖）" },
   write: { ico: "✍️", file: "正文", who: "写作",
     sub: "与项目绑定 · 按上一步敲定的框架写正文（走本机 paper-spine / paper-writer）",
-    seed: "按框架搭骨架", pull: "↧ 用这条回复更新正文", post: "/api/write", scope: "write", hl: false, cite: true,
+    seed: "按框架搭骨架", pull: "↧ 用这条回复更新正文", post: "/api/write", scope: "write", hl: false, cite: true, quiet: true,
     empty: ["✍️", "这是项目的「论文撰写」", "先确认上一步的框架已经定了；再说清：有没有实验数据/图表、投哪里、篇幅要求。我按框架逐节写，缺数据的地方写「待补」，绝不编数字。"],
     ph: "说要求 / 让它写某一节 / 讨论怎么改…（Enter 发送）",
     hint: "Enter 发送 · 说「更新正文」→ 左边立刻换成新版本（文件就地覆盖）" },
@@ -369,6 +369,12 @@ function docOutsTick(){
   pull();
   if(!OUTS_TICK) OUTS_TICK = setInterval(pull, 4000);
 }
+function docProseHidden(k, mv){
+  /* 写作这步（DOC_UI.write.quiet）：正文成品只放左边的展示区，右栏只留过程。
+     但没落盘的那几轮（只是在问你/在讨论）正文得照常显示，否则右栏就空了。 */
+  if(!DOC_UI[k].quiet) return false;
+  return (mv.events || []).some(e => e.type === "tool_call" && /_write$/.test(e.name || ""));
+}
 function docPaint(k){
   const st = docState(k), box = docEl(k, "msgs"); if(!box) return;
   document.querySelectorAll("[data-dv]").forEach(b => b.classList.toggle("on", b.dataset.dv === `${k}|${st.view}`));
@@ -376,7 +382,11 @@ function docPaint(k){
   const c = DOC_UI[k];
   if(!st.msgs.length){ box.innerHTML = emptyState(c.empty[0], c.empty[1], c.empty[2]); return; }
   box.innerHTML = "";
-  st.msgs.forEach(mv => appendOne(box, { type: mv.role, content: mv.content, events: mv.events, replay: true, at: mv.created_at }));
+  st.msgs.forEach(mv => {
+    const hide = docProseHidden(k, mv);
+    appendOne(box, { type: mv.role, content: hide ? "" : mv.content, replay: true, at: mv.created_at,
+                     events: hide ? (mv.events || []).filter(e => !/^assistant/.test(e.type)) : mv.events });
+  });
   box.scrollTop = box.scrollHeight;
 }
 function docStats(k){
@@ -449,7 +459,8 @@ async function docSend(k){
         let ev; try{ ev = JSON.parse(line.slice(6)); }catch{ continue; }
         if(ev.type === "done"){ final = ev.content || ""; continue; }
         if(ev.type === "user") continue;                 // 本地已经先画了，回声不再画、也不进事件流
-        appendOne(box, ev); evs.push(ev);
+        if(!(DOC_UI[k].quiet && /^assistant/.test(ev.type))) appendOne(box, ev);   // 写作这步正文最后落到左边，右栏不刷稿子
+        evs.push(ev);
         if(ev.type === "usage") st.stat.tok += ev.total || 0;
         else if(ev.type === "tool_call") st.stat.calls++;
         docStats(k);
@@ -465,6 +476,10 @@ async function docSend(k){
   await docLoad(k);                                      // 重拉：文件可能刚被 doc_write 改过 → 左边跟着更新
   if(k === "map") await mpLoad();                          // 谱系图：聊天改完立刻重画画布
   docShowCand(k);
+  if(wrote && DOC_UI[k].quiet && final.trim())
+    docMsg(k, `本轮 ${final.length} 字已落到左侧《${DOC_UI[k].file}》—— 右栏只留过程`);
+  else if(!wrote && DOC_UI[k].quiet && final.trim())
+    appendOne(box, { type: "assistant", content: final });  // 没落盘就是在讨论，正文得让他看见
   if(!wrote && !st.cand) docMsg(k, `这轮没有改${DOC_UI[k].file} —— 说「更新${DOC_UI[k].file}」或让它「写进文件」`);
   if(errMsg) appendOne(box, { type: "error", message: errMsg });
   await refreshState(false);
