@@ -46,8 +46,18 @@
     }
   }
 
-  window.renderKanban = async function (container) {
+  // embedded=true 时嵌进「项目空间」当一块内容：不再自己画页头和项目下拉
+  // （外面已经有项目选择器和阶段），其余 KPI/三视图/拖拽/弹窗原样保留。
+  let kbEmbed = false;
+
+  // 记住这次画在哪个容器里：模态框保存后要重画回这块，不能再去抓 #main
+  // （嵌进项目空间后 #main 是整个页面，抓它就等于把页面换成一块看板）。
+  let kbHost = null;
+
+  window.renderKanban = async function (container, opts) {
     if (!container) return;
+    kbHost = container;
+    kbEmbed = !!(opts && opts.embedded);
     await fetchKanbanData(window.curTask);      // 进度必须现取：缓存里那套是上次进来时的
     renderBoard(container);
   };
@@ -72,6 +82,7 @@
         <section class="kb-header">
           <div class="kb-title-row">
             <div class="kb-title-group">
+              ${kbEmbed ? '' : `
               <h2 class="kb-main-title">
                 <span>📋</span> 科研进度与计划看板
               </h2>
@@ -81,7 +92,7 @@
                     ${escapeHtml(t.title)}
                   </option>
                 `).join('')}
-              </select>
+              </select>`}
               <div class="kb-stage-pill" title="当前课题阶段">
                 <span class="dot"></span>
                 <span>阶段：${escapeHtml(stageNow)}</span>
@@ -677,8 +688,7 @@
         }
         close();
         await fetchKanbanData(window.curTask);
-        const main = document.getElementById('main');
-        if (main) renderBoard(main);
+        if (kbHost && kbHost.isConnected) renderBoard(kbHost);
       } catch (err) {
         uiNotify('保存失败: ' + err.message);
       }

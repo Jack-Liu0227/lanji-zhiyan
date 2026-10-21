@@ -7,7 +7,6 @@ function render(){
   else if(r==="agent") renderAgent(m);
   else if(r==="workflow") renderWorkflow(m);
   else if(r==="tasks") renderTasks(m);
-  else if(r==="kanban") renderKanban(m);
   else if(r==="space") renderSpace(m);
   else if(r==="calendar") renderCalendar(m);
   else if(r==="mail") renderMail(m);

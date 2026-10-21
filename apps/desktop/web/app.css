@@ -130,16 +130,6 @@ details.mods>summary b{color:var(--fg);font-weight:600}
 .es-badge.domestic{background:var(--panel2);color:var(--muted);border:1px solid var(--line)}
 
 /* 项目空间待办与笔记预览布局 */
-.sp-todo-row{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;transition:all .15s}
-.sp-todo-row:hover{background:color-mix(in srgb,var(--accent) 8%,var(--panel2))}
-.sp-todo-st{cursor:pointer;user-select:none;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:6px}
-.sp-todo-st.TODO{background:var(--panel);color:var(--muted);border:1px solid var(--line)}
-.sp-todo-st.IN_PROGRESS{background:color-mix(in srgb,var(--accent) 20%,transparent);color:var(--accent);border:1px solid var(--accent)}
-.sp-todo-st.DONE{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok);border:1px solid var(--ok);text-decoration:none}
-.sp-todo-pri{font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px}
-.sp-todo-pri.P1{color:#ef4444;background:#ef44441a;border:1px solid #ef444466}
-.sp-todo-pri.P2{color:#f59e0b;background:#f59e0b1a;border:1px solid #f59e0b66}
-.sp-todo-pri.P3{color:var(--muted);background:var(--panel);border:1px solid var(--line)}
 .sp-note-item{display:flex;gap:10px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);cursor:pointer;transition:background .15s}
 .sp-note-item:hover{background:color-mix(in srgb,var(--accent) 10%,var(--panel2))}
 .sp-note-item.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 16%,var(--panel2))}
@@ -363,9 +353,19 @@ details[open]>summary>.disclosure-arrow{transform:rotate(90deg)}
 .sp-gap{flex:1}
 .sp-hd2{display:flex;align-items:center;gap:10px}
 .sp-hd2 .hint{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sp-grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
 .sp-grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media (max-width:1180px){.sp-grid3{grid-template-columns:repeat(2,minmax(0,1fr))}.sp-grid2{grid-template-columns:1fr}}
+@media (max-width:1180px){.sp-grid2{grid-template-columns:1fr}}
+/* 概览里的十步管道：10 个等宽格子，绿=已完成 青=当前 灰=未开始 */
+.sp-pipe{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:6px;margin-top:12px}
+.sp-pipe-cell{display:flex;flex-direction:column;gap:3px;padding:7px 6px;border:1px solid var(--border);border-radius:8px;background:var(--panel2);cursor:pointer;text-align:left;font:inherit;color:var(--muted)}
+.sp-pipe-cell b{font-size:10px;font-weight:600;letter-spacing:.04em;opacity:.7}
+.sp-pipe-cell span{font-size:11.5px;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sp-pipe-cell:hover{border-color:var(--accent)}
+.sp-pipe-cell.on{border-color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent);color:var(--fg)}
+.sp-pipe-cell.run{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--fg)}
+@media (max-width:1180px){.sp-pipe{grid-template-columns:repeat(5,minmax(0,1fr))}}
+/* 项目空间「进度与计划」：嵌进来的看板自己带卡片的边框，外层别再套一层 */
+.sp-plan .kb-root{padding:0;height:auto;min-height:0;background:transparent;border:0}
 /* 项目空间·笔记页：整页不滚，右栏预览撑满剩余高度（原先写死 560/760 上限） */
 .main.sp-fill{display:flex;flex-direction:column;overflow:hidden}
 .main.sp-fill>.card,.main.sp-fill>.sp-tabs{flex:0 0 auto;margin-bottom:0}
@@ -1526,8 +1526,9 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 /* ---------- 项目笔记：左分类栏 + 右笔记列表（方案A） ---------- */
 .md-dashboard.pn{padding:16px 18px;display:flex;flex-direction:column;height:100%;min-height:0;box-sizing:border-box}
 .md-dashboard.pn .md-dash-head{margin-bottom:12px;flex:0 0 auto}
+.md-dashboard.pn>#mdDashboardBody{flex:1;min-height:0;display:flex;flex-direction:column}
 .pn-search{max-width:220px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:12.5px;color:var(--fg);outline:none}
-.pn-layout{display:grid;grid-template-columns:250px minmax(0,1fr);gap:14px;flex:1;min-height:0}
+.pn-layout{display:grid;grid-template-columns:250px minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:14px;flex:1;min-height:0}
 .pn-side{background:var(--panel);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;overflow:hidden;min-height:0}
 .pn-side-h{padding:12px 14px 8px;font-size:11px;font-weight:600;letter-spacing:.14em;color:var(--muted);text-transform:uppercase}
 .pn-cats{padding:0 8px 8px;overflow:auto;flex:1;min-height:0}
@@ -1554,11 +1555,8 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .pn-badge.on{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 30%,var(--line));background:color-mix(in srgb,var(--accent) 7%,transparent)}
 .pn-badge:hover{border-color:var(--accent);color:var(--accent)}
 .pn-pane-f{padding:8px 14px;border-top:1px solid var(--line);font-size:11.5px;color:var(--muted);flex:0 0 auto}
-.pn-pane.md-dash-editor,.pn-pane .md-dash-editor{height:auto;flex:1;min-height:0;padding:12px 14px}
+.pn-side-foot{margin-top:auto;padding:6px 8px 8px;border-top:1px solid var(--line)}
+.pn-editor-slot{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--panel)}
 @media(max-width:900px){.pn-layout{grid-template-columns:200px minmax(0,1fr)}}
-.md-dash-editor{display:grid;grid-template-columns:1fr 1fr;gap:14px;height:calc(100vh - 240px);min-height:400px}
-.md-dash-editor textarea{width:100%;height:100%;resize:none;box-sizing:border-box;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:18px;font:14px/1.7 ui-monospace,Consolas,monospace}
-.md-dash-editor article{overflow:auto;border:1px solid var(--line);border-radius:8px;padding:18px;background:var(--panel)}
-@media(max-width:800px){.md-dash-editor{grid-template-columns:1fr;height:auto}.md-dash-editor textarea,.md-dash-editor article{min-height:320px}}
 .msg-copy{margin-left:auto;background:transparent;color:var(--muted);border:1px solid var(--line);border-radius:5px;padding:2px 7px;cursor:pointer;font-size:11px}
 .msg-copy:hover{color:var(--fg)}

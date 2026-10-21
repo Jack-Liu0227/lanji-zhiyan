@@ -39,6 +39,8 @@ function mdPaintPreview(){ const p=$("mdPreview"); if(p) p.innerHTML = renderMar
 function mdPaint(){
   mdPaintList();
   const note = mdActive();
+  [$("mdTask"), $("btnMdFocus"), $("btnMdNarrow"), $("btnMdFocusOut"), $("btnMdDelete")]
+    .forEach(el => { if(el) el.style.display = ""; });   // 从项目笔记回来时把这几个还原（mdPaintProj 藏过）
   $("mdEmpty").classList.toggle("hidden", !!note);
   $("mdEditorShell").classList.toggle("hidden", !note);
   if(!note) return;
@@ -109,6 +111,7 @@ async function mdNew(title="未命名笔记", content="", focusSource=false){
 }
 async function mdSave(){
   clearTimeout(mdSaveTimer);
+  if(mdProj) return mdSaveProj();
   const note = mdActive(); if(!note) return;
   const title = $("mdNoteTitle").value.trim() || "未命名笔记";
   const content = $("mdSource").value;
@@ -122,6 +125,14 @@ async function mdSave(){
   }catch(e){ $("mdSaveState").textContent = "保存失败"; $("mdSaveState").title = e.message; console.error("笔记自动保存失败:", e); }
 }
 function mdScheduleSave(){
+  if(mdProj){                                        // 项目笔记：同样 650ms 防抖，只是落到项目里的 .md
+    mdProj.title = $("mdNoteTitle").value.trim();
+    mdProj.content = $("mdSource").value;
+    $("mdSaveState").textContent = "未保存";
+    mdPaintPreview();
+    clearTimeout(mdSaveTimer); mdSaveTimer = setTimeout(mdSave, 650);
+    return;
+  }
   const note = mdActive(); if(!note) return;
   note.title = $("mdNoteTitle").value.trim() || "未命名笔记";
   note.content = $("mdSource").value;
@@ -176,7 +187,9 @@ async function mdImport(files){
   if(n) $("mdSaveState").textContent = `已导入 ${n} 篇`;
 }
 async function mdExport(fmt){
-  const note = mdActive(); if(!note) return;
+  const note = mdProj ? {title: $("mdNoteTitle").value.trim() || "未命名笔记", content: $("mdSource").value}
+                      : mdActive();
+  if(!note) return;
   await mdSave();
   if(fmt==="pdf"){                                   // 走浏览器打印 → 另存为 PDF
     const w = window.open("", "_blank");
@@ -544,51 +557,20 @@ const schTaskName = (id)=> (S.tasks||[]).find(t=>t.id===id)?.title || "";
 
 /* ---------------- 项目空间（页头 + 搜索 + 待办 + 文献/easyScholar + 星图 + 笔记选择与预览 + 概览四卡） ---------------- */
 let spTab = "overview", spId = null;
-const SP_TABS = [["overview","概览"],["todos","待办任务"],["papers","文献"],["stars","论文星图"],["notes","笔记"]];
+const SP_TABS = [["overview","概览"],["plan","进度与计划"],["papers","文献"],["stars","论文星图"],["notes","笔记"]];
 let spActiveNoteId = null;
 let spSelectedNoteIds = new Set();
-let spTodoFilter = "ALL";
 const esBadgeCache = new Map();
 
-function spProg(d){
-  const stages = (S.stages||[]).map(s=>s.key);
-  const map = d.stage_map || {};
-  const total = stages.length || 10;
-  const done = stages.filter(k=>map[k] === "done").length;
-  return { total, done, pct: Math.round(done*100/total) };
-}
 function spWhen(iso){ return iso ? fmtDate(iso) : "—"; }
 
 function spBodyHTML(d){
-  const t = d.task||{}, sum = d.summary||{}, p = spProg(d);
+  const t = d.task||{}, sum = d.summary||{};
 
-  // ---------- 1. 待办任务 ----------
-  if(spTab === "todos"){
-    return `<div class="card" style="margin-top:12px">
-      <div class="sch-head">
-        <div><p class="inst-label">PROJECT TASK BOARD</p><h3>${esc(t.title||"项目")} 的待办任务</h3></div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn ghost" id="spTodoImportWf" title="将当前项目未完成的工作流阶段一键导入为待办任务">⚡ 一键导入工作流步骤</button>
-        </div>
-      </div>
-      <div style="display:flex;gap:8px;margin:14px 0 10px;align-items:center;flex-wrap:wrap">
-        <input class="control" id="spTodoTitle" placeholder="添加新任务描述…" style="flex:1;min-width:200px">
-        <select class="control" id="spTodoPriority" style="width:120px">
-          <option value="P1">高优先级 (P1)</option>
-          <option value="P2" selected>中优先级 (P2)</option>
-          <option value="P3">低优先级 (P3)</option>
-        </select>
-        <button class="btn" id="spTodoAdd">＋ 添加任务</button>
-      </div>
-      <div style="display:flex;gap:6px;margin-bottom:12px">
-        <button class="btn ghost ${spTodoFilter==='ALL'?'on':''}" data-sp-todo-flt="ALL">全部</button>
-        <button class="btn ghost ${spTodoFilter==='TODO'?'on':''}" data-sp-todo-flt="TODO">待处理</button>
-        <button class="btn ghost ${spTodoFilter==='IN_PROGRESS'?'on':''}" data-sp-todo-flt="IN_PROGRESS">进行中</button>
-        <button class="btn ghost ${spTodoFilter==='DONE'?'on':''}" data-sp-todo-flt="DONE">已完成</button>
-      </div>
-      <div id="spTodoList" style="display:flex;flex-direction:column;gap:8px;min-height:80px">
-        <div class="hint">正在加载待办任务…</div>
-      </div>
+  // ---------- 1. 进度与计划（嵌入原「科研进度与计划看板」，含十步管道与排期视图） ----------
+  if(spTab === "plan"){
+    return `<div class="card sp-plan" style="margin-top:12px;padding:14px 16px">
+      <div id="spPlan" style="min-height:320px"><div class="hint">正在读取进度…</div></div>
     </div>`;
   }
 
@@ -672,36 +654,36 @@ function spBodyHTML(d){
   const stages = (S.stages||[]).map(s=>({key:s.key, label:s.label, st:(d.stage_map||{})[s.key]||""}));
   const recent = (d.steps||[]).slice(0,6);
   return `
-    <div class="sp-grid3" style="margin-top:12px">
-      <div class="card sp-kpi"><p class="inst-label">PROGRESS</p><strong>${p.pct}%</strong>
-        <p class="sp-kpi-note">${p.done}/${p.total} 步完成</p><div class="sp-bar"><div style="width:${p.pct}%"></div></div></div>
+    <div class="sp-grid2" style="margin-top:12px">
       <div class="card sp-kpi"><p class="inst-label">RESEARCH</p><strong>${sum.papers||0}</strong>
         <p class="sp-kpi-note">项目文献 · 证据 ${sum.evidence||0} 条</p></div>
       <div class="card sp-kpi sp-kpi-text"><p class="inst-label">QUESTION</p><strong>${esc(t.question||"未填研究问题")}</strong></div></div>
-    <div class="sp-grid2" style="margin-top:12px">
-      <div class="card"><div class="sch-head"><div><p class="inst-label">WORKFLOW SNAPSHOT</p><h3>工作流快照</h3></div>
+    <div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">WORKFLOW PIPELINE</p><h3>十步科研流程</h3></div>
         <button class="btn ghost" id="spToFlow">去科研台 →</button></div>
-        ${stages.length ? stages.map(s=>`<div class="sp-row"><span class="sp-dot ${s.st==="done"?"on":(s.st?"run":"")}"></span>
-          <div class="sp-main"><div class="sp-nm">${esc(s.label)}</div>
-          <div class="sp-meta">${s.st==="done"?"已完成":(s.st?"已记录 · "+esc(s.st):"未开始")}</div></div></div>`).join("")
-        : `<div class="hint" style="margin-top:10px">还没有步骤记录。</div>`}
+        <div class="sp-pipe">
+          ${stages.map((s,i)=>`<button class="sp-pipe-cell ${s.st==="done"?"on":(s.st?"run":"")}" data-sp-flow="${esc(s.key)}"
+              title="${esc(s.label)}：${s.st==="done"?"已完成":(s.st?"已记录 · "+esc(s.st):"未开始")}">
+            <b>${String(i+1).padStart(2,"0")}</b><span>${esc(s.label)}</span></button>`).join("")}
+        </div>
         <div class="hint" style="margin-top:8px">最近步骤：${recent.length?esc(recent.map(r=>r.stage).join(" → ")):"—"}</div></div>
+    <div class="sp-grid2" style="margin-top:12px">
       <div class="card"><p class="inst-label">RELATIONSHIPS</p><h3 style="margin:0 0 8px">项目边界</h3>
         <div class="sp-kv"><span>项目位置</span><b>${esc(t.base_dir||"未设置（产出落工作区默认目录）")}</b></div>
         <div class="sp-kv"><span>关键词 / 体系</span><b>${esc(t.material_system||"—")}</b></div>
         <div class="sp-kv"><span>最近更新</span><b>${esc(spWhen(t.updated_at))}</b></div>
         <div class="hint" style="margin-top:10px">这一页只读聚合：不会改动文献、笔记、日程；写操作都在各自页面里。删除项目会连带它的文献、证据、笔记、会话、步骤。</div>
         <div class="pf-actions" style="margin-top:10px"><button class="btn ghost" id="spDel" style="color:var(--err)">删除项目</button></div></div>
-    </div>
-    <div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">STEP LOG</p><h3>步骤记录</h3></div>
+      <div class="card"><div class="sch-head"><div><p class="inst-label">STEP LOG</p><h3>步骤记录</h3></div>
       <span class="pill">${(d.steps||[]).length} 条</span></div>
       ${recent.length?recent.map(r=>`<div class="sp-row"><span class="sp-ic">•</span><div class="sp-main">
         <div class="sp-nm">${esc(r.stage)} · ${esc(r.status)}</div><div class="sp-meta">${esc(r.summary||"")} · ${esc(spWhen(r.created_at))}</div>
-        </div></div>`).join(""):`<div class="hint" style="margin-top:10px">还没有步骤记录。</div>`}</div>`;
+        </div></div>`).join(""):`<div class="hint" style="margin-top:10px">还没有步骤记录。</div>`}</div>
+    </div>`;
 }
 function spBind(d){
   const go = (id, route)=>{ const b=$(id); if(b) b.onclick = ()=>openTab(route); };
   go("spToFlow","workflow"); go("spToLib","library");
+  document.querySelectorAll("[data-sp-flow]").forEach(b=>b.onclick=()=>openTab("workflow"));
   const zb = $("spZoteroBtn"), zbe = $("spZoteroBtnEmpty");
   if(zb) zb.onclick = zotOpen;
   if(zbe) zbe.onclick = zotOpen;
@@ -722,89 +704,10 @@ function spBind(d){
     curTask = null; localStorage.removeItem("rw-task"); await refreshState(false); openTab("tasks");
   };
 
-  // ---------- 待办任务流转 ----------
-  if(spTab === "todos"){
-    const listEl = $("spTodoList");
-    async function loadTodos(){
-      if(!listEl) return;
-      try{
-        const res = await api(`/api/todos?task_id=${encodeURIComponent(curTask)}`);
-        const todos = (res.todos || []).filter(t => spTodoFilter === "ALL" || t.status === spTodoFilter);
-        if(!todos.length){
-          listEl.innerHTML = `<div class="hint" style="padding:16px 0">${spTodoFilter==='ALL'?'暂无待办任务。点击上方输入框快速添加，或点击「一键导入工作流步骤」。':'该分类下暂无任务。'}</div>`;
-          return;
-        }
-        listEl.innerHTML = todos.map(t => `
-          <div class="sp-todo-row">
-            <span class="sp-todo-st ${esc(t.status)}" data-todo-id="${esc(t.id)}" title="点击切换状态：待处理 → 进行中 → 已完成">
-              ${t.status === 'DONE' ? '✓ 已完成' : t.status === 'IN_PROGRESS' ? '⏳ 进行中' : '○ 待处理'}
-            </span>
-            <span class="sp-todo-pri ${esc(t.priority)}">${esc(t.priority)}</span>
-            ${t.stage ? `<span class="pill" style="font-size:11px">[${esc(t.stage)}]</span>` : ''}
-            <div style="flex:1;min-width:0">
-              <span style="font-size:13.5px;${t.status==='DONE'?'text-decoration:line-through;color:var(--muted)':''}">${esc(t.title)}</span>
-              ${t.due_date ? `<span class="hint" style="margin-left:8px;font-size:11px">截止：${esc(t.due_date)}</span>` : ''}
-            </div>
-            <button class="btn ghost" data-todo-del="${esc(t.id)}" title="删除此任务" style="padding:2px 7px;font-size:12px;color:var(--muted)">🗑</button>
-          </div>
-        `).join("");
-
-        listEl.querySelectorAll("[data-todo-id]").forEach(el => {
-          el.onclick = async () => {
-            await api("/api/todos/toggle", { id: el.dataset.todoId });
-            await loadTodos();
-          };
-        });
-        listEl.querySelectorAll("[data-todo-del]").forEach(btn => {
-          btn.onclick = async () => {
-            if(!await uiConfirm("确定删除该任务吗？")) return;
-            await api("/api/todos/delete", { id: btn.dataset.todoDel });
-            await loadTodos();
-          };
-        });
-      }catch(e){
-        if(listEl) listEl.innerHTML = `<div class="msg error">读取任务失败：${esc(e.message)}</div>`;
-      }
-    }
-    loadTodos();
-
-    const addBtn = $("spTodoAdd"), titleInp = $("spTodoTitle"), priSel = $("spTodoPriority");
-    if(addBtn && titleInp){
-      addBtn.onclick = async () => {
-        const title = titleInp.value.trim();
-        if(!title) return;
-        addBtn.disabled = true;
-        try{
-          await api("/api/todos/add", { task_id: curTask, title, priority: priSel ? priSel.value : "P2" });
-          titleInp.value = "";
-          await loadTodos();
-        }catch(e){ uiNotify("添加任务失败：" + e.message); }
-        finally{ addBtn.disabled = false; }
-      };
-      titleInp.onkeydown = (e) => { if(e.key === "Enter") addBtn.click(); };
-    }
-
-    const impWfBtn = $("spTodoImportWf");
-    if(impWfBtn){
-      impWfBtn.onclick = async () => {
-        impWfBtn.disabled = true;
-        try{
-          const res = await api("/api/todos/import_workflow", { task_id: curTask });
-          toast(`已根据工作流阶段同步创建 ${res.created} 条待办任务`, "success");
-          await loadTodos();
-        }catch(e){ uiNotify("导入失败：" + e.message); }
-        finally{ impWfBtn.disabled = false; }
-      };
-    }
-
-    document.querySelectorAll("[data-sp-todo-flt]").forEach(b => {
-      b.onclick = () => {
-        spTodoFilter = b.dataset.spTodoFlt;
-        document.querySelectorAll("[data-sp-todo-flt]").forEach(x => x.classList.remove("on"));
-        b.classList.add("on");
-        loadTodos();
-      };
-    });
+  // ---------- 进度与计划：直接嵌看板（四列拖拽 / 十步管道 / 排期） ----------
+  if(spTab === "plan"){
+    const host = $("spPlan");
+    if(host && window.renderKanban) window.renderKanban(host, {embedded:true});
   }
 
   // ---------- easyScholar 期刊等级标签（文献页） ----------
@@ -1113,43 +1016,163 @@ async function renderSpace(m){
   }
 }
 
-let mdDashProject = "", mdDashGroup = "", mdDashPath = "";
+let mdDashProject = "", mdDashGroup = "", mdDashPath = "", mdDashQuery = "", mdDashMap = null;
+let mdProj = null, mdDraft = false;      // 项目笔记的编辑状态：{pid, path, title, content}；path 空 = 还没落盘的新笔记
+
+/* 分类色点：精读用主色，未分类用警示色，其余按名字稳定散到莫兰迪色板（同一分类每次颜色一致） */
+const PN_COLORS = ["#176b87","#8e9aa6","#7d94a8","#8aa17f","#a8927c","#9a8fa8","#a8888a"];
+function pnColor(name){
+  if(name === "文献精读笔记") return "var(--accent)";
+  if(name === "未分类") return "var(--warn)";
+  let h = 0; for(const c of String(name)) h = (h * 31 + c.charCodeAt(0)) % 997;
+  return PN_COLORS[h % PN_COLORS.length];
+}
+/* 这条精读笔记挂到谱系图的哪个节点上：先认 ref（文件名/标题都试），再拿标题跟节点 label 互包含。
+   命中就问边表要它的上位小节名 —— 「已挂 2.1 筛选」比「已挂」有用。 */
+function pnMapHit(file){
+  const g = mdDashMap; if(!g || !(g.nodes||[]).length) return null;
+  const norm = s => String(s||"").replace(/[\s·:：,，.。()（）\[\]【】\-—_]/g,"").toLowerCase();
+  const stem = String(file.path||"").split("/").pop().replace(/\.md$/i,"");
+  const title = norm(file.title), id = norm(stem);
+  for(const n of g.nodes){
+    if(n.type === "section") continue;
+    const ref = norm(String(n.ref||"").split("/").pop().replace(/\.md$/i,""));
+    const lbl = norm(n.label);
+    if(!((ref && (ref === id || ref === title)) || (lbl.length >= 4 && title && (title.includes(lbl) || lbl.includes(title))))) continue;
+    const sec = (g.edges||[]).find(e => e.to === n.id && (g.nodes.find(x => x.id === e.from) || {}).type === "section");
+    const host = sec && g.nodes.find(x => x.id === sec.from);
+    return { label: n.label, section: host ? host.label : "" };
+  }
+  return null;
+}
+function pnJumpMap(){
+  if(mdDashProject && curTask !== mdDashProject){ curTask = mdDashProject; localStorage.setItem("rw-task", curTask); }
+  wfStep = "map"; localStorage.setItem("rw-wf-step", wfStep);   // 谱系图就是「梳理精读」那一步
+  openTab("workflow");
+}
+function pnSideHTML(groups, cur){
+  return `<aside class="pn-side">
+    <div class="pn-side-h">分类 · 按流程</div>
+    <div class="pn-cats">${groups.map(g => `<button class="pn-cat${g.name===cur?" on":""}${g.count?"":" zero"}${g.name==="未分类"?" legacy":""}" data-pn-cat="${esc(g.name)}">
+      <i class="pn-dot" style="background:${pnColor(g.name)}"></i><span class="pn-cat-n">${esc(g.name)}</span><span class="pn-n">${g.count}</span></button>`).join("")}</div>
+    <div class="pn-side-foot"><button class="pn-cat" data-pn-legacy="1" title="存在程序文件夹里的独立笔记（Zotero 导入也在这里）">
+      <i class="pn-dot" style="background:var(--muted)"></i><span class="pn-cat-n">独立笔记</span><span class="pn-n">${mdNotes.length}</span></button></div></aside>`;
+}
+function pnBindCats(host){
+  host.querySelectorAll("[data-pn-cat]").forEach(b => b.onclick = () => { mdDashGroup = b.dataset.pnCat; mdDashPath = ""; mdProj = null; mdDashLoad(); });
+  host.querySelectorAll("[data-pn-legacy]").forEach(b => b.onclick = pnOpenLegacy);
+}
+/* 「独立笔记」整页（存程序文件夹，和项目笔记两套）：编辑器壳搬回 .md-note-main 再显示整页。
+   就地搬 DOM —— 同一套工具栏/导出/分栏代码，两种保存目标。 */
+function mdMountEditor(host){ const sh = $("mdEditorShell"); if(sh && host && sh.parentElement !== host) host.appendChild(sh); }
+function pnOpenLegacy(){
+  mdProj = null;
+  mdMountEditor(document.querySelector("#mdView .md-note-main"));
+  $("mdDashboard").style.display = "none";
+  $("mdView").style.display = "";      // 交回 CSS 的 grid；原来写死 flex 会盖掉 grid，编辑器就铺不满
+  mdPaint();
+}
+async function mdSaveProj(){
+  const title = $("mdNoteTitle").value.trim() || "未命名笔记";
+  let content = $("mdSource").value;
+  if(!mdProj.path){                                    // 第一次保存才定文件名：标题即文件名
+    const safe = title.replace(/[\\/:*?"<>|]/g,"_").slice(0,100);
+    mdProj.path = `笔记/${mdDashGroup}/${safe}.md`;
+    if(!/^#\s/.test(content)) content = `# ${title}\n\n` + content;
+  }else if(/^#\s/.test(content)){                      // 已有文件：改标题只改正文 H1，文件名不动（谱系图按它认笔记）
+    content = content.replace(/^#\s.*$/m, `# ${title}`);
+  }
+  if(content !== $("mdSource").value) $("mdSource").value = content;
+  $("mdSaveState").textContent = "保存中…";
+  try{
+    await api("/api/project/note/save", {project_id: mdProj.pid, path: mdProj.path, content});
+    mdProj.title = title;
+    $("mdSaveState").textContent = "已保存";
+  }catch(e){ $("mdSaveState").textContent = "保存失败"; $("mdSaveState").title = e.message; }
+}
+function mdPaintProj(){
+  const sh = $("mdEditorShell"); if(!sh) return;
+  sh.classList.remove("hidden");
+  $("mdNoteTitle").value = mdProj.title || "";
+  $("mdSource").value = mdProj.content || "";
+  mdPaintPreview();
+  $("mdSaveState").textContent = "";
+  [$("mdTask"), $("btnMdFocus"), $("btnMdNarrow"), $("btnMdFocusOut"), $("btnMdDelete")]
+    .forEach(el => { if(el) el.style.display = "none"; });     // 项目笔记里这几样没意义（无绑定下拉/专注靠整页/没有删文件接口）
+}
 async function mdDashLoad(){
   const host = $("mdDashboardBody"); if(!host) return;
   if(!mdDashProject){ host.innerHTML = `<div class="hint">选择项目后浏览该项目中的 Markdown 笔记。</div>`; return; }
-  host.innerHTML = `<div class="hint">正在读取项目笔记…</div>`;
   try{
     const data = await api(`/api/project/notes?project_id=${encodeURIComponent(mdDashProject)}`);
-    const group = (data.groups||[]).find(g=>g.name===mdDashGroup);
-    if(!group){
-      host.innerHTML = `<div class="md-dash-grid">${data.groups.map(g=>`<button class="card md-dash-card" data-md-group="${esc(g.name)}"><b>${esc(g.name)}</b><span>${g.count} 篇</span><small>${esc(g.description)}</small></button>`).join("")}</div>`;
-      host.querySelectorAll("[data-md-group]").forEach(b=>b.onclick=()=>{ mdDashGroup=b.dataset.mdGroup; mdDashPath=""; mdDashLoad(); });
+    const rank = g => g.name === "文献精读笔记" ? -1 : g.name === "未分类" ? 1 : 0;   // 精读钉最上，未分类沉底
+    const groups = (data.groups||[]).slice().sort((a,b) => rank(a) - rank(b));
+    if(!mdDashMap || mdDashMap.pid !== mdDashProject){
+      mdDashMap = { pid: mdDashProject, nodes: [], edges: [] };
+      api(`/api/map/state?id=${encodeURIComponent(mdDashProject)}`)
+        .then(d => { if(mdDashMap && mdDashMap.pid === mdDashProject){ mdDashMap.nodes = d.nodes||[]; mdDashMap.edges = d.edges||[]; if(mdDashGroup === "文献精读笔记" && !mdProj) mdDashLoad(); } })
+        .catch(()=>{});
+    }
+    const cur = groups.find(g => g.name === mdDashGroup) || groups[0];
+    if(!cur){ host.innerHTML = `<div class="hint">这个项目还没有笔记分类。</div>`; return; }
+    mdDashGroup = cur.name;
+    if(mdDashPath || mdDraft){
+      if(!mdProj || mdProj.pid !== mdDashProject || mdProj.path !== mdDashPath){
+        const file = mdDashPath
+          ? await api(`/api/project/note?project_id=${encodeURIComponent(mdDashProject)}&path=${encodeURIComponent(mdDashPath)}`)
+          : {title: "", content: ""};
+        mdProj = {pid: mdDashProject, path: mdDashPath, title: file.title || "", content: file.content || ""};
+        mdDraft = !mdDashPath;
+      }
+      const hit = cur.name === "文献精读笔记" && mdProj.path ? pnMapHit({path: mdProj.path, title: mdProj.title}) : null;
+      host.innerHTML = `<div class="pn-layout">${pnSideHTML(groups, cur.name)}<section class="pn-pane">
+        <div class="pn-pane-h"><button class="btn ghost" id="mdDashBackFiles">← ${esc(cur.name)}</button><b>${esc(mdProj.title || "新笔记")}</b>
+          ${hit?`<span class="pn-badge on">已挂 ${esc(hit.section||hit.label)}</span>`:""}
+          <span style="flex:1"></span><button class="btn" id="mdDashSave">保存</button></div>
+        <div class="pn-editor-slot" id="pnEditorSlot"></div></section></div>`;
+      pnBindCats(host);
+      $("mdDashBackFiles").onclick = async () => {
+        if(mdProj) await mdSaveProj();                  // 退出前先落盘，别丢正在写的
+        mdProj = null; mdDraft = false; mdDashPath = ""; mdDashLoad();
+      };
+      $("mdDashSave").onclick = () => mdSaveProj();
+      mdMountEditor($("pnEditorSlot"));
+      mdPaintProj();
+      if(!mdProj.path) setTimeout(()=> $("mdNoteTitle")?.focus(), 40);
       return;
     }
-    if(mdDashPath){
-      const file = await api(`/api/project/note?project_id=${encodeURIComponent(mdDashProject)}&path=${encodeURIComponent(mdDashPath)}`);
-      host.innerHTML = `<div class="md-dash-head"><button class="btn ghost" id="mdDashBackFiles">← ${esc(group.name)}</button><b>${esc(file.title)}</b><span id="mdDashState" class="hint"></span><button class="btn" id="mdDashSave">保存</button></div><div class="md-dash-editor"><textarea id="mdDashSource" spellcheck="true"></textarea><article id="mdDashPreview" class="md-render"></article></div>`;
-      $("mdDashSource").value=file.content; $("mdDashPreview").innerHTML=renderMarkdown(file.content);
-      $("mdDashSource").oninput=()=>{ $("mdDashState").textContent="未保存"; $("mdDashPreview").innerHTML=renderMarkdown($("mdDashSource").value); };
-      $("mdDashBackFiles").onclick=()=>{ mdDashPath=""; mdDashLoad(); };
-      $("mdDashSave").onclick=async()=>{ try{ await api("/api/project/note/save",{project_id:mdDashProject,path:mdDashPath,content:$("mdDashSource").value}); $("mdDashState").textContent="已保存"; }catch(e){ uiNotify(e.message); } };
-      return;
-    }
-    host.innerHTML = `<div class="md-dash-head"><button class="btn ghost" id="mdDashBackGroups">← 分类</button><b>${esc(group.name)} · ${group.count} 篇</b><button class="btn" id="mdDashNew">＋ 新建</button></div><div class="md-dash-files">${group.files.length?group.files.map(f=>`<button class="md-note-item" data-md-file="${esc(f.path)}">${esc(f.title)}<small>${new Date(f.updated_at*1000).toLocaleDateString()}</small></button>`).join(""):`<div class="hint">这个分类还没有笔记</div>`}</div>`;
-    $("mdDashBackGroups").onclick=()=>{ mdDashGroup=""; mdDashLoad(); };
-    host.querySelectorAll("[data-md-file]").forEach(b=>b.onclick=()=>{ mdDashPath=b.dataset.mdFile; mdDashLoad(); });
-    $("mdDashNew").onclick=async()=>{
-      if(group.name==="未分类") return uiNotify("请在具体分类中创建笔记");
-      const name = (await uiPrompt("新笔记标题"))?.trim(); if(!name) return;
-      const safe = name.replace(/[\\/:*?\"<>|]/g,"_").slice(0,100);
-      const path = `笔记/${group.name}/${safe}.md`;
-      try{ await api("/api/project/note/save",{project_id:mdDashProject,path,content:`# ${name}\n\n`}); mdDashPath=path; mdDashLoad(); }catch(e){ uiNotify(e.message); }
+    mdMountEditor(document.querySelector("#mdView .md-note-main"));   // 离开编辑态：编辑器壳先放回独立笔记页，否则跟着 innerHTML 一起被抹掉
+    const q = mdDashQuery.trim().toLowerCase();
+    const files = (cur.files||[]).filter(f => !q || String(f.title||"").toLowerCase().includes(q));
+    const readGroup = cur.name === "文献精读笔记";
+    host.innerHTML = `<div class="pn-layout">${pnSideHTML(groups, cur.name)}<section class="pn-pane">
+      <div class="pn-pane-h"><b>${esc(cur.name)}</b><span class="pn-sub">· ${cur.count} 篇${cur.description?` · ${esc(cur.description)}`:""}</span>
+        ${readGroup?`<span class="pn-auto">精读完成自动归档到这里</span>`:""}
+        <span style="flex:1"></span>${readGroup?`<button class="btn ghost" id="pnGoMap">看谱系图 →</button>`:""}${cur.name==="未分类"?"":`<button class="btn" id="mdDashNew">＋ 新建</button>`}</div>
+      <div class="pn-rows">${files.length ? files.map(f => {
+        const hit = readGroup ? pnMapHit(f) : null;
+        return `<div class="pn-row" data-pn-file="${esc(f.path)}">
+          <div class="pn-rt" title="${esc(f.title)}">${esc(f.title)}</div>
+          <div class="pn-rm"><span>${new Date(f.updated_at*1000).toLocaleDateString()}</span>
+            ${readGroup ? (hit ? `<span class="pn-badge on" data-pn-map="1" title="这条已挂进谱系图，点它去「梳理精读」">已挂 ${esc(hit.section||hit.label)}</span>`
+                                : `<span class="pn-badge" data-pn-map="1" title="还没挂进谱系图，点它去「梳理精读」挂上">未挂谱系</span>`) : ""}</div></div>`;
+      }).join("") : `<div class="hint">${q?"没有匹配的笔记":(cur.name==="未分类"?"这里没有散落的笔记了":"这个分类还没有笔记")}</div>`}</div>
+      <div class="pn-pane-f">共 ${cur.count} 篇${files.length !== cur.count?` · 筛出 ${files.length} 篇`:""}${readGroup?" · 精读出的 .md 落在 笔记/文献精读笔记/":""}</div></section></div>`;
+    pnBindCats(host);
+    host.querySelectorAll("[data-pn-file]").forEach(b => b.onclick = (e) => {
+      if(e.target.closest("[data-pn-map]")) return pnJumpMap();     // 点徽标=跳谱系图，点别处=开笔记
+      mdDashPath = b.dataset.pnFile; mdDashLoad();
+    });
+    const gm = $("pnGoMap"); if(gm) gm.onclick = pnJumpMap;
+    const nb = $("mdDashNew"); if(nb) nb.onclick = () => {
+      mdProj = {pid: mdDashProject, path: "", title: "", content: ""};   // 标题在编辑器顶部输入，第一次保存才定文件名
+      mdDraft = true; mdDashPath = ""; mdDashLoad();
     };
   }catch(e){ host.innerHTML=`<div class="msg error">${esc(e.message)}</div>`; }
 }
 async function renderNotes(m){
   m.style.padding = "";
-  m.innerHTML = `<div id="mdDashboard" class="md-dashboard"><div class="md-dash-head"><h2>项目笔记</h2><select id="mdDashProject"><option value="">选择项目</option>${(S.tasks||[]).map(t=>`<option value="${esc(t.id)}" ${t.id===(mdDashProject||curTask)?"selected":""}>${esc(t.title)}</option>`).join("")}</select><button class="btn ghost" id="mdLegacyOpen">独立笔记 / Zotero 导入</button></div><div id="mdDashboardBody"></div></div><div class="md-view" id="mdView" style="display:none">
+  m.innerHTML = `<div id="mdDashboard" class="md-dashboard pn"><div class="md-dash-head"><h2>项目笔记</h2><select id="mdDashProject"><option value="">选择项目</option>${(S.tasks||[]).map(t=>`<option value="${esc(t.id)}" ${t.id===(mdDashProject||curTask)?"selected":""}>${esc(t.title)}</option>`).join("")}</select><input id="mdDashSearch" class="pn-search" type="search" placeholder="🔍 搜索标题"></div><div id="mdDashboardBody"></div></div><div class="md-view" id="mdView" style="display:none">
     <aside class="md-note-side">
       <div class="md-note-side-head">
         <button class="btn" id="btnMdNew">＋ 新建</button>
@@ -1209,8 +1232,9 @@ async function renderNotes(m){
   mdBind(m);
   if(!mdLoaded) await mdLoad(); else mdPaint();
   mdDashProject = $("mdDashProject").value;
-  $("mdDashProject").onchange=e=>{ mdDashProject=e.target.value; mdDashGroup=""; mdDashPath=""; mdDashLoad(); };
-  $("mdLegacyOpen").onclick=()=>{ $("mdDashboard").style.display="none"; $("mdView").style.display="flex"; };
+  $("mdDashProject").onchange=e=>{ mdDashProject=e.target.value; mdDashGroup=""; mdDashPath=""; mdDashMap=null; mdDashLoad(); };
+  let pnT = 0;
+  $("mdDashSearch").oninput = e => { mdDashQuery = e.target.value; clearTimeout(pnT); pnT = setTimeout(()=>{ mdDashPath=""; mdDashLoad(); }, 180); };
   mdDashLoad();
   mdFocus(localStorage.getItem("rw-md-focus")==="true", true);     // 上次在专注模式就还在专注模式
   if(mdNarrowOn){ $("mdView")?.classList.add("narrow"); document.body.classList.add("md-narrow"); }

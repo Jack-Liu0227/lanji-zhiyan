@@ -443,3 +443,21 @@ server.py 能 import、真起 8765 跑通；浏览器实测 app.css 解析出 12
 
 - 只改 `apps/desktop/web/` → 窗口里 F5 即可。
 - 改了 `.py`（team.py / workflow.py）→ **关窗重开**，否则团队页 leader 还是老名字。
+
+## 2026-10-21 进度看板并入项目空间（左侧入口下线）
+
+「科研进度与计划看板」与项目空间各有一套进度/待办，数值口径还不一致。看板的功能更全（KPI、十步管道、排期、拖拽流转、任务指派），所以保留看板当渲染引擎，把它挂进项目空间，删掉项目空间里那套老待办列表。
+
+| 位置 | 改动 |
+| --- | --- |
+| `app-core.js` | 左侧 `看板` 入口与 `TITLES.kanban` 删除 |
+| `chat-views.js` | 删除 `r==="kanban"` 路由分支 |
+| `kanban-view.js` | 新增嵌入模式 `renderKanban(el,{embedded:true})`：不画大标题与项目下拉（外面已有），其余原样；记住 `kbHost`，模态框保存后重画回这块容器（原先抓 `#main`，嵌入后会把整页换成一块看板） |
+| `notes-and-settings.js` | `待办任务` tab → `进度与计划`，内容改为嵌入看板；删除老待办列表（含 `spTodo*` 约 3.7KB 绑定代码与 `spTodoFilter`）；概览的「工作流快照」列表换成十步管道格子（点格子跳科研台），删掉与管道重复的 PROGRESS 百分比卡（含 `spProg()`） |
+| `app.css` | 新增 `.sp-pipe / .sp-pipe-cell`（绿=已完成、青=已记录、灰=未开始；窄屏 5+5 折行）、`.sp-plan .kb-root` 去重边框；删除已无引用的 `.sp-grid3`、`.sp-todo-*` 共 11 条规则 |
+
+### 验证
+
+- `342 tests OK (skipped=12)`；`node --check` 全部通过。
+- 浏览器实测：左侧无「看板」；项目空间 5 个 tab；「进度与计划」内 4 列看板可新建/流转/删除（`/api/todos/*` 走通），页面骨架不被替换；概览管道 10 格与 `steps` 表逐项一致（材料信息学综述 5/10，✓✓✓···✓··✓），点格子进科研台。
+- 后端一行未改：`/api/kanban/overview`、`/api/todos/*` 继续服务嵌入后的看板。
