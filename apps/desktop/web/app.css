@@ -1121,7 +1121,10 @@ body.md-narrow .wctl button:hover { background: #eee; }
 .cv-ren:hover{color:var(--accent);border-color:var(--accent)}
 .cv-sel{height:24px;max-width:26ch;border:1px solid var(--line);border-radius:6px;background:var(--panel2);
   color:var(--fg);font-size:12px;padding:0 6px}
-.cv-stage{flex:1;min-height:0;display:flex;flex-direction:column;overflow:auto;background:var(--panel2)}
+.cv-stage{flex:1;min-height:0;display:flex;flex-direction:column;overflow:auto;background:#fff}
+.cv-empty{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;color:#8a8f98;font-size:13.5px;line-height:2;background:#fff}
+.cv-empty .cv-ph{font-size:15px;color:#6b7280}
+.cv-empty .cv-ph span{display:block;margin-top:8px;font-size:12.5px;color:#9aa0a8;line-height:1.9}
 .cv-img{max-width:100%;max-height:100%;margin:auto;object-fit:contain;background:#fff}
 .cv-card{padding:18px 20px;color:var(--muted);font-size:13px;line-height:1.9}
 .cv-card b{color:var(--fg);display:block;margin-bottom:6px}

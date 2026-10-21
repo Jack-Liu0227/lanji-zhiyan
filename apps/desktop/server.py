@@ -61,7 +61,7 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       outline_read, outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
                       map_seed, project_outs, map_tidy, open_write,
                       cite_read, cite_add, conv_files, conv_run, conv_compile, conv_open,
-                      fig_list, fig_rename, conv_preview,
+                      fig_list, fig_rename, conv_preview, open_convert,
                       en_state, en_run, _safe_path, step_plan,
                       stage_download_selected, stage_zotero_import, test_provider,
                       deepread_kick, deepread_state, deepread_stop)
@@ -1604,7 +1604,8 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/conv/run":                 # 一键格式转换（latex 会编译出 PDF）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(conv_run(db, (data.get("task_id") or "").strip(),
-                                                   data.get("format") or "docx", data.get("source") or ""))
+                                                   data.get("format") or "docx", data.get("source") or "",
+                                                   data.get("template") or ""))
                 if path == "/api/doc/seed":                # 起稿（确认大纲=模板；撰写=按框架搭骨架）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(doc_seed(db, (data.get("task_id") or "").strip(),
@@ -1668,6 +1669,11 @@ class Handler(BaseHTTPRequestHandler):
                     if step == "map":                     # 交付谱系图 → 文章撰写接手，先说一句开场白
                         try:
                             res["write_opening"] = open_write(db, tid)
+                        except Exception:
+                            pass
+                    if step == "review":                  # 交付审查 → 格式转换先问三件事（图 / 成品 / 范本）
+                        try:
+                            res["convert_opening"] = open_convert(db, tid)
                         except Exception:
                             pass
                     return self._json(res)

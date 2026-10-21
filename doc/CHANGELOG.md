@@ -2,6 +2,16 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 2026-10-22（格式转换：未编译态、期刊模板库、交付后三问；UI 三版待选）
+
+**1. 右栏未编译态**：`.cv-stage` 底色改纯白，中间一行「还未编译 / 在右边跟格式助手说要什么（PDF / Word），或点上面『📄 转 PDF / 📄 Word』」。
+
+**2. 期刊模板库 `TEMPLATES`**（`workflow_converters.py`）：plain（article+ctex，默认）/ elsevier（elsarticle）/ ieee（IEEEtran）/ revtex（revtex4-2），每项带 `repo` 指向公开模板库（bamos/latex-templates、jsk-report-template/elsarticle-template、quantixed/manuscript-templates、ZhenhongDu 光学类仓库）。`md_to_tex(md, title, template=…)` 按模板出前言；`conv_run(..., template=…)` 透传，**编不过自动退回 plain 并在返回值里报 `template_fallback`**（不静默失败）。四种模板实测都能编出 PDF（elsevier 127 KB / ieee 119 KB）。顺带支持 `format=doc`（docx → Word 97 .doc，本机 LibreOffice）。
+
+**3. 审查交付 → 格式转换先问三件事**：`open_convert()` 在 step=review 交付时往 convert 对话写一条开场白 —— ①图：正文 N 处 [图位] vs「图」文件夹 M 张，对不对；②成品：docx / doc / pdf；③范本：四个模板（带说明）还是上传自己的 .docx/.tex。只写一次。
+
+**4. UI 三版待他挑**：`Desktop\科研agent\格式转换_三版.html`（?v=A|B|C）+ 三张 PNG。A=左胶片+右白纸浮动工具条，B=顶部三步引导+缩略图网格，C=图库列表+三问问询卡。选定后按那版落地前端的模板/格式选择。
+
 ## 2026-10-21（晚 4：项目「图」文件夹 + 格式转换改成「左图 / 右成品」两栏 + 撰写落图位图题）
 
 **1. 项目文件夹多一个「图」**：`PROJ_DIRS` 加 `图`（新建项目就有；老项目首次打开格式转换时 `fig_dir()` 自动补建）。放论文最终要用的成图（PNG/SVG/JPG/PDF），文件名就是图题里要引用的名字。

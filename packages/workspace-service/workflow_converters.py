@@ -130,23 +130,51 @@ def cite_add(db: "WorkflowDB", task_id: str, args: dict[str, Any]) -> dict[str, 
 
 
 # ---------------- 格式转换（照 Overleaf：文件 / 代码 / 编译 → PDF） ----------------
-CONV_FORMATS = {"docx": "Word (.docx)", "html": "HTML", "md": "Markdown", "pdf": "PDF（正文.md → PDF）",
+# 期刊/模板库：优先本机 MiKTeX 已装的 class；GitHub 只作为「模板从哪来」的出处
+# 公开模板库：bamos/latex-templates、quantixed/manuscript-templates、jsk-report-template/elsarticle-template、
+#            ZhenhongDu/Templates-for-submission-to-optical-journals（光学类）
+TEMPLATES: dict[str, dict[str, str]] = {
+    "plain":    {"name": "本机通用（article + ctex）", "cls": "article", "repo": "",
+                 "note": "不挑期刊时的默认：中文友好、图表编号规矩"},
+    "elsevier": {"name": "Elsevier（elsarticle）", "cls": "elsarticle",
+                 "repo": "https://github.com/jsk-report-template/elsarticle-template",
+                 "note": "Elsevier 系期刊（Optics & Laser Technology、Applied Surface Science 等）"},
+    "ieee":     {"name": "IEEE（IEEEtran）", "cls": "IEEEtran",
+                 "repo": "https://github.com/bamos/latex-templates",
+                 "note": "IEEE 期刊/会议，双栏"},
+    "revtex":   {"name": "APS 物理类（revtex4-2）", "cls": "revtex4-2",
+                 "repo": "https://github.com/bamos/latex-templates",
+                 "note": "PRB / PRApplied 这类 APS 期刊"},
+}
+
+_TEX_HEAD = {
+    "plain": [r"\documentclass[11pt,a4paper]{article}",
+              r"\usepackage{ctex}",
+              r"\setlength{\textwidth}{16cm}",
+              r"\setlength{\oddsidemargin}{0pt}",
+              r"\setlength{\evensidemargin}{0pt}"],
+    "elsevier": [r"\documentclass[preprint,12pt]{elsarticle}",
+                 r"\usepackage{ctex}"],
+    "ieee": [r"\documentclass[journal]{IEEEtran}",
+             r"\usepackage{ctex}"],
+    "revtex": [r"\documentclass[aps,prb,reprint]{revtex4-2}",
+               r"\usepackage{ctex}"],
+}
+
+
+CONV_FORMATS = {"docx": "Word (.docx)", "doc": "Word 97-2003 (.doc)", "html": "HTML", "md": "Markdown", "pdf": "PDF（正文.md → PDF）",
                 "latex": "LaTeX (.tex → PDF，本机 MiKTeX)", "tex": "现成 .tex → PDF（本机 MiKTeX）"}
 
 
-def md_to_tex(md: str, title: str) -> str:
+def md_to_tex(md: str, title: str, template: str = "plain") -> str:
     """极简 markdown → tex（标题/段落/列表够用）。真要投稿的排版还是走组内 revtex 规范。
     注意：这里**不能**用 % 或 str.format 打模板（LaTeX 自带 {} 和 % 注释）。"""
-    head = [r"\documentclass[11pt,a4paper]{article}",
-            r"\usepackage{ctex}          % 中文：必须 xelatex 编译（本机只装了 ctex/revtex，别引别的宏包）",
-            r"\setlength{\textwidth}{16cm}",
-            r"\setlength{\oddsidemargin}{0pt}",
-            r"\setlength{\evensidemargin}{0pt}",
-            r"\title{" + tex_escape(title) + "}",
-            r"\date{\today}",
-            r"\begin{document}",
-            r"\maketitle",
-            ""]
+    head = list(_TEX_HEAD.get(template) or _TEX_HEAD["plain"]) + [
+        r"\title{" + tex_escape(title) + r"}",
+        r"\date{\today}",
+        r"\begin{document}",
+        r"\maketitle",
+        ""]
     body: list[str] = []
     bullets: list[str] = []
     for line in (md or "").splitlines():
@@ -208,7 +236,7 @@ def _newest_tex(db: "WorkflowDB", task_id: str) -> Path | None:
     return cands[0] if cands else None
 
 
-def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "") -> dict[str, Any]:
+def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", template: str = "") -> dict[str, Any]:
     """一键格式转换：以正文.md（或指定文件）为源，导出到「最终产物」。
 
     pdf = 正文 → tex → PDF；latex = 同上但留一份 .tex；tex = 直接编手边那份现成 .tex
@@ -248,34 +276,59 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "") -> dict
     out = folder / f"{safe}.{'pdf' if fmt == 'latex' else fmt}"
     if fmt == "md":
         out.write_text(md, encoding="utf-8")
-    elif fmt in ("docx", "html"):
+    elif fmt in ("docx", "html", "doc"):
         from workflow_stages import stage_convert      # 反向 import 会成环，用时再拿
-        stage_convert(db, task_id, md, fmt, safe)
-        out = folder / f"{safe}.{fmt}"
+        base_fmt = "docx" if fmt == "doc" else fmt
+        stage_convert(db, task_id, md, base_fmt, safe)
+        out = folder / f"{safe}.{base_fmt}"
+        if fmt == "doc":                              # 老版 Word 97：docx → doc（本机 LibreOffice）
+            target = folder / f"{safe}.doc"
+            env = lowbox.sandbox_env(fileguard.clean_env(), paths.LOWTMP)
+            proc = lowbox.run([_soffice(), "--headless", "--norestore", "--convert-to", "doc:MS Word 97",
+                               "--outdir", str(folder),
+                               f"-env:UserInstallation=file:///{paths.LOWTMP.as_posix()}/lo", str(out)],
+                              env=env, timeout=180)
+            if proc.returncode != 0 or not target.is_file():
+                raise RuntimeError("转 .doc 失败（本机 LibreOffice）")
+            out = target
     elif fmt == "latex":
         build = folder / "_tex"
         build.mkdir(parents=True, exist_ok=True)
-        tex_path = build / f"{safe}.tex"
-        tex_path.write_text(md_to_tex(md, title), encoding="utf-8", newline="\n")   # 必须 LF：CR 会让 TeX 报 ^^M
-        made = build / f"{safe}.pdf"
-        done = host_compile(tex_path)
-        if done and not done.get("pdf") and done.get("error"):
-            raise RuntimeError(done["error"])
-        if done and done.get("pdf"):
-            made = Path(done["pdf"])                  # 宿主编出来的就在原位
-        else:
+        tpl = template if template in TEMPLATES else "plain"
+
+        def _build(name: str) -> Path:
+            tex_path = build / f"{safe}.tex"
+            tex_path.write_text(md_to_tex(md, title, template=name), encoding="utf-8", newline="\n")
+            done = host_compile(tex_path)
+            if done and not done.get("pdf") and done.get("error"):
+                raise RuntimeError(done["error"])
+            if done and done.get("pdf"):
+                return Path(done["pdf"])
             env = lowbox.sandbox_env(fileguard.clean_env(str(Path(_xelatex()).parent)), paths.LOWTMP)
             proc = lowbox.run([_xelatex(), "-interaction=nonstopmode", "-halt-on-error", tex_path.name],
                               cwd=str(build), env=env, timeout=180)
-            if proc.returncode != 0 or not made.is_file():
+            made_pdf = build / f"{safe}.pdf"
+            if proc.returncode != 0 or not made_pdf.is_file():
                 tail = "\n".join((proc.stdout or "").splitlines()[-12:])
                 raise RuntimeError(f"xelatex 失败（退出码 {proc.returncode}）：{tail[-600:]}")
+            return made_pdf
+
+        fallback = ""
+        try:
+            made = _build(tpl)
+        except RuntimeError:
+            if tpl == "plain":
+                raise
+            fallback = tpl
+            tpl = "plain"
+            made = _build("plain")
         shutil.copy2(made, out)
     else:
         raise ValueError(f"不支持的格式：{fmt}（可用 {'/'.join(CONV_FORMATS)}）")
     db.log_step(task_id, "convert", "done", f"导出 {out.name}")
     return {"path": str(out), "name": out.name, "format": fmt, "size": out.stat().st_size,
-            "pdf": fmt == "latex", "source": str(src)}
+            "pdf": fmt == "latex", "source": str(src),
+            "template": tpl if fmt == "latex" else "", "template_fallback": fallback if fmt == "latex" else ""}
 
 
 CONV_EXT = (".md", ".tex", ".txt", ".json", ".csv", ".html", ".docx", ".pdf")
@@ -353,6 +406,29 @@ def docx_to_pdf(src: Path) -> Path | None:
         return None
     made.replace(out)
     return out
+
+
+def open_convert(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
+    """审查交付 → 格式转换接手：先问三个问题（图的位置数目 / 成品格式 / 格式范本），别自己猜。"""
+    body = doc_read(db, task_id, "write")["markdown"]
+    slots = re.findall(r"\[图位\s*(\d+)\]", body)
+    figs = fig_list(db, task_id)["files"]
+    tpl_lines = chr(10).join(f"   - {k}：{v['name']} —— {v['note']}" for k, v in TEMPLATES.items())
+    msg = (
+        "格式转换可以开始了，先跟你对三件事：" + chr(10) + chr(10) +
+        f"1）**图**：正文里有 {len(slots)} 处 [图位]，项目「图」文件夹里有 {len(figs)} 张成图 —— 位置和数目对吗？"
+        "（不对就说删哪处 / 补哪处）" + chr(10) +
+        "2）**成品**：要 docx、doc（Word 97）还是 pdf？（默认 pdf）" + chr(10) +
+        "3）**格式范本**：按期刊模板来，还是用你自己传的范本？本机能直接用：" + chr(10) +
+        tpl_lines + chr(10) +
+        "   　目标期刊你上一步定过的话说一声我按它选；要自己的范本，把 .docx / .tex 传上来（或给路径），我照着套。" + chr(10) + chr(10) +
+        "回一句就行，例如「三件都对，出 pdf，用 elsevier 模板」。"
+    )
+    for m in db.messages(task_id, "convert"):
+        if (m.get("content") or "").startswith("格式转换可以开始了"):
+            return {"opened": False}
+    db.add_message(task_id, "assistant", msg, scope="convert", sender="格式")
+    return {"opened": True, "message": msg}
 
 
 def conv_preview(path: str) -> dict[str, Any]:

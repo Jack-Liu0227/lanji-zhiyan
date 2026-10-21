@@ -526,7 +526,7 @@ function convPanelHTML(active){
         <div class="cv-stage" id="cvStage">
           <iframe class="cv-frame hidden" id="cvFrame" src="about:blank"></iframe>
           <img class="cv-img hidden" id="cvImg" alt="">
-          <div class="cv-empty" id="cvEmpty">左边点一张图，或上面选一个最终产物（Word / PDF）—— 都在这儿看。</div>
+          <div class="cv-empty" id="cvEmpty"><div class="cv-ph">还未编译<br><span>在右边跟格式助手说要什么（PDF / Word），或点上面「📄 转 PDF / 📄 Word」；成品会显示在这里</span></div></div>
         </div>
       </div>
     </div>

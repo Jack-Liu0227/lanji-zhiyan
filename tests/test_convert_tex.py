@@ -61,12 +61,14 @@ class FormatToolRoutingTest(unittest.TestCase):
         self.db = workflow.WorkflowDB(Path(self._tmp.name) / "t.sqlite3")
         base = Path(self._tmp.name) / "proj"
         (base / "论文正文").mkdir(parents=True)
-        (base / "论文正文" / "正文.md").write_text("# 标题\n\n正文\n", encoding="utf-8")
+        (base / "论文正文" / "正文.md").write_text(chr(10).join([
+            "# 题目", "", "### 1.1 背景", "",
+            "[图位 1] 图1 器件结构 | 文件：fig1_schematic.png"]), encoding="utf-8")
         self.tid = self.db.create_task("格式", "q", "Na", str(base))
         self.wf = workflow
         self.seen = []
         self._old = workflow.conv_run
-        workflow.conv_run = lambda db, tid, fmt, source="": self.seen.append((fmt, source)) or {"ok": True}
+        workflow.conv_run = lambda db, tid, fmt, source="", template="": self.seen.append((fmt, source)) or {"ok": True}
 
     def tearDown(self):
         self.wf.conv_run = self._old
@@ -82,6 +84,48 @@ class FormatToolRoutingTest(unittest.TestCase):
                            {"format": "tex", "source": "C:/x/y.tex"}, scope="convert")
         self.assertEqual(self.seen, [("tex", "C:/x/y.tex")])
 
+
+class ConvertOpeningTest(unittest.TestCase):
+    """审查交付后，格式转换要先问三件事：图的位置数目 / 成品格式 / 格式范本。"""
+
+    def setUp(self):
+        import tempfile
+        import workflow
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = workflow.WorkflowDB(Path(self._tmp.name) / "t.sqlite3")
+        base = Path(self._tmp.name) / "proj"
+        (base / "论文正文").mkdir(parents=True)
+        (base / "图").mkdir()
+        (base / "图" / "fig1_schematic.png").write_bytes(b"PNG-test")
+        (base / "论文正文" / "正文.md").write_text(chr(10).join([
+            "# 题目", "", "### 1.1 背景", "",
+            "[图位 1] 图1 器件结构 | 文件：fig1_schematic.png"]), encoding="utf-8")
+        self.tid = self.db.create_task("开题", "q", "Na", str(base))
+
+    def tearDown(self):
+        self.db.close()
+        self._tmp.cleanup()
+
+    def test_opening_asks_three_things_once(self):
+        import workflow_converters as wc
+        r = wc.open_convert(self.db, self.tid)
+        self.assertTrue(r["opened"])
+        msg = r["message"]
+        self.assertIn("图", msg)
+        self.assertIn("1 处 [图位]", msg)
+        self.assertIn("1 张成图", msg)
+        self.assertIn("docx", msg)
+        self.assertIn("pdf", msg)
+        for key in ("plain", "elsevier", "ieee", "revtex"):
+            self.assertIn(key, msg)
+        self.assertFalse(wc.open_convert(self.db, self.tid)["opened"], "重复交付不刷屏")
+
+    def test_templates_compile_classes_exist(self):
+        import workflow_converters as wc
+        self.assertEqual(set(wc.TEMPLATES), {"plain", "elsevier", "ieee", "revtex"})
+        for k in wc.TEMPLATES:
+            tex = wc.md_to_tex(chr(10).join(["# 标题", "", "正文"]), "测试", template=k)
+            self.assertTrue(tex.startswith("\documentclass"), k)
 
 if __name__ == "__main__":
     unittest.main()
