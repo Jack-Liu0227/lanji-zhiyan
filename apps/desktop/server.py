@@ -17,6 +17,8 @@ import sys
 import threading
 import time
 import traceback
+
+_BOOT_T0 = time.time()      # 冷启动计时起点（RW_BOOT_TRACE=1 时写 cache/boot.log）
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -157,6 +159,14 @@ def _is_our_app(pid: int) -> bool:
     return name in ("python.exe", "pythonw.exe") or "research-workbench" in name
 
 
+def _port_open(port: int, timeout: float = 0.25) -> bool:
+    """自家端口有没有人在听。别裸用 connect_ex：这台机器（装了网络过滤/加速器）对**关着的**端口
+    2.02 秒才回 RST，一次冷启动白等 4 秒（宿主探一次、子进程再探一次）。给个短超时，超时当没人听。"""
+    with socket.socket() as s:
+        s.settimeout(timeout)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def _takeover(port: int, wait: float = 5.0) -> bool:
     """端口被一版老构建占着（改过前端但没重启）→ 杀掉老实例，让自己接管端口。"""
     pid = _port_owner(port)
@@ -168,9 +178,8 @@ def _takeover(port: int, wait: float = 5.0) -> bool:
         return False
     end = time.time() + wait
     while time.time() < end:
-        with socket.socket() as probe:
-            if probe.connect_ex(("127.0.0.1", port)) != 0:
-                return True                  # 端口放开了
+        if not _port_open(port, 0.1):
+            return True
         time.sleep(0.15)
     return False
 
@@ -1021,8 +1030,12 @@ class Handler(BaseHTTPRequestHandler):
                 with WorkflowDB(DB_PATH) as db:
                     tid = q["id"][0]
                     s = db.summary(tid)
+                    task = dict(s["task"] or {})
+                    # 卡片上的「阶段」要跟十步实时对齐：以前只给 research_tasks.stage（几乎不动），
+                    # 于是走完谱系/写作了项目空间还写着「未开始」。stage_now 取最近一条步骤记录。
+                    task["stage_now"] = db.stage_now(tid, task.get("stage") or "")
                     return self._json({
-                        "task": s["task"], "summary": s, "steps": db.steps(tid),
+                        "task": task, "summary": s, "steps": db.steps(tid),
                         "stage_map": db.stage_map(tid), "results": db.results(tid),
                         "notes": [{k: n[k] for k in ("id", "title", "created_at")} for n in db.notes(tid)],
                         "papers": s["papers"], "evidence": s["evidence"],
@@ -1963,6 +1976,7 @@ def _start_inproc(port: int, url: str) -> None:
         threading.Thread(target=paths.mark_write_roots_low, daemon=True).start()
     srv = Server(("127.0.0.1", port), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
+    _boot_mark("服务端口已监听")
     schedule.start()           # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
     feishu.start_bridge(DB_PATH)
     team.start_worker()        # 团队派活队列（串行：一次跑一个成员）
@@ -2057,6 +2071,21 @@ def _start_grant_helper():
 _LOW_SERVER = None            # 低完整性服务端子进程（沙箱模式）；None = 同进程服务（老行为）
 
 
+def _boot_mark(msg: str) -> None:
+    """RW_BOOT_TRACE=1 时把冷启动各阶段耗时追加到 cache/boot.log ——
+    「点快捷键五秒才开」这种事必须先量出卡在哪一段，别靠猜。"""
+    if os.environ.get("RW_BOOT_TRACE") != "1":
+        return
+    try:
+        log = paths.CACHE / "boot.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        dt = time.time() - _BOOT_T0
+        with log.open("a", encoding="utf-8") as f:
+            f.write(f"{os.getpid():>6} {dt:6.2f}s {msg}\n")
+    except OSError:
+        pass
+
+
 def _spawn_low_server(port: int):
     """把 HTTP 服务放到低完整性（Low IL）子进程里：它能写的只有 data/ 与项目目录（内核强制）。
     本进程留着画窗口 —— WebView2 在 Low IL 下建不出窗口（实测 HTTP 通、窗口没有）。
@@ -2072,7 +2101,9 @@ def _spawn_low_server(port: int):
     env = dict(os.environ, RW_LOW_SERVER="1")
     # 先把 data/ 与项目目录标 Low **再由宿主起沙箱**：Low 自己 icacls 是 rc=5（实测），
     # 新装的库/项目目录会一路写不进去（首启建库就失败）。
+    _boot_mark("宿主 import+端口探测完")
     paths.mark_write_roots_low()
+    _boot_mark("mark_write_roots_low 完成")
     # TEMP 指进 Low 目录：Low 服务自己（以及它 Popen 出来的工具）都写不进 Medium 的 %TEMP%
     env = lowbox.sandbox_env(env, paths.LOWTMP)
     grant = _start_grant_helper()              # 先起代建通道，再把端口/key 传给子进程
@@ -2083,8 +2114,8 @@ def _spawn_low_server(port: int):
     except OSError:
         return None
     for _ in range(120):                       # 最多等 24s（首次冷启动要给库迁移留时间）
-        with socket.socket() as probe:
-            if probe.connect_ex(("127.0.0.1", port)) == 0:
+        if _port_open(port, 0.1):
+                _boot_mark("低完整性服务子进程就绪")
                 return proc
         if proc.poll() is not None:            # 子进程自己退了
             return None
@@ -2109,14 +2140,14 @@ def main() -> int:
     if "--pick-folder-helper" in sys.argv:
         idx = sys.argv.index("--pick-folder-helper")
         return folder_picker.helper_main(sys.argv[idx + 1:])
+    _boot_mark("main 入口（import 完）")
     port = PORT
     if "--port" in sys.argv:
         port = int(sys.argv[sys.argv.index("--port") + 1])
     if not (WEB / "index.html").is_file():
         print("缺少 web/index.html"); return 2
     # 端口已占用 → 认为实例已在运行，直接开窗口
-    with socket.socket() as probe:
-        busy = probe.connect_ex(("127.0.0.1", port)) == 0
+    busy = _port_open(port)
     # URL 带上 index.html 的时间戳：同一个 URL 的 --app 窗口会被 Edge 直接聚焦复用、
     # 不重新加载（实测：再发一次启动命令窗口数不变）→ 界面改了还看旧的。带戳就必定新开一扇。
     stamp = int((WEB / "index.html").stat().st_mtime)
@@ -2153,6 +2184,7 @@ def main() -> int:
     if "--no-open" not in sys.argv:
         # 自己的无边框窗口；起不来（没装 pywebview / WebView2 运行时）才退回系统浏览器。
         # Edge --app 兜底已删：它会先弹个小窗再被 _maximize 拉满（「闪一个小卡片」）。
+        _boot_mark("开始建窗口")
         if not busy and _webview_window(url, stamp):
             _stop_low_server()                    # 关窗 = 一起收掉沙箱里的服务端，不留僵尸
             return 0

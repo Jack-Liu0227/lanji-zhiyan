@@ -929,6 +929,17 @@ async function renderSpace(m){
     } catch(_) {}
   };
   refreshAssetStatus();
+  // 「阶段」实时跟十步走：这张卡不整页重画，只把 pill 换掉；页面切走就自己停
+  clearInterval(renderSpace._stageTick);
+  renderSpace._stageTick = setInterval(async () => {
+    const pill = document.querySelector(".sp-step b");
+    if(!pill){ clearInterval(renderSpace._stageTick); return; }
+    try{
+      const dd = await api(`/api/task?id=${encodeURIComponent(curTask)}`);
+      const now = (dd.task || {}).stage_now;
+      if(now && now !== pill.textContent) pill.textContent = now;
+    }catch(_){}
+  }, 8000);
   if(rebuild) rebuild.onclick = async () => {
     rebuild.disabled = true;
     try {
