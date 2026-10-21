@@ -270,7 +270,12 @@ function docPenUp(k){
   const r = sel.getRangeAt(0);
   const mk = document.createElement("mark"); mk.className = "dw-hl"; mk.style.background = st.color;
   mk.title = "点一下取消这处标注";
-  try{ r.surroundContents(mk); }catch(_){ return; }
+  try{
+    /* 不能用 surroundContents：选区跨了 <b>/<code>/<a> 就抛 HierarchyRequestError 被吃掉，
+       表现是「有时候能划、有时候没反应」。抽出来再包，任意结构都行。 */
+    mk.appendChild(r.extractContents());
+    r.insertNode(mk);
+  }catch(_){ return; }
   mk.onclick = ()=>{ st.marks = st.marks.filter(x => x.t !== t); docPaintMarks(k); docMarks(k); docMarksSave(k); };
   if(!st.marks.some(x => x.t === t)) st.marks.push({ t, c: st.color });
   sel.removeAllRanges(); docMarks(k); docMarksSave(k);

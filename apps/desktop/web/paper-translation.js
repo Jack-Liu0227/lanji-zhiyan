@@ -80,7 +80,7 @@ async function trOpen(pid){
   trView("read");
   trSegActive("read");
   $("trPen")?.classList.add("hidden"); TR.hlOn = false;
-  TR.job = null; TR.words = {}; TR.prog = 0; trStopPoll();
+  TR.job = null; TR.prog = 0; trStopPoll();
   trMeta();
   await trReader(pid);
   trHlLoad();
@@ -172,25 +172,21 @@ function trPaintNear(key){
     if(el.offsetTop + el.offsetHeight > top && el.offsetTop < bot) trPaint(key, +el.dataset.page, el);
   });
 }
-function trWords(key){
-  /* 每个词的坐标从后端来（fitz），自己铺文字层：选中→荧光笔才有依据。
-     两栏各自一份（a=原文 / b=译文），所以中文那栏也能划。 */
-  TR.words = TR.words || {};
-  if(TR.words[key]) return Promise.resolve(TR.words[key]);
-  TR.words[key] = {};
-  if(!TR.pid) return Promise.resolve({});
-  const kind = key === "b" ? "mono" : "src";
-  return api(`/api/pdftext?id=${encodeURIComponent(TR.pid)}&task=${encodeURIComponent(curTask||"")}&kind=${kind}`)
-    .then(d=>{ const m = TR.words[key] = {}; (d.pages||[]).forEach(p=>{ m[p.n] = p.words || []; }); return m; })
-    .catch(()=>TR.words[key]);
-}
-function trBuildText(key, n, tl, vp){
-  const words = (TR.words || {})[key]?.[n];
-  if(!words){ trWords(key).then(()=>{ if((TR.words||{})[key]?.[n]) trBuildText(key, n, tl, vp); }); return; }
+async function trBuildText(n, tl, page, vp){
+  /* 文字层直接用 pdf.js 的 textContent：本地解析、零请求，页面画完就能划。
+     旧做法是问后端 /api/pdftext（pdfplumber 抽全篇词坐标，39 页实测 6.65s），
+     这 6 秒里页面上没有可选文字，荧光笔自然"不灵敏"。 */
+  let tc;
+  try{ tc = await page.getTextContent(); }catch(_){ return; }
   const s = vp.scale;
-  tl.innerHTML = words.map(w=>`<span style="left:${(w.x*s).toFixed(1)}px;top:${(w.y*s).toFixed(1)}px;`
-    + `width:${(w.w*s).toFixed(1)}px;height:${(w.h*s).toFixed(1)}px;`
-    + `font-size:${(w.h*s*0.95).toFixed(1)}px;line-height:${(w.h*s).toFixed(1)}px">${esc(w.t)}</span>`).join("");
+  tl.innerHTML = tc.items.map(it=>{
+    if(!it.str || !it.str.trim()) return "";
+    const m = window.pdfjsLib.Util.transform(vp.transform, it.transform);
+    const h = Math.hypot(m[2], m[3]) || 10;
+    return `<span style="left:${m[4].toFixed(1)}px;top:${(m[5] - h * 0.82).toFixed(1)}px;`
+      + `width:${(it.width * s).toFixed(1)}px;height:${h.toFixed(1)}px;`
+      + `font-size:${h.toFixed(1)}px;line-height:${h.toFixed(1)}px">${esc(it.str)}</span>`;
+  }).join("");
 }
 async function trPaint(key, n, el){
   if(el.dataset.painted === "1" && el.querySelector("canvas")) return;
@@ -207,7 +203,7 @@ async function trPaint(key, n, el){
     el.appendChild(cv);
     await page.render({canvasContext: cv.getContext("2d"), viewport: vp, transform: [dpr,0,0,dpr,0,0]}).promise;
     const tl = document.createElement("div"); tl.className = "tr-text"; el.appendChild(tl);
-    trBuildText(key, n, tl, vp);
+    trBuildText(n, tl, page, vp);
     const hl = document.createElement("div"); hl.className = "tr-hls"; el.appendChild(hl);
     trPaintHls(n, el);
   }catch(e){ el.dataset.painted = ""; el.dataset.err = String(e && e.message || e);
@@ -250,6 +246,13 @@ function trExitFull(){
 
 /* ---------------- 荧光笔 ---------------- */
 const TR_COLORS = ["#FFE066", "#8BD498", "#7FC4F0", "#F0A9C0", "#F07C7C"];
+let trHlT = 0;
+function trHlSave(){
+  /* 本机立刻落一份（离线也画得出来），服务端 400ms 防抖 —— 助手读的是服务端那份 */
+  try{ localStorage.setItem("rw-hl-" + TR.pid, JSON.stringify({v: 2, list: TR.hl})); }catch(_){}
+  clearTimeout(trHlT);
+  trHlT = setTimeout(()=>{ api("/api/tr/hl", {id: TR.pid, task_id: curTask || "", list: TR.hl}).catch(()=>{}); }, 400);
+}
 async function trHlLoad(){
   /* 先问服务端（助手要用），没有再用本机那份（离线时画得出来） */
   let list = null;
@@ -305,14 +308,24 @@ function trHlOnMouseUp(e){
   const pageEl = e.target.closest?.(".tr-page");
   if(!pageEl || !pageEl.dataset.painted) return;
   const pr = pageEl.getBoundingClientRect();
-  const rects = [...sel.getRangeAt(0).getClientRects()].filter(r=>r.width > 3 && r.height > 3);
+  const rects = [...sel.getRangeAt(0).getClientRects()].filter(r=>r.width > 3 && r.height > 3)
+    .sort((a, b)=> a.top - b.top || a.left - b.left);
   if(!rects.length) return;
+  /* 文字层是逐词 span，划一行会给出十几个 rect —— 按行合并，一条高亮才是一整条，而不是断续小方块 */
+  const rows = [];
+  rects.forEach(r=>{
+    const last = rows[rows.length - 1];
+    if(last && Math.abs(r.top - last.top) < last.height * 0.6){
+      last.left = Math.min(last.left, r.left);
+      last.right = Math.max(last.right, r.right);
+    } else rows.push({left: r.left, top: r.top, right: r.right, height: r.height});
+  });
   const n = +pageEl.dataset.page;
   const th = TR.hlWidth;
   const txt = (sel.toString() || "").replace(/\s+/g, " ").trim().slice(0, 400);   // 圈的是哪几个字 → 助手要用
-  rects.forEach((r, i)=>{
+  rows.forEach((r, i)=>{
     TR.hl.push({p:n, x:Math.round(r.left - pr.left), y:Math.round(r.top - pr.top + r.height/2 - th/2),
-                w:Math.round(r.width), th, c:TR.hlColor, t: i === 0 ? txt : ""});   // 一段话占多行时文字只记在第一行
+                w:Math.round(r.right - r.left), th, c:TR.hlColor, t: i === 0 ? txt : ""});   // 一段话占多行时文字只记在第一行
   });
   trHlSave(); trPaintHls(n, pageEl); sel.removeAllRanges();
   trMsg(`已标注 ${TR.hl.length} 处 —— 右侧助手能看到你圈的内容，直接问就行`);

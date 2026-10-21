@@ -37,9 +37,14 @@ _CREATE_NEW_PROCESS_GROUP = 0x00000200 if os.name == "nt" else 0   # 控制台�
 STALL_SECONDS = 900                        # 多久没有任何输出就判定卡死（版式识别偶尔会安静几分钟）
 ZHIPU_BASE = "https://open.bigmodel.cn/api/paas/v4"
 ZHIPU_MODEL = "glm-4-flash"
-QPS_TOTAL = int(os.environ.get("RW_TRANS_QPS", "8"))      # 全局并发上限（DeepSeek 的并发上限跟余额挂钩，别超）
-CHUNK_PARALLEL = int(os.environ.get("RW_TRANS_PARALLEL", "3"))   # 同时跑几段
-CHUNK_MAX = int(os.environ.get("RW_TRANS_CHUNKS", "3"))           # 整篇切几段（每段都要重跑一次版式模型，段多反而更慢）     # 翻译并发上限（原来 4，太保守；不满意就设这个环境变量）
+# 实测（2026-10，DeepSeek v4-flash，同一篇 38 页真跑）：
+#  ① thinking 默认开时 reasoning token 会吃掉 babeldoc 硬编码的 max_tokens=2048，正文 JSON 被挤空
+#    → 整批退回「逐段单句翻译」（44s vs 4s，fallback 30/31 → 0/31）；
+#  ② 段并行是版式识别的负收益：4 段并行版式 73s/13 页，单进程 38 页只要 29s ——
+#    babeldoc 每个进程都按满核跑 ONNX，段一多互相抢，所以宁可少切段。
+QPS_TOTAL = int(os.environ.get("RW_TRANS_QPS", "16"))      # 全局并发上限（DeepSeek 的并发上限跟余额挂钩，别超）
+CHUNK_PARALLEL = int(os.environ.get("RW_TRANS_PARALLEL", "2"))   # 同时跑几段
+CHUNK_MAX = int(os.environ.get("RW_TRANS_CHUNKS", "1"))           # 整篇切几段（1 = 第 1 页单跑 + 其余一整段）
 JOBS: dict[str, dict[str, Any]] = {}          # paper_id -> 翻译任务状态（进程内，够用）
 _LOCK = threading.Lock()
 _LOG_LOCK = threading.Lock()      # 多段并行时日志文件是共享的
@@ -474,12 +479,18 @@ def _run(paper_id: str, path: Path, out_dir: Path, cfg: dict[str, str],
             fh.write(f"\n===== 第 {a}-{b} 页（第 {idx}/{len(plan)} 段）=====\n")
             fh.flush()
         _progress(paper_id, f"正在翻第 {a}-{b} 页（第 {idx}/{len(plan)} 段）", a - 1, total, log)
+        _off_think = ("--openai-thinking", "disabled") if (
+            "deepseek" in str(cfg.get("base") or "").lower()
+            or "deepseek" in str(cfg.get("model") or "").lower()) else ()
         cmd = BABELDOC_CMD + ["--files", str(path), "--lang-in", "en", "--lang-out", "zh",
                               "--openai", "--openai-model", cfg["model"],
                               "--openai-base-url", cfg["base"], "--openai-api-key", cfg["key"],
                               "--watermark-output-mode", "no_watermark",
                               # 每段分到的并发 = 全局上限 / 段数（段并行后必须摊薄，否则撞余额决定的并发上限 429）
                               "--qps", str(max(1, QPS_TOTAL // max(1, CHUNK_PARALLEL))),
+                              # thinking 关：它的 reasoning token 会挤空 babeldoc 的 2048 输出预算
+                              *_off_think,
+                              "--enable-json-mode-if-requested",   # 逼模型只吐 JSON，解析失败=整批退化
                               "--no-dual",                    # UI 只用单语译文，省掉对照版的生成
                               "--no-auto-extract-glossary",   # 省掉一整趟全篇术语抽取的 LLM 调用
                               "--pages", f"{a}-{b}",
