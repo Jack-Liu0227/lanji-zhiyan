@@ -333,10 +333,6 @@ def _webview_window(url: str, stamp: int) -> bool:
     s = _dpi_scale()      # pywebview 把 x/y/宽高当逻辑像素再乘 DPI，先除回去，起来后再钉准
     if os.environ.get("RW_DEBUG_CDP"):     # 给验证用的：RW_DEBUG_CDP=9333 就能用 CDP 连进这扇窗读 DOM
         webview.settings["REMOTE_DEBUGGING_PORT"] = int(os.environ["RW_DEBUG_CDP"])
-    # WebView2 默认吃 WinINET 的系统代理：代理开着又没给 127.0.0.1 放行时，窗口里每个请求都被
-    # 丢进代理，页面直接报「127.0.0.1 发送了无效的响应」。这条让窗口自己的回环流量直连。
-    os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-                          "--proxy-bypass-list=127.0.0.1;localhost;::1;<local>")
     threading.Thread(target=_watch_restore, daemon=True).start()
     try:
         win = webview.create_window(
@@ -527,6 +523,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *args: Any) -> None:  # 静默
         pass
+
+    def log_request(self, code: Any = "-", size: Any = "-") -> None:
+        # 排障用：只把 >=400 的响应记到 data/cache/req.log（全记会无界长；正常请求不留痕）
+        if str(code).isdigit() and int(code) < 400:
+            return
+        try:
+            with (paths.CACHE / "req.log").open("a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%H:%M:%S')} {code} {self.command} {self.path}\n")
+        except OSError:
+            pass
 
     # ---------- 基础设施 ----------
     def _send(self, code: int, body: bytes, ctype: str, extra: dict[str, str] | None = None) -> None:
@@ -1151,7 +1157,9 @@ class Handler(BaseHTTPRequestHandler):
                          ".jpeg": "image/jpeg", ".svg": "image/svg+xml", ".md": "text/markdown; charset=utf-8",
                          ".tex": "text/plain; charset=utf-8", ".txt": "text/plain; charset=utf-8",
                          ".html": "text/html; charset=utf-8"}.get(ext, "application/octet-stream")
-                extra = {"Content-Disposition": f'inline; filename="{p.name}"'} if (ext == ".pdf" or q.get("inline")) else None
+                # inline 预览不带文件名：http.server 按 latin-1 编 header，中文文件名会让整条响应坏掉
+                # （Chromium 报「127.0.0.1 发送了无效的响应」）。要下载的文件名见 825 行的 filename*。
+                extra = {"Content-Disposition": "inline"} if (ext == ".pdf" or q.get("inline")) else None
                 return self._send(200, p.read_bytes(), ctype, extra)
             if path == "/api/idea/memory":
                 with WorkflowDB(DB_PATH) as db:
@@ -1239,7 +1247,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not f:
                     return self._send(404, b"not found", "text/plain; charset=utf-8")
                 return self._send(200, f.read_bytes(), "application/pdf",
-                                  {"Content-Disposition": f'inline; filename="{f.name}"'})
+                                  {"Content-Disposition": "inline"})
             if path == "/api/trans/file":                # 译文（mono=纯中文 / dual=左右对照）
                 kind = (q.get("kind") or ["mono"])[0]
                 with WorkflowDB(DB_PATH) as db:
@@ -1253,7 +1261,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not f.is_file():
                     return self._send(404, b"no translation", "text/plain; charset=utf-8")
                 return self._send(200, f.read_bytes(), "application/pdf",
-                                  {"Content-Disposition": f'inline; filename="{f.name}"'})
+                                  {"Content-Disposition": "inline"})
             if path == "/api/pdftext":                    # 每页词坐标（前端自己铺文字层；kind=mono 是中文那栏）
                 kind = (q.get("kind") or ["src"])[0]
                 with WorkflowDB(DB_PATH) as db:

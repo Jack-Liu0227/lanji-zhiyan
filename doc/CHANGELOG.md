@@ -14,7 +14,7 @@
 
 **5. 删掉展示区那一行工具**（他的口径：格式与模板是助手问使用者的，不该让使用者自己选）：`最终产物… / PDF / 通用模板 / ⚙ 编译 / ↗` 整行移除，`cvBuild`、`cvToPdf`、`cvToWord` 一起删；编译只由格式助手调 `format_convert`。没成品时展示区是**整块纯白 + 居中「未生成」**（顺手删掉压掉居中的那条旧 `.cv-empty{flex:none…}` 覆盖），清空时标题回到「展示区」。
 
-**6. 修「127.0.0.1 发送了无效的响应」**：根因不是服务端 —— WinINET 系统代理开着（`ProxyEnable=1`、`127.0.0.1:10090`，`ProxyOverride` 为空），WebView2 走系统代理，连窗口自己的回环请求都被丢进代理，于是整页报错。两处一起修：①系统代理的 bypass 补上 `127.0.0.1;localhost;::1;<local>`；②`_webview_window` 里给 WebView2 设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--proxy-bypass-list=127.0.0.1;localhost;::1;<local>`，代理以后再被打开也不会复发。另：先前那个回 GET 501 的 56492 端口是内部「代建通道」（只有 do_POST），不是窗口地址。
+**6. 修「127.0.0.1 发送了无效的响应」（真凶：header 里的中文文件名）**：`/api/file` 与两处 PDF 预览原来发 `Content-Disposition: inline; filename="基于局部电阻梯度调控的 … .pdf"`。`http.server` 按 latin-1 编 header，中文名让这条 header 直接编不出来 —— 响应头和正文对不上，Chromium/WebView2 整页报「127.0.0.1 发送了无效的响应」，req.log 里是同一个 URL 先 200 后 400。改成 `Content-Disposition: inline`（预览不需要文件名；下载仍走 825 行的 `filename*=UTF-8''`）。实测中文名 PDF：115993 B 全下来，展示区正常渲染。顺带：`log_request` 只记 >=400 到 `data/cache/req.log`（全记会无界长），排障时一眼看到坏请求。
 
 ## 2026-10-21（晚 4：项目「图」文件夹 + 格式转换改成「左图 / 右成品」两栏 + 撰写落图位图题）
 
