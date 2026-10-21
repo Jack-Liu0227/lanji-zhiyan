@@ -602,9 +602,13 @@ function mpSize(n){
   MP_MEAS.set(key, s);
   return s;
 }
+function mpHier(){
+  /* 只看「包含」这类父子边；「下一章」是同级串联，不参与分层、不参与居中 —— 
+     以前居中那一步把「下一章」也当子节点，章 2 的中线被章 3 的位置拉偏，于是 6 跑到 2 和 5 中间。 */
+  return MP.edges.filter(e => !/下一章|下一节/.test(e.label || ""));
+}
 function mpDepth(){
-  /* 层级只看「包含」这类父子边；「下一章」是同级串联，不参与分层（否则第二章会被排到第三章右边） */
-  const hier = MP.edges.filter(e => !/下一章|下一节/.test(e.label || ""));
+  const hier = mpHier();
   const incoming = {}, kids = {};
   hier.forEach(e => { (incoming[e.to] = incoming[e.to] || []).push(e.from); (kids[e.from] = kids[e.from] || []).push(e.to); });
   const depth = {}, q = MP.nodes.filter(n => !incoming[n.id]).map(n => [n.id, 0]);
@@ -620,7 +624,7 @@ function mpDepth(){
 function mpOrder(){
   /* 深度优先顺序：父下面紧跟它的子，这样每一列排下来，第二章会排在第一章的所有小节之后，
      而不是跟第一章的小节抢位置（横向思维导图就是这个观感） */
-  const hier = MP.edges.filter(e => !/下一章|下一节/.test(e.label || ""));
+  const hier = mpHier();
   const kids = {}, incoming = {};
   hier.forEach(e => { (kids[e.from] = kids[e.from] || []).push(e.to); (incoming[e.to] = incoming[e.to] || []).push(e.from); });
   const seen = {}, out = [];
@@ -650,12 +654,13 @@ function mpLayout(){
   });
   // 父节点在自己的子节点中间垂直居中（思维导图的观感：章对齐到它那组小节的中线）
   const maxD = Math.max(0, ...Object.values(depth));
+  const hier = mpHier();
   for(let d = maxD - 1; d >= 0; d--){
     const parents = MP.nodes.filter(n => (depth[n.id] || 0) === d)
       .sort((a, b) => pos[a.id].y - pos[b.id].y);
     parents.forEach(n => {
       if(typeof n.x === "number" && typeof n.y === "number") return;      // 拖过的不动
-      const kids = MP.edges.filter(e => e.from === n.id && pos[e.to]).map(e => pos[e.to]);
+      const kids = hier.filter(e => e.from === n.id && pos[e.to]).map(e => pos[e.to]);
       if(!kids.length) return;
       const top = Math.min(...kids.map(k => k.y)), bot = Math.max(...kids.map(k => k.y + k.h));
       pos[n.id].y = Math.max(MP_W.pady, (top + bot) / 2 - pos[n.id].h / 2);
@@ -664,10 +669,10 @@ function mpLayout(){
   MP.nodes.forEach(n => {
     if(typeof n.x === "number" && typeof n.y === "number"){ pos[n.id].x = n.x; pos[n.id].y = n.y; }
   });
-  // 同一列里别互相压：拖过的保持原位，没拖过的往下让开
+  // 同一列里按框架顺序别互相压：居中之后可能被拉高，这里按顺序往下让开 —— 序号顺序永远不被居中打乱
   Object.keys(byCol).forEach(d => {
     const col = MP.nodes.filter(n => (depth[n.id] || 0) === Number(d))
-      .sort((a, b) => pos[a.id].y - pos[b.id].y);
+      .sort((a, b) => (order[a.id] ?? 0) - (order[b.id] ?? 0));
     for(let i = 1; i < col.length; i++){
       const prev = pos[col[i-1].id], cur = pos[col[i].id], n = col[i];
       if(cur.y < prev.y + prev.h + MP_W.gapy){
