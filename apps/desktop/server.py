@@ -61,7 +61,7 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       outline_read, outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
                       map_seed, project_outs, map_tidy, open_write,
                       cite_read, cite_add, conv_files, conv_run, conv_compile, conv_open,
-                      fig_list, fig_rename, conv_preview, open_convert,
+                      fig_list, fig_rename, conv_preview, open_convert, convert_system,
                       en_state, en_run, _safe_path, step_plan,
                       stage_download_selected, stage_zotero_import, test_provider,
                       deepread_kick, deepread_state, deepread_stop)
@@ -1970,6 +1970,7 @@ class Handler(BaseHTTPRequestHandler):
                 # 三块统计面板永远是 0 / 还没有。纯聊天（不绑项目）照旧 scope=''。
                 on_task = bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
                 run_agent(db, tid, data.get("message", ""), emit, extra_context=extra,
+                          system=convert_system(db, tid) if wstep == "convert" else None,   # 格式转换：三件事依次问
                           step=wstep, scope=wstep if (wstep and on_task) else "",
                           cancel_check=lambda: run.cancel_requested)
             if track:

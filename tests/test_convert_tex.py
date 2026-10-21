@@ -114,10 +114,11 @@ class ConvertOpeningTest(unittest.TestCase):
         self.assertIn("图", msg)
         self.assertIn("1 处 [图位]", msg)
         self.assertIn("1 张成图", msg)
-        self.assertIn("docx", msg)
-        self.assertIn("pdf", msg)
+        self.assertNotIn("elsevier", msg, "开场只问第一件（图），模板留到第三问")
+        sys_txt = wc.convert_system(self.db, self.tid)
         for key in ("plain", "elsevier", "ieee", "revtex"):
-            self.assertIn(key, msg)
+            self.assertIn(key, sys_txt)
+        self.assertIn("一次只问一件", sys_txt)
         self.assertFalse(wc.open_convert(self.db, self.tid)["opened"], "重复交付不刷屏")
 
     def test_templates_compile_classes_exist(self):

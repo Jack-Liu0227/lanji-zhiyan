@@ -409,26 +409,46 @@ def docx_to_pdf(src: Path) -> Path | None:
 
 
 def open_convert(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
-    """审查交付 → 格式转换接手：先问三个问题（图的位置数目 / 成品格式 / 格式范本），别自己猜。"""
+    """审查交付 → 格式转换接手：**只抛第一个问题**（图），后面两件由格式助手在对话里依次问，
+    这样右栏是一问一答的对话，不是一口气砸三段。"""
     body = doc_read(db, task_id, "write")["markdown"]
     slots = re.findall(r"\[图位\s*(\d+)\]", body)
     figs = fig_list(db, task_id)["files"]
-    tpl_lines = chr(10).join(f"   - {k}：{v['name']} —— {v['note']}" for k, v in TEMPLATES.items())
     msg = (
-        "格式转换可以开始了，先跟你对三件事：" + chr(10) + chr(10) +
-        f"1）**图**：正文里有 {len(slots)} 处 [图位]，项目「图」文件夹里有 {len(figs)} 张成图 —— 位置和数目对吗？"
-        "（不对就说删哪处 / 补哪处）" + chr(10) +
-        "2）**成品**：要 docx、doc（Word 97）还是 pdf？（默认 pdf）" + chr(10) +
-        "3）**格式范本**：按期刊模板来，还是用你自己传的范本？本机能直接用：" + chr(10) +
-        tpl_lines + chr(10) +
-        "   　目标期刊你上一步定过的话说一声我按它选；要自己的范本，把 .docx / .tex 传上来（或给路径），我照着套。" + chr(10) + chr(10) +
-        "回一句就行，例如「三件都对，出 pdf，用 elsevier 模板」。"
+        f"审查意见我看了，开始排版。先对第一件事 —— **图**：" + chr(10) + chr(10) +
+        f"正文里有 {len(slots)} 处 [图位]，项目「图」文件夹里有 {len(figs)} 张成图"
+        + (f"（{'、'.join(f['name'] for f in figs[:6])}{'…' if len(figs) > 6 else ''}）" if figs else "（还是空的）")
+        + "。" + chr(10) + chr(10) +
+        "位置和数目对得上吗？要删或要补，直接说「第 3 处删掉」「2.2 再加一张」这种就行。"
+        "（对的话回「对」，我接着问成品格式和模板。）"
     )
     for m in db.messages(task_id, "convert"):
-        if (m.get("content") or "").startswith("格式转换可以开始了"):
+        if (m.get("content") or "").startswith("审查意见我看了，开始排版"):
             return {"opened": False}
     db.add_message(task_id, "assistant", msg, scope="convert", sender="格式")
     return {"opened": True, "message": msg}
+
+
+def convert_system(db: "WorkflowDB", task_id: str) -> str:
+    """格式助手（格式转换这一步）的 system：三件事**一次只问一件**，问完全按模板编译。"""
+    task = db.summary(task_id)["task"]
+    figs = fig_list(db, task_id)["files"]
+    tpl_lines = chr(10).join(f"- `{k}`：{v['name']} —— {v['note']}" + (f"（来源 {v['repo']}）" if v["repo"] else "")
+                             for k, v in TEMPLATES.items())
+    return (
+        f"你是「览籍智研」里「格式转换」这一步的格式助手，用中文工作，站在排版工的位置。" + chr(10) + chr(10) +
+        f"项目《{task['title']}》，你只做一件事：把「论文正文/正文.md」按用户要的格式与期刊模板导成成品，"
+        "放进「最终产物」。" + chr(10) + chr(10) +
+        "**开场必须依次问三件事，一次只问一件，拿到回答再问下一件**（不要一口气问完，也不要自己替用户定）：" + chr(10) +
+        "1. 图：正文里的 [图位] 与「图」文件夹里的成图，位置和数目对不对；" + chr(10) +
+        "2. 成品：docx / doc（Word 97）/ pdf；" + chr(10) +
+        "3. 范本：用下面哪个期刊模板，还是用户自己上传 .docx/.tex 范本。" + chr(10) + chr(10) +
+        "三件都定下来之后：调 `format_convert`（format=pdf/docx/doc，template=模板名；要 .tex→PDF 用 format=tex），"
+        "把产出路径和页数/大小告诉用户，别贴正文。" + chr(10) + chr(10) +
+        "【可选模板】" + chr(10) + tpl_lines + chr(10) + chr(10) +
+        f"【「图」文件夹现状】{len(figs)} 张：" + (chr(10) + chr(10).join(f"- {f['name']}" for f in figs[:20]) if figs else "（空）") + chr(10) + chr(10) +
+        "规矩：不编数据；用户没明确说的模板不要自己拍；编译失败要把错误摘要原样告诉用户，并说清退回的是哪套模板。"
+    )
 
 
 def conv_preview(path: str) -> dict[str, Any]:

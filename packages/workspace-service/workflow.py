@@ -1796,7 +1796,7 @@ from workflow_stages import (
 
 from workflow_converters import (
     cite_read, cite_add, conv_run, conv_files, conv_compile, conv_open, _safe_path,
-    fig_dir, fig_list, fig_rename, conv_preview, open_convert,
+    fig_dir, fig_list, fig_rename, conv_preview, open_convert, convert_system,
     en_state, en_run, compose_draft
 )
 
