@@ -617,6 +617,20 @@ class Handler(BaseHTTPRequestHandler):
         if not blob:
             return self._json({"error": "空文件"}, 400)
         UPLOADS.mkdir(parents=True, exist_ok=True)
+        if (q.get("dest", [""])[0] or "") == "fig" and task_id:      # 直接落进项目「图」文件夹（名字就是图题要引用的）
+            from workflow_converters import fig_dir
+            if name.rsplit(".", 1)[-1].lower() not in ("png", "svg", "jpg", "jpeg", "webp", "tif", "tiff", "bmp", "pdf"):
+                return self._json({"error": "「图」文件夹只收图片或 PDF"}, 400)
+            with WorkflowDB(DB_PATH) as db:
+                folder = fig_dir(db, task_id)
+            target, i = folder / name, 2
+            while target.exists():
+                target = folder / f"{Path(name).stem}-{i}{Path(name).suffix}"
+                i += 1
+            target.write_bytes(blob)
+            fileguard.audit("upload", target, bytes=len(blob))
+            return self._json({"name": target.name, "path": str(target), "size": len(blob),
+                               "ext": target.suffix.lstrip(".").lower()})
         dest = UPLOADS / f"{hashlib.sha256(blob).hexdigest()[:12]}_{name}"
         if not dest.exists():                       # 同内容重传只留一份
             dest.write_bytes(blob)

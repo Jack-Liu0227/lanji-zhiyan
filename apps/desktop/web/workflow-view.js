@@ -512,7 +512,9 @@ function convPanelHTML(active){
     <div class="cv-grid">
       <aside class="cv-col cv-side">
         <div class="cv-h"><b>图</b><span class="cv-spacer"></span><span class="cv-tag" id="figDir" title=""></span>
+          <button class="cv-ib" id="figAdd" title="上传图（PNG/SVG/JPG/PDF）；也可以直接把文件拖进左栏">＋</button>
           <button class="cv-ib" id="figRefresh" title="重新读「图」文件夹">↻</button></div>
+        <input type="file" id="figFile" accept=".png,.svg,.jpg,.jpeg,.webp,.tif,.tiff,.bmp,.pdf" multiple hidden>
         <div class="cv-list" id="figList"></div>
       </aside>
       <div class="cv-col">
@@ -571,6 +573,22 @@ async function cvPreview(path, label){
     if(d.kind !== "other" && d.kind !== "docx"){ o.classList.remove("hidden"); o.onclick = ()=>api("/api/conv/open", { path: d.path }).catch(()=>{}); }
     cvMsg(d.converted ? `（Word 已转 PDF 预览）${d.name}` : "", 6000);
   }catch(e){ cvMsg("打开失败：" + e.message); cvClearStage(); }
+}
+
+async function figUpload(files){
+  if(!curTask){ cvMsg("先选一个项目"); return; }
+  if(!files || !files.length) return;
+  let ok = 0;
+  for(const f of files){
+    try{
+      const r = await fetch(`/api/upload?dest=fig&name=${encodeURIComponent(f.name)}&task_id=${encodeURIComponent(curTask)}`,
+                            { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: f });
+      const d = await r.json(); if(d.error) throw new Error(d.error);
+      ok++;
+    }catch(e){ cvMsg(`上传 ${f.name} 失败：${e.message}`); }
+  }
+  await figLoad();
+  if(ok) cvMsg(`已上传 ${ok} 张到「图」文件夹`, 5000);
 }
 
 async function figLoad(){
@@ -643,6 +661,19 @@ async function cvToWord(){
 function cvBind(){
   if(!$("figList")) return;
   $("figRefresh").onclick = ()=>{ figLoad(); cvLoad(); };
+  $("figAdd").onclick = ()=>$("figFile").click();
+  $("figFile").onchange = (e)=>{ const fs = [...e.target.files]; e.target.value = ""; figUpload(fs); };
+  const dropHost = $("figList");
+  ["dragenter", "dragover"].forEach(t => dropHost.addEventListener(t, (e)=>{ e.preventDefault(); dropHost.classList.add("drop-on"); }));
+  ["dragleave", "drop"].forEach(t => dropHost.addEventListener(t, (e)=>{
+    e.preventDefault();
+    if(t === "dragleave" && dropHost.contains(e.relatedTarget)) return;
+    dropHost.classList.remove("drop-on");
+  }));
+  dropHost.addEventListener("drop", (e)=>{
+    const fs = [...((e.dataTransfer && e.dataTransfer.files) || [])];
+    if(fs.length) figUpload(fs);
+  });
   $("cvPdf").onclick = async () => { if (await needPerm("用 xelatex 出 PDF（正文会先转成 LaTeX）")) cvToPdf(); };
   $("cvWord").onclick = async () => { if (await needPerm("导出 Word(.docx) 到最终产物")) cvToWord(); };
   $("cvOpenExt").onclick = () => { if(cvCur.path) api("/api/conv/open", { path: cvCur.path }).catch(()=>{}); };
