@@ -28,8 +28,8 @@ DOC_STEPS = {
                 "hint": "大标题 `## `、小标题 `### `、每个小标题下一行 `- 说明：…`"},
     "write":   {"file": "正文.md", "dir": "论文正文", "label": "正文",
                 "hint": "从框架展开成正文：标题层级跟框架一致，每节写实；数据没有就写「待补」，不要编。"},
-    "review":  {"file": "正文.md", "dir": "论文正文", "label": "正文",
-                "hint": "审的是同一份正文；改就整份覆盖，别只改片段。"},
+    "review":  {"file": "审查意见.md", "dir": "论文正文", "label": "审查意见",
+                "hint": "审稿意见本身：三重视角打分 + 决议 + 逐段可操作的修改建议；要动正文回「论文撰写」。"},
 }
 
 
@@ -744,6 +744,7 @@ REVIEW_FALLBACK = ("以严格审稿人的位置读全文：先说**大的思路�
 def review_system(db: "WorkflowDB", task_id: str) -> str:
     task = db.summary(task_id)["task"]
     cur = doc_read(db, task_id, "write")
+    rep = doc_read(db, task_id, "review")
     skills = "\n\n".join(x for x in (
         skill_text("research", "research-topic-selection", "SKILL.md", cap=1800, db=db, task_id=task_id),
         skill_text("idea-evaluator", "SKILL.md", cap=3500, db=db, task_id=task_id),
@@ -759,11 +760,12 @@ def review_system(db: "WorkflowDB", task_id: str) -> str:
    - **Reviewer 2 (挑剔派 / 理论贡献与创新度)**：严苛检验主要贡献增量、与前人工作的区分度，是否存在过度声明 (Overclaiming)；
    - **Reviewer 3 (落地派 / 工程与泛化应用)**：关注实验条件苛刻度、跨领域适用性、成本与工业放大限制；
    最后给出综合决议（Accept / Minor Revision / Major Revision / Reject）和逐段可操作的修改建议。没有正文就提醒他先去「论文撰写」。
-3. 用户在左侧用荧光笔标了「需要改的细节」，会以「[我的标注] …」出现在消息里 —— 逐条回应，别漏。
-4. 需要改正文时调用 doc_write 写**整份** markdown（就地覆盖 `正文.md`）；只讨论不改也可以。
+3. 用户把想改的细节贴在消息里（「[我的标注] …」这种也照此处理）—— 逐条回应，别漏。
+4. **产出是审稿意见，不是正文**：把审稿意见整份 markdown 用 doc_write 写进 `{rep['path']}`（左边展示区就是它，写完整份、不要只给片段），**不要覆盖正文**；正文要改就让用户回「论文撰写」那一步改。
+4.1 **能写就直接写**：用户说「审一遍」「给点意见」「放到左边」就是让你现在写出整份审查意见并 doc_write 落盘 —— 不要先反问「要不要我写成一份」；落盘后用一两句说清决议和最关键的三条。确实没正文才问。
 5. 不编造文献与数据；页码/数字对不上的不当结论。你的意见是草稿式判断，最终以导师与证据为准。
 6. 出现值得长期记住的结论/约束/导师要求时调用 memory_save 记一条。
-7. 正文文件：`{cur['path']}`（{'已有正文' if cur['exists'] else '还没有正文 —— 提醒他先去「论文撰写」写一版'}）。
+7. 被审的正文：`{cur['path']}`（{'已有正文' if cur['exists'] else '还没有正文 —— 提醒他先去「论文撰写」写一版'}）。
 
 【审查框架（取自本机 skill）】
 {skills}
