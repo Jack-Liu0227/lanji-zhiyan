@@ -420,14 +420,6 @@ def block(db, scope_id: str, now_window: int = 10, line: int = 120) -> str:
 
 
 # ------------------------------------------------------------------ 维护
-def all_rows(db, scope_id: str = "", limit: int = 400) -> list[dict[str, Any]]:
-    """记忆面板用：全局 + 这个项目的全部条目（归档的排后面）。"""
-    ready(db)
-    where, args = _scope_sql("project", scope_id, True)
-    return _rows(db, f"SELECT * FROM memory WHERE {where} "
-                     "ORDER BY archived, importance DESC, updated_at DESC LIMIT ?", args + [limit])
-
-
 def stats(db, scope_id: str = "") -> dict[str, Any]:
     ready(db)
     def one(scope: str, sid: str) -> dict[str, Any]:

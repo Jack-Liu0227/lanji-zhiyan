@@ -46,7 +46,6 @@ import zotero                    # Zotero 本机 Local API 只读接入（笔记
 import project_notes
 import agent_settings
 import capabilities
-import memory_store           # 记忆面板：全局/项目两层
 import workflow_layout
 import folder_picker
 import feishu
@@ -1089,14 +1088,6 @@ class Handler(BaseHTTPRequestHandler):
                     step = (q.get("step") or ["idea"])[0]
                     tid = q["id"][0]
                     return self._json({"step": step, "messages": db.messages(tid, step)})
-            if path == "/api/memory":                      # 记忆面板：全局 + 这个项目的记忆
-                with WorkflowDB(DB_PATH) as db:
-                    tid = (q.get("id") or [""])[0]
-                    rows = memory_store.search(db, (q.get("q") or [""])[0], tid, 20, include_archived=True) \
-                        if (q.get("q") or [""])[0] else memory_store.all_rows(db, tid)
-                    return self._json({"global": [r for r in rows if r["scope"] == "global"],
-                                       "project": [r for r in rows if r["scope"] != "global"],
-                                       "stats": memory_store.stats(db, tid), "budget": memory_store.BUDGET})
             if path == "/api/doc/state":                  # 确认大纲 / 论文撰写 / 稿件审查 共用的「左边那份文件」
                 step = (q.get("step") or ["outline"])[0]
                 with WorkflowDB(DB_PATH) as db:
@@ -1387,14 +1378,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": str(exc)}, 400)
         if path.startswith("/api/win/"):
             return self._json(_win(path.rsplit("/", 1)[-1]))
-        if path == "/api/memory":                    # 记忆面板：批量增改删 / 检索
-            try:
-                with WorkflowDB(DB_PATH) as db:
-                    tid = str(data.get("id") or "")
-                    out = memory_store.apply(db, tid, data)
-                return self._json(out)
-            except Exception as exc:
-                return self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
         if path == "/api/idea/input":                # 创新点审查：存上区那段原文（助手每轮读它）
             try:
                 with WorkflowDB(DB_PATH) as db:
