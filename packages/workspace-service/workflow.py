@@ -1725,6 +1725,7 @@ def _json_in(text: str) -> Any | None:
 
 
 _JSON_MAX_TOKENS = 8000   # 推理模型的思维链也记在这个上限里，见 chat_json
+WRITE_MAX_TOKENS = 8000   # 写作那步要吐整份正文（一个巨大的 markdown 参数），预算得跟 chat_json 一档
 
 
 def chat_json(profile: dict[str, Any], messages: list[dict[str, str]], **kw: Any) -> Any:
@@ -2692,6 +2693,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             say({"type": "assistant_delta", "content": piece})
         try:
             msg = chat_raw(profile, messages, tools=tool_specs,
+                           # 写作这步的产出（整份正文）就是一个大参数：4096 预算下推理模型的思维链把额度吃光，
+                           # doc_write 的 markdown 直接被截断 → 工具调用变成「空参数」，文件被清空、左边永远空白。
+                           max_tokens=WRITE_MAX_TOKENS if scope == "write" else 4096,
                            on_delta=forward_delta if emit else None, cancel_check=cancel_check,
                            on_reasoning=forward_reasoning if emit else None)
         except Exception as exc:

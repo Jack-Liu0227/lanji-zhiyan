@@ -197,6 +197,15 @@ function docCandidate(text){
   const cut = body.slice(m).trim();
   return (/^##\s+\S/m.test(cut) && (cut.match(/^#{2,3}\s+/gm) || []).length >= 2) ? cut : "";
 }
+function docDraft(text){
+  /* 写作这步从回复里抠正文：**单节也算**（有一个标题行就够）。
+     docCandidate 那套要 ≥2 个二级标题（判「像一整份稿子」），只写一节时永远返空、抠不出来。 */
+  const t = String(text || "");
+  const fence = t.match(/```(?:markdown|md|text)?\s*\n([\s\S]*?)```/);
+  const body = fence ? fence[1] : t;
+  const m = body.search(/^#{1,4}\s+\S/m);
+  return m < 0 ? "" : body.slice(m).trim();
+}
 function docShowCand(k){
   const b = docEl(k, "pull"); if(!b) return;
   const srcEl = docEl(k, "src"); const cur = (srcEl ? srcEl.value : "").trim();
@@ -470,17 +479,27 @@ async function docSend(k){
   st.msgs.push({ role: "assistant", content: final, events: evs });
   st.events = st.events.concat(evs);
   const wrote = evs.some(e => e.type === "tool_call" && (e.name === "doc_write" || e.name === "outline_write" || e.name === "map_write"));
-  st.cand = wrote ? "" : docCandidate(final);            // 模型没调工具就把回复里那段收着，给个一键落盘
+  st.cand = wrote ? "" : (DOC_UI[k].quiet ? docDraft(final) : docCandidate(final));   // 模型没调工具就把回复里那段收着，给个一键落盘
   btn.disabled = false; btn.textContent = "↑";
   box.scrollTop = box.scrollHeight;
   await docLoad(k);                                      // 重拉：文件可能刚被 doc_write 改过 → 左边跟着更新
   if(k === "map") await mpLoad();                          // 谱系图：聊天改完立刻重画画布
   docShowCand(k);
+  let autoPulled = false;
+  if(!wrote && DOC_UI[k].quiet && st.cand && st.cand.length > 300){
+    /* 兜底：模型这轮没调写文件工具（参数被截断 / 干脆把稿子贴在回复里）→ 把回复里那份正文抠出来直接落盘，
+       左边展示区才有东西。只在「像一整份正文」（≥2 个二级标题）时才动手，见 docCandidate。 */
+    try{
+      const r = await api("/api/doc/save", { task_id: curTask, step: k, markdown: st.cand });
+      st.cand = ""; docShow(k, r); docShowCand(k); autoPulled = true;
+      docMsg(k, `模型这轮没调写文件工具，我把回复里那份正文自动落到左侧了（${r.chars || 0} 字）`);
+    }catch(e){ docMsg(k, "自动落盘失败：" + e.message); }
+  }
   if(wrote && DOC_UI[k].quiet && final.trim())
     docMsg(k, `本轮 ${final.length} 字已落到左侧《${DOC_UI[k].file}》—— 右栏只留过程`);
-  else if(!wrote && DOC_UI[k].quiet && final.trim())
+  else if(!wrote && !autoPulled && DOC_UI[k].quiet && final.trim())
     appendOne(box, { type: "assistant", content: final });  // 没落盘就是在讨论，正文得让他看见
-  if(!wrote && !st.cand) docMsg(k, `这轮没有改${DOC_UI[k].file} —— 说「更新${DOC_UI[k].file}」或让它「写进文件」`);
+  if(!wrote && !autoPulled && !st.cand) docMsg(k, `这轮没有改${DOC_UI[k].file} —— 说「更新${DOC_UI[k].file}」或让它「写进文件」`);
   if(errMsg) appendOne(box, { type: "error", message: errMsg });
   await refreshState(false);
 }

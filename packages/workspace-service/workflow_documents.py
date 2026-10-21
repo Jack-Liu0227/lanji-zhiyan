@@ -380,7 +380,13 @@ def map_sources(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
 
 
 def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str) -> dict[str, Any]:
-    """就地覆盖写（他要的就是「修改调整都直接在原文件改」）。"""
+    """就地覆盖写（他要的就是「修改调整都直接在原文件改」）。
+
+    空内容一律拒写：模型偶尔发一个丢参数的工具调用（args 是空的），照写就把整份正文清成 1 字节
+    —— 实测真发生过，左边展示区于是永远是空的，模型还回一句「已写好文件」。
+    """
+    if not (markdown or "").strip():
+        raise ValueError("markdown 不能为空：这是整份覆盖写，空内容会把文件清空（已拒写）。要给完整正文。")
     p = doc_path(db, task_id, kind)
     p.parent.mkdir(parents=True, exist_ok=True)
     fileguard.before_write(p, f"{kind}正文覆盖")
@@ -618,6 +624,7 @@ def write_system(db: "WorkflowDB", task_id: str) -> str:
 5. **能写就直接写**：用户让你写某一节、或说「按框架写」，就直接把那一节写出来（300-800 字量级，学术书面语），缺的东西写「待补：<还差什么>」——**不要先反问一串再等**；确实缺到没法动笔（比如完全不知道研究对象）才问 1 个问题。写完落盘并说清改了哪一节。
 6. 用户上传的文件会以「[附件] … 路径」出现，需要内容就调 read_attachment（PDF 自动抓正文）。
 7. 正文文件：`{cur['path']}`（{'已有正文' if cur['exists'] else '还没有正文'}）。
+7.1 **左栏就是这份正文**：用户说「写在左边」「在左边展示正文」「生成到左边」——都是叫你把整份正文调 doc_write 落盘，写完左边立刻换成新内容；不要在聊天里贴全文当交付。工具调用要带完整 `markdown` 参数，空参数会被服务端拒写。
 8. **引用不要写进正文**：正文里**不出现** `[1]` `[2]` 这类标号（也不要写「(Smith et al., 2024)」这种行内引用）；需要引用文献时，调 **cite_add** 把「这一处落在哪一节 + 被引用的那句原话（照抄，用来对锚点）+ 文献题目/作者/出处/年/DOI/页数/引用页」记进后台的引用台账。正文保持流畅通顺，引用关系由台账负责。
 
 【本机写作工作流（按它的规范写）】

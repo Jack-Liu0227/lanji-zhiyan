@@ -178,6 +178,16 @@ class MapStepTest(unittest.TestCase):
         self.assertIn({"from": ids["1.1 实验方法"], "to": "r1", "label": "支撑"}, r["edges"])
         self.assertIn({"from": ids["2.1 实验方法"], "to": "r2", "label": "支撑"}, r["edges"])
 
+    def test_doc_write_refuses_empty_markdown(self):
+        """模型偶尔发个丢参数的工具调用：空 markdown 被照写就把整份正文清空（实测发生过）。"""
+        workflow.doc_write(self.db, self.tid, "write", "# 已有正文\n\n第一段。\n")
+        with self.assertRaises(ValueError):
+            workflow.doc_write(self.db, self.tid, "write", "   ")
+        with self.assertRaises(ValueError):
+            workflow.doc_write(self.db, self.tid, "write", "")
+        kept = workflow.doc_read(self.db, self.tid, "write")["markdown"]
+        self.assertIn("第一段", kept, "拒写之后原正文得还在")
+
     def test_open_write_is_once(self):
         """谱系图交付 → 文章撰写接手只留一条开场白（重复交付不刷屏）。"""
         r1 = workflow_documents.open_write(self.db, self.tid)
