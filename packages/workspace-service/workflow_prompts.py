@@ -402,6 +402,14 @@ TOOL_SPECS = [
     _schema("recall", "回想：按关键词检索 记忆 + 过往对话 + 笔记/证据原文块。引用旧结论之前先查，别凭印象。",
             {"query": {"type": "string", "description": "关键词，两三个词最好；两字也能搜"},
              "limit": {"type": "integer", "description": "每类最多几条，默认 8"}}, ["query"]),
+    _schema("file_list", "列项目文件夹里某一层的内容（目录 + 文件，带大小与修改时间）。rel 相对项目根，空 = 根。",
+            {"rel": {"type": "string", "description": "相对路径，如 论文正文 或 最终产物/_tex；空 = 项目根"}}),
+    _schema("file_hand", "把项目里的一个文件转到某一步的对话里 —— 那一步的助手下次开口就带着它（用户说的「交给写作助手」）。",
+            {"rel": {"type": "string", "description": "相对项目根的路径（文件或文件夹）"},
+             "step": {"type": "string", "enum": ["idea", "search", "download", "notes", "outline", "map",
+                                                 "write", "review", "entrans", "convert"],
+                      "description": "交给哪一步"},
+             "note": {"type": "string", "description": "附一句要那一步做什么（可空）"}}, ["rel", "step"]),
 ]
 
 TOOL_NAMES = [t["function"]["name"] for t in TOOL_SPECS]

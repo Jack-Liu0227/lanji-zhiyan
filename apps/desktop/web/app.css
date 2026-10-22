@@ -1598,3 +1598,30 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 @media(max-width:900px){.pn-layout{grid-template-columns:200px minmax(0,1fr)}}
 .msg-copy{margin-left:auto;background:transparent;color:var(--muted);border:1px solid var(--line);border-radius:5px;padding:2px 7px;cursor:pointer;font-size:11px}
 .msg-copy:hover{color:var(--fg)}
+/* 三栏页第 11 项「项目文件夹」：左目录 + 右预览（与「格式转换」同构，只多一个 .wf-vsep 分隔线） */
+.wf-vsep{height:1px;background:var(--line);margin:6px 3px 3px}
+.fl{display:flex;flex-direction:column;flex:1;min-height:0}
+.fl-grid{display:grid;grid-template-columns:minmax(178px,214px) minmax(0,1fr);gap:10px;flex:1;min-height:0}
+.fl-col{display:flex;flex-direction:column;min-width:0;min-height:0;border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden}
+.fl-h{display:flex;align-items:center;gap:8px;min-height:40px;padding:7px 10px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--panel) 80%,var(--bg))}
+.fl-h b{font-size:12.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fl-sub{font-size:10.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fl-tag{font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:5px;padding:1px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:118px}
+.fl-sp{flex:1}
+.fl-ib{flex:0 0 auto;width:22px;height:22px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);color:var(--muted);font-size:11px;line-height:1;padding:0;cursor:pointer}
+.fl-ib:hover{border-color:var(--accent);color:var(--accent)}
+.fl-list{flex:1;min-height:0;overflow:auto;padding:4px 5px}
+.fl-row{display:flex;align-items:center;gap:7px;height:27px;padding:0 6px;border-radius:7px;font-size:12.5px;color:var(--fg);cursor:pointer}
+.fl-row:hover{background:color-mix(in srgb,var(--accent) 9%,transparent)}
+.fl-row.dir{font-weight:650}
+.fl-row.kid{padding-left:21px;font-size:12px}
+.fl-row.on{background:color-mix(in srgb,var(--accent) 13%,transparent);box-shadow:inset 2px 0 0 var(--accent)}
+.fl-nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fl-cnt{font-size:10px;color:var(--muted)}
+.fl-ext{font-size:9px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 3px}
+.fl-stage{flex:1;min-height:0;overflow:auto;padding:0}
+.fl-doc{margin:0;padding:16px 22px;white-space:pre-wrap;font-size:12.6px;line-height:1.78;color:var(--fg);font-family:inherit}
+.fl-img{display:block;max-width:100%;margin:14px auto}
+.fl-frame{width:100%;height:100%;border:0;display:block}
+.fl-empty{margin:0;padding:22px;color:var(--muted);font-size:12px;line-height:1.9}
+.fl-empty span{font-size:11.5px;opacity:.8}

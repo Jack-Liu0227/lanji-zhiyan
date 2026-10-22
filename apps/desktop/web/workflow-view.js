@@ -512,6 +512,109 @@ async function docSend(k){
 /* ==== 格式转换：左窄栏 = 项目「图」文件夹（改名 / 点开看），右大区 = 成品展示（Word / PDF / 图） ==== */
 let cvCur = { path: "", ext: "" };      // 展示区当前文件
 
+/* ==== 项目文件夹（左栏第 11 项：不是一步、不进 WF_ORDER；中栏 = 左目录 + 右预览）==== */
+const FL_TEXT = new Set(["md","markdown","txt","tex","bib","json","py","csv","yaml","yml","log","sh","js","css"]);
+let flRel = "", flSel = "", flRows = [];
+
+function flFmtSize(n){ n = Number(n || 0);
+  if(!n) return "";
+  if(n < 1024) return n + " B";
+  if(n < 1048576) return (n/1024).toFixed(1) + " KB";
+  return (n/1048576).toFixed(1) + " MB"; }
+function flMsg(t){ const el = $("flMeta"); if(el) el.textContent = t || ""; }
+
+function filesPanelHTML(active){
+  return `<section class="fl" id="panel-files"${active ? "" : ' style="display:none"'}>
+    <div class="fl-grid">
+      <aside class="fl-col">
+        <div class="fl-h"><b>项目文件夹</b><span class="fl-tag" id="flRoot" title=""></span><span class="fl-sp"></span>
+          <button class="fl-ib" id="flReload" title="重新读这个文件夹">↻</button></div>
+        <div class="fl-list" id="flList"><p class="fl-empty">读目录…</p></div>
+      </aside>
+      <div class="fl-col">
+        <div class="fl-h"><b id="flName">选一个文件</b><span class="fl-sub" id="flMeta"></span><span class="fl-sp"></span>
+          <button class="fl-ib" id="flHand" title="交给某一步的助手（先写进右边对话框）">⇢</button>
+          <button class="fl-ib" id="flOpen" title="用系统程序打开">↗</button></div>
+        <div class="fl-stage" id="flStage"><div class="fl-empty">左边点一个文件，这里出预览<br>
+          <span>md / txt / tex / json 显示正文，pdf 内嵌，docx 先转 PDF</span></div></div>
+      </div>
+    </div></section>`;
+}
+
+function flBind(){
+  const list = $("flList");
+  if(list) list.onclick = (e)=>{
+    const row = e.target.closest(".fl-row"); if(!row) return;
+    if(row.dataset.up){ flLoad(flRel.split("/").slice(0,-1).join("/")); return; }
+    const r = flRows.find(x => x.rel === row.dataset.rel); if(!r) return;
+    if(r.dir){ flSel = ""; flLoad(r.rel); } else flShow(r);
+  };
+  const rl = $("flReload"); if(rl) rl.onclick = ()=>flLoad(flRel);
+  const hand = $("flHand"); if(hand) hand.onclick = ()=>{
+    const ta = $("wv-ask");
+    if(!flSel){ flMsg("先在左边点一个文件"); return; }
+    if(ta){ ta.value = `把 ${flSel} 交给写作助手`; ta.focus(); }
+  };
+  const op = $("flOpen"); if(op) op.onclick = ()=>{
+    const r = flRows.find(x => x.rel === flSel);
+    if(!r){ flMsg("先在左边点一个文件"); return; }
+    api("/api/conv/open", { path: r.path }).catch(e => flMsg("打不开：" + e.message));
+  };
+  flLoad(flRel);
+}
+
+async function flLoad(rel){
+  flRel = rel || "";
+  const list = $("flList"); if(!list) return;
+  if(!curTask){ list.innerHTML = `<p class="fl-empty">先选一个项目</p>`; return; }
+  list.innerHTML = `<p class="fl-empty">读目录…</p>`;
+  let d = {};
+  try{ d = await api(`/api/tree?id=${encodeURIComponent(curTask)}&rel=${encodeURIComponent(flRel)}`); }
+  catch(e){ list.innerHTML = `<p class="fl-empty">读失败：${esc(e.message)}</p>`; return; }
+  if(d.error){
+    if(flRel) return flLoad("");                 // 换了项目 / 这个夹没了 → 退回根，别卡在一句报错里
+    list.innerHTML = `<p class="fl-empty">${esc(d.error)}</p>`;
+    return;
+  }
+  if(d.missing){ list.innerHTML = `<p class="fl-empty">这个项目还没设项目位置 —— 在「项目空间」里选一个文件夹，这里就长出目录了</p>`; return; }
+  const tag = $("flRoot");
+  if(tag){ const parts = String(d.root || "").split(/[\\/]/).filter(Boolean);
+    tag.textContent = parts.slice(-2).join("/"); tag.title = d.root || ""; }
+  flRows = d.rows || [];
+  const up = flRel ? `<div class="fl-row dir" data-up="1"><span>↑</span><span class="fl-nm">上一层</span></div>` : "";
+  list.innerHTML = up + (flRows.length ? flRows.map(r=>`
+    <div class="fl-row${r.dir ? " dir" : " kid"}${r.rel === flSel ? " on" : ""}" data-rel="${esc(r.rel)}" data-dir="${r.dir ? 1 : 0}" title="${esc(r.name)}">
+      <span>${r.dir ? "▸" : "　"}</span><span class="fl-nm">${esc(r.name)}</span>
+      ${r.dir ? `<span class="fl-cnt">${r.count || 0}</span>` : `<span class="fl-ext">${esc(r.ext || "")}</span>`}</div>`).join("")
+    : `<p class="fl-empty">这个夹是空的</p>`);
+  if(wfStep === "files") wfPaintFoot();
+}
+
+async function flShow(row){
+  flSel = row.rel;
+  document.querySelectorAll("#flList .fl-row").forEach(x => x.classList.toggle("on", x.dataset.rel === flSel));
+  if($("flName")) $("flName").textContent = row.name;
+  flMsg([flFmtSize(row.size), row.at, row.rel.split("/").slice(0,-1).join("/")].filter(Boolean).join(" · "));
+  const stage = $("flStage"); if(!stage) return;
+  stage.innerHTML = `<p class="fl-empty">打开中…</p>`;
+  const ext = String(row.ext || "").toLowerCase();
+  if(FL_TEXT.has(ext) || !ext){
+    try{
+      const d = await api(`/api/conv/read?path=${encodeURIComponent(row.path)}`);
+      if(d.error) throw new Error(d.error);
+      stage.innerHTML = `<pre class="fl-doc">${esc((d.text || "") + (d.truncated ? "\n\n…（太长，只预览前一段；完整内容用 ↗ 打开）" : ""))}</pre>`;
+    }catch(e){ stage.innerHTML = `<p class="fl-empty">读不了：${esc(e.message)}</p>`; }
+    return;
+  }
+  try{
+    const d = await api(`/api/conv/preview?path=${encodeURIComponent(row.path)}`);
+    if(d.error) throw new Error(d.error);
+    if(d.kind === "image") stage.innerHTML = `<img class="fl-img" src="${d.url}&t=${Date.now()}" alt="${esc(row.name)}">`;
+    else if(d.kind === "pdf" || d.kind === "html") stage.innerHTML = `<iframe class="fl-frame" src="${d.url}&t=${Date.now()}"></iframe>`;
+    else stage.innerHTML = `<p class="fl-empty">这类文件这里不预览 —— 点右上角 ↗ 用系统程序打开</p>`;
+  }catch(e){ stage.innerHTML = `<p class="fl-empty">打不开：${esc(e.message)}</p>`; }
+}
+
 function convPanelHTML(active){
   return `<section class="cv" id="panel-convert"${active ? "" : ' style="display:none"'}>
     <div class="cv-grid">
@@ -823,7 +926,10 @@ const WF_AGENT = {
   entrans: {emoji:"🌍", name:"中译英助手", sub:"学术口径中译英，术语统一", api:"/api/agent",
             ph:"说目标期刊口径 / 要不要译图表标题…", hint:"Enter 发送 · 说「开始翻译」→ 译文落进产出"},
   convert: {emoji:"🔄", name:"格式助手", sub:"转 docx / pdf / tex，样式跟模板走", api:"/api/agent",
-            ph:"说导出格式和模板…", hint:"Enter 发送 · 说「导出 docx」→ 文件落进产出"}
+            ph:"说导出格式和模板…", hint:"Enter 发送 · 说「导出 docx」→ 文件落进产出"},
+  /* 左栏第 11 项「项目文件夹」的助手：不是一步，不进 WF_ORDER，也不占 steps 表 */
+  files:   {emoji:"📁", name:"文件管理助手", sub:"看 / 找 / 传：问文件内容，说「交给写作助手」就转过去", api:"/api/agent",
+            ph:"问这个文件 / 这个夹，或说「交给写作助手」…", hint:"Enter 发送 · 左边点文件出预览 · 右上 ↗ 用系统程序打开"}
 };
 /* 这五步的面板本来就自带对话 —— 三栏页里对话统一收到右栏，面板里那份藏掉，避免两个聊天 */
 const WF_OWN_CHAT = new Set(["idea", "map", "outline", "write", "review"]);
@@ -930,7 +1036,14 @@ async function wfPlanLoad(step){
 function wfPaintMsgs(step){
   const box = $("wv-msgs"); if(!box) return;
   if(wfView === "trajectory"){ box.innerHTML = ""; renderTrajectory(box, wfEvents); return; }
-  if(!wfMsgs.length){ wfPlanLoad(step); return; }
+  if(!wfMsgs.length){
+    if(step === "files"){                       // 这一步不烧模型、不出「本步计划」：直接给一句引导
+      box.innerHTML = `<div class="wf-plan"><div class="wf-plan-h"><span class="wf-av">📁</span><b>文件管理助手</b></div>
+        <p class="wf-plan-q">左边点一个文件（或钻进子夹找），我告诉你里面是什么、和项目里别的文件对不对得上；说「把 论文正文/正文.md 交给写作助手」我就转进那一步的对话。</p></div>`;
+      return;
+    }
+    wfPlanLoad(step); return;
+  }
   box.innerHTML = "";
   const who = WF_AGENT[step] || WF_AGENT.idea;          // 这一步的助手说话，不是智研管家
   wfMsgs.forEach((mv, i) => {
@@ -981,7 +1094,8 @@ async function wfSend(m, step){
   const evs = [];
   try{
     const res = await fetch(a.api, {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({task_id:curTask, message:text, step:step})});
+      body: JSON.stringify({task_id:curTask, message:text, step:step,
+        sel: step === "files" ? ((flRows.find(r => r.rel === flSel) || {}).path || "") : ""})});
     if(!res.ok || !res.body) throw new Error("HTTP "+res.status);
     const reader = res.body.getReader(), dec = new TextDecoder();
     let buf = "", final = "";
@@ -1012,6 +1126,7 @@ async function wfSend(m, step){
     box.scrollTop = box.scrollHeight;
     if(step === "search") wsLoadState();      // 助手检索完 → 左边结果立刻回填
     if(step === "convert") cvLoad();          // 助手导出完 → 左边文件/预览立刻刷新
+    if(step === "files") flLoad(flRel);       // 助手可能刚落了文件 → 目录刷新
     if(step === "idea" && typeof iwLoad === "function") iwLoad();   // 刚出的判定 → 左边下区刷新
   }
 }
@@ -1019,6 +1134,7 @@ async function wfSend(m, step){
 function renderWorkflow(m){
   m.style.padding = "";        // 清掉别的页面留下的内边距
   const proj = (S.tasks||[]).find(t => t.id === curTask);
+  if(wfStep !== "files" && !WF_ORDER.includes(wfStep)) wfStep = WF_ORDER[0];   // 老 localStorage 存了个不认识的步
   m.innerHTML = needTask() || `
     <div class="wf-page${wfMin?" min":""}" id="wfPage">
       <aside class="wf-rail" id="wfRail">
@@ -1027,10 +1143,13 @@ function renderWorkflow(m){
         ${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}" title="${STAGE[s]}">
             <span class="wf-ico">${STAGE[s].split(" ")[0]}</span><span class="wf-lbl">${STAGE[s].slice(STAGE[s].indexOf(" ")+1)}</span>
             <span class="wf-dot"></span></button>`).join("")}
+        <div class="wf-vsep"></div>
+        <button class="wf-step${wfStep==="files"?" on":""}" data-step="files" title="📁 项目文件夹（整个文件夹，不是一步）">
+            <span class="wf-ico">📁</span><span class="wf-lbl">项目文件夹</span><span class="wf-dot"></span></button>
       </aside>
       <main class="wf-stage" id="wfStage">
         <div class="wf-panels">${WF_ORDER.map(s=> PANELS[s] ? PANELS[s](s===wfStep)
-          : `<div class="card" id="panel-${s}"${s===wfStep?"":' style="display:none"'}><h3>${STAGE[s]}</h3><div id="out-${s}"></div></div>`).join("")}</div>
+          : `<div class="card" id="panel-${s}"${s===wfStep?"":' style="display:none"'}><h3>${STAGE[s]}</h3><div id="out-${s}"></div></div>`).join("")}${filesPanelHTML(wfStep==="files")}</div>
         <div class="wf-foot">
           <span class="wf-pill" id="wfFootPill">第 1 / 10 步</span>
           <span class="hint" id="wfFootHint">确认后这一步锁定，下一步才能拿它当输入。</span>
@@ -1053,11 +1172,13 @@ function renderWorkflow(m){
     if(DOC_UI[wfStep]) docBind(wfStep, m);
     if(wfStep==="convert") cvBind();
     if(wfStep==="entrans") enBind();
+    if(wfStep==="files") flBind();
   };
   m.querySelectorAll(".wf-step").forEach(b=>b.onclick=()=>{
     wfStep = b.dataset.step; localStorage.setItem("rw-wf-step", wfStep);
     m.querySelectorAll(".wf-step").forEach(x=>x.classList.toggle("on", x.dataset.step===wfStep));
-    WF_ORDER.forEach(s=>{ const p=$("panel-"+s); if(p) p.style.display = s===wfStep ? "" : "none"; });
+    WF_ORDER.forEach(s=>{ const p=$("panel-"+s); if(p) { const on = s===wfStep; p.style.display = on ? "" : "none"; } });
+    const pf = $("panel-files"); if(pf) pf.style.display = wfStep==="files" ? "" : "none";
     bindStep(); wfAgentPaint(m, wfStep); wfPaintFoot();
   });
   const back = $("wfBack"); if(back) back.onclick = ()=>{
@@ -1086,7 +1207,16 @@ function renderWorkflow(m){
 }
 function wfPaintFoot(){
   const a = WF_AGENT[wfStep];
-  const hint = $("wfFootHint"), pill = $("wfFootPill");
+  const hint = $("wfFootHint"), pill = $("wfFootPill"), back = $("wfBack"), deliver = $("wfDeliver");
+  if(wfStep === "files"){                       // 第 11 项不是一步：不编号、不交付、不给「退回上一步」
+    if(pill) pill.textContent = `项目文件夹 · ${flRows.length} 项`;
+    if(hint) hint.textContent = "点文件看预览 · 在右边问它这个文件 · 说「交给写作助手」就转到那一步";
+    if(back) back.style.display = "none";
+    if(deliver) deliver.style.display = "none";
+    return;
+  }
+  if(back) back.style.display = "";
+  if(deliver) deliver.style.display = "";
   const name = (STAGE[wfStep]||wfStep).slice((STAGE[wfStep]||"").indexOf(" ")+1);
   if(pill) pill.textContent = `第 ${WF_ORDER.indexOf(wfStep)+1} / ${WF_ORDER.length} 步 · ${name}`;
   if(hint && a) hint.textContent = `右侧「${a.name}」的产出看着没问题就交付`;

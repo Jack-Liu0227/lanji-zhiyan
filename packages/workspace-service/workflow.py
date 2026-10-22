@@ -1804,6 +1804,7 @@ from workflow_stages import (
 from workflow_converters import (
     cite_read, cite_add, cite_bib, conv_run, conv_files, conv_compile, conv_open, _safe_path,
     fig_dir, fig_list, fig_rename, conv_preview, open_convert, convert_system,
+    tree_list, file_hand, files_system,
     en_state, en_run, compose_draft
 )
 
@@ -2019,6 +2020,7 @@ TOOL_RISK = {
     "library_overview": "read_only", "knowledge_query": "read_only",
     "outline_read": "read_only", "map_read": "read_only", "map_sources": "read_only",
     "doc_read": "read_only", "cite_read": "read_only", "read_attachment": "read_only",
+    "file_list": "read_only", "file_hand": "workspace_write",
     "paper_search": "network_read", "search": "network_read",
     "mail_accounts": "network_read", "mail_list": "network_read", "mail_read": "network_read",
     "zotero_collections": "network_read",
@@ -2357,6 +2359,11 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         return cite_bib(db, task_id, args)
     if name == "read_attachment":
         return read_attachment(args.get("path", ""), int(args.get("chars") or 8000))
+    if name == "file_list":                                   # 项目文件夹：看一层目录
+        return tree_list(db, task_id, str(args.get("rel") or ""))
+    if name == "file_hand":                                   # 把文件转到某一步的对话里
+        return file_hand(db, task_id, str(args.get("rel") or ""), str(args.get("step") or ""),
+                         str(args.get("note") or ""))
     if name == "draft_write":
         return stage_write(db, task_id, args.get("title", ""), args.get("section", "引言"))
     if name == "draft_review":

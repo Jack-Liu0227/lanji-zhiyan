@@ -527,6 +527,105 @@ def convert_system(db: "WorkflowDB", task_id: str) -> str:
     )
 
 
+# ============================ 项目文件夹（三栏页第 11 项：看 / 预览 / 交给某一步）============================
+SKIP_NAMES = {"_work", "_parts", "_tex", "__pycache__", ".obsidian", ".git", ".agents", "node_modules"}
+HAND_STEPS = {"idea": "创新点审查助手", "search": "文献检索助手", "download": "入库助手",
+              "notes": "翻译助手", "outline": "框架助手", "map": "谱系助手",
+              "write": "写作助手", "review": "审查助手", "entrans": "中译英助手", "convert": "格式助手"}
+
+
+def _fsize(n: int) -> str:
+    v = float(n or 0)
+    for unit in ("B", "KB", "MB"):
+        if v < 1024:
+            return f"{v:.0f} {unit}" if unit == "B" else f"{v:.1f} {unit}"
+        v /= 1024
+    return f"{v:.1f} GB"
+
+
+def tree_list(db: "WorkflowDB", task_id: str, rel: str = "") -> dict[str, Any]:
+    """项目文件夹的一层清单（rel 相对项目根，'' = 根）。
+    两道闸：_safe_path 先保证在白名单里，再判 is_relative_to(root) —— 只加前者的话，
+    rel='../别的项目' 也能过（同级项目都在白名单里）。"""
+    base = db.base_dir(task_id)
+    if not base or not base.is_dir():
+        return {"root": str(base or ""), "rel": "", "rows": [], "missing": True}
+    root = _safe_path(str(base))
+    target = _safe_path(str(root / rel)) if rel else root
+    if not target.is_relative_to(root):
+        raise ValueError("只能看这个项目文件夹里的东西")
+    if not target.is_dir():
+        raise ValueError("不是文件夹：" + rel)
+    dirs: list[dict[str, Any]] = []
+    files: list[tuple[float, dict[str, Any]]] = []
+    for p in target.iterdir():
+        if p.name.startswith((".", "~$")) or p.name in SKIP_NAMES:
+            continue
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        row = {"name": p.name, "rel": p.relative_to(root).as_posix(), "path": str(p),
+               "dir": p.is_dir(), "ext": "" if p.is_dir() else p.suffix.lower().lstrip("."),
+               "size": 0 if p.is_dir() else st.st_size, "count": 0,
+               "at": datetime.fromtimestamp(st.st_mtime).strftime("%m-%d %H:%M")}
+        if row["dir"]:
+            try:
+                row["count"] = sum(1 for c in p.iterdir() if c.is_file())
+            except OSError:
+                pass
+            dirs.append(row)
+        else:
+            files.append((st.st_mtime, row))
+    dirs.sort(key=lambda r: r["name"])
+    files.sort(key=lambda x: -x[0])                       # 文件按修改时间倒序：刚改的排前面
+    return {"root": str(root), "rel": "" if target == root else target.relative_to(root).as_posix(),
+            "rows": dirs + [r for _, r in files], "missing": False}
+
+
+def file_hand(db: "WorkflowDB", task_id: str, rel: str, step: str, note: str = "") -> dict[str, Any]:
+    """把项目里的一个文件转到某一步的对话里（scope=step）—— 那一步的助手下次开口就带着它。
+    只写一条消息，不触发那一步跑模型（用户自己走到那一步时才会读到）。"""
+    base = db.base_dir(task_id)
+    if not base:
+        raise ValueError("这个项目还没设项目位置")
+    who = HAND_STEPS.get(step or "")
+    if not who:
+        raise ValueError("没有这一步：" + (step or ""))
+    root = _safe_path(str(base))
+    p = _safe_path(str(root / rel)) if rel else root
+    if not p.is_relative_to(root) or not p.exists():
+        raise ValueError("文件不在这项目里：" + (rel or ""))
+    size = sum(c.stat().st_size for c in p.iterdir() if c.is_file()) if p.is_dir() else p.stat().st_size
+    msg = f"【文件管理助手转来】{p.relative_to(root).as_posix()}（{_fsize(size)}）" + (f"\n{note}" if note else "")
+    db.add_message(task_id, "user", msg, scope=step, sender="files")
+    return {"ok": True, "step": step, "who": who, "name": p.name, "path": str(p), "size": size}
+
+
+def files_system(db: "WorkflowDB", task_id: str) -> str:
+    """文件管理助手（项目文件夹这一栏）的 system：整夹随便看，只读为主，要动手就交给对应那一步。"""
+    task = db.summary(task_id)["task"]
+    base = db.base_dir(task_id)
+    try:
+        lines = chr(10).join(
+            (f"- {r['name']}/  {r['count']} 个文件" if r["dir"] else f"- {r['name']}  {_fsize(r['size'])}")
+            for r in tree_list(db, task_id)["rows"][:26]) or "（空）"
+    except Exception as exc:
+        lines = f"（读不到目录：{exc}）"
+    return (
+        "你是「览籍智研」三栏页「项目文件夹」这一栏的文件管理助手，用中文工作。" + chr(10) +
+        f"项目《{task['title']}》，文件夹 {base or '（这个项目还没设项目位置）'}。" + chr(10) + chr(10) +
+        "用户会把文件拖进对话框、或在左边点选文件来问你。你要做的是：说清这是什么文件、里面有什么、"
+        "和项目里别的文件对不对得上（比如正文和引用台账、图和图注）。" + chr(10) +
+        "- 读内容用 read_attachment（自动认 md/txt/pdf/docx）；看目录/找文件用 file_list（rel 相对项目根）。" + chr(10) +
+        "- 用户说「交给 X 助手」→ 调 file_hand（rel + step + note），然后一句话说清转给了谁、那一步会拿它干什么。" +
+        "step 取值：" + "、".join(f"{k}={v}" for k, v in HAND_STEPS.items()) + "。" + chr(10) +
+        "- 只读为主：改内容、挪位置、删除，都要用户明确说了才做，做之前先用一句话复述一遍。" + chr(10) +
+        "- 不编造文件里没有的内容；找不到就说找不到，并列出你到底看了哪几个路径。" + chr(10) + chr(10) +
+        "【项目根目录现状】" + chr(10) + lines
+    )
+
+
 def conv_preview(path: str) -> dict[str, Any]:
     """右栏展示区要什么：PDF/图片直接给 /api/file 的地址；Word 先转成 PDF 再展示。"""
     p = _safe_path(str(path))          # 只认项目 / data 目录里的文件（以前这里没校验，任意路径都能拉去转换）

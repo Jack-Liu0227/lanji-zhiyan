@@ -2,6 +2,18 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 2026-10-22（三栏页第 11 项「项目文件夹」+ 文件管理助手）
+
+**0. 口径**：它是**文件夹**，不是第 11 步 —— 不进 `WF_ORDER`、不编号、不写 `steps` 表、没有「确认交付」。目的是「看文件 / 问文件 / 把文件交给某一步」都在程序内闭环，不用跳出到资源管理器。
+
+**1. 实现**：`workflow_converters.tree_list`（一层清单，目录在前、文件按 mtime 倒序）、`file_hand`（把文件写进目标步 scope 的一条消息，**不**触发那步跑模型）、`files_system`（本栏助手 system：整夹可看、只读为主、要动手交给对应那一步）；新路由 `GET /api/tree?id=&rel=`；两个新工具 `file_list` / `file_hand`（`TOOL_RISK` 分别是 read_only / workspace_write）；前端 `filesPanelHTML + flBind/flLoad/flShow`（左 214px 目录 + 右预览，预览复用 `/api/conv/preview` 与 `/api/conv/read`，文档开外站复用 `/api/conv/open`），右栏换成「文件管理助手」（scope=`files`），发消息时把选中文件绝对路径当 `sel` 带上、服务端拼进 `extra_context`。
+
+**2. 坑（下次别重踩）**：面板显隐原来只遍历 `WF_ORDER` → 第 11 项会被藏住，改成按 `panel-<wfStep>` 统一 toggle；`wfPaintFoot` 用 `WF_ORDER.indexOf` 会写出「第 0 / 10 步」，必须先判 files 并藏掉「退回上一步 / 确认交付」；`wfPaintMsgs` 空态默认走 `wfPlanLoad`（会白烧一次模型），files 要给静态引导；换项目后 `flRel` 还留着上一个项目的子路径 → 报「不是文件夹」卡死，`flLoad` 里 `d.error && flRel` 退回根重试一次。
+
+**3. 没做**：改名 / 删除 / 新建夹 / 全树搜索；拖拽入口（WebView2 拿不到 `file.path`，仍靠 ＋ 粘路径）。
+
+**4. 验**：`py -3.10 -m unittest tests.test_files_panel` 5 项 OK（含「同级项目 `../别的项目` 必须被第二道 `is_relative_to` 拦下」）；真项目只读探针：测试test 根 8 个子夹 + README、`最终产物` 的 PDF 内嵌 566×835、`论文正文/正文.md` 正文 1890 字；真跑一轮「论文正文都有什么文件」→ 助手调 `file_list` 两轮后按真实大小/时间列了 8 个文件。
+
 ## 2026-10-22（文章撰写：从零起稿按谱系图逐节生成）
 
 **0. 口径**：谱系图只在**起稿那一次**当骨架 —— 从零写第一版时，一节一次调用、每节只喂挂在该节下的证据；正文写进文件之后，图与稿脱钩，改图不会改变已成稿的输出（要按新图重写必须明说「整篇/全文/从头」）。

@@ -62,6 +62,7 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       map_seed, project_outs, map_tidy, open_write,
                       cite_read, conv_files, conv_compile, conv_open,
                       fig_list, fig_rename, conv_preview, open_convert, convert_system,
+                      tree_list, files_system,
                       en_state, en_run, _safe_path, step_plan,
                       stage_download_selected, stage_zotero_import, test_provider,
                       deepread_kick, deepread_state, deepread_stop)
@@ -1119,6 +1120,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/fig/list":                   # 格式转换：左栏「图」文件夹
                 with WorkflowDB(DB_PATH) as db:
                     return self._json(fig_list(db, q["id"][0]))
+            if path == "/api/tree":                       # 项目文件夹：一层清单（rel 相对项目根）
+                with WorkflowDB(DB_PATH) as db:
+                    try:
+                        return self._json(tree_list(db, q["id"][0], (q.get("rel") or [""])[0]))
+                    except Exception as exc:
+                        return self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
             if path == "/api/conv/preview":               # 右栏展示区：PDF/图片直给，Word 先转 PDF
                 try:
                     return self._json(conv_preview(q.get("path", [""])[0]))
@@ -1972,12 +1979,17 @@ class Handler(BaseHTTPRequestHandler):
                     extra = ""
                 # step 只用来给这个助手一个身份（前端在 body 里带上）；不参与下面的 log_step，那一步照旧只记 runners
                 wstep = step or str(data.get("step") or "")
+                if wstep == "files":                  # 项目文件夹：把左边选中的文件带进来，它才答得上「这个文件…」
+                    sel = str(data.get("sel") or "")
+                    if sel:
+                        extra = (extra + chr(10) * 2 if extra else "") + "【当前选中的文件】" + sel
                 # 对话落在这个步骤自己的 scope 里 —— 右栏是按 /api/step/messages?step=X 取历史的，
                 # 不落 scope 的话通用 Agent 这几步（检索/下载/笔记/翻译/转换）一换步就整段消失、
                 # 三块统计面板永远是 0 / 还没有。纯聊天（不绑项目）照旧 scope=''。
                 on_task = bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
                 run_agent(db, tid, data.get("message", ""), emit, extra_context=extra,
-                          system=convert_system(db, tid) if wstep == "convert" else None,   # 格式转换：三件事依次问
+                          system=(files_system(db, tid) if wstep == "files"
+                                  else convert_system(db, tid) if wstep == "convert" else None),   # 格式转换：三件事依次问
                           step=wstep, scope=wstep if (wstep and on_task) else "",
                           cancel_check=lambda: run.cancel_requested)
             if track:
