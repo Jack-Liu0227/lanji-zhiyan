@@ -22,7 +22,7 @@ python apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开
 
 如果启动检查失败，脚本会显示错误并暂停，详细信息保存在 `data/startup.log`；服务启动后的异常见 `apps/desktop/data/server-error.log`。按错误提示，用选中的 Python 执行 `-m pip install -r requirements.txt` 修复依赖。
 
-**下载安装**（GitHub Releases）：<https://github.com/Jack-Liu0227/lanji-zhiyan/releases/latest> —— 两个资产：`览籍智研-0.1.0-安装程序.exe`（单文件安装器，双击即装、自动建桌面快捷方式）与 `览籍智研-0.1.0-win64.zip`（免安装，解压双击里面的 `览籍智研.exe`）。
+**????**?GitHub Releases??<https://github.com/Jack-Liu0227/lanji-zhiyan/releases/latest> ? ?????`LanjiZhiyan-0.2.0-Setup.exe`???????????????????????? `LanjiZhiyan-0.2.0-Portable.zip`???????????? `????.exe`??
 
 **自己打包**：双击 `tools\build-app.bat`（用 `tools\览籍智研.spec`，入口 `apps/desktop/server.py`）→ `dist\览籍智研\`；要单文件安装器再打 `tools\installer.spec`（入口 `tools/installer.py`）。**必须用 3.10 打包**，否则运行时会静默退回带黑标题栏的 Edge 窗口。
 
