@@ -1236,6 +1236,15 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 and "？" not in (msg.get("content") or "") and "?" not in (msg.get("content") or "")):
             # 检索跑完了却没问「还改不改」→ 补一句（它自己问过就不重复问）
             msg = {**msg, "content": (msg.get("content") or "").rstrip() + SEARCH_CLOSING}
+        if not calls and msg.get("content"):
+            # 证据闸门：本轮工具返回里找不到出处的数字，明说出来（不改模型原文，只追加一行）
+            import verify
+            seen = "\n".join(m.get("content") or "" for m in messages if m.get("role") == "tool")
+            rep = verify.audit(msg["content"], corpus=seen, label="chat")
+            if rep["bad"] and verify.enabled():
+                msg = {**msg, "content": msg["content"].rstrip()
+                       + "\n\n> ⚠ 本次工具返回里没找到这些数字的出处："
+                       + "、".join(x["value"] for x in rep["bad"][:8])}
         if msg.get("content"):
             say({"type": "assistant", "content": msg["content"], "step": step})
             events.append({"type": "assistant", "content": msg["content"]})

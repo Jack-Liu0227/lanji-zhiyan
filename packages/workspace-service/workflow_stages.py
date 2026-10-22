@@ -347,8 +347,12 @@ def stage_read(db: WorkflowDB, task_id: str, paper_id: str, per_page: int = 6000
             raise RuntimeError(f"第 {i}/{len(chunks)} 段没有拿到内容，模型回空，这篇先算失败")
         parts.append(text)
     md = f"# 精读 · {paper['filename']}\n\n" + "\n\n".join(parts)
+    import verify                                    # 页内校验：模型标的 (p.N) 必须真在那一页上
+    rep = verify.audit(md, pages={p["page_no"]: p["text"] for p in paper["pages"]}, label=paper["filename"])
+    md = verify.stamp(md, rep)
     note = db.add_note(task_id, READ_NOTE_TITLE + paper["filename"], md, paper_id)
-    db.log_step(task_id, "download", "done", f"精读完成：{paper['filename']}")
+    db.log_step(task_id, "download", "done",
+                f"精读完成：{paper['filename']}（页内校验 {rep['page_ok']}/{rep['page_claims']}，待核 {rep['warn']}）")
     return {"note_id": note["id"], "markdown": md, "chunks": len(chunks)}
 
 
@@ -394,9 +398,12 @@ def stage_write(db: WorkflowDB, task_id: str, title: str = "", section: str = "�
         {"role": "user", "content": f"题目：{title or task['title']}\n研究问题：{task['question']}\n关键词：{task['material_system']}\n\n== 笔记 ==\n{context}\n\n== 证据 ==\n{ev_text}"},
     ], max_tokens=4000)
     doc = f"# {title or task['title']} · {section}\n\n{md}\n"
+    import verify                                    # 数值校验：带单位的数字必须能在证据/笔记里找到出处
+    rep = verify.audit(md, corpus=ev_text + "\n" + context, label=section)
+    doc = verify.stamp(doc, rep)
     out = db.pdir(task_id, "论文正文") / f"draft-{task_id[:8]}-{section}.md"
     out.write_text(doc, encoding="utf-8")
-    db.log_step(task_id, "write", "done", f"{section} 草稿 {len(md)} 字")
+    db.log_step(task_id, "write", "done", f"{section} 草稿 {len(md)} 字（待核 {rep['warn']}）")
     return {"markdown": doc, "path": str(out)}
 
 

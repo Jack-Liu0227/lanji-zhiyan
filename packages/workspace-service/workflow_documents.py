@@ -410,7 +410,10 @@ def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str) -> dict[
     p = doc_path(db, task_id, kind)
     p.parent.mkdir(parents=True, exist_ok=True)
     fileguard.before_write(p, f"{kind}正文覆盖")
-    content = (markdown or "").strip() + "\n"
+    import verify                                     # 落盘前机械核一遍：素材（证据+笔记）里找不到的带单位数值，标出来
+    corpus = "\n".join([str(r["excerpt"] or "") for r in db.evidence(task_id)]
+                       + [n["markdown"][:20000] or "" for n in db.notes(task_id)[:80]])
+    content = verify.stamp((markdown or "").strip(), verify.audit(markdown, corpus=corpus, label=kind)).rstrip() + "\n"
     import asset_service
     asset_service.atomic_write_text(p, content)
     asset_service.register_file(db, p, project_id=task_id, kind="document", title=(DOC_STEPS.get(kind) or DOC_STEPS["outline"])["file"],

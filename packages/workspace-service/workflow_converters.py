@@ -60,6 +60,24 @@ def _cite_load(db: "WorkflowDB", task_id: str) -> list[dict[str, Any]]:
         return []
 
 
+def _cite_page_ok(db: "WorkflowDB", e: dict[str, Any]) -> bool | None:
+    """这条引用的数值，是否真在它声称的那一页上。None = 核不了（无全文 / 无页码 / 纯定性）。"""
+    import verify
+    pid, page = str(e.get("paper_id") or ""), str(e.get("cite_page") or "").strip()
+    if not (pid and page.isdigit()):
+        return None
+    try:
+        pages = {p["page_no"]: p["text"] for p in db.paper(pid)["pages"]}
+    except Exception:
+        return None
+    if int(page) not in pages:
+        return False
+    qs = verify.quantities(e.get("anchor") or "")
+    if not qs:
+        return None
+    return any(verify.qty_in_page(raw, pages[int(page)]) for _, _, raw in qs)
+
+
 def cite_sync(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     """按当前正文重算每条引用的锚点状态，然后把台账 markdown 整份重写（随时跟着前台改）。"""
     md, js = cite_paths(db, task_id)
@@ -73,6 +91,7 @@ def cite_sync(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
         anchor = (e.get("anchor") or "").strip()
         ok = bool(anchor) and anchor in draft
         e["ok"] = ok
+        e["page_ok"] = _cite_page_ok(db, e) if ok else None
         lines += [f"## C{i} · {e.get('section') or '（未标章节）'}", ""]
         lines.append(f"- 位置：{(e.get('section') or '（未标章节）')}" +
                      (f"，锚句：「{anchor}」" if anchor else "（没给锚句，只能靠人找）"))
@@ -90,7 +109,15 @@ def cite_sync(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
             lines.append(f"- 链接：{e['url']}")
         if e.get("why"):
             lines.append(f"- 引用理由：{e['why']}")
-        lines.append(f"- 状态：{'✓ 锚句还在正文里' if ok else ('⚠ 正文里找不到这句（可能已改写）' if anchor else '– 未给锚句')}")
+        if not ok:
+            state = "⚠ 正文里找不到这句（可能已改写）" if anchor else "– 未给锚句"
+        elif e["page_ok"] is False:
+            state = f"⚠ 锚句在正文，但数值不在 p.{e.get('cite_page')}"
+        elif e["page_ok"] is True:
+            state = "✓ 锚句在正文，数值在引用页"
+        else:
+            state = "✓ 锚句在正文（无全文/无页码，未核数值）"
+        lines.append(f"- 状态：{state}")
         if e.get("paper_id"):
             lines.append(f"- 库内 paper_id：{e['paper_id']}")
         lines.append("")
@@ -102,7 +129,7 @@ def cite_sync(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     asset_service.register_file(db, md, project_id=task_id, kind="document", title=CITE_FILE,
                                 source="workflow", body="\n".join(lines), metadata={"document_kind": "citation_ledger"})
     return {"path": str(md), "count": len(entries), "stale": sum(1 for e in entries if not e.get("ok")),
-            "markdown": "\n".join(lines)}
+            "suspect": sum(1 for e in entries if e.get("page_ok") is False), "markdown": "\n".join(lines)}
 
 
 def cite_read(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
