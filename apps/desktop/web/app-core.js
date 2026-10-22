@@ -392,3 +392,56 @@ async function requireModelKey() {
   if (go) openTab("settings");
   return false;
 }
+
+/* 原生 select 的弹出层由浏览器画，只认系统配色，深色主题下就是白底 + 白色高亮行。
+   这里把它换成自己画的一层(.sel-pop)，原生 select 仍留着当数据源：选中后回写
+   selectedIndex 再派发 change，所以所有调用点一行不用改；键盘/无障碍仍走原生弹层。 */
+function skinSelects() {
+  let pop = null, owner = null;
+  const close = () => { if (pop) { pop.remove(); pop = null; owner = null; } };
+  // 点的是 select 本体，或包着它的那个胶囊 label，都算要打开
+  const selOf = (node) => {
+    const s = node.closest && (node.closest("select") || node.closest("label")?.querySelector("select"));
+    return s && !s.disabled && !s.multiple && !s.size ? s : null;
+  };
+  const open = (sel) => {
+    close();
+    const r = sel.getBoundingClientRect();
+    pop = document.createElement("div");
+    pop.className = "att-menu sel-pop";
+    pop.setAttribute("role", "listbox");
+    pop.style.minWidth = Math.min(Math.round(r.width), 280) + "px";   // 跟触发器一样宽，但别让整行 select 撑出满屏菜单
+    pop.innerHTML = [...sel.options].map((o, i) =>
+      i === sel.selectedIndex
+        ? `<button type="button" role="option" data-i="${i}" class="sel">${esc(o.textContent)}<span class="tick">✓</span></button>`
+        : `<button type="button" role="option" data-i="${i}">${esc(o.textContent)}</button>`).join("");
+    document.body.appendChild(pop);
+    owner = sel;
+    const below = r.bottom + 4, above = r.top - 4 - pop.offsetHeight;   // 下面放不下就翻到上面
+    pop.style.left = Math.round(r.left) + "px";
+    pop.style.top = Math.round(below + pop.offsetHeight > innerHeight && above > 4 ? above : below) + "px";
+    const cur = pop.querySelector("button.sel");
+    if (cur) pop.scrollTop = Math.max(0, cur.offsetTop - pop.clientHeight / 2);   // 长列表先滚到当前项
+  };
+  document.addEventListener("mousedown", (e) => {
+    if (pop && pop.contains(e.target)) return;
+    const sel = selOf(e.target);
+    if (sel) { e.preventDefault(); open(sel); return; }   // 挡掉浏览器自己弹那层
+    close();
+  }, true);
+  document.addEventListener("click", (e) => {
+    if (pop && pop.contains(e.target)) {                  // 选中：回写原生 select 再关
+      const b = e.target.closest("button[data-i]");
+      if (b && owner && owner.selectedIndex !== +b.dataset.i) {
+        owner.selectedIndex = +b.dataset.i;
+        owner.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      close(); return;
+    }
+    if (selOf(e.target)) e.preventDefault();              // 挡掉 label 转发给 select 的第二次打开
+  }, true);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); }, true);
+  document.addEventListener("scroll", (e) => { if (!pop || !pop.contains(e.target)) close(); }, true);
+  addEventListener("resize", close);
+}
+skinSelects();

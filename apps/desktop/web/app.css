@@ -1,6 +1,6 @@
 /* 主题色由 JS 从「主色」推导（抄 zotero-lit-tool 的 deriveTheme），这里只留两档明暗底 */
-:root[data-theme=dark]{--bg:#0b0f14;--panel:#111821;--panel2:#0e141b;--line:#1e2833;--fg:#e6edf5;--muted:#8b9bb0;--ok:#4ade80;--warn:#fbbf24;--err:#f87171;--shadow:0 8px 30px rgba(0,0,0,.45);--accent:#2dd4bf;--accent-ink:#04211f;--side-bg:#0e141b}
-:root[data-theme=light]{--bg:#f6f8fa;--panel:#ffffff;--panel2:#f1f4f8;--line:#dfe5ec;--fg:#16202b;--muted:#5d6b7c;--ok:#159a5a;--warn:#b07d00;--err:#c04040;--shadow:0 8px 24px rgba(16,32,52,.10);--accent:#176b87;--accent-ink:#ffffff;--side-bg:#f1f4f8;--bg-card:var(--panel);--bg-sub:var(--panel2);--border:var(--line)}
+:root[data-theme=dark]{color-scheme:dark;--bg:#0b0f14;--panel:#111821;--panel2:#0e141b;--line:#1e2833;--fg:#e6edf5;--muted:#8b9bb0;--ok:#4ade80;--warn:#fbbf24;--err:#f87171;--shadow:0 8px 30px rgba(0,0,0,.45);--accent:#2dd4bf;--accent-ink:#04211f;--side-bg:#0e141b}
+:root[data-theme=light]{color-scheme:light;--bg:#f6f8fa;--panel:#ffffff;--panel2:#f1f4f8;--line:#dfe5ec;--fg:#16202b;--muted:#5d6b7c;--ok:#159a5a;--warn:#b07d00;--err:#c04040;--shadow:0 8px 24px rgba(16,32,52,.10);--accent:#176b87;--accent-ink:#ffffff;--side-bg:#f1f4f8;--bg-card:var(--panel);--bg-sub:var(--panel2);--border:var(--line)}
 /* 看板等旧样式写的是 --bg-card/--bg-sub/--border，深色下靠各自的暗色兜底值就成立，浅色必须显式接上主题，否则卡片全是深灰块 */
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
@@ -285,6 +285,11 @@ details[open]>summary>.disclosure-arrow{transform:rotate(90deg)}
 .att-menu button{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;text-align:left;padding:6px 8px;border-radius:6px;font-size:12.5px;color:var(--fg);cursor:pointer}
 .att-menu button:hover{background:var(--panel2)}
 .att-menu .tip{padding:4px 8px;font-size:11px;color:var(--muted)}
+/* 原生 select 的弹出层是浏览器画的，只认系统配色：深色下白底白高亮、跟应用两张皮。
+   鼠标点开时换成这一层（见 app-core.js skinSelects）；原生 select 仍是数据源，键盘仍走原生 */
+.sel-pop{position:fixed;bottom:auto;width:auto;min-width:120px;max-height:320px;overflow:auto;z-index:300}
+.sel-pop button.sel{background:color-mix(in srgb,var(--accent) 12%,transparent);color:var(--accent)}
+.sel-pop button .tick{margin-left:auto;padding-left:12px;font-size:11px}
 .ta-mirror{position:fixed;left:-9999px;top:0;visibility:hidden;overflow:hidden;resize:none;border:0;outline:none;min-height:0;max-height:none}
 .chips{display:flex;gap:6px;flex-wrap:wrap;padding:0 12px 8px}
 .chip{border:1px solid var(--line);background:var(--panel2);border-radius:999px;padding:3px 9px;font-size:11.5px;color:var(--muted);cursor:pointer}
@@ -529,8 +534,7 @@ details[open]>summary>.disclosure-arrow{transform:rotate(90deg)}
 .check-del{border:none;background:none;color:var(--muted);cursor:pointer;font-size:12px;flex-shrink:0}
 .check-del:hover{color:var(--err)}
 .quick-add{display:flex;gap:8px;margin-top:10px;flex:none}
-.quick-add .quick-time{flex:none;width:104px;color-scheme:dark}
-html[data-theme="light"] .quick-add .quick-time{color-scheme:light}
+.quick-add .quick-time{flex:none;width:104px}
 .tb-input{flex:1;min-width:0;background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-size:13px;color:inherit;outline:none;font-family:inherit}
 
 .feed-list{display:flex;flex-direction:column;gap:0;flex:1;min-height:0;overflow-y:auto}

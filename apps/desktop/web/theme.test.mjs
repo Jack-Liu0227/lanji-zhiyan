@@ -78,5 +78,10 @@ for (const p of t.THEME_PRESETS) {
   root.dataset.theme = "dark";
 }
 
+// 原生控件（select 弹出层、滚动条、日期选择器）跟随主题：缺 color-scheme 时深色下弹出层是白底白高亮
+const css = readFileSync(new URL("./app.css", import.meta.url), "utf8");
+assert.match(css, /^:root\[data-theme=dark\]\{color-scheme:dark;/m, "深色主题缺 color-scheme:dark");
+assert.match(css, /^:root\[data-theme=light\]\{color-scheme:light;/m, "浅色主题缺 color-scheme:light");
+
 console.log("theme.test OK | 深色对比度", contrast(darkAccent, "#111821").toFixed(2),
             "| 浅色对比度", contrast("#176B87", "#ffffff").toFixed(2));
