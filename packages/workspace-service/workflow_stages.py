@@ -437,19 +437,17 @@ def stage_convert(db: WorkflowDB, task_id: str, markdown: str, fmt: str = "docx"
         dest.write_text(f"<!doctype html><meta charset='utf-8'><body>{body}</body>", encoding="utf-8")
     elif fmt == "docx":
         try:
-            from docx import Document
+            from workflow_docx import build as _build_docx
         except ImportError as exc:
             raise RuntimeError("未安装 python-docx，无法导出 docx（可改用 md/pdf 或 `py -3.10 -m pip install python-docx`）") from exc
-        doc = Document()
-        for line in markdown.splitlines():
-            m = re.match(r"^(#{1,6})\s+(.*)$", line)
-            if m:
-                doc.add_heading(m.group(2), level=min(len(m.group(1)), 4))
-            elif line.startswith("- "):
-                doc.add_paragraph(line[2:], style="List Bullet")
-            elif line.strip():
-                doc.add_paragraph(line)
-        dest = folder / f"{safe}.docx"; doc.save(str(dest))
+        dest = folder / f"{safe}.docx"
+        bases = []
+        for sub in ("最终产物", "图", "论文正文"):
+            try:
+                bases.append(db.pdir(task_id, sub))
+            except Exception:
+                pass
+        _build_docx(markdown, dest, bases=bases)
     else:
         raise ValueError(f"不支持的格式：{fmt}（可用 md/html/docx）")
     db.log_step(task_id, "convert", "done", f"导出 {dest.name}")

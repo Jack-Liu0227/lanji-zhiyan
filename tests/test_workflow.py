@@ -248,7 +248,7 @@ class WorkflowTest(unittest.TestCase):
 
     def test_convert_offline(self) -> None:
         md = "# 标题\n\n- 要点一\n- 要点二\n\n正文段落。"
-        for fmt in ("md", "html"):
+        for fmt in ("md", "html", "docx"):
             out = stage_convert(self.db, self.task, md, fmt, "paper")
             self.assertTrue(Path(out["path"]).is_file())
             self.assertGreater(out["size"], 0)
