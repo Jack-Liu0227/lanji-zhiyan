@@ -54,6 +54,13 @@ import zotero_sync
 import agent_integrations
 import reproduction_routes
 import feature_routes
+# handlers/ 是本目录下的包：被 importlib 按文件加载（测试）或从别处 import 时，本目录不一定在 sys.path 上
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+from handlers.starmap import StarmapRoutes          # do_GET 的路由按域分片（见 handlers/*.py）
+from handlers.core import CoreRoutes
+from handlers.wf_routes import WorkflowRoutes
+from handlers.misc import MiscRoutes
 from run_manager import RunManager
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
@@ -519,7 +526,7 @@ class Server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
-class Handler(BaseHTTPRequestHandler):
+class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *args: Any) -> None:  # 静默
@@ -537,6 +544,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- 基础设施 ----------
     def _send(self, code: int, body: bytes, ctype: str, extra: dict[str, str] | None = None) -> None:
+        self._responded = True        # handlers/* 里那些直接写 wfile 的分支靠它告诉派发循环「已经回过包了」
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -900,6 +908,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
 
     def do_GET(self) -> None:
+        self._responded = False
         parsed = urllib.parse.urlparse(self.path)
         path, q = parsed.path, urllib.parse.parse_qs(parsed.query)
         try:
@@ -924,410 +933,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self._mail_route("GET", path, q, None):
                 return
-            if path == "/api/win/state":
-                h = _win_hwnd()
-                return self._json({"zoomed": bool(h and _at_work_area(h))})
-            if path == "/api/starmap":
-                tid = (q.get("task") or [""])[0]
-                fresh = (q.get("rebuild") or [""])[0] in ("1", "true")
-                with WorkflowDB(DB_PATH) as db:
-                    # 不带 task = 第一级（知识库 → 项目）；带 task = 该项目的五簇分支
-                    # 分支层是编译产物：第一次进来算一次落库，之后直接读（不实时重算）；?rebuild=1 才重编译
-                    return self._json(db.kb_graph(tid, fresh) if tid else starmap.overview(db.db))
-            if path == "/api/tr/hl":                     # 论文翻译：荧光笔标注（读）
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json({"list": db.tr_hl((q.get("id") or [""])[0], (q.get("task") or [""])[0])})
-            if path == "/api/starmap/brief":            # 知识点简介：库里有回库里的，没有才调一次模型
-                term = (q.get("term") or [""])[0]
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json(starmap.brief(db.db, term, db.active_model()))
-            if path == "/api/starmap/item":
-                pid = (q.get("id") or [""])[0]
-                title = (q.get("title") or [""])[0]
-                doi = (q.get("doi") or [""])[0]
-                key = (q.get("key") or [""])[0]
-                filename = ""
-                db_row = None
-                if pid:
-                    with WorkflowDB(DB_PATH) as db:
-                        db_row = db.db.execute(
-                            "SELECT p.id, p.task_id, p.filename, p.source_path, p.pages, "
-                            "m.title, m.authors, m.doi, m.year "
-                            "FROM papers p LEFT JOIN paper_meta m ON m.paper_id=p.id "
-                            "WHERE p.id=?", (pid,)).fetchone()
-                if db_row:
-                    filename = db_row["filename"] or ""
-                    if not title:
-                        title = db_row["title"] or filename
-                    if not doi:
-                        doi = db_row["doi"] or ""
-
-                res = {}
-                try:
-                    res = zotero.get_item_details(key=key, title=title, doi=doi, filename=filename)
-                except Exception as exc:
-                    res = {"zotero_found": False, "error": str(exc)}
-
-                if not res or not res.get("zotero_found"):
-                    authors_list = []
-                    if db_row and db_row["authors"]:
-                        for a in (db_row["authors"]).split(" · "):
-                            if a.strip():
-                                authors_list.append({"name": a.strip(), "role": "作者"})
-                    att = []
-                    if db_row and db_row["source_path"]:
-                        att.append({
-                            "title": db_row["filename"] or "PDF 全文",
-                            "filename": db_row["filename"] or "",
-                            "path": db_row["source_path"] or "",
-                            "contentType": "application/pdf"
-                        })
-                    res = {
-                        "zotero_found": False,
-                        "key": key or "",
-                        "itemType": "journalArticle",
-                        "itemTypeLabel": "文献",
-                        "title": title or (db_row["title"] if db_row else "") or (db_row["filename"] if db_row else "未命名论文"),
-                        "citationKey": "",
-                        "creators": authors_list,
-                        "publication": "",
-                        "journalAbbr": "",
-                        "publisher": "",
-                        "place": "",
-                        "date": (db_row["year"] if db_row else "") or "",
-                        "volume": "",
-                        "issue": "",
-                        "pages": f"{db_row['pages']} 页" if (db_row and db_row["pages"]) else "",
-                        "doi": doi or (db_row["doi"] if db_row else "") or "",
-                        "url": (f"https://doi.org/{doi}" if doi else ""),
-                        "accessDate": "",
-                        "issn": "",
-                        "isbn": "",
-                        "language": "en",
-                        "libraryCatalog": "本地文献库",
-                        "extra": "",
-                        "dateAdded": "",
-                        "dateModified": "",
-                        "abstract": "",
-                        "tags": [],
-                        "attachments": att,
-                        "zotero_select_url": "",
-                    }
-                return self._json(res)
-            if path == "/api/zotero/select":
-                key = (q.get("key") or [""])[0]
-                if not key:
-                    return self._json({"error": "缺少 key"}, 400)
-                try:
-                    if sys.platform == "win32":
-                        os.startfile(f"zotero://select/items/0_{key}")
-                    else:
-                        subprocess.Popen(["xdg-open" if sys.platform != "darwin" else "open", f"zotero://select/items/0_{key}"])
-                    return self._json({"ok": True})
-                except Exception as exc:
-                    return self._json({"error": f"唤起失败：{exc}"}, 500)
-            if path == "/api/litgraph":
-                tid = (q.get("task") or [""])[0]
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json(litgraph(db, tid))
-            if path == "/api/state":
-                with WorkflowDB(DB_PATH) as db:
-                    all_tasks = db.tasks()
-                    if not all_tasks:
-                        db.create_task(
-                            "锂金属固态电池界面反应动力学与多尺度演化研究",
-                            "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
-                            "固态锂电池, 复合固态电解质, 锂金属负极",
-                        )
-                        all_tasks = db.tasks()
-                    active = db.active_model()
-                    return self._json({
-                        "tasks": [{**dict(t), "stage_now": db.stage_now(t["id"], t["stage"])} for t in all_tasks],
-                        "chats": db.chats(),
-                        "assistants": db.assistants(),
-                        "models": [{**m, "api_key": "***" if m["api_key"] else ""} for m in db.models()],
-                        "active": (lambda m: ({**m, "api_key": "***"} if m and m["api_key"] else m))(active),
-                        "active_model": (lambda m: ({**m, "api_key": "***"} if m and m["api_key"] else m))(active),
-                        "events": db.events(q.get("month", [None])[0]),
-                        "notes": [{k: n[k] for k in ("id", "task_id", "title", "created_at")} for n in db.notes()],
-                        "stages": [{"key": s, "label": STAGE_LABEL[s]} for s in STAGES],
-                    })
-            if path == "/api/task":
-                with WorkflowDB(DB_PATH) as db:
-                    tid = q["id"][0]
-                    s = db.summary(tid)
-                    task = dict(s["task"] or {})
-                    # 卡片上的「阶段」要跟十步实时对齐：以前只给 research_tasks.stage（几乎不动），
-                    # 于是走完谱系/写作了项目空间还写着「未开始」。stage_now 取最近一条步骤记录。
-                    task["stage_now"] = db.stage_now(tid, task.get("stage") or "")
-                    return self._json({
-                        "task": task, "summary": s, "steps": db.steps(tid),
-                        "stage_map": db.stage_map(tid), "results": db.results(tid),
-                        "notes": [{k: n[k] for k in ("id", "title", "created_at")} for n in db.notes(tid)],
-                        "papers": s["papers"], "evidence": s["evidence"],
-                        "paper_list": db.papers_of(tid),
-                        "paper_graph": db.paper_graph(tid),
-                        "evidence_list": [dict(r) for r in db.evidence(tid)],
-                    })
-            if path == "/api/note":
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json(db.note(q["id"][0]))
-            if path == "/api/notes":
-                with WorkflowDB(DB_PATH) as db:
-                    tid = q.get("id", [None])[0]
-                    return self._json({"notes": db.notes(tid) if tid else db.notes()})
-            if path == "/api/chat":
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json({"messages": db.messages(q["id"][0])})
-            if path == "/api/security":                   # 权限模式：all=不再逐次问，ask=编译/写文件每次问
-                with WorkflowDB(DB_PATH) as db:
-                    sec = kv_store.read(db, "security")
-                    return self._json({"permission_mode": str(sec.get("permission_mode") or ""),
-                                       "history_chars": int(sec.get("history_chars") or 0)})
-            if path == "/api/step/messages":               # 三栏页：右栏「本步助手」的历史（按 scope 取）
-                with WorkflowDB(DB_PATH) as db:
-                    step = (q.get("step") or ["idea"])[0]
-                    tid = q["id"][0]
-                    return self._json({"step": step, "messages": db.messages(tid, step)})
-            if path == "/api/doc/state":                  # 确认大纲 / 论文撰写 / 稿件审查 共用的「左边那份文件」
-                step = (q.get("step") or ["outline"])[0]
-                with WorkflowDB(DB_PATH) as db:
-                    tid = q["id"][0]
-                    return self._json({"step": step, "out": str(db.out_dir(tid)),
-                                       "long": db.memory(tid, "long"),
-                                       "messages": db.messages(tid, step),
-                                       **doc_read(db, tid, step)})
-            if path == "/api/map/state":                  # 梳理精读：谱系图 + 能挂的源 + 大纲
-                with WorkflowDB(DB_PATH) as db:
-                    tid = q["id"][0]
-                    return self._json({"messages": db.messages(tid, "map"),
-                                       "outline": doc_read(db, tid, "outline"),
-                                       "sources": map_sources(db, tid),
-                                       **map_read(db, tid)})
-            if path == "/api/step/outs":                   # 右栏「产出目录」：项目里落过盘的文件，新的在前
-                with WorkflowDB(DB_PATH) as db:
-                    tid = q["id"][0]
-                    return self._json({"out": str(db.out_dir(tid)), "outs": project_outs(db, tid)})
-            if path == "/api/en/state":                   # 中译英：默认源（正文.md）+ 上次译文
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json(en_state(db, q["id"][0]))
-            if path == "/api/doc/cite":                   # 后台引用台账（读之前先按当前正文同步状态）
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json(cite_read(db, q["id"][0]))
-            if path == "/api/conv/files":                 # 格式转换：可导出的成品（右栏下拉用）
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json(conv_files(db, q["id"][0]))
-            if path == "/api/fig/list":                   # 格式转换：左栏「图」文件夹
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json(fig_list(db, q["id"][0]))
-            if path == "/api/tree":                       # 项目文件夹：一层清单（rel 相对项目根）
-                with WorkflowDB(DB_PATH) as db:
-                    try:
-                        return self._json(tree_list(db, q["id"][0], (q.get("rel") or [""])[0]))
-                    except Exception as exc:
-                        return self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
-            if path == "/api/conv/preview":               # 右栏展示区：PDF/图片直给，Word 先转 PDF
-                try:
-                    return self._json(conv_preview(q.get("path", [""])[0]))
-                except Exception as exc:
-                    return self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
-            if path == "/api/conv/read":                  # 打开一个文件（代码区）
-                with WorkflowDB(DB_PATH) as db:
-                    p = _safe_path(q.get("path", [""])[0])
-                    if not p.is_file():
-                        return self._json({"error": "文件不存在"}, 404)
-                    if p.suffix.lower() in (".docx", ".pdf"):
-                        return self._json({"path": str(p), "binary": True, "ext": p.suffix.lower()[1:], "text": ""})
-                    text = p.read_text(encoding="utf-8", errors="replace")
-                    cap = int(q.get("cap", ["200000"])[0])
-                    return self._json({"path": str(p), "name": p.name, "ext": p.suffix.lower()[1:],
-                                       "text": text[:cap], "truncated": len(text) > cap, "bytes": len(text)})
-            if path == "/api/file/snapshots":             # 某文件还有几个历史版本（写前快照）
-                p = _safe_path(q.get("path", [""])[0])
-                return self._json({"path": str(p),
-                                   "snapshots": [{"at": s.parent.name + " " + s.name, "bytes": s.stat().st_size}
-                                                 for s in fileguard.snapshots(p)]})
-            if path == "/api/paper/open":                 # 星图/文献双击：用系统默认程序打开这篇论文的 PDF
-                with WorkflowDB(DB_PATH) as db:
-                    row = db.db.execute("SELECT source_path FROM papers WHERE id=?",
-                                        (q.get("id", [""])[0],)).fetchone()
-                p = Path(row["source_path"]) if row else None
-                if not p or not p.is_file():
-                    return self._json({"error": "找不到这篇论文的 PDF 文件（可能已移走）"}, 404)
-                return self._json(fileguard.open_document(p))
-            if path == "/api/file":                       # 把项目里的文件发出去（PDF 给 iframe 预览用）
-                p = _safe_path(q.get("path", [""])[0])
-                if not p.is_file():
-                    return self._send(404, b"not found", "text/plain; charset=utf-8")
-                ext = p.suffix.lower()
-                ctype = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg",
-                         ".jpeg": "image/jpeg", ".svg": "image/svg+xml", ".md": "text/markdown; charset=utf-8",
-                         ".tex": "text/plain; charset=utf-8", ".txt": "text/plain; charset=utf-8",
-                         ".html": "text/html; charset=utf-8"}.get(ext, "application/octet-stream")
-                # inline 预览不带文件名：http.server 按 latin-1 编 header，中文文件名会让整条响应坏掉
-                # （Chromium 报「127.0.0.1 发送了无效的响应」）。要下载的文件名见 825 行的 filename*。
-                extra = {"Content-Disposition": "inline"} if (ext == ".pdf" or q.get("inline")) else None
-                return self._send(200, p.read_bytes(), ctype, extra)
-            if path == "/api/idea/memory":
-                with WorkflowDB(DB_PATH) as db:
-                    tid = q["id"][0]
-                    db.seed_long_memory(tid)
-                    return self._json({
-                        "out": str(db.out_dir(tid)),
-                        "mine": db.idea_input(tid),                 # 上区：用户写的创新点原文
-                        "verdict": db.idea_verdict(tid),            # 下区：最近一次判定（笔记 markdown）
-                        "long": db.memory(tid, "long"),
-                        "short": [{"role": m["role"], "content": m["content"], "created_at": m["created_at"],
-                                   "events": m.get("events") or []} for m in db.messages(tid)],
-                    })
-            if path == "/api/vault/scan":              # 知识库：扫一遍已授权 Vault（路径参数走 query）
-                try:
-                    return self._json(vault.scan((q.get("vault") or [""])[0]))
-                except vault.VaultError as exc:
-                    return self._json({"error": str(exc)}, 400)
-            if path == "/api/folder/pick":
-                return self._json(self._pick_folder((q.get("initial") or [""])[0],
-                                                    (q.get("title") or [""])[0] or "选择产出文件夹"))
-            if path == "/api/deepread/status":           # 精读进度（前端每 2 秒问一次）
-                return self._json(deepread_state((q.get("task_id") or [""])[0]) or {"phase": ""})
-            if path == "/api/settings/meta":            # 设置页分区要的元数据：工具 / 技能 / MCP
-                with WorkflowDB(DB_PATH) as db:
-                    project = (q.get("project_id") or [""])[0]
-                    row = db.db.execute("SELECT base_dir FROM research_tasks WHERE id=?", (project,)).fetchone()
-                    return self._json(capabilities.settings_meta(db, str(row["base_dir"] or "") if row else ""))
-            if path == "/api/teams":                     # 团队清单（每项目 2 常驻 + 3 加急；不带 project 就是全部）
-                try:
-                    return self._json(team.teams((q.get("project") or [""])[0] or None))
-                except ValueError as exc:
-                    return self._json({"error": str(exc), "teams": []}, 400)
-            if path == "/api/team/chat":                 # 团队 v2：成员（从助手选）+ 群记录 + 接力状态
-                try:
-                    return self._json(team.chat_state((q.get("scope") or [""])[0]))
-                except ValueError as exc:
-                    return self._json({"error": str(exc)}, 400)
-            if path == "/api/team":                      # 团队看板：成员状态 + 派活队列 + 运行事件
-                try:
-                    return self._json(team.board((q.get("id") or [""])[0]))
-                except ValueError as exc:
-                    return self._json({"error": str(exc), "members": [], "tasks": [], "counts": {}}, 400)
-            if path == "/api/schedules":                 # 定时任务页：规则 + 最近运行
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json({"schedules": db.schedules(), "runs": db.schedule_runs(),
-                                       "freq": schedule.FREQ_LABELS, "run_status": schedule.RUN_STATUS,
-                                       "retryable": sorted(schedule.RETRYABLE)})
-            if path == "/api/mdnotes":
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json({"notes": db.md_notes()})
-            if path == "/api/project/notes":
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json(project_notes.dashboard(db, (q.get("project_id") or [""])[0]))
-            if path == "/api/project/note":
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json(project_notes.read(db, (q.get("project_id") or [""])[0],
-                                                         (q.get("path") or [""])[0]))
-            if path == "/api/zotero/status":            # Zotero 本机只读接入（笔记页用）
-                return self._json(zotero.status(q.get("base", [""])[0] or None))
-            if path == "/api/zotero/collections":
-                try:
-                    return self._json(zotero.collections(q.get("base", [""])[0] or None))
-                except zotero.ZoteroError as exc:
-                    return self._json({"error": str(exc), "collections": []}, 400)
-            if path == "/api/zotero/items":
-                try:
-                    return self._json(zotero.items(
-                        q.get("base", [""])[0] or None,
-                        (q.get("collection") or [""])[0],
-                        (q.get("q") or [""])[0],
-                        int((q.get("start") or ["0"])[0] or 0),
-                        int((q.get("limit") or ["50"])[0] or 50)))
-                except (zotero.ZoteroError, ValueError) as exc:
-                    return self._json({"error": str(exc), "items": []}, 400)
-            if path == "/api/zotero/note":              # 条目 → 可存成笔记的 title/content（不落盘）
-                try:
-                    return self._json(zotero.note_for(q.get("base", [""])[0] or None,
-                                                      (q.get("key") or [""])[0]))
-                except zotero.ZoteroError as exc:
-                    return self._json({"error": str(exc)}, 400)
-            if path == "/api/pdf":                       # 论文翻译页的阅读器：按入库记录回吐 PDF 字节
-                with WorkflowDB(DB_PATH) as db:
-                    f = papertran.pdf_path(db, (q.get("id") or [""])[0])
-                if not f:
-                    return self._send(404, b"not found", "text/plain; charset=utf-8")
-                return self._send(200, f.read_bytes(), "application/pdf",
-                                  {"Content-Disposition": "inline"})
-            if path == "/api/trans/file":                # 译文（mono=纯中文 / dual=左右对照）
-                kind = (q.get("kind") or ["mono"])[0]
-                with WorkflowDB(DB_PATH) as db:
-                    pid = (q.get("id") or [""])[0]
-                    src = papertran.pdf_path(db, pid)
-                    tid = (q.get("task") or [""])[0]
-                    out = db.pdir(tid, "文献库") if tid else (paths.OUT)
-                if not src:
-                    return self._send(404, b"not found", "text/plain; charset=utf-8")
-                f = papertran.out_paths(src, out)[0 if kind == "dual" else 1]
-                if not f.is_file():
-                    return self._send(404, b"no translation", "text/plain; charset=utf-8")
-                return self._send(200, f.read_bytes(), "application/pdf",
-                                  {"Content-Disposition": "inline"})
-            if path == "/api/pdftext":                    # 每页词坐标（前端自己铺文字层；kind=mono 是中文那栏）
-                kind = (q.get("kind") or ["src"])[0]
-                with WorkflowDB(DB_PATH) as db:
-                    f = papertran.pdf_path(db, (q.get("id") or [""])[0])
-                    tid = (q.get("task") or [""])[0]
-                    out = db.pdir(tid, "文献库") if tid else (paths.OUT)
-                if not f:
-                    return self._json({"error": "找不到这篇 PDF 的文件"}, 404)
-                if kind == "mono":
-                    f = papertran.out_paths(f, out)[1]
-                    if not f.is_file():
-                        return self._json({"error": "还没有译文"}, 404)
-                return self._json(papertran.pdf_words(f, int((q.get("pages") or ["0"])[0] or 0)))
-            if path == "/api/papermeta":
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json(papertran.paper_meta(db, (q.get("id") or [""])[0]))
-            if path == "/api/trans/status":
-                return self._json(papertran.status((q.get("id") or [""])[0]))
-            if path == "/api/rss/sources":
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json({"sources": db.rss_sources(), "defaults": rss.DEFAULT_SOURCES})
-            if path == "/api/rss/items":
-                with WorkflowDB(DB_PATH) as db:
-                    sid = (q.get("source") or [""])[0]
-                    kw = (q.get("q") or [""])[0].strip()
-                    yr = (q.get("year") or [""])[0].strip()
-                    return self._json({"items": db.rss_items(sid, kw, yr),
-                                       "total": db.rss_count(sid, kw, yr)})
-            if path == "/api/tools":
-                return self._json({"tools": [{"name": t["function"]["name"],
-                                              "description": t["function"]["description"]} for t in [*workflow.TOOL_SPECS, *agent_integrations.tool_specs()]]})
-            if path == "/api/providers":
-                with WorkflowDB(DB_PATH) as db:
-                    return self._json({"providers": catalog_cards(db),
-                                       "wires": [{"id": w, "label": WIRE_LABEL.get(w, w)} for w in CUSTOM_WIRES],
-                                       "default": db.provider_default()})
-            if path == "/api/find":
-                needle = (q.get("q", [""])[0] or "").strip().lower()
-                hits = []
-                with WorkflowDB(DB_PATH) as db:
-                    if needle:
-                        for t in db.tasks():
-                            if needle in t["title"].lower() or needle in (t["question"] or "").lower():
-                                hits.append({"kind": "任务", "id": t["id"], "title": t["title"], "sub": t["question"]})
-                        for n in db.notes():
-                            if needle in n["title"].lower() or needle in n["markdown"].lower():
-                                hits.append({"kind": "笔记", "id": n["task_id"], "title": n["title"], "sub": n["created_at"][:16].replace("T", " ")})
-                        for r in db.db.execute("SELECT id,task_id,title,source,year FROM search_cache"):
-                            if needle in (r["title"] or "").lower():
-                                hits.append({"kind": "文献", "id": r["task_id"], "title": r["title"], "sub": f"{r['source']} {r['year']}"})
-                        # evidence 没有 task_id，靠 papers 关联（原来直接 SELECT task_id 会 500）
-                        for e in db.db.execute("SELECT e.field, e.value, e.excerpt, p.task_id AS task_id"
-                                               " FROM evidence e JOIN papers p ON p.id = e.paper_id"):
-                            if needle in (e["value"] or "").lower() or needle in (e["excerpt"] or "").lower():
-                                hits.append({"kind": "证据", "id": e["task_id"], "title": f"{e['field']}: {e['value']}", "sub": e["excerpt"][:120]})
-                        for ev in db.events():
-                            if needle in ev["title"].lower():
-                                hits.append({"kind": "日程", "id": ev["task_id"] or "", "title": ev["title"], "sub": ev["date"]})
-                return self._json({"q": needle, "hits": hits[:60]})
+            # ---- 各域路由（handlers/*）：命中即返回 ----
+            for fn in (self._r_starmap, self._r_core, self._r_workflow, self._r_misc):
+                r = fn(path, q)
+                if r is not None or self._responded:
+                    return r
             return self._json({"error": "not found"}, 404)
         except ValueError as exc:                 # 用法/前置条件不对 → 400（不是服务端故障）
             self._json({"error": str(exc)}, 400)
@@ -1841,6 +1451,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- Agent 事件流（SSE，支持 HTTP/1.1 长连接、事件持久化与 Last-Event-ID 重放） ----------
     def _stream_run(self, run_id: str, after_id: int = 0) -> None:
+        self._responded = True
         self.protocol_version = "HTTP/1.1"
         self.close_connection = True
         self.send_response(200)
@@ -1923,6 +1534,7 @@ class Handler(BaseHTTPRequestHandler):
             run.remove_listener(on_event)
 
     def _sse(self, data: dict[str, Any], step: str = "") -> None:
+        self._responded = True
         self.protocol_version = "HTTP/1.1"
         self.close_connection = True
         self.send_response(200)

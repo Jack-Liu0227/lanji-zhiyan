@@ -1,0 +1,117 @@
+# -*- coding: utf-8 -*-
+"""三栏页（step/doc/map/conv/fig/tree/file/idea）
+
+从 server.py 的 do_GET 里整块搬过来，**逻辑一行没改**（只是少缩进 4 格、末尾多一句 return None）。
+DB_PATH 这类运行期常量在函数里 `from server import ...` 现取：启动时迁移失败会把它改指老库，
+模块导入期就绑死会拿到旧值。
+"""
+from typing import Any
+
+from pathlib import Path
+
+import fileguard
+from workflow import (WorkflowDB, _safe_path, cite_read, conv_files, conv_preview, doc_read,
+                      en_state, fig_list, map_read, map_sources, project_outs, tree_list)
+
+
+class WorkflowRoutes:
+    def _r_workflow(self, path: str, q: dict[str, list[str]]) -> Any:
+        """命中就返回响应（None 也算已响应），没命中返回 None 交给下一段。"""
+        from server import DB_PATH        # 启动可能改写它（迁移失败退回老库），导入期绑死会拿旧值
+        if path == "/api/step/messages":               # 三栏页：右栏「本步助手」的历史（按 scope 取）
+            with WorkflowDB(DB_PATH) as db:
+                step = (q.get("step") or ["idea"])[0]
+                tid = q["id"][0]
+                return self._json({"step": step, "messages": db.messages(tid, step)})
+        if path == "/api/doc/state":                  # 确认大纲 / 论文撰写 / 稿件审查 共用的「左边那份文件」
+            step = (q.get("step") or ["outline"])[0]
+            with WorkflowDB(DB_PATH) as db:
+                tid = q["id"][0]
+                return self._json({"step": step, "out": str(db.out_dir(tid)),
+                                   "long": db.memory(tid, "long"),
+                                   "messages": db.messages(tid, step),
+                                   **doc_read(db, tid, step)})
+        if path == "/api/map/state":                  # 梳理精读：谱系图 + 能挂的源 + 大纲
+            with WorkflowDB(DB_PATH) as db:
+                tid = q["id"][0]
+                return self._json({"messages": db.messages(tid, "map"),
+                                   "outline": doc_read(db, tid, "outline"),
+                                   "sources": map_sources(db, tid),
+                                   **map_read(db, tid)})
+        if path == "/api/step/outs":                   # 右栏「产出目录」：项目里落过盘的文件，新的在前
+            with WorkflowDB(DB_PATH) as db:
+                tid = q["id"][0]
+                return self._json({"out": str(db.out_dir(tid)), "outs": project_outs(db, tid)})
+        if path == "/api/en/state":                   # 中译英：默认源（正文.md）+ 上次译文
+            with WorkflowDB(DB_PATH) as db:
+                return self._json(en_state(db, q["id"][0]))
+        if path == "/api/doc/cite":                   # 后台引用台账（读之前先按当前正文同步状态）
+            with WorkflowDB(DB_PATH) as db:
+                return self._json(cite_read(db, q["id"][0]))
+        if path == "/api/conv/files":                 # 格式转换：可导出的成品（右栏下拉用）
+            with WorkflowDB(DB_PATH) as db:
+                return self._json(conv_files(db, q["id"][0]))
+        if path == "/api/fig/list":                   # 格式转换：左栏「图」文件夹
+            with WorkflowDB(DB_PATH) as db:
+                return self._json(fig_list(db, q["id"][0]))
+        if path == "/api/tree":                       # 项目文件夹：一层清单（rel 相对项目根）
+            with WorkflowDB(DB_PATH) as db:
+                try:
+                    return self._json(tree_list(db, q["id"][0], (q.get("rel") or [""])[0]))
+                except Exception as exc:
+                    return self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
+        if path == "/api/conv/preview":               # 右栏展示区：PDF/图片直给，Word 先转 PDF
+            try:
+                return self._json(conv_preview(q.get("path", [""])[0]))
+            except Exception as exc:
+                return self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
+        if path == "/api/conv/read":                  # 打开一个文件（代码区）
+            with WorkflowDB(DB_PATH) as db:
+                p = _safe_path(q.get("path", [""])[0])
+                if not p.is_file():
+                    return self._json({"error": "文件不存在"}, 404)
+                if p.suffix.lower() in (".docx", ".pdf"):
+                    return self._json({"path": str(p), "binary": True, "ext": p.suffix.lower()[1:], "text": ""})
+                text = p.read_text(encoding="utf-8", errors="replace")
+                cap = int(q.get("cap", ["200000"])[0])
+                return self._json({"path": str(p), "name": p.name, "ext": p.suffix.lower()[1:],
+                                   "text": text[:cap], "truncated": len(text) > cap, "bytes": len(text)})
+        if path == "/api/file/snapshots":             # 某文件还有几个历史版本（写前快照）
+            p = _safe_path(q.get("path", [""])[0])
+            return self._json({"path": str(p),
+                               "snapshots": [{"at": s.parent.name + " " + s.name, "bytes": s.stat().st_size}
+                                             for s in fileguard.snapshots(p)]})
+        if path == "/api/paper/open":                 # 星图/文献双击：用系统默认程序打开这篇论文的 PDF
+            with WorkflowDB(DB_PATH) as db:
+                row = db.db.execute("SELECT source_path FROM papers WHERE id=?",
+                                    (q.get("id", [""])[0],)).fetchone()
+            p = Path(row["source_path"]) if row else None
+            if not p or not p.is_file():
+                return self._json({"error": "找不到这篇论文的 PDF 文件（可能已移走）"}, 404)
+            return self._json(fileguard.open_document(p))
+        if path == "/api/file":                       # 把项目里的文件发出去（PDF 给 iframe 预览用）
+            p = _safe_path(q.get("path", [""])[0])
+            if not p.is_file():
+                return self._send(404, b"not found", "text/plain; charset=utf-8")
+            ext = p.suffix.lower()
+            ctype = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg",
+                     ".jpeg": "image/jpeg", ".svg": "image/svg+xml", ".md": "text/markdown; charset=utf-8",
+                     ".tex": "text/plain; charset=utf-8", ".txt": "text/plain; charset=utf-8",
+                     ".html": "text/html; charset=utf-8"}.get(ext, "application/octet-stream")
+            # inline 预览不带文件名：http.server 按 latin-1 编 header，中文文件名会让整条响应坏掉
+            # （Chromium 报「127.0.0.1 发送了无效的响应」）。要下载的文件名见 825 行的 filename*。
+            extra = {"Content-Disposition": "inline"} if (ext == ".pdf" or q.get("inline")) else None
+            return self._send(200, p.read_bytes(), ctype, extra)
+        if path == "/api/idea/memory":
+            with WorkflowDB(DB_PATH) as db:
+                tid = q["id"][0]
+                db.seed_long_memory(tid)
+                return self._json({
+                    "out": str(db.out_dir(tid)),
+                    "mine": db.idea_input(tid),                 # 上区：用户写的创新点原文
+                    "verdict": db.idea_verdict(tid),            # 下区：最近一次判定（笔记 markdown）
+                    "long": db.memory(tid, "long"),
+                    "short": [{"role": m["role"], "content": m["content"], "created_at": m["created_at"],
+                               "events": m.get("events") or []} for m in db.messages(tid)],
+                })
+        return None
