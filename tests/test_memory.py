@@ -27,6 +27,9 @@ class MemorySystemTest(unittest.TestCase):
         self.root = Path(temporary.name)
         self.db = workflow.WorkflowDB(self.root / "memory.sqlite3")
         self.addCleanup(self.db.close)
+        sandbox = patch.object(memory_store, "_user_root", return_value=self.root / "user")
+        sandbox.start()                       # 全局记忆.md 写到临时目录：别踩真实用户目录，也别被它污染
+        self.addCleanup(sandbox.stop)
         self.a = self.db.create_task("Project A", "怎么掺杂", "O3-NFM", str(self.root / "A"))
         self.b = self.db.create_task("Project B")
         memory_store.ready(self.db)
@@ -58,8 +61,38 @@ class MemorySystemTest(unittest.TestCase):
         for i in range(50):
             memory_store.add(self.db, "条目%d：%s" % (i, chr(0x4e00 + i * 5) * 200), scope_id=self.b)
         out = memory_store.consolidate(self.db, self.b)
-        self.assertGreater(out["archived"], 0)
         self.assertLessEqual(out["stats"]["project"]["chars"], memory_store.BUDGET["project"])
+        self.assertGreater(out["stats"]["project"]["archived"], 0)   # 写入路径上就压住了，不用等人手动整理
+
+    # ---- 注入只放事实层：episode 不常驻，也不占注入预算
+    def test_episode_stays_out_of_prompt_but_remains_searchable(self):
+        memory_store.add(self.db, "对话经过：导师说要先做随机切分", scope_id=self.a, kind="episode")
+        text = self.db.memory_block(self.a)
+        self.assertNotIn("先做随机切分", text)                             # 不常驻注入
+        self.assertIn("短期经过 1 条", text)                               # 但要报数，不静默丢
+        self.assertTrue(memory_store.search(self.db, "随机切分", self.a))   # recall 查得到
+
+    def test_episodes_do_not_eat_the_injection_budget(self):
+        for i in range(40):
+            memory_store.add(self.db, "经过%d：%s" % (i, chr(0x4e00 + i * 7) * 250),
+                             scope_id=self.b, kind="episode")
+        memory_store.add(self.db, "结论：Cu 掺杂最优", scope_id=self.b, kind="decision")
+        text = self.db.memory_block(self.b)
+        self.assertIn("Cu 掺杂最优", text)
+        self.assertNotIn("超预算", text)                                   # 一万字符的经过都没挤进预算
+
+    # ---- 全局记忆.md 手改要读得回来（dump 以前只写不读，手改下次被覆盖）
+    def test_hand_edited_global_file_is_read_back_then_preserved(self):
+        fake = self.root / "user"
+        with patch.object(memory_store, "_user_root", return_value=fake):
+            folder = fake / "记忆"
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "全局记忆.md").write_text(
+                "# 全局记忆\n\n- 以后中文稿一律不用小括号\n", encoding="utf-8")
+            self.assertIn("不用小括号", self.db.memory_block(self.a))      # block → sync_files 收进来
+            self.assertIn("不用小括号", memory_store.block(self.db, self.b))  # 全局就该到每个项目
+            memory_store.dump(self.a)                                     # 重写文件不能把手改冲掉
+            self.assertIn("不用小括号", (folder / "全局记忆.md").read_text(encoding="utf-8"))
 
     # ---- 旧库搬家
     def test_legacy_project_memory_rows_are_migrated_once(self):

@@ -143,6 +143,7 @@ def add(db, text: str, *, scope: str = "project", scope_id: str = "", kind: str 
     _index(conn, mem_id, body, _clean(tags))
     conn.commit()
     dump(db, scope_id)
+    _tidy(db, scope, scope_id)
     return {"id": mem_id, "scope": scope, "scope_id": scope_id, "kind": kind, "text": body,
             "tags": _clean(tags), "source": source, "importance": importance, "created_at": stamp}
 
@@ -337,8 +338,10 @@ def recall(db, query: str, scope_id: str = "", limit: int = 8) -> dict[str, Any]
 
 # ------------------------------------------------------------------ 注入
 def _section(db, scope: str, scope_id: str, budget: int) -> tuple[list[str], int]:
+    """只挑事实层进常驻注入。episode（对话经过）不进 prompt —— 它在 `block()` 的
+    「更早的对话」段和 `短期记忆.md` 里已各有一份，按需走 recall 查，别每轮重复付 token。"""
     where, args = _scope_sql(scope, scope_id, False)
-    rows = _rows(db, f"SELECT * FROM memory WHERE {where} AND archived=0 "
+    rows = _rows(db, f"SELECT * FROM memory WHERE {where} AND archived=0 AND kind<>'episode' "
                      "ORDER BY importance DESC, updated_at DESC", args)
     picked, used = [], 0
     for row in rows:
@@ -350,23 +353,41 @@ def _section(db, scope: str, scope_id: str, budget: int) -> tuple[list[str], int
     return picked, len(rows) - len(picked)
 
 
+def _user_root() -> Path:
+    """用户级目录（全局记忆住在它下面）。自检/单测里没有 workspace-core 的 sys.path 时兜底。"""
+    try:
+        import paths
+        return Path(paths.USER)
+    except ImportError:
+        return Path.home() / ".lanji-zhiyan"
+
+
 def _import_from_files(db, scope_id: str) -> int:
-    """人工直接改 `记忆/长期记忆.md` 的路子留着：文件里 `- ` 开头的行补进库（只插没有的原句）。
+    """人工直接改 `记忆/*.md` 的路子留着：文件里 `- ` 开头的行补进库（只插没有的原句）。
+
+    空 scope_id = 收 `user/记忆/全局记忆.md`。它跟项目记忆走同一条通道 —— 否则 dump()
+    每轮把它写出去，却没人读回来，手改的全局口径下次就被覆盖掉。
 
     直接走 SQL、不经过 add() —— add() 会回写文件，那样「读文件」和「写文件」会互相踩掉对方。
     """
-    base = db.base_dir(scope_id) if scope_id else None
-    if not base:
-        return 0
-    folder = db.pdir(scope_id, "记忆")
+    if scope_id:
+        base = db.base_dir(scope_id)
+        if not base:
+            return 0
+        folder = db.pdir(scope_id, "记忆")
+        files = [(folder / "长期记忆.md", "project", scope_id, "fact", base),
+                 (folder / "短期记忆.md", "project", scope_id, "episode", base)]
+    else:
+        base = _user_root() / "记忆"
+        files = [(base / "全局记忆.md", "global", "", "fact", base)]
     added = 0
     conn = db.db
-    for name, kind in (("长期记忆.md", "fact"), ("短期记忆.md", "episode")):
-        path = folder / name
+    for path, scope, sid, kind, root in files:
         try:
-            if not path.is_file() or not path.resolve().is_relative_to(base.resolve()):
+            if not path.is_file() or not path.resolve().is_relative_to(root.resolve()):
                 continue
-            known = {r["text"] for r in _rows(db, "SELECT text FROM memory WHERE scope_id=?", (scope_id,))}
+            known = {r["text"] for r in _rows(
+                db, "SELECT text FROM memory WHERE scope=? AND scope_id=?", (scope, sid))}
             for line in path.read_text(encoding="utf-8").splitlines():
                 body = line[2:].strip()
                 if not line.startswith("- ") or not body or "（暂无）" in body or body in known:
@@ -374,7 +395,7 @@ def _import_from_files(db, scope_id: str) -> int:
                 mem_id, stamp = uuid.uuid4().hex, now()
                 conn.execute("INSERT INTO memory (id,scope,scope_id,kind,text,tags,source,importance,hits,"
                              "archived,superseded_by,created_at,updated_at) VALUES (?,?,?,?,?,'','import',1,0,0,'',?,?)",
-                             (mem_id, "project", scope_id, kind, body, stamp, stamp))
+                             (mem_id, scope, sid, kind, body, stamp, stamp))
                 _index(conn, mem_id, body, "")
                 known.add(body)
                 added += 1
@@ -387,6 +408,7 @@ def _import_from_files(db, scope_id: str) -> int:
 
 def sync_files(db, scope_id: str) -> None:
     _import_from_files(db, scope_id)
+    _import_from_files(db, "")                # 全局记忆.md 也读回来（dump 写它，得有人读）
 
 
 def block(db, scope_id: str, now_window: int = 10, line: int = 120) -> str:
@@ -406,6 +428,13 @@ def block(db, scope_id: str, now_window: int = 10, line: int = 120) -> str:
         if missed:
             over.append(f"{title} 还有 {missed} 条超预算没注入")
     if scope_id:
+        try:
+            n_ep = db.db.execute("SELECT COUNT(*) FROM memory WHERE scope_id=? AND archived=0 "
+                                 "AND kind='episode'", (scope_id,)).fetchone()[0]
+            if n_ep:
+                over.append(f"短期经过 {n_ep} 条不常驻注入")
+        except Exception:
+            pass
         try:
             msgs = db.messages(scope_id)
             older = msgs[:-now_window] if len(msgs) > now_window else []
@@ -428,6 +457,7 @@ def stats(db, scope_id: str = "") -> dict[str, Any]:
         live = [r for r in rows if not r["archived"]]
         return {"count": len(live), "archived": len(rows) - len(live),
                 "chars": sum(len(r["text"]) for r in live),
+                "inject": sum(len(r["text"]) for r in live if r["kind"] != "episode"),
                 "budget": BUDGET[scope], "kinds": _tally(live)}
     return {"global": one("global", ""), "project": one("project", scope_id)}
 
@@ -459,6 +489,8 @@ def consolidate(db, scope_id: str = "") -> dict[str, Any]:
                 kept.append(row)
         used = 0
         for row in kept:
+            if row["kind"] == "episode":            # 不进常驻注入，也就不占注入预算（见 _section）
+                continue
             if used + len(row["text"]) <= BUDGET[scope]:
                 used += len(row["text"])
             else:
@@ -467,6 +499,22 @@ def consolidate(db, scope_id: str = "") -> dict[str, Any]:
     conn.commit()
     dump(db, scope_id)
     return {"merged": merged, "archived": archived, "stats": stats(db, scope_id)}
+
+
+def _tidy(db, scope: str, scope_id: str) -> None:
+    """写完之后看一眼：注入层真撑破预算才整理。
+
+    不放进 block() —— 那是每轮都跑的路径，两两相似度在 79 条上就是三千次 difflib。
+    ponytail: 门槛只看字符数；等条目上千再换成按 importance 分层预算，别现在猜。
+    """
+    where, args = _scope_sql(scope, scope_id, False)
+    try:
+        used = db.db.execute(f"SELECT COALESCE(SUM(LENGTH(text)),0) FROM memory WHERE {where} "
+                             "AND archived=0 AND kind<>'episode'", args).fetchone()[0]
+    except sqlite3.Error:
+        return
+    if used > BUDGET[scope]:
+        consolidate(db, scope_id)
 
 
 def dump(db, scope_id: str = "") -> None:
@@ -483,11 +531,8 @@ def dump(db, scope_id: str = "") -> None:
                                                   "AND kind='episode' ORDER BY updated_at DESC", (scope_id,))]
             _write(folder / "长期记忆.md", "长期记忆", "项目要点与重要结论（自动维护，可直接编辑，下次运行会读回来）。", long)
             _write(folder / "短期记忆.md", "短期记忆", "这个项目的对话内容与细节（按时间顺序，越靠下越新）。", short)
-        try:
-            import paths
-            user_root = Path(paths.USER)
-        except ImportError:                          # 自检/单测里没有 workspace-core 的 sys.path
-            user_root = Path.home() / ".lanji-zhiyan"
+        user_root = _user_root()
+        _import_from_files(db, "")                   # 全局记忆.md 同样先收手改，再整份重写
         glob = [r["text"] for r in _rows(db, "SELECT * FROM memory WHERE scope='global' AND archived=0 "
                                              "ORDER BY importance DESC, updated_at DESC")]
         _write(user_root / "记忆" / "全局记忆.md", "全局记忆",
@@ -555,8 +600,8 @@ if __name__ == "__main__":                            # python memory_store.py
     assert add(db, "访谈结论：单卡 8G 显存，训练只能小批", scope_id="t2")["duplicate"], "写入时没去重"
     for i in range(60):
         add(db, "条目%d：%s" % (i, chr(0x4e00 + i * 5) * 200), scope_id="t2", importance=1)
-    out = consolidate(db, "t2")
-    assert out["archived"] > 0, "超预算没归档"
+    out = consolidate(db, "t2")              # 写入路径上的 _tidy 已经压过一次，这里应当无活可干
+    assert out["stats"]["project"]["archived"] > 0, "超预算没归档"
     assert out["stats"]["project"]["chars"] <= BUDGET["project"], "预算没兜住"
     assert search(db, "8G", "t2", include_archived=True), "归档后连检索也查不到了"
     for i in range(2):                       # 绕过 add 直接塞两条近重复，验证 consolidate 的兜底合并
