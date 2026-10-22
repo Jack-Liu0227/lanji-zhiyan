@@ -2,6 +2,20 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 2026-10-22（语义检索层：论文全文进索引，knowledge_query 升成双路召回）
+
+**0. 口径**：RAG 落地的判据是**命中能回指原文页码**，不是相似度好看。所以论文按页切块（页码跟着块走），每条命中带 `citation: 文件名 p.N`；不引 faiss/chroma，5800 块 × 1024 维全量装内存做暴力余弦，万级块下 <10ms。
+
+**1. 原来缺的不是向量，是索引**：`asset_fts` 里只有 10 篇论文、88 条资产；`paper_pages` 的 1418 页 / 583 万字符**没有任何索引**，只有 9 条 evidence 摘录能被 `_knowledge_query` 的子串 `in` 扫到。所以先补 `migrations/008_semantic.sql`：`sem_chunks`（块+向量 BLOB+页码）、`sem_state`（内容哈希台账）、`sem_fts`（FTS5 **trigram**，中文才切得动；`unicode61` 会把整段中文当一个 token —— 实测 `asset_fts` 就是这个毛病）。
+
+**2. `packages/workspace-service/semantic.py`**：分块（按句子攒 900 字、尾部重叠 150，单句超长才硬切）→ 嵌入（OpenAI 兼容 `/embeddings`，默认本机 ollama `bge-m3`，可用 `LANJI_EMBED_BASE/MODEL/KEY` 或 `service_settings(service='semantic')` 换）→ 双路召回（trigram MATCH 带 bm25 / 2 字查询退回 LIKE 子串；向量余弦）→ RRF(k=60) 融合。索引是**派生数据**：内容哈希 + 模型名都没变就跳过，所以论文入库、笔记保存、证据摘录**都不用挂钩子**，下次 sync 自然补上。
+
+**3. 接线**：`workflow._knowledge_query` 改走 `semantic.hybrid`，空结果/嵌入服务挂了自动退回原来的子串扫并标 `mode`（`hybrid`/`vector`/`lexical`）——语义层是增强不是前置依赖。新工具 `semantic_index`（`status`/`sync`，风险级 `local_execution`）。`server._semantic_boot()` 在服务起来后起一个后台线程预热（同一进程同库只起一次，`idle=0.01` 让位给 agent）。`knowledge_query` 的工具描述改成「论文全文+笔记+证据」，让它知道现在能搜原文。
+
+**4. 坑（下次别重踩）**：FTS5 列写成 `UNINDEXED` 就等于没建索引 —— 第一版把正文放在 `UNINDEXED` 列里，MATCH 恒返 0；改成正常列 + rowid 对齐 `sem_chunks.rowid`。trigram 要求查询 ≥3 字符，2 字中文（「掺杂」「层状」）必须退回 LIKE。「铜掺杂 循环稳定性」整串 phrase 匹配是 0 命中，要拆词 OR。
+
+**5. 没做**：交叉编码器重排、增量 upsert（现在是整源重嵌）、知识星图/前端检索页接入。等实测命中率再说。
+
 ## 2026-10-22（结构整理：前端分目录 / workflow.py 拆库层 / server.py 分路由）
 
 **0. 口径**：只搬不改 —— 三个提交里没有一条业务逻辑变更，全部以「404 测试全绿 + 真应用点一遍」为验收线；对外接口（`import workflow` 的 41 处、前端全局函数、所有 HTTP 路由）一律不动。

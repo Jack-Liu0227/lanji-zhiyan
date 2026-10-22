@@ -353,13 +353,56 @@ def _search_scope(db: "WorkflowDB", task_id: str, project: str) -> list[tuple[st
 
 
 def _knowledge_query(db: "WorkflowDB", task_id: str, query: str, project: str = "") -> dict[str, Any]:
-    q = (query or "").lower().strip()
+    """知识检索：语义层双路召回（FTS5 trigram + 向量，RRF 融合），索引没建好时退回子串扫。
+
+    「最高标准」指的是命中要能回指原文页码，不是相似度数字好看 —— 所以论文按页切块，
+    每条命中都带 citation（文件名 p.N）。
+    """
+    q = (query or "").strip()
     if not q:
         raise ValueError("要给检索关键词")
-    hits: list[dict[str, Any]] = []
-    scope = dict(_search_scope(db, task_id, project))
+    scope = _search_scope(db, task_id, project)
     scoped = bool(project) or bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone())
-    for pid, ptitle in scope.items():
+    ids = [pid for pid, _title in scope]
+    literal = _knowledge_query_literal(db, q, scope, scoped)["hits"]
+    try:
+        import semantic
+        out = semantic.hybrid(db, q, project_ids=ids if scoped else None, limit=20)
+        if out.get("hits"):
+            return _fuse_literal(out, literal)
+        reason = out.get("mode") or "empty"
+    except Exception as exc:                              # 语义层是增强，不是前置依赖
+        reason = "semantic_failed: %s" % exc
+    return dict(_knowledge_query_literal(db, q, scope, scoped), mode="lexical", reason=reason)
+
+
+def _fuse_literal(out: dict[str, Any], literal: list[dict[str, Any]]) -> dict[str, Any]:
+    """第三路：笔记/证据的字面命中。
+
+    中文术语经常是「笔记写 Cu掺杂、用户问 铜掺杂」——向量能连上、trigram 连不上，
+    所以把老的字面扫也并进 RRF，一个词对得上的笔记不会被长句查询挤下去。
+    """
+    hits = {(h["kind"], h["id"], h.get("page_no") or 0): dict(h) for h in out["hits"]}
+    for rank, h in enumerate(literal):
+        key = (h["kind"], h["id"], 0)                    # 笔记/证据没有页码，按源合并
+        gain = 1.0 / (60 + rank + 1)
+        if key in hits:
+            hits[key]["rrf"] = round(hits[key]["rrf"] + gain, 5)
+            if "literal" not in hits[key]["matched"]:
+                hits[key]["matched"].append("literal")
+        else:
+            hits[key] = dict(h, rrf=round(gain, 5), matched=["literal"])
+    merged = sorted(hits.values(), key=lambda h: -h["rrf"])[:20]
+    mode = "hybrid" if literal else out["mode"]
+    return {**out, "hits": merged, "total": len(merged), "mode": mode}
+
+
+def _knowledge_query_literal(db: "WorkflowDB", q: str, scope: list[tuple[str, str]],
+                             scoped: bool) -> dict[str, Any]:
+    """老的子串扫：索引还没建、或语义层坏掉时的兜底。口径与升级前一致。"""
+    q = q.lower()
+    hits: list[dict[str, Any]] = []
+    for pid, ptitle in scope:
         for n in db.notes(pid):
             if q in (n["title"] or "").lower() or q in (n["markdown"] or "").lower():
                 idx = (n["markdown"] or "").lower().find(q)
@@ -369,15 +412,16 @@ def _knowledge_query(db: "WorkflowDB", task_id: str, query: str, project: str = 
             if q in (e["value"] or "").lower() or q in (e["excerpt"] or "").lower() or q in (e["field"] or "").lower():
                 hits.append({"kind": "evidence", "project": ptitle, "field": e["field"], "value": e["value"],
                              "citation": f"{e['filename']} p.{e['page_no']}", "context": e["excerpt"]})
+    scope_ids = dict(scope)
     for note in db.md_notes():                                  # 笔记页那批「大笔记」
-        if scoped and note.get("task_id") not in scope:
+        if scoped and note.get("task_id") not in scope_ids:
             continue
         body = (note.get("content") or "")
         if q in (note.get("title") or "").lower() or q in body.lower():
             idx = body.lower().find(q)
-            hits.append({"kind": "big-note", "project": scope.get(note.get("task_id"), ""), "id": note.get("id"), "title": note.get("title"),
-                         "context": body[max(0, idx - 120): idx + 240]})
-    return {"query": query, "hits": hits[:20], "total": len(hits)}
+            hits.append({"kind": "big-note", "project": scope_ids.get(note.get("task_id"), ""), "id": note.get("id"),
+                         "title": note.get("title"), "context": body[max(0, idx - 120): idx + 240]})
+    return {"query": q, "hits": hits[:20], "total": len(hits)}
 
 
 def _calendar_list(db: "WorkflowDB", args: dict[str, Any], project_id: str = "") -> dict[str, Any]:
@@ -498,6 +542,7 @@ TOOL_RISK = {
     "project_note_list": "read_only", "project_note_read": "read_only",
     "project_task_manage": "workspace_write", "assistant_manage": "workspace_write",
     "project_list": "read_only", "skill_read": "read_only",
+    "semantic_index": "local_execution",
     "zotero_search": "read_only", "zotero_item": "read_only", "zotero_import_pdf": "workspace_write",
 }
 
@@ -759,6 +804,11 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         return _overview(db, task_id)
     if name == "knowledge_query":
         return _knowledge_query(db, task_id, args.get("query", ""), str(args.get("project") or ""))
+    if name == "semantic_index":
+        import semantic
+        if str(args.get("action") or "status") == "sync":
+            return semantic.sync(db, limit=int(args.get("limit") or 0))
+        return semantic.status(db)
     if name == "calendar_list":
         return _calendar_list(db, args, scoped_project)
     if name == "schedule_manage":

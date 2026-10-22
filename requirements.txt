@@ -9,3 +9,4 @@ PyYAML==6.0.3            # MIT            读配置（server.py）
 pywin32==312             # PSF-2.0        可选：仅 installer.py 用，已包在 try/except 内
 qrcode==8.2              # BSD-3-Clause   Local SVG QR codes for Feishu device authorization
 lark-oapi==1.7.5         # MIT            飞书长连接接收机器人消息
+numpy==2.2.6             # BSD-3-Clause   语义检索向量运算（semantic.py；万级块内暴力余弦，不引向量库）

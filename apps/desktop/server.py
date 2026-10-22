@@ -1624,6 +1624,15 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
         return paths.host_pick_folder(initial, title)
 
 
+def _semantic_boot() -> None:
+    """语义索引后台预热：不阻塞启动；失败只打日志（检索会自动退回词法腿，不影响可用性）。"""
+    try:
+        import semantic
+        semantic.warm_async(str(DB_PATH))
+    except Exception as exc:
+        print("[semantic] 预热跳过：%s" % exc)
+
+
 def _start_inproc(port: int, url: str) -> None:
     """老路径：HTTP 服务跟窗口在同一个（Medium）进程里。沙箱起不来时用它兜底。"""
     with WorkflowDB(DB_PATH) as _db:
@@ -1648,6 +1657,7 @@ def _start_inproc(port: int, url: str) -> None:
     schedule.start()           # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
     feishu.start_bridge(DB_PATH)
     team.start_worker()        # 团队派活队列（串行：一次跑一个成员）
+    _semantic_boot()           # 语义索引后台预热（内容没变就全跳过，幂等）
     print(f"览籍智研已启动：{url}")
 
 
