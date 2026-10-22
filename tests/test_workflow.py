@@ -534,6 +534,14 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual([e["type"] for e in seen].count("done"), 1)                 # 只有一个收尾 done
         self.assertEqual(seen[-1]["type"], "done")
         self.assertEqual([m["role"] for m in self.db.messages(self.task, "write")], ["user", "assistant"])
+        # 右栏的团队协作：四段「谁 → 谁」，审查意见原文要进前台（不是只剩一句统计）
+        team = [e for e in seen if e.get("type") == "team"]
+        self.assertEqual([t["role"] for t in team], ["evidence", "writer", "critic", "writer"])
+        self.assertEqual([t["to"] for t in team], ["论文写作", "论文审查", "论文写作", "左边正文"])
+        self.assertTrue(team[2]["content"].startswith("- [2 结果]"))
+        self.assertRegex(team[3]["tag"], r"^定稿 \d+ 字 · 待补 0 处$")
+        saved = [e for e in self.db.messages(self.task, "write")[-1]["events"] if e.get("type") == "team"]
+        self.assertEqual(len(saved), 4)                                              # 落库 → 刷新后还在
         self.assertIn("后台流水线完成", out["reply"])
         self.assertIn("审查意见：1 条", out["reply"])
         body = workflow.doc_read(self.db, self.task, "write")

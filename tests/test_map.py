@@ -178,6 +178,40 @@ class MapStepTest(unittest.TestCase):
         self.assertIn({"from": ids["1.1 实验方法"], "to": "r1", "label": "支撑"}, r["edges"])
         self.assertIn({"from": ids["2.1 实验方法"], "to": "r2", "label": "支撑"}, r["edges"])
 
+    def test_hand_made_node_roundtrip_and_survives_tidy(self):
+        """节点尾部 ＋ 手建的节点：没有 ref、大纲里也没有它 —— 写进去要原样留住，挂在某节下面就别被「重新整理」清掉。"""
+        workflow.map_seed(self.db, self.tid)
+        cur = workflow.map_read(self.db, self.tid)
+        sec = [n for n in cur["nodes"] if n["label"] == "1.2 现状"][0]["id"]
+        r = workflow.map_write(self.db, self.tid, {
+            "nodes": cur["nodes"] + [{"id": "r1", "type": "note", "label": "我手加的一条", "detail": "自己的说明"}],
+            "edges": cur["edges"] + [{"from": sec, "to": "r1", "label": "包含"}]}, keep_positions=False)
+        got = [n for n in r["nodes"] if n["id"] == "r1"][0]
+        self.assertEqual((got["label"], got["detail"], got["type"], got["ref"]),
+                         ("我手加的一条", "自己的说明", "note", ""))
+        self.assertIn({"from": sec, "to": "r1", "label": "包含"}, r["edges"])
+        after = workflow.map_tidy(self.db, self.tid)
+        self.assertIn("我手加的一条", [n["label"] for n in after["nodes"]], "挂在节下面 → 重新整理留着")
+        self.assertIn({"from": sec, "to": "r1", "label": "包含"}, after["edges"])
+
+    def test_tidy_keeps_hand_made_nodes(self):
+        """他自己用 ＋ 加的节点（mine=true）大纲里没有 —— 重新整理不许删，坐标、类型、边原样留着。"""
+        workflow.map_seed(self.db, self.tid)
+        cur = workflow.map_read(self.db, self.tid)
+        sec = [n for n in cur["nodes"] if n["label"] == "1 引言"][0]["id"]
+        r = workflow.map_write(self.db, self.tid, {
+            "nodes": cur["nodes"] + [{"id": "r1", "type": "section", "label": "1.4 我自己加的一节",
+                                      "mine": True, "x": 11.0, "y": 22.0}],
+            "edges": cur["edges"] + [{"from": sec, "to": "r1", "label": "包含"}]}, keep_positions=False)
+        self.assertTrue([n for n in r["nodes"] if n["id"] == "r1"][0]["mine"], "mine 要能落盘（map_write 不能剥掉）")
+        after = workflow.map_tidy(self.db, self.tid)
+        got = [n for n in after["nodes"] if n["id"] == "r1"]
+        self.assertEqual(len(got), 1, "手建的节点不该被重新整理删掉")
+        self.assertEqual((got[0]["label"], got[0]["type"], got[0].get("x"), got[0].get("y")),
+                         ("1.4 我自己加的一节", "section", 11.0, 22.0))
+        self.assertIn({"from": sec, "to": "r1", "label": "包含"}, after["edges"])
+        self.assertTrue(any("手建的 1 个节点" in c for c in after["changed"]), after["changed"])
+
     def test_doc_write_refuses_empty_markdown(self):
         """模型偶尔发个丢参数的工具调用：空 markdown 被照写就把整份正文清空（实测发生过）。"""
         workflow.doc_write(self.db, self.tid, "write", "# 已有正文\n\n第一段。\n")
@@ -198,12 +232,14 @@ class MapStepTest(unittest.TestCase):
         self.assertEqual(len(msgs), 1)
         self.assertIn("谱系图我已经看过了", msgs[0]["content"])
 
-    def test_write_system_carries_map_evidence(self):
-        """写作助手说「我已经看过谱系图」，那 system 里就得真有谱系图挂着的东西。"""
+    def test_write_system_no_map_block_after_draft(self):
+        """口径（2026-10-22 改）：谱系图只在「从零起稿」那一次当骨架用（逐节生成，见 test_draft_from_map）；
+        写下正文之后改图不许影响改稿，所以 write_system 里不再挂谱系图那段。
+        以前这条测的是反过来的口径（system 里必须有图），起稿改成分节生成后它就没有消费方了。"""
         self._seed_map([("r1", "笔记一", "s2")])
         txt = workflow_documents.write_system(self.db, self.tid)
-        self.assertIn("谱系图", txt)
-        self.assertIn("笔记一", txt)
+        self.assertNotIn("【谱系图", txt)
+        self.assertNotIn("笔记一", txt)
 
     def test_write_system_lists_figures_and_asks_for_captions(self):
         """文章撰写要读「图」文件夹，并要求在正文里落 [图位 N] 图题（格式转换左栏读的就是这个夹）。"""

@@ -145,6 +145,8 @@ def map_write(db: "WorkflowDB", task_id: str, data: Any, keep_positions: bool = 
         node = {"id": nid, "type": t if t in MAP_TYPES else "note",
                 "label": str(n["label"])[:120], "detail": str(n.get("detail") or "")[:600],
                 "ref": str(n.get("ref") or "")[:300]}
+        if n.get("mine"):                            # 他自己用 ＋ 加的节点：来源标记，重新整理时不许动它
+            node["mine"] = True
         for k in ("x", "y"):                       # 手动拖过的位置
             try:
                 node[k] = round(float(n.get(k)), 1)
@@ -198,8 +200,12 @@ def map_tidy(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     """
     md = doc_read(db, task_id, "outline")["markdown"]
     cur = map_read(db, task_id)
-    olds = [n for n in cur["nodes"] if n.get("type") == "section"]
-    refs = [dict(n) for n in cur["nodes"] if n.get("type") != "section"]
+    # mine=true 的节点是他自己用 ＋ 加的：大纲里没有它、也不是 agent 挂的资料 —— 重新整理只能重排大纲那部分，
+    # 他的手写内容（连坐标、连边）一律原样留着，否则「按大纲重认」就等于删他的字。
+    mine = [dict(n) for n in cur["nodes"] if n.get("mine")]
+    mine_ids = {n["id"] for n in mine}
+    olds = [n for n in cur["nodes"] if n.get("type") == "section" and n["id"] not in mine_ids]
+    refs = [dict(n) for n in cur["nodes"] if n.get("type") != "section" and n["id"] not in mine_ids]
     old_order = [n["id"] for n in olds]
     by_num: dict[str, dict[str, Any]] = {}
     by_title: dict[str, dict[str, Any]] = {}
@@ -272,6 +278,20 @@ def map_tidy(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     if moved:
         detail = "、".join(f"「{lab[i]}」第 {a + 1} → 第 {b + 1}" for i, a, b in moved[:5])
         changed.append(f"顺序按大纲重排：{detail}" + (f" 等 {len(moved)} 处" if len(moved) > 5 else ""))
+
+    if mine:                                     # 手建节点排在最后追加：不参与上面的顺序比对，坐标和边原样带走
+        have = {n["id"] for n in nodes}
+        for m in mine:
+            if m["id"] not in have:
+                nodes.append(m)
+                have.add(m["id"])
+        seen_edge = {(e["from"], e["to"]) for e in edges}
+        for e in cur["edges"]:
+            k = (e.get("from"), e.get("to"))
+            if (k[0] in mine_ids or k[1] in mine_ids) and k not in seen_edge and k[0] in have and k[1] in have:
+                edges.append({"from": k[0], "to": k[1], "label": e.get("label") or ""})
+                seen_edge.add(k)
+        changed.append(f"手建的 {len(mine)} 个节点原样留着")
 
     out = map_write(db, task_id, {"nodes": nodes, "edges": edges}, keep_positions=False)
     out["changed"] = changed
@@ -606,20 +626,15 @@ WRITE_FALLBACK = ("按框架逐节展开成正式论文正文：每节先给要�
                   "缺数据的地方写「待补」，不编造数字与文献；术语前后一致。")
 
 
-def write_system(db: "WorkflowDB", task_id: str) -> str:
+def write_system(db: "WorkflowDB", task_id: str, draft: bool = False) -> str:
+    """写作 agent 的 system。`draft=True` 是「按谱系图整篇起稿」那一趟：那一版不留「待补」占位
+    —— 没挂证据的节照框架做定性论述，绝不写「待补：…」让用户对着空壳改。"""
     from workflow_converters import fig_list        # 反向 import 会成环，用时再拿
     from workflow_converters import cite_sync
     task = db.summary(task_id)["task"]
     out = doc_read(db, task_id, "outline")
     cur = doc_read(db, task_id, "write")
     cite = cite_sync(db, task_id)                    # 每次进这一步都按当前正文重算台账状态
-    mp = map_read(db, task_id)                       # 上一步交付的谱系图：每节挂着哪些证据
-    lab = {n["id"]: (n.get("label") or "") for n in mp["nodes"]}
-    hung: dict[str, list[str]] = {}
-    for e in mp["edges"]:
-        if e.get("from") in lab and e.get("to") in lab and (e.get("label") or "") not in ("包含", "下一章"):
-            hung.setdefault(e["from"], []).append(f"{lab[e['to']]}（{e.get('label') or '支撑'}）")
-    evid = "\n".join(f"- {lab[k]} ← {'；'.join(v)}" for k, v in hung.items()) or "（谱系图还没挂证据）"
     figs = fig_list(db, task_id)["files"]        # 「图」文件夹：正文的图位只能从此处挑
     fig_txt = "\n".join(f"- {f['name']}（{f['ext'].upper()}，{max(1, f['size'] // 1024)} KB）" for f in figs[:40]) \
         or "（图文件夹还是空的 —— 让他先把成图放进项目的「图」文件夹；没有的就写「待补图」）"
@@ -633,9 +648,9 @@ def write_system(db: "WorkflowDB", task_id: str) -> str:
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：**按已确认的框架把正文写出来/改好**。不做检索、下载、精读、格式转换。
 2. **必须以上一步敲定的框架为骨架**（标题层级、每节要写什么，照它来；要动结构先说清为什么，用户同意再动框架文件）。
-3. 缺数据、缺文献、缺结论的地方，写「待补：<还差什么>」，**绝不编造**。数字只能来自用户给的材料或项目库。
+3. {('缺数据、缺文献的地方**做定性论述、用限定语**（在本文条件下 / 就现有报道看），正文里**不出现「待补」这类占位**；数字与文献一律不编造' if draft else '缺数据、缺文献、缺结论的地方，写「待补：<还差什么>」，**绝不编造**')}。数字只能来自用户给的材料或项目库。
 4. 用户说「更新正文」「写进文件」、或你们敲定了改动时，**必须调用 doc_write** 写**整份** markdown（覆盖同一个文件，不要新建、不要只给片段）；可以先写一节让他看，但落盘永远是整份。
-5. **能写就直接写**：用户让你写某一节、或说「按框架写」，就直接把那一节写出来（300-800 字量级，学术书面语），缺的东西写「待补：<还差什么>」——**不要先反问一串再等**；确实缺到没法动笔（比如完全不知道研究对象）才问 1 个问题。写完落盘并说清改了哪一节。
+5. **能写就直接写**：用户让你写某一节、或说「按框架写」，就直接把那一节写出来（300-800 字量级，学术书面语），{('缺的东西做定性论述、写满写实' if draft else '缺的东西写「待补：<还差什么>」')}——**不要先反问一串再等**；确实缺到没法动笔（比如完全不知道研究对象）才问 1 个问题。写完落盘并说清改了哪一节。
 6. 用户上传的文件会以「[附件] … 路径」出现，需要内容就调 read_attachment（PDF 自动抓正文）。
 7. 正文文件：`{cur['path']}`（{'已有正文' if cur['exists'] else '还没有正文'}）。
 7.1 **左栏就是这份正文**：用户说「写在左边」「在左边展示正文」「生成到左边」——都是叫你把整份正文调 doc_write 落盘，写完左边立刻换成新内容；不要在聊天里贴全文当交付。工具调用要带完整 `markdown` 参数，空参数会被服务端拒写。
@@ -647,9 +662,6 @@ def write_system(db: "WorkflowDB", task_id: str) -> str:
 
 【框架（上一步敲定的，必须遵守）】
 {out['markdown'][:6000] or '（还没有框架 —— 提醒用户先去「确认大纲」敲定框架）'}
-
-【谱系图（上一步交付：每个小节挂着哪些证据，写这一节时就按它取用；没有出处的写「待补」）】
-{evid[:2500]}
 
 【图文件夹（项目里的「图」；图位只能引用这里的文件名）】
 {fig_txt[:1500]}

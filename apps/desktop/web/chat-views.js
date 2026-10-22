@@ -769,6 +769,15 @@ function appendOne(box,ev,who){
      el.innerHTML=`<div class="msg-meta">${avHtml}<strong>${esc(aName)}</strong>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}<span class="msg-chip">${esc(assistantKey())}</span><span class="msg-chip">完成</span><button class="msg-copy" title="复制回复">复制</button></div><div class="md">${md(ev.content||"…")}</div>`;
   }
   else if(ev.type==="error"){ el.className="msg-err"; el.textContent="⚠ "+(ev.message||"出错了"); }
+  else if(ev.type==="team"){
+    // 后台多 agent 协作：一条 = 一个 agent 说的一段话，头上写清「谁 → 谁」。
+    // role 只决定配色（跟团队页同一套身份），文案与标签都由后端给，前端不猜。
+    el.className="team-blk"; el.dataset.role=ev.role||"";
+    el.innerHTML=`<div class="team-hd"><span class="team-av">${esc(ev.emoji||"🤖")}</span><b>${esc(ev.name||"agent")}</b>`
+      + (ev.to?`<span class="team-to">→ ${esc(ev.to)}</span>`:"")
+      + (ev.tag?`<span class="team-tag">${esc(ev.tag)}</span>`:"") + `</div>`
+      + `<div class="team-bub md">${md(ev.content||"")}</div>`;
+  }
   else if(ev.type==="sub"){
     if(ev.phase==="start"){
       el.className="sub-row"; el.id="sub-"+ev.sub;

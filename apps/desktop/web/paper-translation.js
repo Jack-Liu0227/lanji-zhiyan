@@ -585,12 +585,12 @@ let mpGauge = null;                                  // 量字用的隐藏盒（
 const MP_MEAS = new Map();                            // type|label|detail → {w,h}
 function mpNodeInner(n){
   const dot = `<span class="mp-dot" style="background:${MP_COL[n.type]||"var(--muted)"}"></span>`;
+  const plus = `<button class="mp-add" data-add="${esc(n.id)}" title="在它后面加一个节点（Enter 落盘）">＋</button>`;
   if(n.type === "section"){
     const d = n.detail || mpOutlineNote(n.label);
-    return `<div class="t">${dot}${esc(n.label)}</div>${d?`<div class="d">${esc(d)}</div>`:""}
-      <button class="mp-add" data-add="${esc(n.id)}" title="挂资料（精读笔记 / 实验数据 / 文献）">＋</button>`;
+    return `<div class="t">${dot}<span class="lbl">${esc(n.label)}</span>${plus}</div>${d?`<div class="d">${esc(d)}</div>`:""}`;
   }
-  return `<div class="t" title="${esc(n.label||"")}">${dot}<span class="lbl">${esc(n.label)}</span></div>
+  return `<div class="t" title="${esc(n.label||"")}">${dot}<span class="lbl">${esc(n.label)}</span>${plus}</div>
     ${n.detail?`<div class="d">${esc(n.detail)}</div>`:""}
     <span class="mp-pill">${MP_TAG[n.type]||""}</span>`;
 }
@@ -760,7 +760,9 @@ function mpCard(id){
   const old = document.querySelector(".mp-card"); if(old) old.remove();
   const lab = (x)=>(MP.nodes.find(k=>k.id===x)||{}).label||x;
   const kidEdges = MP.edges.filter(e=>e.from===id);
-  const par = MP.edges.filter(e=>e.to===id).map(e=>lab(e.from)).filter(Boolean);
+  const secNodes = MP.nodes.filter(x=>x.type==="section");
+  const secIds = new Set(secNodes.map(x=>x.id));
+  const secPar = MP.edges.filter(e=>e.to===id && secIds.has(e.from)).map(e=>e.from);
   const wrap = $("mp-wrap");
   const div = document.createElement("div");
   div.className = "mp-card";
@@ -771,7 +773,10 @@ function mpCard(id){
     ${n.type==="section"?`<label class="mp-f">挂一条资料<select id="mp-e-add"><option value="">— 精读笔记 / 实验数据 / 文献库 —</option>${mpPickHTML()}</select></label>`:""}
     ${kidEdges.length?`<div class="mp-rel">挂出去的：${kidEdges.map(e=>`<button class="mp-unl" data-un="${esc(e.to)}" title="从这一节上摘掉">${esc(lab(e.to))} ✕</button>`).join("")}</div>`:""}
     ${n.ref?`<p class="mp-rel">来源：${esc(n.ref)}</p>`:""}
-    ${par.length?`<p class="mp-rel">挂在小节：${esc(par.join("、"))}</p>`:""}
+    ${n.type==="section"?"":`<label class="mp-f">挂在小节<select id="mp-e-par">
+      <option value=""${secPar.length?"":" selected"}>— 没挂任何小节 —</option>
+      ${secNodes.map(s=>`<option value="${esc(s.id)}"${secPar[0]===s.id?" selected":""}>${esc(s.label)}</option>`).join("")}
+    </select></label>`}
     <div class="row"><button class="btn ghost" id="mp-cx">关闭</button>
       <button class="btn" id="mp-csave">保存</button>
       <button class="btn ghost" id="mp-cdel">删掉这个节点</button></div>`;
@@ -794,6 +799,15 @@ function mpCard(id){
     add.value = "";
     await mpSave();
     mpSay(`已把「${label}」挂到这一节（谱系.json 已更新）`);
+  };
+  const parSel = $("mp-e-par");
+  if(parSel) parSel.onchange = async ()=>{
+    const sid = parSel.value;
+    const name = (MP.nodes.find(x=>x.id===sid)||{}).label;
+    MP.sel = ""; div.remove();
+    await mpReparent(id, sid);
+    mpSay(sid ? `已把「${n.label}」挪到「${name}」下面（谱系.json 已更新）`
+              : `已把「${n.label}」从所有小节上摘下来，节点还留着（谱系.json 已更新）`);
   };
   div.querySelectorAll("[data-un]").forEach(b=>{
     b.onclick = async ()=>{
@@ -821,6 +835,50 @@ function mpCard(id){
     MP.sel = "";
     await mpSave(); mpSay("已删掉这个节点（谱系.json 已更新）");
   };
+}
+function mpNew(pid){
+  /* 节点尾部那个 ＋：就地建一个手打标题的节点，挂在它下面（包含）。落盘走同一个 mpSave，后端不用改。
+     ponytail: 只能「加在某个节点后面」，插到前面就先加再拖；要改类型/说明点开编辑卡。 */
+  const n = MP.nodes.find(x=>x.id===pid); if(!n) return;
+  document.querySelectorAll(".mp-card").forEach(x=>x.remove());
+  MP.sel = "";
+  const div = document.createElement("div");
+  div.className = "mp-card";
+  div.innerHTML = `<h4>在「${esc(n.label)}」后面加一个节点</h4>
+    <label class="mp-f">标题<input id="mp-n-label" placeholder="Enter 加进去 · Esc 取消"></label>
+    <label class="mp-f">类型<select id="mp-n-type">${Object.keys(MP_TAG).map(k=>`<option value="${k}"${k==="note"?" selected":""}>${MP_TAG[k]}</option>`).join("")}</select></label>
+    <div class="row"><button class="btn ghost" id="mp-nx">取消</button><button class="btn" id="mp-nok">加进去</button></div>`;
+  $("mp-wrap").appendChild(div);
+  const inp = $("mp-n-label");
+  inp.focus();
+  const ok = async ()=>{
+    const label = (inp.value||"").trim();
+    if(!label){ inp.focus(); return; }
+    let nid = "r1"; while(MP.nodes.some(x=>x.id===nid)) nid = "r" + (Number(nid.slice(1)) + 1);
+    MP.nodes.push({id:nid, type:$("mp-n-type").value, label, detail:"", ref:"", mine:true});
+    MP.edges.push({from:pid, to:nid, label:"包含"});
+    div.remove();
+    await mpSave();
+    mpSay(`已在「${n.label}」后面加了「${label}」（谱系.json 已更新）`);
+  };
+  inp.onkeydown = (e)=>{
+    if(e.key === "Enter"){ e.preventDefault(); ok(); }
+    else if(e.key === "Escape") div.remove();
+  };
+  $("mp-nok").onclick = ok;
+  $("mp-nx").onclick = ()=>div.remove();
+}
+async function mpReparent(cid, sid){
+  /* 把一条资料挪到 sid 那个小节下面：同一份资料只留一个小节父边，边标签沿用原来的（支撑（背景）这类不丢）。
+     sid 为空 = 从所有小节上摘下来，节点留着。手拖过的坐标清掉，跟着新父自动重排，不留在鼠标松手的地方。 */
+  const secIds = new Set(MP.nodes.filter(x=>x.type==="section").map(x=>x.id));
+  const oldEdge = MP.edges.find(e=>e.to===cid && secIds.has(e.from));
+  const label = (oldEdge && oldEdge.label) || "支撑";
+  MP.edges = MP.edges.filter(e=>!(e.to===cid && secIds.has(e.from)));
+  if(sid) MP.edges.push({from:sid, to:cid, label});
+  const n = MP.nodes.find(x=>x.id===cid);
+  if(n){ delete n.x; delete n.y; }
+  await mpSave();
 }
 
 function mpSay(t){
@@ -898,7 +956,19 @@ function mpBind(m){
   // 画布：点节点 = 打开编辑卡；拖动节点 = 挪位置（松手落盘）；拖文件进来 = 上传实验数据
   const wrap = $("mp-wrap");
   let mdrag = null, dragged = false;
+  /* 落点命中哪张小节卡：拖资料压在小节卡片上 = 挂到它下面；压不上就当普通挪位置。
+     用 getBoundingClientRect 而不是 elementFromPoint —— 拖动中的卡片就在光标底下，会把命中挡掉。 */
+  const mpDropTarget = (cx, cy, skip)=>{
+    let hit = null;
+    document.querySelectorAll("#mp-wrap .mp-node.sec").forEach(el=>{
+      if(el.dataset.mp === skip) return;
+      const r = el.getBoundingClientRect();
+      if(cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) hit = el;
+    });
+    return hit;
+  };
   wrap.addEventListener("pointerdown", (e)=>{
+    if(e.target.closest("[data-add]")) return;                 // 点的是 ＋：别当成拖节点
     const el = e.target.closest("[data-mp]"); if(!el) return;
     const p = MP.pos[el.dataset.mp]; if(!p) return;
     mdrag = { id: el.dataset.mp, el, sx: e.clientX, sy: e.clientY, ox: p.x, oy: p.y, moved: false };
@@ -910,20 +980,37 @@ function mpBind(m){
     const dx = (e.clientX - mdrag.sx) / z, dy = (e.clientY - mdrag.sy) / z;
     if(!mdrag.moved && Math.abs(dx) + Math.abs(dy) < 4) return;      // 手抖不算拖
     mdrag.moved = true;
+    mdrag.el.classList.add("mp-dragging");                            // 半透明：看得见底下那张小节卡
     const n = MP.nodes.find(x=>x.id===mdrag.id); if(!n) return;
     n.x = Math.round(mdrag.ox + dx); n.y = Math.round(mdrag.oy + dy);
     mdrag.el.style.left = n.x + "px"; mdrag.el.style.top = n.y + "px";   // 拖动时只挪这块，松手再重算连线
+    const t = n.type === "section" ? null : mpDropTarget(e.clientX, e.clientY, mdrag.id);
+    wrap.querySelectorAll(".mp-node.drop").forEach(x=>x.classList.remove("drop"));
+    if(t) t.classList.add("drop");                                    // 松手就挂到它下面
   });
-  const endDrag = async ()=>{
+  const endDrag = async (e)=>{
     if(!mdrag) return;
-    const moved = mdrag.moved; mdrag = null; dragged = moved;
+    const { id, el, moved } = mdrag; mdrag = null; dragged = moved;
+    el.classList.remove("mp-dragging");
+    wrap.querySelectorAll(".mp-node.drop").forEach(x=>x.classList.remove("drop"));
     if(!moved) return;
+    const me = MP.nodes.find(n=>n.id===id);
+    const tgt = (e && e.type === "pointerup" && me && me.type !== "section")
+      ? mpDropTarget(e.clientX, e.clientY, id) : null;
+    if(tgt){
+      const tid = tgt.dataset.mp;
+      await mpReparent(id, tid);
+      mpSay(`已把「${me.label}」挂到「${(MP.nodes.find(n=>n.id===tid)||{}).label}」下面（谱系.json 已更新）`);
+      return;
+    }
     mpPaint();
     await mpSave();
   };
   wrap.addEventListener("pointerup", endDrag);
   wrap.addEventListener("pointercancel", endDrag);
   wrap.onclick = (e)=>{
+    const ab = e.target.closest("[data-add]");
+    if(ab){ dragged = false; mpNew(ab.dataset.add); return; }        // 节点尾部 ＋ = 在后面加一个节点
     const el = e.target.closest("[data-mp]"); if(!el) return;
     if(dragged){ dragged = false; return; }                          // 刚拖完，别当成点击
     MP.sel = el.dataset.mp; mpPaint();
