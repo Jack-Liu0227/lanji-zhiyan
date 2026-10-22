@@ -10,7 +10,6 @@ function trPanelHTML(active){
   return `<div class="tr" id="panel-notes"${active?"":' style="display:none"'}>
     <div class="tr-bar">
       <button class="btn btn-teal" id="trAdd">＋ 添加论文</button>
-      <select id="trPick" class="tr-sel" title="这个项目文献库里已有的 PDF"><option value="">文献库已有…</option></select>
       <span class="tr-seg" id="trSeg">
         <button class="tr-seg-b active" id="trBtnEn" title="英文原文 PDF">English</button>
         <button class="tr-seg-b" id="trBtnZh" title="纯中文（BabelDOC 译文）">中文</button>
@@ -143,7 +142,7 @@ async function trMount(key, url){
   try{
     const pdf = await window.pdfjsLib.getDocument({url}).promise;
     TR.pdfs = TR.pdfs || {}; TR.pdfs[key] = pdf;
-    TR.pages = pdf.numPages; $("trPick") && trFillPick();
+    TR.pages = pdf.numPages;
     box.innerHTML = "";
     for(let n = 1; n <= pdf.numPages; n++){
       const page = await pdf.getPage(n);
@@ -339,13 +338,15 @@ async function trTranslate(){
   trSegActive("zh");
   if(b){ b.disabled = true; }
   trMsg("启动翻译…（同一篇只翻一次，第二次秒开）");
+  TR.busyOff = 0;
+  trBusy(true, "正在翻译中", "开始识别版式，第一篇要等十几秒…");
   try{
     const r = await api("/api/trans/start", {id: TR.pid, task_id: curTask, pages: TR.testPages || ""});
     if(r.error) throw new Error(r.error);
     TR.job = r;
-    if(r.state === "done" || r.cached){ if(b) b.disabled = false; return trShowZh(r.pages_done || 0); }
+    if(r.state === "done" || r.cached){ if(b) b.disabled = false; trBusy(false); trMsg("已打开中文译文（这篇翻过，直接用）"); return trShowZh(r.pages_done || 0); }
     trStartPoll();
-  }catch(e){ trMsg("翻译启动失败：" + e.message); if(b) b.disabled = false; }
+  }catch(e){ trBusy(false); trMsg("翻译启动失败：" + e.message); if(b) b.disabled = false; }
 }
 function trStartPoll(){
   trStopPoll();
@@ -359,6 +360,7 @@ function trStartPoll(){
         lbl("翻译中…", true);
         const done = s.pages_done || 0;
         trMsg(`${s.msg || "正在翻译"}　已用 ${Math.floor(el/60)}分${el%60}秒（${TR.pages||"整篇"} 页大约十几分钟，可以先干别的）`);
+        trBusy(true, "正在翻译中", `${s.msg || "正在翻译"}　已翻 ${done}/${s.total_pages || TR.pages || "?"} 页 · 已用 ${Math.floor(el/60)}分${el%60}秒`);
         if(done > 0 && done !== TR.prog){          // 翻好一批就在「中文」里先看这一批
           TR.prog = done;
           trShowZh(done);
@@ -367,11 +369,13 @@ function trStartPoll(){
         if(s.state === "partial"){                 // 后面失败了：已翻好的照看
           trStopPoll(); TR.t0 = 0; lbl("中文", false);
           trMsg(`翻到第 ${done} 页时中断：${s.msg || ""}（已翻好的还在，日志：${s.log || ""}）`);
+          trBusy(true, "翻译中断", `翻到第 ${done} 页时失败：${s.msg || ""}` + (s.log ? `\n日志：${s.log}` : ""), true);
         }
       }
-      if(s.state === "done"){ trStopPoll(); TR.t0 = 0; lbl("中文", false); trShowZh(s.pages_done || 0); }
+      if(s.state === "done"){ trStopPoll(); TR.t0 = 0; lbl("中文", false); trBusy(false); trShowZh(s.pages_done || 0); }
       if(s.state === "error"){ trStopPoll(); TR.t0 = 0; lbl("中文", false);
-                              trMsg("翻译失败：" + (s.msg||"") + (s.log ? `（日志：${s.log}）` : "")); }
+                              trMsg("翻译失败：" + (s.msg||"") + (s.log ? `（日志：${s.log}）` : ""));
+                              trBusy(true, "翻译失败", (s.msg || "") + (s.log ? `\n日志：${s.log}` : ""), true); }
     }catch(_){}
   }, 2500);
 }
@@ -448,22 +452,70 @@ function trNoteBind(){
   const later = ()=>{ clearTimeout(t0); t0 = setTimeout(save, 700); };
   t.oninput = later; s.oninput = later;
 }
-/* ---------------- 交互绑定 ---------------- *//* ---------------- 交互绑定 ---------------- */
-async function trFillPick(){
-  const sel = $("trPick"); if(!sel || !curTask) return;
-  try{
-    const d = await api(`/api/task?id=${encodeURIComponent(curTask)}`);
-    const list = d.paper_list || [];
-    sel.innerHTML = `<option value="">文献库已有…</option>` +
-      list.map(p=>`<option value="${p.id}"${p.id===TR.pid?" selected":""}>${esc(p.filename)}</option>`).join("");
-    if(list.length === 1 && !TR.pid) setTimeout(()=>trOpen(list[0].id), 50);   // 只有一篇就直接开
-  }catch(_){}
+
+/* ---------------- 左上 ＋：直接进这个项目的文献库挑一篇 ---------------- */
+async function trOpenPicker(){
+  if(!curTask) return trMsg("先选一个项目 —— 论文在项目的文献库里");
+  const d = document.createElement("dialog");
+  d.className = "modal";
+  d.innerHTML = `
+    <div class="modal-mask"></div>
+    <div class="modal-dialog" style="width:540px">
+      <div class="modal-head"><h3>项目文献库</h3><button class="modal-close" data-x>✕</button></div>
+      <div class="modal-body"><p class="modal-text">读取文献库…</p></div>
+      <div class="modal-foot">
+        <span class="tr-phint" data-n></span>
+        <button class="btn ghost" data-up>＋ 添加 PDF…</button>
+      </div>
+    </div>`;
+  const close = ()=>{ d.close(); d.remove(); };
+  d.querySelector("[data-x]").onclick = close;
+  d.querySelector(".modal-mask").onclick = close;
+  d.querySelector("[data-up]").onclick = ()=>{ close(); $("trFile").click(); };
+  document.body.appendChild(d); d.showModal();      // 先把框立起来，列表慢也不会像没反应
+  let list = [], err = "";
+  try{ list = (await api(`/api/task?id=${encodeURIComponent(curTask)}`)).paper_list || []; }
+  catch(e){ err = e.message; }
+  if(!d.isConnected) return;                        // 等的时候已经被关掉了
+  const rows = list.map(p=>`
+    <button class="tr-prow${p.id === TR.pid ? " on" : ""}" data-id="${esc(p.id)}" title="${esc(p.filename)}">
+      <span class="tr-pn">${esc(p.filename)}</span>
+      <span class="tr-pm">${p.pages ? p.pages + " 页" : ""}</span>
+    </button>`).join("");
+  d.querySelector(".modal-body").innerHTML = err ? `<p class="modal-text">读文献库失败：${esc(err)}</p>`
+    : rows ? `<div class="tr-plist">${rows}</div>`
+           : `<p class="modal-text">这个项目的文献库还是空的 —— 点下面「添加 PDF」，选好自动入库。</p>`;
+  d.querySelector("[data-n]").textContent = `共 ${list.length} 篇`;
+  d.querySelectorAll("[data-id]").forEach(b => b.onclick = ()=>{ close(); trOpen(b.dataset.id); });
 }
+
+/* ---------------- 翻译中：屏幕正中的一层（翻完自己消失） ---------------- */
+function trBusy(show, title, sub, closable){
+  let d = $("trBusy");
+  if(!show){ if(d){ d.close(); d.remove(); } return; }
+  if(!closable && TR.busyOff) return;                 // 点过「后台运行」就不再往屏幕上弹
+  if(!d){
+    d = document.createElement("dialog");
+    d.className = "modal"; d.id = "trBusy";
+    d.innerHTML = `<div class="modal-mask tr-mask-soft"></div>
+      <div class="modal-dialog tr-busy-card" style="width:340px">
+        <div class="tr-busy"><span class="tr-ring" id="trBusyRing"></span><b id="trBusyT">正在翻译中</b></div>
+        <div class="tr-busy-s" id="trBusyS"></div>
+        <button class="btn" id="trBusyX">后台运行</button>
+      </div>`;
+    document.body.appendChild(d); d.showModal();
+  }
+  $("trBusyT").textContent = title || "正在翻译中";
+  $("trBusyS").textContent = sub || "";
+  $("trBusyRing").classList.toggle("hidden", !!closable);      // 失败态：不转了
+  $("trBusyX").textContent = closable ? "知道了" : "后台运行";
+  $("trBusyX").onclick = ()=>{ if(!closable) TR.busyOff = 1; trBusy(false); };
+}
+
 function trBind(){
   const inFile = $("trFile");
-  $("trAdd").onclick = ()=>inFile.click();
+  $("trAdd").onclick = trOpenPicker;                  // ＋ → 项目文献库（不再弹系统文件框）
   inFile.onchange = (e)=>{ trUpload(e.target.files); e.target.value = ""; };
-  $("trPick").onchange = (e)=>{ if(e.target.value) trOpen(e.target.value); };
   $("trIn").onclick = ()=>trZoom(+0.15);
   $("trOut").onclick = ()=>trZoom(-0.15);
   $("trPenTop").onclick = ()=>trPenPanel();
@@ -471,7 +523,7 @@ function trBind(){
   $("trBtnZh").onclick = ()=>trTranslate();
   $("trBtnN").onclick = ()=>trNoteMode();
   $("trStripMore").onclick = ()=>$("trDetail")?.classList.toggle("hidden");
-  trPenInit(); trFillPick(); trZoomLabel();
+  trPenInit(); trZoomLabel();
   if(!TR.hlBound){ TR.hlBound = 1;                     // 文档级监听只挂一次（renderWorkflow 会反复调 trBind）
     document.addEventListener("mouseup", (e)=>{ if($("trStage")?.contains(e.target)) trHlOnMouseUp(e); });
     document.addEventListener("keydown", (e)=>{ if(e.key === "Escape"){ trPenPanel(false); trExitFull(); } });
@@ -595,8 +647,7 @@ function mpNodeInner(n){
     <span class="mp-pill">${MP_TAG[n.type]||""}</span>`;
 }
 function mpSize(n){
-  /* 卡片大小按内容真量（以前写死 216×52 / 190×36，长标题直接被折掉）：
-     宽度 = 文字自然宽度，最长夹到一个上限；高度 = 真排出来的行高 */
+  /* 卡片大小按内容真量（写死尺寸会把长标题折掉）：宽度 = 文字自然宽度夹到上限，高度 = 真排出来的行高 */
   const detail = n.type === "section" ? (n.detail || mpOutlineNote(n.label)) : (n.detail || "");
   const key = `${n.type}\u0001${n.label}\u0001${detail}`;
   const hit = MP_MEAS.get(key); if(hit) return hit;
@@ -882,17 +933,16 @@ async function mpReparent(cid, sid){
 }
 
 function mpSay(t){
-  /* 谱系图这步没有 map-meta 那个元素（右栏 meta 是 mp-meta 计数），所以整理/挂资料的结果
-     直接说进右栏对话里 —— 以前这些提示全写到一个不存在的节点上，点了按钮就像没反应 */
+  /* 谱系图这步没有 map-meta 元素（右栏 meta 是 mp-meta 计数）：整理/挂资料的结果直接说进右栏对话，
+     写到别处就看不见，点了按钮像没反应 */
   const st = DOCS["map"]; if(!st || !t) return;
   st.msgs.push({ role: "assistant", content: t, events: [] });
   docPaint("map");
 }
 
 async function mpTidy(){
-  /* 重新整理 = 按大纲**当前的**顺序重认一遍框架：他把 2.1 和 1.1 调换、改标题、加减小节后点这里。
-     结构性重排交给服务端（标题认身份、挂着的资料跟着走、手动坐标全清 → 一定看得见变化）；
-     剩下「哪条精读笔记挂哪一节」要读内容判断，那一半交给右边谱系助手，拿不准它会问他。 */
+  /* 重新整理 = 按大纲**当前的**顺序重认一遍框架。结构性重排交给服务端（标题认身份、挂着的资料跟着走、
+     手动坐标全清）；「哪条精读笔记挂哪一节」要读内容判断，交给右边谱系助手。 */
   try{
     const d = await api("/api/map/tidy", {task_id: curTask});
     if(d.error) throw new Error(d.error);

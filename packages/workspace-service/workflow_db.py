@@ -94,8 +94,7 @@ from workflow_prompts import (
     WORKFLOW_SCHEMA, IDEA_FALLBACK, AGENT_SYSTEM, _DELEGATE_SYSTEM, BUILTIN_ASSISTANTS
 )
 
-# 内置 Provider 目录：从科研工作台内嵌的 pi-ai SDK 里导出（40 家），不手抄
-# 见同目录 providers_catalog.json（id / name / base_url / wire / auth / 模型 id）
+# 内置 Provider 目录：从内嵌 pi-ai SDK 导出（40 家），字段见同目录 providers_catalog.json
 CATALOG_PATH = next((p for p in (
     ROOT / "packages" / "contracts" / "providers_catalog.json",   # 源码树
     ROOT / "contracts" / "providers_catalog.json",                # 打包后（数据按 datas 落位）
@@ -121,8 +120,8 @@ WIRE_LABEL = {
 }
 USABLE_WIRES = {"openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"}
 CUSTOM_WIRES = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"]
-# 「订阅 / OAuth 登录」时给用户打开的授权页；设备码流需要各家的 client_id，
-# 这里不假装能自动授权（ponytail: 真有 client_id 时再把 RFC 8628 轮询加进来）
+# 「订阅 / OAuth 登录」的授权页；设备码流要各家 client_id，暂不自动授权
+# ponytail: 拿到 client_id 再加 RFC 8628 轮询
 OAUTH_CONSOLE = {
     "openai": "https://platform.openai.com/api-keys",
     "openai-codex": "https://chatgpt.com/",
@@ -199,8 +198,7 @@ def current_stage_key(conn: Any, task_id: str) -> str:
         pass
     ordered = [s for s in STAGES if s in done]
     pending = [k for k in running if k not in done]
-    # 正在跑、且排在最后一个已完成步之后的那一步，比它更「当前」；排在已经做完的步
-    # 之前的 running 是崩溃/中断留下的残迹，不算。
+    # 当前步 = 最后一个已完成步之后的 running；其前的 running 是崩溃残留，不算。
     last_done_idx = STAGES.index(ordered[-1]) if ordered else -1
     frontier = [k for k in pending if STAGES.index(k) >= last_done_idx]
     if frontier:
@@ -236,8 +234,7 @@ def _norm_hhmm(value: str) -> str:
 
 
 # ------------------------------------------------------------ 内置定时任务 ----
-# 内置定时规则（DEFAULT 清单）：4 条，id 固定，
-# 这样重复播种是「只补缺」而不是反复插入；prompt 换成我们这套（检索 → 精读 → 落盘）的说法。
+# 内置定时规则：id 固定，重复播种只补缺、不重复插入。
 BUILTIN_SCHEDULES = [
     {"id": "builtin.schedule.last30days", "name": "Last 30 days 每日资讯推送",
      "cron": "0 9 * * *", "output_dir": "每日资讯推送",
@@ -255,6 +252,7 @@ BUILTIN_SCHEDULES = [
 
 
 # 项目位置里固定生成的六个子目录：名字 + 写进各自 README 的说明
+_LOW_MARKED: set[str] = set()     # 已标成低完整性的目录（每个进程只 icacls 一次）
 
 PROJ_DIRS: list[tuple[str, str]] = [
     ("记忆", "项目记忆的落盘副本：长期记忆.md（项目要点与重要结论）、短期记忆.md（对话内容与细节）。由「创新点审查」等步骤自动维护，人工也可直接编辑，下一步再跑时会读回来。"),
@@ -278,7 +276,7 @@ class WorkflowDB(ResearchDB):
             self.db.execute("ALTER TABLE chats ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''")
         if "task_id" not in cols:                     # 老库补列：对话绑的项目（'' = 随意对话）
             self.db.execute("ALTER TABLE chats ADD COLUMN task_id TEXT NOT NULL DEFAULT ''")
-        # 老库补列（providers 是这次新做的表，早期版本只有 6 列）
+        # 老库补列（早期版本 providers 只有 6 列）
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(providers)")}
         if "source" not in cols:
             self.db.execute("ALTER TABLE providers ADD COLUMN source TEXT NOT NULL DEFAULT 'builtin'")
@@ -298,7 +296,7 @@ class WorkflowDB(ResearchDB):
         if "paper_id" not in cols:                      # 老库补列：阅读笔记绑论文（论文又绑项目）
             self.db.execute("ALTER TABLE md_notes ADD COLUMN paper_id TEXT NOT NULL DEFAULT ''")
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(chat)")}
-        if "scope" not in cols:                         # 老库补列：各步骤的对话分开存（原来只有创新点审查一个）
+        if "scope" not in cols:                         # 老库补列：各步骤的对话分开存
             self.db.execute("ALTER TABLE chat ADD COLUMN scope TEXT NOT NULL DEFAULT ''")
         self.db.execute("""CREATE TABLE IF NOT EXISTS dl_queue (
               task_id TEXT NOT NULL, result_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
@@ -424,8 +422,7 @@ class WorkflowDB(ResearchDB):
 
     # ---------- 任务 / 步骤 ----------
     def log_step(self, task_id: str, stage: str, status: str, summary: str = "") -> dict[str, Any]:
-        # quiet_steps：定时任务那类「不是科研台某一步」的后台跑，不往十步账上记账
-        # （日报导出写进来过 write/convert，进度被虚高，2026-10-21 清过一次）。
+        # quiet_steps：定时任务这类后台跑不记到十步账上（否则进度虚高）。
         if getattr(self, "quiet_steps", False):
             return {"id": "", "stage": stage, "status": status, "summary": summary, "created_at": now(), "skipped": True}
         row = (uuid.uuid4().hex, task_id, stage, status, summary, now())
@@ -694,6 +691,17 @@ class WorkflowDB(ResearchDB):
             except ValueError:
                 raise ValueError("项目目录中的子目录越界") from None
         folder.mkdir(parents=True, exist_ok=True)
+        # 启动之后新建的项目，mark_write_roots_low 那一轮没覆盖到它：babeldoc / xelatex 都跑在
+        # Low IL 沙箱里，往 Medium 目录写就是 WinError 5 —— 用户看到的是「一按翻译就报退出码 1」。
+        # 这里是所有项目子目录的唯一出口；icacls 一次 ~40ms，所以每个目录每个进程只标一次。
+        key = str(folder).lower()
+        if key not in _LOW_MARKED:
+            try:
+                import lowbox
+                if lowbox.mark_low(folder, recursive=False):
+                    _LOW_MARKED.add(key)
+            except OSError:
+                pass
         return folder
 
     # ---------- 定时任务（规则 + 每次运行一条记录） ----------
@@ -893,7 +901,7 @@ class WorkflowDB(ResearchDB):
         self.db.execute("INSERT INTO teams (id,name,kind,status,project_id,purpose,created_at,updated_at)"
                         " VALUES (?,?,?,?,?,?,?,?)",
                         (tid, (name or "新团队").strip(), kind, "idle", project_id or "", purpose or "", now(), now()))
-        # 不再顺手建同名 chats 行：团队有独立的 team_sessions，混进「智研管家」对话列表只会删不掉
+        # 不建同名 chats 行：团队用独立 team_sessions，混进对话列表删不掉
         self.db.commit()
         return self.team(tid) or {}
 

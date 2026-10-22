@@ -1058,7 +1058,7 @@ body.md-narrow .wctl button:hover { background: #eee; }
 /* ---- 论文翻译（工作流第 4 步：添加论文 → 元数据 → PDF 阅读器 → 中英互译 / 笔记模式 / 荧光笔） ---- */
 .tr{display:flex;flex-direction:column;gap:10px;height:100%;min-height:0}
 .tr-bar{display:flex;align-items:center;gap:10px;flex:none;height:44px}
-.tr-bar>.btn,.tr-bar>.tr-sel,.tr-bar>.tr-pageno,.tr-bar>.tr-zoom,.tr-bar>.tr-seg,.tr-bar>.tr-grp{height:36px;display:inline-flex;align-items:center;justify-content:center;line-height:1;box-sizing:border-box;margin:0}
+.tr-bar>.btn,.tr-bar>.tr-pageno,.tr-bar>.tr-zoom,.tr-bar>.tr-seg,.tr-bar>.tr-grp{height:36px;display:inline-flex;align-items:center;justify-content:center;line-height:1;box-sizing:border-box;margin:0}
 .tr-bar>.btn{padding:0 14px;font-size:13px}
 .tr-bar>.tr-zoom{gap:2px;padding:0 3px;border:1px solid var(--line);border-radius:9px;background:var(--panel)}
 .tr-bar>.tr-zoom>button{width:30px;height:30px;border:0;background:transparent;color:var(--fg);border-radius:7px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;font:inherit;font-size:15px;line-height:1}
@@ -1074,7 +1074,6 @@ body.md-narrow .wctl button:hover { background: #eee; }
 .tr-grp>.tr-ib.active{background:color-mix(in srgb,var(--accent) 20%,transparent);color:var(--accent)}
 .tr-spacer{flex:1}
 .tr-bar .btn-teal{background:var(--accent);color:var(--accent-ink,#0d1218);font-weight:600}
-.tr-sel{flex:0 0 auto;max-width:230px;height:36px;padding:0 8px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;color:var(--fg);font:inherit;font-size:13px}
 .tr-zoom{display:inline-flex;gap:6px}
 .tr-ib{width:36px;height:36px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--fg);cursor:pointer;font-size:15px;line-height:1}
 .tr-ib:hover,.tr-ib.active{border-color:var(--accent);color:var(--accent)}
@@ -1195,6 +1194,24 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .tr-stage.zen .tr-zen-zoom{display:flex}
 .tr-load{padding:22px;color:var(--muted)}
 .tr-load.err{color:var(--err)}
+/* 翻译中：屏幕正中的一层（翻完自己消失；失败就停在原地，点按钮关） */
+.tr-mask-soft{background:color-mix(in srgb,var(--bg) 42%,transparent)}
+.tr-busy-card{padding:24px 24px 20px;text-align:center}
+.tr-busy{display:flex;align-items:center;justify-content:center;gap:10px;font-size:15px;font-weight:700;color:var(--fg)}
+.tr-busy-s{margin:10px 0 14px;font-size:12.5px;line-height:1.65;color:var(--muted);white-space:pre-wrap}
+.tr-ring{flex:none;width:15px;height:15px;border-radius:50%;
+  border:2px solid color-mix(in srgb,var(--accent) 28%,transparent);border-top-color:var(--accent);
+  animation:spins .9s linear infinite}
+/* 左上 ＋：项目文献库的挑论文列表 */
+.tr-plist{display:flex;flex-direction:column;gap:3px;max-height:46vh;overflow:auto}
+.tr-prow{display:flex;align-items:center;gap:10px;width:100%;padding:9px 10px;border:1px solid transparent;
+  border-radius:8px;background:transparent;color:var(--fg);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
+.tr-prow:hover{background:color-mix(in srgb,var(--accent) 10%,transparent);
+  border-color:color-mix(in srgb,var(--accent) 28%,transparent)}
+.tr-prow.on{background:color-mix(in srgb,var(--accent) 14%,transparent);border-color:var(--accent)}
+.tr-pn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tr-pm{flex:none;color:var(--muted);font-size:11.5px}
+.tr-phint{margin-right:auto;align-self:center;color:var(--muted);font-size:12px}
 /* ============ 笔记页 · 方案②（莫兰迪静谧）· 全走主题变量，2026-10-11 ============ */
 .md-view{ --r-md: 10px; }
 .md-view .md-note-item{ border-radius: var(--r-md); }
