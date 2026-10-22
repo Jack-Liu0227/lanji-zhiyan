@@ -3,13 +3,19 @@
 // 用法：node apps/desktop/web/ids.test.mjs
 import { readdirSync, readFileSync } from "node:fs";
 
-const dir = new URL(".", import.meta.url);
-const sources = readdirSync(dir)
-  .filter((name) => name.endsWith(".html") || name.endsWith(".js"))
-  .map((name) => ({
-    name,
-    text: readFileSync(new URL(name, dir), "utf8"),
-  }));
+const root = new URL(".", import.meta.url);
+// 视图 JS 在 views/ 里：递归收，别只扫根目录（只扫根 = 一条也扫不到，还照样打印 OK）
+const sources = [];
+(function walk(dir, prefix) {
+  for (const ent of readdirSync(dir, { withFileTypes: true })) {
+    if (ent.isDirectory()) {
+      if (ent.name !== "vendor" && !ent.name.startsWith(".")) walk(new URL(ent.name + "/", dir), prefix + ent.name + "/");
+      continue;
+    }
+    if (!ent.name.endsWith(".html") && !ent.name.endsWith(".js")) continue;
+    sources.push({ name: prefix + ent.name, text: readFileSync(new URL(ent.name, dir), "utf8") });
+  }
+})(root, "");
 
 const defined = new Set();
 const refs = new Map();
@@ -32,7 +38,7 @@ for (const { name, text } of sources) {
 }
 
 // 这些控件按需创建，或在代码里有 ?. / if(!x) return 兜底；缺了不会让整页初始化中断。
-const OPTIONAL = new Set(["mailNotifStack", "prLangTo", "prTranslateSource", "tofClose"]);
+const OPTIONAL = new Set(["mailNotifStack", "prLangTo", "prTranslateSource", "tofClose", "cvOpenExt"]);
 const missing = [...refs.keys()].filter((id) => !defined.has(id) && !OPTIONAL.has(id));
 
 console.log(`ids.test: 页面定义 ${defined.size} 个 id，代码引用 ${refs.size} 个`);

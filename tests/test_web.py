@@ -13,6 +13,7 @@ import tempfile
 # ---------------- 来自 test_web_fetch.py ----------------
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WEB = ROOT / "apps" / "desktop" / "web"
+JS = WEB / "views"          # 视图 JS 已从 web/ 挪进 web/views/（css/ 里是样式）
 for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
     sys.path.insert(0, str(ROOT / "packages" / _n))
 
@@ -41,7 +42,7 @@ class ChatWithoutConversationTest(unittest.TestCase):
 
     def setUp(self) -> None:
         self.server = (ROOT / "apps" / "desktop" / "server.py").read_text(encoding="utf-8")
-        self.chat_js = (WEB / "chat-views.js").read_text(encoding="utf-8")
+        self.chat_js = (JS / "chat-views.js").read_text(encoding="utf-8")
 
     def test_server_creates_chat_when_task_id_is_empty_or_stale(self) -> None:
         self.assertIn("db.create_chat(\"\")", self.server)
@@ -119,9 +120,9 @@ class ModelKeyGuardTest(unittest.TestCase):
     「编译 .tex」不在守卫里 —— 那是本地 xelatex，不需要任何 Key。"""
 
     def test_发送入口都挂了守卫(self) -> None:
-        chat = (WEB / "chat-views.js").read_text(encoding="utf-8")
-        wf = (WEB / "workflow-view.js").read_text(encoding="utf-8")
-        core = (WEB / "app-core.js").read_text(encoding="utf-8")
+        chat = (JS / "chat-views.js").read_text(encoding="utf-8")
+        wf = (JS / "workflow-view.js").read_text(encoding="utf-8")
+        core = (JS / "app-core.js").read_text(encoding="utf-8")
         self.assertIn("function hasModelKey", core)
         self.assertIn("async function requireModelKey", core)
         self.assertEqual(chat.count("requireModelKey()"), 1, "主页聊天发送缺守卫")

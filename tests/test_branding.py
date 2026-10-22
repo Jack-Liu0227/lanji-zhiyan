@@ -25,7 +25,7 @@ class BrandingTest(unittest.TestCase):
         self.assertIn('APP = "览籍智研"', installer_py)
 
     def test_sidebar_shows_chinese_brand(self) -> None:
-        core = (ROOT / "apps" / "desktop" / "web" / "app-core.js").read_text(encoding="utf-8")
+        core = (ROOT / "apps" / "desktop" / "web" / "views" / "app-core.js").read_text(encoding="utf-8")
         self.assertIn("<b>览籍智研</b>", core)
         self.assertNotIn("Research workspace", core)
 

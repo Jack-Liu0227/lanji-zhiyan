@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 
 const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
-const external = readFileSync(new URL("./notes-and-settings.js", import.meta.url), "utf8");
+const external = readFileSync(new URL("./views/notes-and-settings.js", import.meta.url), "utf8");
 const js = [...inline, external].find(source => source.includes("const DEFAULT_THEME"));
 assert.ok(js, "theme implementation was not found in index.html or notes-and-settings.js");
 const block = js.slice(js.indexOf("const DEFAULT_THEME"), js.indexOf("function bindSwatches"));
@@ -79,7 +79,7 @@ for (const p of t.THEME_PRESETS) {
 }
 
 // 原生控件（select 弹出层、滚动条、日期选择器）跟随主题：缺 color-scheme 时深色下弹出层是白底白高亮
-const css = readFileSync(new URL("./app.css", import.meta.url), "utf8");
+const css = readFileSync(new URL("./css/app.css", import.meta.url), "utf8");
 assert.match(css, /^:root\[data-theme=dark\]\{color-scheme:dark;/m, "深色主题缺 color-scheme:dark");
 assert.match(css, /^:root\[data-theme=light\]\{color-scheme:light;/m, "浅色主题缺 color-scheme:light");
 

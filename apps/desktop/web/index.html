@@ -10,8 +10,8 @@ document.title = "览籍智研 · v" + (new URLSearchParams(location.search).get
 /* 主题在首帧前就定好：以前等 refreshState 回来才套 rw-theme，浅色用户会先看到一帧深色页再翻白（同样算闪一下） */
 document.documentElement.dataset.theme = localStorage.getItem("rw-theme") || "dark";
 </script>
-<link rel="stylesheet" href="/app.css">
-<link rel="stylesheet" href="/kanban.css">
+<link rel="stylesheet" href="/css/app.css">
+<link rel="stylesheet" href="/css/kanban.css">
 </head>
 <body>
 <div class="app-shell">
@@ -117,21 +117,21 @@ document.documentElement.dataset.theme = localStorage.getItem("rw-theme") || "da
 <script src="/vendor/marked/marked.umd.js"></script>
 <script src="/vendor/dompurify/purify.min.js"></script>
 <script src="/vendor/katex/katex.min.js"></script>
-<script src="/app-core.js"></script>
-<script src="/chat-views.js"></script>
-<script src="/team-office.js"></script>
-<script src="/workflow-view.js"></script>
-<script src="/mail-view.js"></script>
-<script src="/starmap-view.js"></script>
-<script src="/notes-and-settings.js"></script>
-<script src="/paper-translation.js"></script>
-<script src="/diff-viewer.js"></script>
-<script src="/agent-settings.js"></script>
-<script src="/capabilities.js"></script>
-<script src="/workflow-layout.js"></script>
-<script src="/integrations-settings.js"></script>
-<script src="/platform-nav.js"></script>
-<script src="/project-space.js"></script>
-<script src="/kanban-view.js"></script>
+<script src="/views/app-core.js"></script>
+<script src="/views/chat-views.js"></script>
+<script src="/views/team-office.js"></script>
+<script src="/views/workflow-view.js"></script>
+<script src="/views/mail-view.js"></script>
+<script src="/views/starmap-view.js"></script>
+<script src="/views/notes-and-settings.js"></script>
+<script src="/views/paper-translation.js"></script>
+<script src="/views/diff-viewer.js"></script>
+<script src="/views/agent-settings.js"></script>
+<script src="/views/capabilities.js"></script>
+<script src="/views/workflow-layout.js"></script>
+<script src="/views/integrations-settings.js"></script>
+<script src="/views/platform-nav.js"></script>
+<script src="/views/project-space.js"></script>
+<script src="/views/kanban-view.js"></script>
 </body>
 </html>
