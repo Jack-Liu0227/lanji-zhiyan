@@ -129,6 +129,82 @@ def cite_add(db: "WorkflowDB", task_id: str, args: dict[str, Any]) -> dict[str, 
     return out
 
 
+# ---------------- 引用台账 → 家格式 .bib（元数据只从 Zotero 取，不自己拼） ----------------
+CITE_BIB = "引用台账.bib"
+BIB_KEEP = ("author", "title", "journal", "booktitle", "volume", "number", "pages", "year", "doi")
+BIB_DROP = {"issn", "isbn", "url", "urldate", "month", "language", "shorttitle", "file", "publisher",
+            "address", "abstract", "keywords", "numpages", "eprint", "archiveprefix", "primaryclass",
+            "series", "edition", "chapter", "institution", "school", "organization", "note", "annote"}
+
+
+def cite_bib_path(db: "WorkflowDB", task_id: str) -> Path:
+    base = db.base_dir(task_id)
+    return (Path(base) if base else OUT) / "文献" / CITE_BIB
+
+
+def bib_house(text: str) -> str:
+    """Zotero 导出的 BibTeX → 家格式：只留必要字段，页码单横线改双横线。"""
+    head = re.search(r"@(\w+)\s*\{\s*([^,\n]+),", text)
+    if not head:
+        return ""
+    fields: dict[str, str] = {}
+    for line in text.splitlines()[1:]:
+        m = re.match(r"\s*(\w+)\s*=\s*\{(.*)\}\s*,?\s*$", line)
+        if not m:
+            continue
+        name = m.group(1).lower()
+        if name in BIB_DROP:
+            continue
+        fields[name] = " ".join(m.group(2).split())
+    if "pages" in fields:
+        fields["pages"] = re.sub(r"(\d)\s*-\s*(\d)", r"\1--\2", fields["pages"])
+    body = ",\n".join(f"  {name:<8}= {{{fields[name]}}}" for name in BIB_KEEP if name in fields)
+    return "@%s{%s,\n%s\n}" % (head.group(1).lower(), head.group(2).strip(), body)
+
+
+def cite_bib(db: "WorkflowDB", task_id: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+    """引用台账 → <项目>/文献/引用台账.bib。每条元数据从 Zotero 本机库取；库里没有就报缺，绝不自己编。"""
+    import asset_service
+    import zotero
+
+    entries = _cite_load(db, task_id)
+    packed: dict[str, str] = {}
+    missing: list[dict[str, Any]] = []
+    for i, e in enumerate(entries, 1):
+        doi = str(e.get("doi") or "").strip()
+        title = str(e.get("title") or "").strip()
+        if not (doi or title):
+            missing.append({"index": i, "reason": "台账这条没给 DOI / 题目"})
+            continue
+        try:
+            hit = zotero.bibtex_for(doi=doi, title=title)
+        except Exception as exc:                               # noqa: BLE001 — Zotero 没开也要如实回报
+            missing.append({"index": i, "title": title, "reason": str(exc)})
+            continue
+        if not hit.get("found"):
+            missing.append({"index": i, "title": title, "doi": doi,
+                            "reason": "Zotero 里没有这篇：先导进 Zotero（项目分类），再重跑"})
+            continue
+        item = bib_house(hit["bibtex"])
+        if not item:
+            missing.append({"index": i, "title": title, "reason": "Zotero 导出的 BibTeX 解析不了"})
+            continue
+        packed.setdefault((hit.get("doi") or doi or title).lower(), item)
+
+    path = cite_bib_path(db, task_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fileguard.before_write(path, "引用台账")
+    text = ("% House-style bibliography (引用台账，元数据来自 Zotero)\n\n" + "\n\n".join(packed.values()) + "\n"
+            if packed else "")
+    asset_service.atomic_write_text(path, text)
+    if packed:
+        asset_service.register_file(db, path, project_id=task_id, kind="document", title=CITE_BIB,
+                                    source="workflow", metadata={"document_kind": "citation_bib"})
+    return {"path": str(path), "count": len(packed), "ledger": len(entries), "missing": missing,
+            "message": (f"{len(packed)} 条已写入 {CITE_BIB}" + (f"，{len(missing)} 条缺 Zotero 记录" if missing else "")
+                        if packed else "一条都没写出来：台账是空的，或这些文献都还没进 Zotero")}
+
+
 # ---------------- 格式转换（照 Overleaf：文件 / 代码 / 编译 → PDF） ----------------
 # 期刊/模板库：优先本机 MiKTeX 已装的 class；GitHub 只作为「模板从哪来」的出处
 # 公开模板库：bamos/latex-templates、quantixed/manuscript-templates、jsk-report-template/elsarticle-template、

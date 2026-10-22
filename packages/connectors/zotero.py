@@ -10,7 +10,9 @@ Zotero 接入约定（
   · 只允许 loopback（非 127.0.0.1/localhost 直接报错）；
   · 能力探测：/connector/ping 看「起没起」，/api/users/0/items 看「读不读得了」，
     没探测成功就不显示「已连接」，中文说清原因（未启动 / 版本太老 / 超时）；
-  · 本模块**只读**。写回 Zotero 仍走既有 preview/confirm 流程（integrations.zotero_preview）。
+  · 本模块以**只读**为主。Zotero 10+ 另有一条本机写入通道（建分类 / 写条目 / 挂链接文件），
+    必须先用 zotero_local_authorize 拿到用户在弹窗里授予的 key（「始终允许」才可复用），
+    文件始终留在项目文件夹（linked_file），不上传、不进 Zotero storage。
 
 Zotero 7+ 的接口：
   GET /api/users/0/items?format=json&limit=&start=&q=
@@ -30,6 +32,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import securestore                # 本机写权限 key 加密（DPAPI，见 workspace-core/securestore.py）
+import service_settings as store
 from pathlib import Path
 from typing import Any
 
@@ -712,6 +716,166 @@ def get_item_details(key: str = "", title: str = "", doi: str = "", filename: st
         "attachments": attachments,
         "zotero_select_url": f"zotero://select/items/0_{found_key}",
     }
+
+
+# --------------------------------------------------------------------------- #
+# 写入（Zotero 10+ 本机 API：Zotero-Server-ID + 用户授权 key）
+#
+# 写权限由用户在 Zotero 弹窗里点按钮授予：点「始终允许」→ key 可复用，加密存库；
+# 点「允许」→ key 一次性，第一个写请求成功后即作废。所以本机写失败先看授权。
+# --------------------------------------------------------------------------- #
+WRITE_TIMEOUT = 180                      # 首次授权要等用户点弹窗，别按读超时算
+LOCAL_SERVICE = "zotero_local"
+
+
+def _server_id(base: str) -> str:
+    """Zotero 10+ 每个响应都带 Zotero-Server-ID；照响应头取，不打开 zotero.sqlite。"""
+    _, headers, _ = _get(_api_url(base, "/users/0/items", {"limit": 1}))
+    sid = headers.get("zotero-server-id", "")
+    if not sid:
+        raise ZoteroError("这台 Zotero 不带 Zotero-Server-ID：本机写入需要 Zotero 10 及以上。")
+    return sid
+
+
+def local_write_state(db: Any) -> dict:
+    data = store.read(db, LOCAL_SERVICE)
+    return {"authorized": bool(data.get("key")), "remember": bool(data.get("remember")),
+            "server_id": str(data.get("server_id") or ""), "updated_at": int(data.get("updated_at") or 0)}
+
+
+def _authorize(db: Any, app_name: str = "览籍智研") -> dict:
+    """申请一个本机写 key。用户点了「始终允许」就落库复用；否则拿到一次性 key（约 1.5s，通常不弹窗）。"""
+    base = _base()
+    sid = _server_id(base)
+    request = urllib.request.Request(base + "/api/local/authorize", method="POST",
+                                     data=json.dumps({"appName": app_name}).encode(),
+                                     headers={"Content-Type": "application/json", "Zotero-Server-ID": sid})
+    try:
+        with urllib.request.urlopen(request, timeout=WRITE_TIMEOUT) as response:
+            body = json.loads(response.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 403:
+            raise ZoteroError("你在 Zotero 弹窗里点了「拒绝」，没拿到写权限。") from exc
+        if exc.code == 429:
+            raise ZoteroError("授权请求太频繁（每分钟最多 5 次），等一分钟再试。") from exc
+        raise ZoteroError("申请 Zotero 写权限失败（HTTP %s）。" % exc.code) from exc
+    except TimeoutError as exc:
+        raise ZoteroError("等你点 Zotero 弹窗超时（%s 秒）。" % WRITE_TIMEOUT) from exc
+    key = str(body.get("key") or "")
+    if not key:
+        raise ZoteroError("Zotero 没返回写权限 key。")
+    remember = bool(body.get("remember"))
+    if remember:
+        store.write(db, LOCAL_SERVICE, {"key": securestore.protect(key), "server_id": sid,
+                                        "remember": True, "updated_at": int(time.time())})
+    return {"key": key, "server_id": sid, "remember": remember}
+
+
+def authorize_local_write(db: Any, app_name: str = "览籍智研") -> dict:
+    """工具入口：申请本机写权限。点「始终允许」才存下可复用 key。"""
+    out = _authorize(db, app_name)
+    return {"remember": out["remember"], "stored": out["remember"],
+            "message": "已存下可复用写权限。" if out["remember"] else
+                      "只拿到一次性 key：写入时会自动续（每次约 1.5s）。想一次性搞定就在弹窗里点「始终允许」。"}
+
+
+def _write(db: Any, path: str, payload: Any = None, method: str = "POST") -> Any:
+    raw = json.dumps(payload, ensure_ascii=False).encode() if payload is not None else None
+    data = store.read(db, LOCAL_SERVICE)
+    for attempt in (0, 1):
+        if not data.get("key"):                          # 没授权 / 一次性 key 用掉了 → 现申请一个
+            fresh = _authorize(db)
+            data = {"key": securestore.protect(fresh["key"]), "server_id": fresh["server_id"]}
+        base = _base()
+        headers = {"Content-Type": "application/json", "Zotero-API-Version": API_VERSION,
+                   "Zotero-Server-ID": str(data.get("server_id") or ""),
+                   "Zotero-API-Key": securestore.unprotect(data["key"])}
+        if method in {"DELETE", "PATCH", "PUT"}:        # Zotero 要求带版本，否则 428
+            _, version_headers, obj = _get(_api_url(base, path))
+            version = version_headers.get("last-modified-version") or str((obj or {}).get("version") or "")
+            if version:
+                headers["If-Unmodified-Since-Version"] = str(version)
+        request = urllib.request.Request(base + "/api" + path, data=raw, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=READ_TIMEOUT) as response:
+                body = response.read().decode("utf-8", "replace")
+                return json.loads(body) if body.strip() else {}
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401 and attempt == 0:          # 一次性 key 被上一次写消耗掉了：换 key 重试
+                store.write(db, LOCAL_SERVICE, {})
+                data = {}
+                continue
+            hints = {401: "本机写授权失效：Zotero 那边可能在 设置→高级 里清过写入授权",
+                     403: "用户拒绝了这次写入",
+                     404: "条目/分类不存在（可能已被删）",
+                     412: "条目版本已变更，重新读一次再写",
+                     428: "Zotero 要版本前置条件（If-Unmodified-Since-Version）",
+                     429: "请求过于频繁，稍后重试"}
+            raise ZoteroError("Zotero 写入失败 HTTP %s：%s" % (exc.code, hints.get(exc.code, "检查条目字段"))) from exc
+    raise ZoteroError("Zotero 写入失败：换 key 后仍然 401。")
+
+
+def _results(body: Any, hint: str) -> dict:
+    successful = (body or {}).get("successful") or {}
+    if not successful:
+        failed = (body or {}).get("failed") or {}
+        raise ZoteroError("%s失败：%s" % (hint, json.dumps(failed, ensure_ascii=False)[:300] or "Zotero 未接受"))
+    return list(successful.values())[0]
+
+
+def create_collection(db: Any, name: str, parent: str = "") -> dict:
+    """新建分类（项目分类）。父分类可选。"""
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("分类名不能为空")
+    payload = [{"name": name, "parentCollection": str(parent or "") or False}]
+    created = _results(_write(db, "/users/0/collections", payload), "新建分类")
+    return {"key": str(created.get("key") or ""), "name": name, "parent": str(parent or "")}
+
+
+def add_item(db: Any, item: dict) -> dict:
+    """把一条题录写进本机库。字段口径同 Zotero Web API 的 item data。"""
+    if not isinstance(item, dict) or not item.get("itemType"):
+        raise ValueError("条目必须是带 itemType 的对象")
+    created = _results(_write(db, "/users/0/items", [item]), "写入条目")
+    return {"key": str(created.get("key") or ""), "itemType": item.get("itemType"), "title": str(item.get("title") or "")}
+
+
+def link_pdf(db: Any, item_key: str, pdf: str, title: str = "PDF") -> dict:
+    """把项目文件夹里的 PDF 挂成链接文件附件（文件不搬进 Zotero storage）。"""
+    item_key = str(item_key or "").strip()
+    path = Path(str(pdf or "")).expanduser()
+    if not item_key:
+        raise ValueError("缺少条目 key")
+    if not path.is_file():
+        raise ValueError("PDF 不存在：%s" % path)
+    attachment = {"itemType": "attachment", "parentItem": item_key, "linkMode": "linked_file",
+                  "title": str(title or "PDF"), "path": str(path.resolve()),
+                  "contentType": "application/pdf"}
+    created = _results(_write(db, "/users/0/items", [attachment]), "挂链接文件")
+    return {"key": str(created.get("key") or ""), "parentItem": item_key, "path": str(path.resolve())}
+
+
+def bibtex_for(key: str = "", doi: str = "", title: str = "", base: str | None = None) -> dict[str, Any]:
+    """按 key / DOI / 标题找到条目，取 **Zotero 自己导出的 BibTeX**（元数据不自己拼）。
+
+    找不到返回 {"found": False}；调用方据此报缺，别用正文里抄的信息凑一条。
+    """
+    info = get_item_details(key=key, doi=doi, title=title, base=base)
+    if not (info or {}).get("zotero_found"):
+        return {"found": False, "error": (info or {}).get("error") or "Zotero 里没有这篇"}
+    item_key = str(info.get("key") or "")
+    root = _base(base)
+    request = urllib.request.Request(_api_url(root, f"/users/0/items/{urllib.parse.quote(item_key)}",
+                                             {"format": "bibtex"}),
+                                     headers={"Zotero-API-Version": API_VERSION})
+    try:
+        with urllib.request.urlopen(request, timeout=READ_TIMEOUT) as response:
+            text = response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        raise ZoteroError("Zotero 导出 BibTeX 失败（HTTP %s）。" % exc.code) from exc
+    return {"found": bool(text.strip()), "key": item_key, "title": info.get("title", ""),
+            "doi": info.get("doi", ""), "bibtex": text.strip()}
 
 
 if __name__ == "__main__":                                        # 手跑自检：python zotero.py [base]

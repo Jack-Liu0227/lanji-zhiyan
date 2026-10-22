@@ -1802,7 +1802,7 @@ from workflow_stages import (
 
 
 from workflow_converters import (
-    cite_read, cite_add, conv_run, conv_files, conv_compile, conv_open, _safe_path,
+    cite_read, cite_add, cite_bib, conv_run, conv_files, conv_compile, conv_open, _safe_path,
     fig_dir, fig_list, fig_rename, conv_preview, open_convert, convert_system,
     en_state, en_run, compose_draft
 )
@@ -2025,7 +2025,7 @@ TOOL_RISK = {
     "delegate": "local_execution", "format_convert": "local_execution",
     "paper_download": "network_read", "download": "network_read",
     "outline_write": "workspace_write", "map_write": "workspace_write", "doc_write": "workspace_write",
-    "cite_add": "workspace_write", "memory_save": "workspace_write", "notes": "workspace_write",
+    "cite_add": "workspace_write", "cite_bib": "workspace_write", "memory_save": "workspace_write", "notes": "workspace_write",
     "memory": "workspace_write", "recall": "read_only", "skill_write": "workspace_write",
     "notes_compose": "workspace_write", "idea_review": "workspace_write", "paper_read": "workspace_write",
     "read": "workspace_write", "draft_write": "workspace_write", "draft_review": "workspace_write",
@@ -2353,6 +2353,8 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         return cite_add(db, task_id, args)
     if name == "cite_read":
         return cite_read(db, task_id)
+    if name == "cite_bib":
+        return cite_bib(db, task_id, args)
     if name == "read_attachment":
         return read_attachment(args.get("path", ""), int(args.get("chars") or 8000))
     if name == "draft_write":

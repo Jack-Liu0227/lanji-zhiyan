@@ -20,6 +20,11 @@ def tool_specs() -> list[dict]:
         ("mail_send", "Send an email; requires user enabled Full Access", {"account_id": "string", "to": "string", "cc": "string", "subject": "string", "text": "string"}),
         ("feishu_send", "Send a Feishu message; requires user enabled Full Access", {"text": "string", "receive_id": "string"}),
         ("zotero_collections", "读取已配置 Zotero Web API 的全部集合。", {}),
+        ("zotero_local_state", "查本机 Zotero 写权限是否已授权，不修改任何数据。", {}),
+        ("zotero_local_authorize", "申请本机 Zotero 写权限；用户在 Zotero 弹窗点「始终允许」才能复用，需 Full Access。", {}),
+        ("zotero_local_collection_create", "在本机 Zotero 新建分类（＝项目文献夹），需 Full Access。", {"name": "string", "parent": "string"}),
+        ("zotero_local_item_add", "把一条题录写进本机 Zotero 库，需 Full Access；字段口径同 Zotero item data。", {"item": "object"}),
+        ("zotero_local_link_pdf", "把项目文件夹里的 PDF 挂到 Zotero 条目上（链接文件，文件不搬走），需 Full Access。", {"key": "string", "pdf": "string", "title": "string"}),
         ("zotero_write", "Write a Zotero item; requires Full Access and key/version for updates", {"item": "object"}),
         ("zotero_sync", "预览或执行项目与绑定Collection的元数据同步；默认只预览，执行需plan_token与确认。", {"task_id": "string", "mode": "string", "dry_run": "boolean", "plan_token": "string", "confirm": "boolean"}),
     ]
@@ -38,7 +43,9 @@ def invoke(name: str, db: Any, task_id: str, args: dict, assistant_id: str = "",
             raise PermissionError("只读权限不能创建项目副本")
         import project_sources
         return project_sources.import_zotero_pdf(db, task_id, str(args.get("key") or ""))
-    external_write = name in {"mail_send", "feishu_send", "zotero_write"} or (name == "zotero_sync" and args.get("dry_run") is False)
+    external_write = name in {"mail_send", "feishu_send", "zotero_write", "zotero_local_authorize",
+                             "zotero_local_collection_create", "zotero_local_item_add",
+                             "zotero_local_link_pdf"} or (name == "zotero_sync" and args.get("dry_run") is False)
     if external_write:
         if permission in {"read_only", "read-only"}:
             raise ValueError("当前助手为只读权限，禁止外发/写入")
@@ -63,6 +70,21 @@ def invoke(name: str, db: Any, task_id: str, args: dict, assistant_id: str = "",
         return feishu.send(db, assistant_id, str(args.get("text") or ""), str(args.get("receive_id") or ""))
     if name == "zotero_collections":
         return {"collections": zotero_sync.all_pages(zotero_sync.config(db), "/collections")}
+    if name == "zotero_local_state":
+        return zotero.local_write_state(db)
+    if name == "zotero_local_authorize":
+        return zotero.authorize_local_write(db)
+    if name == "zotero_local_collection_create":
+        return zotero.create_collection(db, str(args.get("name") or ""), str(args.get("parent") or ""))
+    if name == "zotero_local_item_add":
+        return zotero.add_item(db, args.get("item") or {})
+    if name == "zotero_local_link_pdf":
+        from pathlib import Path
+        root = Path(db.base_dir(task_id)).resolve()      # ponytail: 只挡路径越界，不查是否该条目的论文
+        path = Path(str(args.get("pdf") or "")).expanduser().resolve()
+        if not path.is_relative_to(root):
+            raise PermissionError("只能挂当前项目文件夹里的 PDF：%s" % root)
+        return zotero.link_pdf(db, str(args.get("key") or ""), str(path), str(args.get("title") or "PDF"))
     if name == "zotero_write":
         return zotero_sync.write_item(db, args.get("item") or {})
     if name == "zotero_sync":
