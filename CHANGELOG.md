@@ -12,4 +12,5 @@
 - Linked paper-bound notes to paper assets, preserved one asset across project rebinds, archived deleted note mirrors and made legacy rebuilds prefer existing Markdown files.
 - Made failed workflow requests fully idempotent and surfaced migration failures instead of deferring them to misleading missing-column errors.
 - Added execution-boundary tool risk classification for read-only, workspace-write, local-execution, network-read and external-write actions.
+- Ranked `paper_search` results by query relevance × citation count (per-source duplicates collapsed, hard cap 100 per search, OpenAlex abstracts rebuilt from the inverted index instead of falling back to the title).
 - Verification baseline: Python test suite and desktop web smoke tests pass in the development environment.

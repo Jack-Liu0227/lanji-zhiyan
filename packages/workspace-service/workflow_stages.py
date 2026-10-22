@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import paths
 from workflow_prompts import READ_SYSTEM
-from workflow_search import download_pdf, enrich_oa, search
+from workflow_search import MAX_RESULTS, download_pdf, enrich_oa, query_tokens, rank, search
 
 if TYPE_CHECKING:
     from workflow import WorkflowDB
@@ -71,31 +71,33 @@ def stage_idea(db: WorkflowDB, task_id: str, idea: str) -> dict[str, Any]:
     return {"verdict": out, "note_id": note["id"], "markdown": md}
 
 
-_GLUE = {"using", "based", "with", "from", "into", "this", "that", "these", "their",
-         "have", "been", "were", "between", "toward", "towards", "about", "after", "before", "under"}
-
-
 def _relevant(query: str, item: dict[str, Any]) -> bool:
     """相关度粗筛：查询里 ≥2 个实词（≥4 字符）出现在标题+摘要里才算命中。
     目的：挡掉「Teacher materials Volume 1」这类只蹭到一个词的噪声。关键词本来就少时不过滤。"""
-    toks = [t for t in re.findall(r"[a-z0-9][a-z0-9\-]{3,}", (query or "").lower()) if t not in _GLUE]
+    toks = query_tokens(query)
     if len(toks) < 2:
         return True
     blob = ("%s %s" % (item.get("title") or "", item.get("abstract") or "")).lower()
     return sum(1 for t in toks if t in blob) >= 2
 
 
-def stage_search(db: WorkflowDB, task_id: str, query: str, sources: list[str] | None = None, rows: int = 10) -> dict[str, Any]:
+def stage_search(db: WorkflowDB, task_id: str, query: str, sources: list[str] | None = None, rows: int = 30,
+                 limit: int = MAX_RESULTS) -> dict[str, Any]:
     query = (query or "").strip() or db.summary(task_id)["task"]["question"]
     if not query:
         raise ValueError("请填写检索关键词")
+    rows = max(1, min(int(rows or 30), 50))       # 单源上限 50，三源够凑满 limit
+    limit = max(1, min(int(limit or MAX_RESULTS), MAX_RESULTS))
     raw = search(query, sources, rows)
-    found = [x for x in raw if _relevant(query, x)]
-    filled = enrich_oa(found)                      # 按 DOI 反查 OpenAlex，尽量把 OA 直链补全
+    rel = [x for x in raw if _relevant(query, x)]
+    found = rank(query, rel, limit)            # 去重 + 按 相关度×引用量 排序 + 限条数（在补 OA 前截，少发请求）
+    filled = enrich_oa(found)                  # 按 DOI 反查 OpenAlex，尽量把 OA 直链补全
     saved = db.cache_results(task_id, found)
-    db.log_step(task_id, "search", "done", f"检索到 {len(found)} 条（粗筛掉 {len(raw) - len(found)} 条不相关），新增 {len(saved)} 条，补 OA 直链 {filled} 条")
-    return {"query": query, "found": len(found), "filtered": len(raw) - len(found), "saved": saved,
-            "enriched": filled, "results": db.results(task_id)}
+    db.log_step(task_id, "search", "done",
+                f"检索到 {len(found)} 条（原始 {len(raw)}，粗筛掉 {len(raw) - len(rel)}，去重排序后限 {limit} 条），"
+                f"新增 {len(saved)} 条，补 OA 直链 {filled} 条")
+    return {"query": query, "found": len(found), "raw": len(raw), "filtered": len(raw) - len(rel),
+            "limit": limit, "saved": saved, "enriched": filled, "results": db.results(task_id)}
 
 
 def stage_download(db: WorkflowDB, task_id: str, result_id: str) -> dict[str, Any]:

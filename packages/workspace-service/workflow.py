@@ -1351,8 +1351,11 @@ class WorkflowDB(ResearchDB):
                 continue
             rid = uuid.uuid4().hex
             row = (rid, task_id, it.get("source", ""), it["title"], it.get("authors", ""), it.get("year", ""),
-                   it.get("doi", ""), it.get("url", ""), it.get("pdf_url", ""), it.get("abstract", ""), now())
-            self.db.execute("INSERT INTO search_cache VALUES (?,?,?,?,?,?,?,?,?,?,?)", row)
+                   it.get("doi", ""), it.get("url", ""), it.get("pdf_url", ""), it.get("abstract", ""),
+                   float(it.get("score") or 0), now())
+            self.db.execute(
+                "INSERT INTO search_cache (id,task_id,source,title,authors,year,doi,url,pdf_url,abstract,score,created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row)
             saved.append(self.result(rid))
         self.db.commit()
         return saved
@@ -1369,9 +1372,12 @@ class WorkflowDB(ResearchDB):
         if row:
             return row["id"]
         rid = uuid.uuid4().hex
-        self.db.execute("INSERT INTO search_cache VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                        (rid, task_id, it.get("source", ""), title, it.get("authors", ""), it.get("year", ""),
-                         it.get("doi", ""), it.get("url", ""), it.get("pdf_url", ""), it.get("abstract", ""), now()))
+        self.db.execute(
+            "INSERT INTO search_cache (id,task_id,source,title,authors,year,doi,url,pdf_url,abstract,score,created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (rid, task_id, it.get("source", ""), title, it.get("authors", ""), it.get("year", ""),
+             it.get("doi", ""), it.get("url", ""), it.get("pdf_url", ""), it.get("abstract", ""),
+             float(it.get("score") or 0), now()))
         self.db.commit()
         return rid
 
@@ -1382,7 +1388,7 @@ class WorkflowDB(ResearchDB):
         return dict(row)
 
     def results(self, task_id: str) -> list[dict[str, Any]]:
-        rows = self.db.execute("SELECT * FROM search_cache WHERE task_id=? ORDER BY created_at DESC, year DESC", (task_id,))
+        rows = self.db.execute("SELECT * FROM search_cache WHERE task_id=? ORDER BY score DESC, created_at DESC, year DESC", (task_id,))
         return [dict(r) for r in rows]
 
     # ---------- 笔记 ----------
@@ -2312,9 +2318,9 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         return db.add_event(args.get("title", ""), args.get("date", ""), task_id, args.get("kind", "milestone"),
                             time=args.get("time", ""))
     if name == "search":
-        return stage_search(db, task_id, args.get("query", ""), args.get("sources"), int(args.get("rows", 10)))
+        return stage_search(db, task_id, args.get("query", ""), args.get("sources"), int(args.get("rows", 30)))
     if name == "paper_search":
-        return stage_search(db, task_id, args.get("query", ""), args.get("sources"), int(args.get("rows", 10)))
+        return stage_search(db, task_id, args.get("query", ""), args.get("sources"), int(args.get("rows", 30)))
     if name == "paper_download":
         return stage_download(db, task_id, args.get("result_id", ""))
     if name == "download":

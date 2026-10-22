@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import urllib.parse
 import urllib.request
@@ -39,6 +40,7 @@ def search_crossref(query: str, rows: int = 10) -> list[dict[str, Any]]:
         links = [l.get("URL", "") for l in it.get("link", []) if l.get("content-type") == "application/pdf"]
         out.append({"source": "crossref", "title": _text((it.get("title") or [""])[0]), "authors": authors, "year": year,
                     "doi": it.get("DOI", ""), "url": it.get("URL", ""), "pdf_url": links[0] if links else "",
+                    "citations": int(it.get("is-referenced-by-count") or 0),
                     "abstract": _text(it.get("abstract", ""))[:800]})
     return out
 
@@ -54,6 +56,15 @@ def _oa_pdf(w: dict[str, Any]) -> str:
     return oa if oa.lower().endswith(".pdf") else ""
 
 
+def _oa_abstract(w: dict[str, Any]) -> str:
+    """OpenAlex 的摘要是倒排索引，拼回正常文本；没有就空着（不能拿标题顶，排序会算错相关度）。"""
+    inv = w.get("abstract_inverted_index") or {}
+    if not inv:
+        return ""
+    pos = {i: word for word, idxs in inv.items() for i in idxs}
+    return _text(" ".join(pos[k] for k in sorted(pos)))[:800]
+
+
 def search_openalex(query: str, rows: int = 10) -> list[dict[str, Any]]:
     url = ("https://api.openalex.org/works?per-page=%d&filter=type:article&search=%s"
            % (rows, urllib.parse.quote(query)))
@@ -64,7 +75,8 @@ def search_openalex(query: str, rows: int = 10) -> list[dict[str, Any]]:
         pdf = _oa_pdf(it)
         out.append({"source": "openalex", "title": _text(it.get("title", "")), "authors": authors,
                     "year": str(it.get("publication_year") or ""), "doi": (it.get("doi") or "").replace("https://doi.org/", ""),
-                    "url": it.get("id", ""), "pdf_url": pdf or "", "abstract": _text(it.get("title", ""))[:800]})
+                    "url": it.get("id", ""), "pdf_url": pdf or "", "abstract": _oa_abstract(it),
+                    "citations": int(it.get("cited_by_count") or 0)})
     return out
 
 
@@ -85,11 +97,58 @@ def search_arxiv(query: str, rows: int = 10) -> list[dict[str, Any]]:
         out.append({"source": "arxiv", "title": _text(get("title")), "year": (get("published") or "")[:4],
                     "authors": "; ".join(re.findall(r"<name>(.*?)</name>", entry)[:6]), "doi": "",
                     "url": aid, "pdf_url": pdf, "abstract": _text(get("summary"))[:800],
+                    "citations": 0,
                     "arxiv_id": (aid or "").rsplit("/", 1)[-1]})
     return out
 
 
 SOURCES = {"crossref": search_crossref, "openalex": search_openalex, "arxiv": search_arxiv}
+
+GLUE = {"using", "based", "with", "from", "into", "this", "that", "these", "their",
+        "have", "been", "were", "between", "toward", "towards", "about", "after", "before", "under"}
+
+MAX_RESULTS = 100          # 一次检索落库上限
+
+
+def query_tokens(query: str) -> list[str]:
+    """查询实词（≥4 字符、去虚词）。相关度粗筛与排序共用这一份，口径才一致。"""
+    return [t for t in re.findall(r"[a-z0-9][a-z0-9\-]{3,}", (query or "").lower()) if t not in GLUE]
+
+
+def _score(toks: list[str], item: dict[str, Any]) -> float:
+    """相关度 × 引用量系数：标题命中算两票、摘要命中算一票（标题是论文自己声明的主题），
+    再乘 1+log1p(引用数) 让高质量者往上走。arXiv 无引用数按 0，只靠相关度撑。
+    ponytail: 引用数没做年份/领域归一，跨领域比高低会偏；要改成 log1p(cites/年数) 就调这里。"""
+    if not toks:
+        return 0.0
+    title = (item.get("title") or "").lower()
+    blob = ("%s %s" % (title, item.get("abstract") or "")).lower()
+    rel = sum(2 * (t in title) + (t in blob) for t in toks) / (3.0 * len(toks))
+    return round(rel * (1.0 + math.log1p(max(0, int(item.get("citations") or 0)))), 4)
+
+
+def rank(query: str, items: list[dict[str, Any]], limit: int = MAX_RESULTS) -> list[dict[str, Any]]:
+    """同 DOI / 同标题去重（留分数高的，顺手继承对方 PDF 直链）→ 按分数降序 → 最多 limit 条。"""
+    toks = query_tokens(query)
+    keep: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for it in items:
+        key = (it.get("doi") or "").strip().lower() or re.sub(r"[^a-z0-9]+", "", (it.get("title") or "").lower())[:80]
+        if not key:
+            continue
+        it = dict(it, score=_score(toks, it))
+        old = keep.get(key)
+        if old is None:
+            keep[key] = it
+            order.append(key)
+        elif it["score"] > old["score"]:
+            it["pdf_url"] = it.get("pdf_url") or old.get("pdf_url") or ""
+            keep[key] = it
+        elif not (old.get("pdf_url") or "").strip():
+            old["pdf_url"] = it.get("pdf_url") or ""
+    out = [keep[k] for k in order]
+    out.sort(key=lambda x: (-x["score"], -int(x.get("citations") or 0), -int((x.get("year") or "0") or 0)))
+    return out[:limit]
 
 
 def enrich_oa(items: list[dict[str, Any]], chunk: int = 40) -> int:

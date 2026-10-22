@@ -316,9 +316,9 @@ TOOL_SPECS = [
     _schema("project_list", "列出已经添加的项目、项目 ID 和文件夹，返回当前绑定项目 ID。", {}),
     _schema("library_overview", "查看当前任务的文献/检索结果/笔记/证据数量和最近条目，先调它了解现状。", {}),
     _schema("idea_review", "审查一个创新点：给新颖性/可行性/证据充分度评分、风险与待答问题。", {"idea": {"type": "string", "description": "待审查的创新点"}}, ["idea"]),
-    _schema("paper_search", "在 OpenAlex/Crossref/arXiv 检索论文并入库。", {
+    _schema("paper_search", "在 OpenAlex/Crossref/arXiv 检索论文并入库；结果按「相关度×引用量」排序，一次最多留 100 条。", {
         "query": {"type": "string"}, "sources": {"type": "array", "items": {"type": "string", "enum": ["openalex", "crossref", "arxiv"]}},
-        "rows": {"type": "integer", "description": "每源条数，默认 10"}}, ["query"]),
+        "rows": {"type": "integer", "description": "每源条数(1-50)，默认 30"}}, ["query"]),
     _schema("paper_download", "下载一条检索结果的开放获取(OA) PDF 并入库；没有 OA 链接会失败。", {"result_id": {"type": "string"}}, ["result_id"]),
     _schema("paper_read", "把一篇已入库 PDF 逐页精读成中文要点（带 p.页码）。", {"paper_id": {"type": "string"}}, ["paper_id"]),
     _schema("notes_compose", "把一条精读笔记整理成带证据表的知识库笔记，可选写入 Obsidian。", {"note_id": {"type": "string"}, "vault": {"type": "string"}}, ["note_id"]),

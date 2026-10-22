@@ -1790,7 +1790,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json(ACTION["idea"](db, tid, data.get("idea", "")))
                     if stage == "search":
                         srcs = data.get("sources") or None
-                        return self._json(ACTION["search"](db, tid, data.get("query", ""), srcs, int(data.get("rows", 10))))
+                        return self._json(ACTION["search"](db, tid, data.get("query", ""), srcs, int(data.get("rows", 30))))
                     if stage == "download":
                         ids = data.get("result_ids")
                         if ids:
