@@ -2,6 +2,20 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 2026-10-22（结构整理：前端分目录 / workflow.py 拆库层 / server.py 分路由）
+
+**0. 口径**：只搬不改 —— 三个提交里没有一条业务逻辑变更，全部以「404 测试全绿 + 真应用点一遍」为验收线；对外接口（`import workflow` 的 41 处、前端全局函数、所有 HTTP 路由）一律不动。
+
+**1. 前端 `web/` 分家**：15 个视图模块 → `web/views/`，`app.css`/`kanban.css` → `web/css/`；`index.html` 18 处 `src`/`href` 改新路径。`ids.test.mjs` 改成**递归**扫 `web/`（不递归就一条 js 也扫不到、还照样打印 OK）；`theme.test.mjs` 的 `notes-and-settings.js` 与 `app.css` 路径同步；`tests/test_web.py` 加 `JS = WEB/"views"`。图片（`home.png`/`logo.png`/`mark.png`）**没动**：它们按 URL 被 server 的静态兜底逻辑引用（`/home.png` 找不到会退回 `tools/home/home.png`），搬了只添风险不添价值。
+
+**2. `workflow.py` 拆库层**：2929 → 1379 行。常量 / `now()` / `PROJ_DIRS` / `STAGES` / `WORKFLOW_SCHEMA` / `class WorkflowDB` 整块进 `workflow_db.py`（单向依赖：db 不 import workflow），`workflow.py` 顶部 `from workflow_db import (...)` 再导出。漏掉的名字靠「扫全仓 `workflow.X` 用法 vs 模块实际属性」脚本补齐（本次补回 `BUILTIN_ASSISTANTS`、`PROVIDER_CATALOG`）。没继续拆 `_tool_impl`：它是跨 60 多个符号的派发表，拆开反而要满屏 `workflow.` 前缀，收益不如风险。
+
+**3. `server.py` 拆路由**：`do_GET` 的连续路由段 → `apps/desktop/handlers/{starmap,core,wf_routes,misc}.py` 四个混入类，`Handler` 多继承，`do_GET` 留派发循环。**新增 `self._responded`**：`_send`/`_sse`/`_stream_run` 直接写 `wfile`、`return` 的是 `None`，光看返回值判断不了「已回过包」，没有这个标志会把已回包的请求继续往下派、再撞一次 404。**`do_POST` 没动**：它的路由挂在共享的 `with WorkflowDB(...)` 块里，按域切要改作用域，那是重写不是搬运。
+
+**4. 删掉根目录的旧 `CHANGELOG.md`**（1788B 的英文 asset-graph 版），只留 `doc/CHANGELOG.md`（README 本来就是指这里）。
+
+**5. 验**：每个提交各自跑过 `404 tests OK (skipped=12)`；`node ids.test.mjs`/`theme.test.mjs` 通过；重启真应用后 9 个主页面逐个点开有内容、21 条 GET 路由全 200、`/api/nope` 仍 404。
+
 ## 2026-10-22（三栏页第 11 项「项目文件夹」+ 文件管理助手）
 
 **0. 口径**：它是**文件夹**，不是第 11 步 —— 不进 `WF_ORDER`、不编号、不写 `steps` 表、没有「确认交付」。目的是「看文件 / 问文件 / 把文件交给某一步」都在程序内闭环，不用跳出到资源管理器。
