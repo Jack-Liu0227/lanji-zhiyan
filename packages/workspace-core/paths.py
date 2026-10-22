@@ -227,9 +227,19 @@ def project_roots() -> list[Path]:
 
 
 def allowed_roots() -> list[Path]:
-    """允许碰的全部根：自己的数据根（data/ 里的 uploads、papers、notes、out）+ 用户建过的项目目录。
+    """允许碰的全部根：自己的数据根（data/ 里的 uploads、papers、notes、out）+ 用户建过的项目目录 + Zotero 文献源。
     白名单只在这里定义一次 —— 别的地方要判，一律调 resolve_allowed()。"""
     roots = [DATA, UPLOADS, PAPERS, NOTES, OUT, *project_roots()]
+    try:
+        import zotero
+        zd = zotero.find_zotero_data_dir()
+        if zd and zd.exists():
+            roots.append(zd)
+        for z_att in zotero.linked_attachment_roots():
+            if z_att and z_att.exists():
+                roots.append(z_att)
+    except Exception:
+        pass
     return [r.resolve() for r in roots if r and r.exists()]
 
 
@@ -277,8 +287,8 @@ def assert_not_zotero_write(path: str | os.PathLike[str]) -> None:
         import zotero
     except ImportError:
         return
-    roots = [zotero.find_zotero_data_dir(), *zotero.linked_attachment_roots()]
-    if any(target.is_relative_to(root.resolve()) for root in roots):
+    roots = [root for root in (zotero.find_zotero_data_dir(), *zotero.linked_attachment_roots()) if root]
+    if any(target.is_relative_to(Path(root).expanduser().resolve()) for root in roots):
         raise ValueError("Zotero 数据或链接附件目录只读，请在独立项目中处理副本")
 
 

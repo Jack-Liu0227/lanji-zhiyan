@@ -43,8 +43,8 @@ ZHIPU_MODEL = "glm-4-flash"
 #  ② 段并行是版式识别的负收益：4 段并行版式 73s/13 页，单进程 38 页只要 29s ——
 #    babeldoc 每个进程都按满核跑 ONNX，段一多互相抢，所以宁可少切段。
 QPS_TOTAL = int(os.environ.get("RW_TRANS_QPS", "16"))      # 全局并发上限（DeepSeek 的并发上限跟余额挂钩，别超）
-CHUNK_PARALLEL = int(os.environ.get("RW_TRANS_PARALLEL", "2"))   # 同时跑几段
-CHUNK_MAX = int(os.environ.get("RW_TRANS_CHUNKS", "1"))           # 整篇切几段（1 = 第 1 页单跑 + 其余一整段）
+CHUNK_PARALLEL = int(os.environ.get("RW_TRANS_PARALLEL", "3"))   # 同时跑几段
+CHUNK_MAX = int(os.environ.get("RW_TRANS_CHUNKS", "4"))           # 整篇切几段（1 = 第 1 页单跑 + 其余一整段）
 JOBS: dict[str, dict[str, Any]] = {}          # paper_id -> 翻译任务状态（进程内，够用）
 _LOCK = threading.Lock()
 _LOG_LOCK = threading.Lock()      # 多段并行时日志文件是共享的
@@ -232,7 +232,7 @@ def _plan(n: int) -> list[tuple[int, int]]:
     if n == 1:
         return [(1, 1)]
     if n > 12:
-        size = -(-n // max(1, CHUNK_MAX))
+        size = max(3, min(6, -(-n // max(1, CHUNK_MAX))))
     else:
         size = 3
     parts, a = [(1, 1)], 2

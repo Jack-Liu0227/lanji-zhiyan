@@ -1542,6 +1542,11 @@ class WorkflowDB(ResearchDB):
         self.db.commit()
         return self.messages(task_id, scope)[-1]
 
+    def add_chat(self, task_id: str, role: str, content: str, events: list | None = None,
+                 scope: str = "", sender: str = "") -> dict[str, Any]:
+        """别名兼容：避免外部模块或旧调用误把 add_message 写成 add_chat 抛 AttributeError"""
+        return self.add_message(task_id, role, content, events, scope, sender)
+
     def seed_welcome(self) -> str:
         """新用户首启：种一条「小智」欢迎对话 —— 真实 chat + 一条 assistant 消息，
         在对话列表里能看见、能像普通对话一样删掉。已经有对话就什么都不做。

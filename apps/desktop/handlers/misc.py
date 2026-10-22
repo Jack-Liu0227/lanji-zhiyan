@@ -11,6 +11,8 @@ import agent_integrations
 import capabilities
 import papertran                 # PDF 服务 / 元数据 / BabelDOC 任务
 import paths
+import fileguard
+import os
 import project_notes
 import rss                       # 情报日报
 import schedule                  # 定时任务
@@ -93,6 +95,22 @@ class MiscRoutes:
                                                   (q.get("key") or [""])[0]))
             except zotero.ZoteroError as exc:
                 return self._json({"error": str(exc)}, 400)
+        if path == "/api/zotero/pdf":
+            key = (q.get("key") or [""])[0]
+            base = (q.get("base") or [""])[0] or None
+            pdf = zotero.pdf_path(key, base)
+            return self._json({"pdf": pdf, "exists": bool(pdf and os.path.isfile(pdf))})
+        if path == "/api/zotero/open_pdf":
+            key = (q.get("key") or [""])[0]
+            base = (q.get("base") or [""])[0] or None
+            pdf = (q.get("path") or [""])[0] or zotero.pdf_path(key, base)
+            if pdf and os.path.isfile(pdf):
+                try:
+                    fileguard.open_document(pdf)
+                    return self._json({"opened": True, "path": pdf})
+                except Exception as exc:
+                    return self._json({"opened": False, "error": str(exc)}, 500)
+            return self._json({"opened": False, "error": "未找到本地关联的 PDF 文件"}, 404)
         if path == "/api/pdf":                       # 论文翻译页的阅读器：按入库记录回吐 PDF 字节
             with WorkflowDB(DB_PATH) as db:
                 f = papertran.pdf_path(db, (q.get("id") or [""])[0])

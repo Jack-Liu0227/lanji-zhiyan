@@ -201,9 +201,10 @@ async function trPaint(key, n, el){
     cv.style.width = "100%"; cv.style.height = "100%";
     el.innerHTML = "";
     el.appendChild(cv);
-    await page.render({canvasContext: cv.getContext("2d"), viewport: vp, transform: [dpr,0,0,dpr,0,0]}).promise;
     const tl = document.createElement("div"); tl.className = "tr-text"; el.appendChild(tl);
-    trBuildText(n, tl, page, vp);
+    const renderP = page.render({canvasContext: cv.getContext("2d"), viewport: vp, transform: [dpr,0,0,dpr,0,0]}).promise;
+    const textP = trBuildText(n, tl, page, vp);
+    await Promise.all([renderP, textP]);
     const hl = document.createElement("div"); hl.className = "tr-hls"; el.appendChild(hl);
     trPaintHls(n, el);
   }catch(e){ el.dataset.painted = ""; el.dataset.err = String(e && e.message || e);
@@ -305,7 +306,9 @@ function trHlOnMouseUp(e){
   if(!TR.hlOn) return;
   const sel = window.getSelection();
   if(!sel || sel.isCollapsed) return;
-  const pageEl = e.target.closest?.(".tr-page");
+  const pageEl = e.target.closest?.(".tr-page")
+    || (sel.anchorNode && (sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement)?.closest?.(".tr-page"))
+    || (sel.focusNode && (sel.focusNode.nodeType === 1 ? sel.focusNode : sel.focusNode.parentElement)?.closest?.(".tr-page"));
   if(!pageEl || !pageEl.dataset.painted) return;
   const pr = pageEl.getBoundingClientRect();
   const rects = [...sel.getRangeAt(0).getClientRects()].filter(r=>r.width > 3 && r.height > 3)
@@ -509,6 +512,12 @@ function mapPanelHTML(active){
           <b>🧩 谱系图</b><span class="ol-tag" id="mp-file">谱系.json</span>
           <span class="mp-meta" id="mp-meta"></span>
           <span class="mp-spacer"></span>
+          <div class="mp-filter-group" id="mpFilter" style="display:inline-flex;gap:4px;background:var(--panel2);padding:2px;border-radius:6px;border:1px solid var(--line)">
+            <button class="btn xs ${(!MP.filter||MP.filter==='all')?'on':''}" data-mp-filter="all">全部</button>
+            <button class="btn xs ${(MP.filter==='lit')?'on':''}" data-mp-filter="lit">📑 文献/笔记</button>
+            <button class="btn xs ${(MP.filter==='data')?'on':''}" data-mp-filter="data">📊 自研数据</button>
+          </div>
+          <button class="btn ghost primary" id="mp-add-node" title="手动添加新节点（自研数据/文献引用/小节）">＋ 加节点</button>
           <span class="mp-zoom"><button class="btn ghost" id="mp-zout" title="缩小">−</button><button class="btn ghost" id="mp-zin" title="放大">＋</button><button class="btn ghost" id="mp-zfit" title="适应画布">适应</button></span>
           <button class="btn ghost" id="mp-refresh" title="重新整理：按大纲当前的顺序重认框架（调换 2.1/1.1、改标题、加减小节之后就点它；手动拖过的位置会一并重排）">↻ 重新整理</button>
           <button class="btn ghost" id="mp-edit" title="直接改那份 JSON">✎ 手改</button>
@@ -590,9 +599,14 @@ function mpNodeInner(n){
     const d = n.detail || mpOutlineNote(n.label);
     return `<div class="t">${dot}<span class="lbl">${esc(n.label)}</span>${plus}</div>${d?`<div class="d">${esc(d)}</div>`:""}`;
   }
+  const isData = n.type === "data" || n.mine || (n.ref && String(n.ref).includes("data"));
+  const tagBadge = isData
+    ? `<span class="mp-pill" style="background:#4ade8022;color:#4ade80;border:1px solid #4ade8055">📊 自研数据</span>`
+    : (n.type === "paper" ? `<span class="mp-pill" style="background:#60a5fa22;color:#60a5fa;border:1px solid #60a5fa55">📑 文献证据</span>`
+    : `<span class="mp-pill">${MP_TAG[n.type]||"笔记"}</span>`);
   return `<div class="t" title="${esc(n.label||"")}">${dot}<span class="lbl">${esc(n.label)}</span>${plus}</div>
     ${n.detail?`<div class="d">${esc(n.detail)}</div>`:""}
-    <span class="mp-pill">${MP_TAG[n.type]||""}</span>`;
+    ${tagBadge}`;
 }
 function mpSize(n){
   /* 卡片大小按内容真量（以前写死 216×52 / 190×36，长标题直接被折掉）：
@@ -928,6 +942,19 @@ async function mpSave(){
 
 function mpBind(m){
   docBind("map", m);                                  /* 右栏＝「确认大纲」那套（对话/轨迹/统计/附件），post 走 /api/map */
+  m.querySelectorAll("[data-mp-filter]").forEach(b=>{
+    b.onclick = ()=>{
+      MP.filter = b.dataset.mpFilter;
+      m.querySelectorAll("[data-mp-filter]").forEach(x=>x.classList.toggle("on", x.dataset.mpFilter === MP.filter));
+      mpPaint();
+    };
+  });
+  const addBtn = $("mp-add-node");
+  if(addBtn){
+    addBtn.onclick = ()=>{
+      showAddNodeModal();
+    };
+  }
   $("mp-refresh").onclick = ()=>mpTidy();
   $("mp-zin").onclick = ()=>{ MP.zoom = Math.min(1.6, Math.round((MP.zoom + 0.1) * 10) / 10); mpPaint(); };
   $("mp-zout").onclick = ()=>{ MP.zoom = Math.max(0.5, Math.round((MP.zoom - 0.1) * 10) / 10); mpPaint(); };
@@ -1066,4 +1093,75 @@ async function mpUpload(files){
   }
   await mpLoad();
   mpSay("数据文件进来了 —— 跟 agent 说一句「把刚上传的这份挂到某一节下面」它就会画进谱系图。");
+}
+
+function showAddNodeModal(){
+  const secNodes = (MP.nodes||[]).filter(n=>n.type==="section");
+  const modal = document.createElement("div");
+  modal.className = "modal";
+  modal.innerHTML = `
+    <div class="modal-mask"></div>
+    <div class="modal-dialog" style="width:480px">
+      <div class="modal-head"><h3>＋ 添加谱系图节点</h3><button class="modal-close" id="btnMpClose">✕</button></div>
+      <div class="modal-body">
+        <label class="field"><span>节点分类</span>
+          <select id="mpNodeType" class="control" style="width:100%">
+            <option value="data">📊 我的自研数据 (实验数据 / 模拟仿真 / 实测结果)</option>
+            <option value="paper">📑 学术文献 (论文证据 / 对比基准)</option>
+            <option value="note">📝 精读笔记 (理论推导 / 机理解析)</option>
+            <option value="section">🗂 大纲小节 (章节标题)</option>
+          </select>
+        </label>
+        <label class="field"><span>节点标题 / 标签</span>
+          <input id="mpNodeLabel" class="control" style="width:100%" placeholder="如：Cu 掺杂暗电流降解实测 (样件#3)">
+        </label>
+        <label class="field"><span>结论说明 / 核心要点</span>
+          <textarea id="mpNodeDetail" class="control" rows="3" style="width:100%" placeholder="简要说明支撑或反例结论，如：在 200V 反偏下漏电降低 2 个数量级"></textarea>
+        </label>
+        <label class="field"><span>挂靠大纲小节</span>
+          <select id="mpNodeParent" class="control" style="width:100%">
+            ${secNodes.map(s=>`<option value="${esc(s.id)}">${esc(s.label)}</option>`).join("")}
+          </select>
+        </label>
+        <label class="field"><span>与该小节关系</span>
+          <select id="mpNodeRel" class="control" style="width:100%">
+            <option value="支撑" selected>支撑 (正面佐证)</option>
+            <option value="反例">反例 (反向证伪 / 冲突对比)</option>
+            <option value="方法">方法支撑</option>
+            <option value="补充">背景补充</option>
+          </select>
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button id="btnMpSubmit" class="btn btn-primary">确认添加</button>
+        <button id="btnMpCancel" class="btn">取消</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  const close = ()=>modal.remove();
+  modal.querySelector("#btnMpClose").onclick = close;
+  modal.querySelector("#btnMpCancel").onclick = close;
+  modal.querySelector(".modal-mask").onclick = close;
+  modal.querySelector("#btnMpSubmit").onclick = async ()=>{
+    const type = modal.querySelector("#mpNodeType").value;
+    const label = modal.querySelector("#mpNodeLabel").value.trim();
+    const detail = modal.querySelector("#mpNodeDetail").value.trim();
+    const parentId = modal.querySelector("#mpNodeParent").value;
+    const rel = modal.querySelector("#mpNodeRel").value;
+    if(!label){ uiNotify("请填写节点标题"); return; }
+    const newId = "user_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
+    const newNode = { id: newId, type, label, detail, mine: true, ref: type === "data" ? "data/user" : "" };
+    MP.nodes.push(newNode);
+    if(parentId){
+      MP.edges.push({ from: parentId, to: newId, label: rel });
+    }
+    try{
+      await api("/api/map/save", { task_id: curTask, data: { nodes: MP.nodes, edges: MP.edges } });
+      uiNotify("已添加新节点并保存谱系图");
+      close();
+      mpPaint();
+    }catch(err){
+      uiNotify("保存失败：" + err.message);
+    }
+  };
 }

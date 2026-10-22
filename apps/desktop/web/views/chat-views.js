@@ -21,9 +21,15 @@ function render(){
 }
 
 function needTask(){
-  if(!curTask && S.tasks && S.tasks.length){
-    curTask = S.tasks[0].id;
-    localStorage.setItem("rw-task", curTask);
+  if(S.tasks && S.tasks.length){
+    const exists = S.tasks.some(t => t.id === curTask);
+    if(!exists){
+      curTask = S.tasks[0].id;
+      localStorage.setItem("rw-task", curTask);
+    }
+  } else {
+    curTask = null;
+    localStorage.removeItem("rw-task");
   }
   if(!curTask) return `<div class="card"><h3>当前暂无项目</h3><div class="hint">工作流与文献均可绑定到独立项目上。你可以点击下方按钮新建项目，也可以在「项目」页自由管理。</div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn btn-primary" onclick="openTab('tasks')">＋ 新建项目</button></div></div>`;
   return "";

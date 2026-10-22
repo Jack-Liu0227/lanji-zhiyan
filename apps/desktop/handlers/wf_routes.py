@@ -82,10 +82,24 @@ class WorkflowRoutes:
                                "snapshots": [{"at": s.parent.name + " " + s.name, "bytes": s.stat().st_size}
                                              for s in fileguard.snapshots(p)]})
         if path == "/api/paper/open":                 # 星图/文献双击：用系统默认程序打开这篇论文的 PDF
-            with WorkflowDB(DB_PATH) as db:
-                row = db.db.execute("SELECT source_path FROM papers WHERE id=?",
-                                    (q.get("id", [""])[0],)).fetchone()
-            p = Path(row["source_path"]) if row else None
+            pid = q.get("id", [""])[0]
+            req_path = q.get("path", [""])[0]
+            p = None
+            if pid:
+                with WorkflowDB(DB_PATH) as db:
+                    row = db.db.execute("SELECT source_path FROM papers WHERE id=?", (pid,)).fetchone()
+                if row and row["source_path"]:
+                    p = Path(row["source_path"])
+            if (not p or not p.is_file()) and req_path:
+                p = Path(req_path)
+            if not p or not p.is_file():
+                if req_path:
+                    fname = Path(req_path).name
+                    with WorkflowDB(DB_PATH) as db:
+                        row = db.db.execute("SELECT source_path FROM papers WHERE filename=? OR source_path LIKE ?",
+                                            (fname, f"%{fname}")).fetchone()
+                    if row and row["source_path"] and Path(row["source_path"]).is_file():
+                        p = Path(row["source_path"])
             if not p or not p.is_file():
                 return self._json({"error": "找不到这篇论文的 PDF 文件（可能已移走）"}, 404)
             return self._json(fileguard.open_document(p))
@@ -113,5 +127,84 @@ class WorkflowRoutes:
                     "long": db.memory(tid, "long"),
                     "short": [{"role": m["role"], "content": m["content"], "created_at": m["created_at"],
                                "events": m.get("events") or []} for m in db.messages(tid)],
+                })
+        if path == "/api/easyscholar/ranks":
+            import easyscholar
+            venues = [v.strip() for v in (q.get("venues", [""])[0] or "").split(",") if v.strip()]
+            ranks = {}
+            for v in venues[:40]:
+                try:
+                    r = easyscholar.query_publication_rank(v)
+                    if r and not r.get("error"):
+                        ranks[v] = {
+                            "badges": easyscholar.parse_badges(r),
+                            "sciUp": r.get("sciUp"),
+                            "sciUpTop": r.get("sciUpTop"),
+                            "sci": r.get("sci"),
+                            "sciif": r.get("sciif"),
+                            "ccf": r.get("ccf"),
+                            "pku": r.get("pku"),
+                            "sciwarn": r.get("sciwarn")
+                        }
+                except Exception:
+                    pass
+            cfg = easyscholar.get_config()
+            return self._json({"ranks": ranks, "has_key": bool(cfg.get("secret_key"))})
+        if path == "/api/step/sessions":
+            with WorkflowDB(DB_PATH) as db:
+                tid = (q.get("id") or [""])[0]
+                step = (q.get("step") or [""])[0]
+                sessions = []
+                archived_workflow = []
+                assistant_chats = []
+                try:
+                    # 1. 各步骤当前活跃会话统计
+                    rows = db.db.execute("SELECT scope, role, content, created_at FROM chat WHERE task_id=? ORDER BY created_at DESC", (tid,)).fetchall()
+                    step_groups = {}
+                    for r in rows:
+                        sc = r["scope"] or "idea"
+                        if sc not in step_groups:
+                            step_groups[sc] = {"count": 0, "last_msg": r["content"][:60], "updated_at": r["created_at"]}
+                        step_groups[sc]["count"] += 1
+                    for sc, data in step_groups.items():
+                        sessions.append({"step": sc, "count": data["count"], "last_msg": data["last_msg"], "updated_at": data["updated_at"]})
+
+                    # 2. 归档的工作流历史会话（在 chats 表中 assistant_id='step-xxx'）
+                    arc_rows = db.db.execute("SELECT id, title, assistant_id, created_at, updated_at FROM chats WHERE task_id=? AND assistant_id LIKE 'step-%' ORDER BY updated_at DESC", (tid,)).fetchall()
+                    for ar in arc_rows:
+                        cid = ar["id"]
+                        sc = ar["assistant_id"][5:]
+                        cnt_row = db.db.execute("SELECT count(*) as c, content FROM chat WHERE task_id=? ORDER BY created_at DESC LIMIT 1", (cid,)).fetchone()
+                        cnt = cnt_row["c"] if cnt_row else 0
+                        last = cnt_row["content"][:60] if cnt_row and cnt_row["content"] else ""
+                        archived_workflow.append({
+                            "id": cid, "step": sc, "title": ar["title"], "count": cnt,
+                            "last_msg": last, "updated_at": ar["updated_at"]
+                        })
+
+                    # 3. 一级助手 / 通用会话（智研管家、独立助手等）
+                    ast_rows = db.db.execute("SELECT id, title, assistant_id, created_at, updated_at FROM chats WHERE (assistant_id NOT LIKE 'step-%' OR assistant_id IS NULL) ORDER BY updated_at DESC").fetchall()
+                    assistants_meta = {a["id"]: a["name"] for a in db.assistants()}
+                    assistants_meta["builtin-steward"] = "智研管家"
+                    assistants_meta[""] = "智研管家"
+                    for asr in ast_rows:
+                        cid = asr["id"]
+                        aid = asr["assistant_id"] or ""
+                        aname = assistants_meta.get(aid, "智能助手")
+                        cnt_row = db.db.execute("SELECT count(*) as c, content FROM chat WHERE task_id=? ORDER BY created_at DESC LIMIT 1", (cid,)).fetchone()
+                        cnt = cnt_row["c"] if cnt_row else 0
+                        last = cnt_row["content"][:60] if cnt_row and cnt_row["content"] else ""
+                        assistant_chats.append({
+                            "id": cid, "title": asr["title"], "assistant_id": aid,
+                            "assistant_name": aname, "count": cnt,
+                            "last_msg": last, "updated_at": asr["updated_at"]
+                        })
+                except Exception:
+                    pass
+                return self._json({
+                    "task_id": tid, "current_step": step,
+                    "sessions": sessions,
+                    "archived_workflow": archived_workflow,
+                    "assistant_chats": assistant_chats
                 })
         return None

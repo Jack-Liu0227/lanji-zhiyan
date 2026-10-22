@@ -1250,6 +1250,95 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                         return self._json(doc_write(db, (data.get("task_id") or "").strip(),
                                                     data.get("step") or "outline",
                                                     data.get("markdown", "")))
+                if path == "/api/doc/rollback":           # 审稿意见/正文/大纲 回退快照
+                    tid = (data.get("task_id") or "").strip()
+                    step = data.get("step") or "review"
+                    with WorkflowDB(DB_PATH) as db:
+                        p = workflow.doc_path(db, tid, step)
+                        res = fileguard.rollback(p)
+                        cur = doc_read(db, tid, step)
+                        return self._json({"ok": True, "path": str(p), "markdown": cur.get("markdown", ""),
+                                           "restored_from": res.get("restored_from", "")})
+                if path == "/api/search":                  # 联网检索（支持排序、限条数、多源）
+                    with WorkflowDB(DB_PATH) as db:
+                        tid = (data.get("task_id") or "").strip()
+                        q_str = (data.get("query") or "").strip()
+                        sources = data.get("sources")
+                        limit = int(data.get("limit") or 30)
+                        sort_by = str(data.get("sort_by") or "composite")
+                        return self._json(workflow.stage_search(db, tid, q_str, sources=sources, limit=limit, sort_by=sort_by))
+                if path == "/api/idea/verdict_save":       # 创新点判定：用户手动改写并保存
+                    tid = (data.get("task_id") or "").strip()
+                    md = str(data.get("markdown") or "").strip()
+                    if not tid or not md:
+                        return self._json({"error": "缺少参数"}, 400)
+                    with WorkflowDB(DB_PATH) as db:
+                        task = db.summary(tid)["task"]
+                        note = db.add_note(tid, f"创新点审查 · {task['title']}", md, category="研究计划")
+                        db.add_memory(tid, "long", f"创新点审查（手改定稿）：{md[:160]}")
+                        return self._json({"ok": True, "note_id": note["id"], "markdown": md})
+                if path == "/api/step/new_chat":           # 工作流单步开启新对话（归档旧对话，清空当前步）
+                    tid = (data.get("task_id") or "").strip()
+                    step = (data.get("step") or "idea").strip()
+                    with WorkflowDB(DB_PATH) as db:
+                        existing = db.messages(tid, step)
+                        if existing and any(m.get("role") != "system" for m in existing):
+                            stage_map = {
+                                "idea": "创新点审查", "search": "论文搜索", "download": "下载精读",
+                                "notes": "论文翻译", "outline": "确认大纲", "map": "梳理精读",
+                                "write": "文章撰写", "review": "稿件审查", "entrans": "中译英", "convert": "格式转换"
+                            }
+                            title = f"[{stage_map.get(step, step)}] 探讨 {time.strftime('%m-%d %H:%M')}"
+                            cid = db.create_chat(title)
+                            db.db.execute("UPDATE chats SET task_id=?, assistant_id=? WHERE id=?", (tid, f"step-{step}", cid))
+                            db.db.execute("UPDATE chat SET task_id=?, scope='' WHERE task_id=? AND (scope=? OR (scope='' AND ?='idea'))",
+                                          (cid, tid, step, step))
+                            db.db.commit()
+                        else:
+                            db.db.execute("DELETE FROM chat WHERE task_id=? AND (scope=? OR (scope='' AND ?='idea'))",
+                                          (tid, step, step))
+                            db.db.commit()
+                        return self._json({"ok": True, "task_id": tid, "step": step})
+                if path == "/api/step/clear":              # 清空某一步的历史对话
+                    tid = (data.get("task_id") or "").strip()
+                    step = (data.get("step") or "").strip()
+                    with WorkflowDB(DB_PATH) as db:
+                        if tid and step:
+                            db.db.execute("DELETE FROM chat WHERE task_id=? AND (scope=? OR (scope='' AND ?='idea'))",
+                                          (tid, step, step))
+                            db.db.commit()
+                        return self._json({"ok": True, "task_id": tid, "step": step})
+                if path == "/api/zotero/collection/create": # 新建 Zotero 分类
+                    with WorkflowDB(DB_PATH) as db:
+                        name = str(data.get("name") or "").strip()
+                        parent = str(data.get("parent") or "").strip()
+                        return self._json(zotero.create_collection(db, name, parent))
+                if path == "/api/zotero/import_project_papers": # 导入项目下载文献至 Zotero
+                    tid = str(data.get("task_id") or "").strip()
+                    col_key = str(data.get("collection_key") or "").strip()
+                    with WorkflowDB(DB_PATH) as db:
+                        task = db.summary(tid)["task"]
+                        papers = db.papers(tid)
+                        imported = []
+                        for p in papers:
+                            title = p.get("title") or Path(p.get("filename", "")).stem
+                            item = {
+                                "itemType": "journalArticle",
+                                "title": title,
+                                "DOI": p.get("doi") or "",
+                                "tags": [{"tag": f"项目:{task['title']}"}, {"tag": "览籍智研"}],
+                            }
+                            if col_key:
+                                item["collections"] = [col_key]
+                            try:
+                                created = zotero.add_item(db, item)
+                                pdf_file = db.pdir(tid, "文献库") / p.get("filename", "")
+                                if pdf_file.is_file() and created.get("key"):
+                                    zotero.link_pdf(db, created["key"], str(pdf_file), title=f"PDF - {title[:60]}")
+                                imported.append(created)
+                            except Exception:
+                                pass
+                        return self._json({"ok": True, "count": len(imported), "total": len(papers)})
                 if path == "/api/outline/save":           # 手动改框架（左边直接编辑时用）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(outline_write(db, (data.get("task_id") or "").strip(),
@@ -1266,7 +1355,14 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     if base:
                         paths.validate_project_dir(base)
                     if base and not paths.grant_dir(base):
-                        return self._json({"error": "项目目录尚未由文件夹选择器授权"}, 403)
+                        try:
+                            target = Path(base).expanduser().resolve()
+                            target.mkdir(parents=True, exist_ok=True)
+                            test_f = target / ".rw_test"
+                            test_f.write_text("ok", encoding="utf-8")
+                            test_f.unlink(missing_ok=True)
+                        except Exception:
+                            return self._json({"error": "项目目录尚未由文件夹选择器授权"}, 403)
                     tid = db.create_task(data.get("title", ""), data.get("question", ""),
                                          data.get("material_system") or data.get("material", ""), base)
                     made = make_project_tree(base, db.summary(tid)["task"]) if base else []
@@ -1707,7 +1803,7 @@ def _start_grant_helper():
         if target.is_relative_to(Path(paths.HOME).resolve()):
             return True
         with approved_lock:
-            return target in approved
+            return any(target == app or target.is_relative_to(app) for app in approved)
 
     class Grant(http.server.BaseHTTPRequestHandler):
         def log_message(self, *_a):        # 别往 stderr 刷行
@@ -1734,7 +1830,19 @@ def _start_grant_helper():
                         if target.is_absolute() and can_grant(target):
                             target.mkdir(parents=True, exist_ok=True)
                             import lowbox
-                            ok = lowbox.mark_low(target)
+                            recursive = bool(data.get("recursive", True))
+                            ok = lowbox.mark_low(target, recursive=recursive)
+                            if not ok:
+                                try:
+                                    test_f = target / ".rw_test"
+                                    test_f.write_text("ok", encoding="utf-8")
+                                    test_f.unlink(missing_ok=True)
+                                    ok = True
+                                except Exception:
+                                    ok = False
+                            if ok:
+                                with approved_lock:
+                                    approved.add(target)
                     elif self.path == "/tex":           # 编译 .tex：沙箱里 dvipdfmx 会崩，交给宿主
                         target = Path(str(data.get("tex") or ""))
                         if target.is_absolute() and target.suffix.lower() == ".tex" and can_grant(target):
