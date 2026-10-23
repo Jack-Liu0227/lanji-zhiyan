@@ -78,5 +78,50 @@ class ChainTest(unittest.TestCase):
             self.assertIn("Smith", (d / "main.bbl").read_text(encoding="utf-8", errors="replace"))
 
 
+class WordCiteTest(unittest.TestCase):
+    """Word/HTML 那条路：{{Cn}} → [n]（按出现顺序），文末参考文献由台账字段排。"""
+
+    def setUp(self) -> None:
+        import workflow_converters as wc
+        self.wc = wc
+        self._old = wc._cite_load
+        wc._cite_load = lambda db, tid: [
+            {"title": "A study of sodium layered cathodes", "authors": "Smith J, Lee A",
+             "venue": "J Testing", "year": "2020", "pages": "345-356", "doi": "10.1000/xyz123"},
+            {"title": "Second paper", "authors": "Chen K", "venue": "Nanoscale", "year": "2021"},
+        ]
+
+    def tearDown(self) -> None:
+        self.wc._cite_load = self._old
+
+    def test_按出现顺序编号_同一篇复用同号(self) -> None:
+        got = self.wc.doc_cites(None, "t", "先引{{C2}}，再引{{C1}}，又回{{C2}}。")
+        self.assertEqual(got["md"], "先引[1]，再引[2]，又回[1]。")
+        self.assertEqual(len(got["refs"]), 2)
+        self.assertTrue(got["refs"][0].startswith("[1] Chen K."))
+        self.assertIn("Nanoscale, 2021", got["refs"][0])
+        self.assertEqual(got["missing"], [])
+
+    def test_台账里没有的编号保留标记(self) -> None:
+        got = self.wc.doc_cites(None, "t", "见{{C9}}。")
+        self.assertEqual(got["md"], "见{{C9}}。")
+        self.assertEqual(got["refs"], [])
+        self.assertEqual(got["missing"], [9])
+
+    def test_word里真有编号和参考文献表(self) -> None:
+        from docx import Document
+        import workflow_docx
+        with tempfile.TemporaryDirectory() as td:
+            got = self.wc.doc_cites(None, "t", "# 标题\n\n层状正极在循环中快速衰减{{C1}}。\n")
+            md = self.wc.with_references(got["md"], got["refs"])
+            dest = Path(td) / "a.docx"
+            workflow_docx.build(md, dest)
+            texts = "\n".join(p.text for p in Document(str(dest)).paragraphs)
+            self.assertIn("[1]", texts)                 # 正文里的编号
+            self.assertIn("参考文献", texts)             # 文末那一节
+            self.assertIn("Smith J", texts)             # 条目内容
+            self.assertIn("DOI: 10.1000/xyz123", texts)
+
+
 if __name__ == "__main__":
     unittest.main()

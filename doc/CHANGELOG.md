@@ -2,6 +2,16 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 2026-10-23（Word / HTML / Markdown 导出也带引用）
+
+**口径**：正文里的 {{Cn}} 标记在 Word/HTML/Markdown 里换成 `[n]`，编号**按正文出现顺序**给（同一篇复用同一个号），文末自动接一节「参考文献」，条目按 GB/T 7714 顺序编码的样子由台账字段排：`[1] 作者. 题名[J]. 出处, 年: 页. DOI: …`。台账里找不到的编号**保留 `{{Cn}}` 原样**并在返回的 `cites.missing` 里报出来，不悄悄丢。
+
+**为什么不走 bibtex**：docx 那条链是 python-docx 直接排，没有 .bst 可言；引用条目只用台账字段拼（authors/title/venue/year/pages/doi），PDF 那条路仍然走 `\cite` + `bibliographystyle`。两者编号口径一致（顺序编码、同篇同号）。
+
+**落点**：`workflow_converters.doc_cites()`（标记→[n] + 条目）/ `with_references()`（末尾接参考文献节）/ `_ref_line()`（题录排版），`conv_run` 在 md/docx/doc/html 四个出口统一过一遍；返回里加 `cites {used, missing, style}` 与 `cite_note`。docx 渲染器本来就认「参考文献」这个标题、会把 `[n]` 开头的行做成悬挂缩进小字号，不用改。
+
+**验证**：`tests/test_cite_tex.py` 加 3 条（按出现顺序编号、台账没有的编号保留标记、真建一份 docx 再用 python-docx 读回来断言正文有 `[1]`、文末有「参考文献」和 DOI）；端到端（临时 HOME）：`conv_run(fmt="docx")` → 同一篇三处引用全变 `[1]`、文末一条条目。
+
 ## 2026-10-23（PDF 真的带上引用：正文 {{C3}} → \cite，文末按样式出参考文献表）
 
 **口径**：正文里用双花括号包 C 编号（例如 C 的第 3 条写成两个花括号夹 C3）标引用，导出 PDF/LaTeX 时换成 `\cite{key}`，文末挂 `\bibliographystyle` + `\bibliography{refs}`。样式**问使用者**：格式助手开篇第 4 问给可选清单，`gbt7714`（GB/T 7714 顺序编码，中文稿默认）/ `unsrt` / `plain` / `ieeetr` / `elsarticle` / `aps`，工具参数 `cite_style`。key 与元数据全部来自 Zotero（台账缺条就报 missing，不自己编题录），对不上的编号在 PDF 里原样留着，不悄悄丢掉。

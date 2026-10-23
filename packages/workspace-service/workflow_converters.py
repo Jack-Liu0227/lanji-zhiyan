@@ -389,6 +389,57 @@ def latex_chain(tex: Path, run: Any) -> dict[str, Any]:
     return {"pdf": str(pdf), "passes": passes, "bibtex": note}
 
 
+def _ref_line(num: int, e: dict[str, Any]) -> str:
+    """台账一条 → GB/T 7714 顺序编码的一条（[n] 作者. 题名[J]. 出处, 年: 页. DOI: …）。
+    这里只用台账字段排版，不引 bibtex —— Word/HTML 走这条，PDF 走 .bst。"""
+    authors = str(e.get("authors") or "").strip().rstrip(".")
+    title = str(e.get("title") or "").strip().rstrip(".")
+    venue = str(e.get("venue") or "").strip()
+    year = str(e.get("year") or "").strip()
+    pages = str(e.get("pages") or "").strip()
+    doi = str(e.get("doi") or "").strip()
+    url = str(e.get("url") or "").strip()
+    head = ("%s. " % authors if authors else "") + (title or "（题名待补）") + "[J]"
+    tail = ", ".join(x for x in (venue, year) if x)      # 题录里用西文逗号，顿号是中文并列用的
+    if pages:
+        tail = (tail + ": " + pages) if tail else pages
+    line = head + ". " + (tail + "." if tail else "")
+    if doi:
+        line += " DOI: %s." % doi
+    elif url:
+        line += " %s" % url
+    return "[%d] %s" % (num, line.strip())
+
+
+def doc_cites(db: "WorkflowDB", task_id: str, md: str) -> dict[str, Any]:
+    """Word / HTML / Markdown 导出用：正文 {{Cn}} → [n]（按**出现顺序**编号，同一条复用同一个号），
+    并给出文末参考文献条目。Zotero 里查不到的编号在返回的 missing 里报出来。"""
+    entries = _cite_load(db, task_id)
+    order: list[int] = []
+    for m in CITE_MARK_RE.finditer(md or ""):
+        num = int(m.group(1))
+        if num not in order:
+            order.append(num)
+    numbers = {num: i + 1 for i, num in enumerate(order)}
+    known = {num: numbers[num] for num in order if 1 <= num <= len(entries)}
+
+    def _sub(m: Any) -> str:
+        num = int(m.group(1))
+        return "[%d]" % known[num] if num in known else m.group(0)   # 台账里没有的编号原样留着
+
+    body = CITE_MARK_RE.sub(_sub, md or "")
+    refs = [_ref_line(known[num], entries[num - 1]) for num in order if num in known]
+    return {"md": body, "refs": refs, "used": len(order), "ledger": len(entries),
+            "missing": [num for num in order if num not in known]}
+
+
+def with_references(md: str, refs: list[str]) -> str:
+    """正文末尾接一节「参考文献」。docx 渲染器认得这个标题（引用条目按悬挂缩进排）。"""
+    if not refs:
+        return md
+    return (md or "").rstrip() + "\n\n## 参考文献\n\n" + "\n".join(refs) + "\n"
+
+
 def _line_with_cites(line: str, cite_keys: dict[int, str] | None, missing: set[int]) -> str:
     """一行正文 → tex：`{{C3}}` 换成 `\\cite{key}`；对不上编号的原样留着并记进 missing（不悄悄丢引用）。"""
     out: list[str] = []
@@ -538,6 +589,11 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", templat
                  db.summary(task_id)["task"]["title"] or Path(src).stem)      # 没框架就用项目名，别叫「正文」
     safe = re.sub(r"[^\w\-. ]+", "_", title)[:60] or "paper"
     out = folder / f"{safe}.{'pdf' if fmt == 'latex' else fmt}"
+    # Word / HTML / Markdown 也带引用：{{Cn}} → [n]（按出现顺序），文末接「参考文献」
+    doc_cite = {"used": 0, "missing": [], "refs": [], "ledger": 0}
+    if fmt in ("md", "docx", "doc", "html") and CITE_MARK_RE.search(md or ""):
+        doc_cite = doc_cites(db, task_id, md)
+        md = with_references(doc_cite["md"], doc_cite["refs"])
     if fmt == "md":
         out.write_text(md, encoding="utf-8")
     elif fmt in ("docx", "html", "doc"):
@@ -622,6 +678,12 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", templat
         res.update({"cites": {"used": len(used), "linked": len(cite_keys), "missing": cite_missing},
                     "cite_style": meta.get("style", ""), "passes": meta.get("passes", 0),
                     "bibtex": meta.get("bibtex", ""), "cite_note": "；".join(meta.get("notes") or [])})
+    else:
+        res["cites"] = {"used": doc_cite.get("used", 0), "missing": doc_cite.get("missing", []),
+                        "style": "顺序编码（按出现顺序，GB/T 7714 式条目）" if doc_cite.get("used") else ""}
+        if doc_cite.get("missing"):
+            res["cite_note"] = ("%d 处引用在台账里找不到（%s），正文里保留了 {{Cn}}"
+                                % (len(doc_cite["missing"]), "、".join("C%d" % n for n in doc_cite["missing"][:6])))
     return res
 
 
