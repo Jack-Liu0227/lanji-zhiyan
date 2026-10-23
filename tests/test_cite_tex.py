@@ -108,6 +108,29 @@ class WordCiteTest(unittest.TestCase):
         self.assertEqual(got["refs"], [])
         self.assertEqual(got["missing"], [9])
 
+    def test_著者出版年制_标注与著者字顺(self) -> None:
+        # 顺序：第 1 条 Smith 2020、第 2 条 Chen 2021
+        got = self.wc.doc_cites(None, "t", "先{{C2}}再{{C1}}。", cite_style="gbt7714-ay")
+        self.assertEqual(got["mode"], "author-year")
+        self.assertEqual(got["md"], "先(Chen, 2021)再(Smith, Lee, 2020)。")
+        self.assertTrue(got["refs"][0].startswith("Chen K. 2021."))     # 文后按著者字顺，不是出现顺序
+        self.assertIn("(Smith", got["md"])
+
+    def test_同年同著者加ab(self) -> None:
+        self.wc._cite_load = lambda db, tid: [
+            {"title": "B paper", "authors": "Smith J", "venue": "J", "year": "2020"},
+            {"title": "A paper", "authors": "Smith J", "venue": "J", "year": "2020"},
+        ]
+        got = self.wc.doc_cites(None, "t", "{{C1}}与{{C2}}。", cite_style="gbt7714-ay")
+        # 组内按题名排：A paper=C2 拿 a，B paper=C1 拿 b
+        self.assertEqual(got["md"], "(Smith, 2020b)与(Smith, 2020a)。")
+
+    def test_四位以上作者用等(self) -> None:
+        self.wc._cite_load = lambda db, tid: [
+            {"title": "长名单", "authors": "张三、李四、王五、赵六", "venue": "学报", "year": "2023"}]
+        got = self.wc.doc_cites(None, "t", "见{{C1}}。", cite_style="gbt7714-ay")
+        self.assertIn("(张三 等, 2023)", got["md"])
+
     def test_word里真有编号和参考文献表(self) -> None:
         from docx import Document
         import workflow_docx

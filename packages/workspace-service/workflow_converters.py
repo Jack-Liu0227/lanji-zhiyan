@@ -280,6 +280,8 @@ BIB_NAME = "refs"          # 构建夹里的 .bib 用纯 ASCII 名：老 bibtex 
 BUILD_STEM = "paper"        # 同理：.tex/.aux 也得 ASCII，否则 bibtex 报「I couldn't open file name」，.bbl 空
 CITE_STYLES: dict[str, tuple[str, str]] = {
     "gbt7714":    ("gbt7714-numeric", "GB/T 7714 顺序编码（中文期刊 / 学位论文）"),
+    "gbt7714-ay": ("gbt7714-author-year", "GB/T 7714 著者-出版年制（Word/HTML/MD：正文 (著者 等, 年)、文后按著者字顺、同著者同年 a/b；PDF 仍数字式）"),
+    "apa":        ("apalike", "APA 风格（作者-年份，Word/HTML/MD；PDF 仍数字式）"),
     "unsrt":      ("unsrt", "unsrt（英文通用，按正文出现顺序编号）"),
     "plain":      ("plain", "plain（英文通用，按作者字母排序编号）"),
     "ieeetr":     ("ieeetr", "ieeetr（IEEE 数字式）"),
@@ -287,14 +289,31 @@ CITE_STYLES: dict[str, tuple[str, str]] = {
     "aps":        ("apsrev4-2", "APS / revtex 数字式"),
 }
 _TEMPLATE_CITE = {"plain": "gbt7714", "elsevier": "elsarticle", "ieee": "ieeetr", "revtex": "aps"}
+AY_STYLES = ("gbt7714-ay", "apa")            # 著者-出版年制：正文给 (著者 年)、文后按著者字顺
+AY_ETAL_FROM = 4                              # ≥4 位作者才用「等 / et al.」，1–3 位全列（常见期刊口径）
+
+
+def is_author_year(cite_style: str = "", bst: str = "") -> bool:
+    """这个样式是不是著者-出版年制（决定 Word 正文给 (著者, 年) 还是 [n]）。"""
+    key = (cite_style or "").strip().lower()
+    return key in AY_STYLES or (bst or "").startswith(("gbt7714-author-year", "apalike"))
 
 
 def bib_style(template: str = "", cite_style: str = "") -> tuple[str, str, str]:
-    """→（.bst 名, 要顺手装的宏包, 退回说明）。用户选的优先，没选按期刊模板给默认；
-    本机没这个 bst 就退 plain。宏包那一项是 gbt7714 —— 它的 .bbl 用 \doi{}，不装宏包直接编不出。"""
+    """→（.bst 名, 要顺手装的宏包, 说明）。用户选的优先，没选按期刊模板给默认；本机没这个 bst 就退 plain。
+
+    宏包那一项是 gbt7714 —— 它的 .bbl 用 \\doi{}，不装宏包直接编不出。
+    著者-出版年制（gbt7714-ay / apa）只在 Word/HTML/MD 那条路上生效：PDF 走 bst 时标签会被
+    natbib 排成方括号、gbt7714 宏包又会把 cite 翻成数字式，实测两头都不对，所以 PDF 退回数字式并说明。
+    """
     key = (cite_style or "").strip().lower()
     if key not in CITE_STYLES:
         key = _TEMPLATE_CITE.get(template, "gbt7714")
+    if key in AY_STYLES:
+        bst, label = CITE_STYLES[key]
+        return ("gbt7714-numeric", "gbt7714",
+                "%s 只在 Word/HTML/MD 里生效；PDF 仍按 GB/T 7714 数字式排（%s.bst 的标签会被排成方括号）"
+                % (label.split("（")[0], bst))
     bst, label = CITE_STYLES[key]
     if not _kpsewhich(bst + ".bst"):
         return "plain", "", "%s 的 %s.bst 本机没装，退回 plain" % (label, bst)
@@ -411,26 +430,111 @@ def _ref_line(num: int, e: dict[str, Any]) -> str:
     return "[%d] %s" % (num, line.strip())
 
 
-def doc_cites(db: "WorkflowDB", task_id: str, md: str) -> dict[str, Any]:
-    """Word / HTML / Markdown 导出用：正文 {{Cn}} → [n]（按**出现顺序**编号，同一条复用同一个号），
-    并给出文末参考文献条目。Zotero 里查不到的编号在返回的 missing 里报出来。"""
+def _author_list(e: dict[str, Any]) -> list[str]:
+    raw = str(e.get("authors") or "").strip()
+    if not raw:
+        return []
+    return [p.strip() for p in re.split(r"[;,，；、]|\s+and\s+", raw) if p.strip()]
+
+
+def _surname(name: str) -> str:
+    """台账里的作者串通常是「Smith J」或「张三」，取正文标注要用的那一段（姓）。"""
+    name = (name or "").strip()
+    if not name:
+        return ""
+    if any("\u4e00" <= ch <= "\u9fff" for ch in name):
+        return name[:2] if len(name) > 2 else name          # 中文：前两字当简称（张三 / 欧阳）
+    parts = name.split()
+    if len(parts) == 1:
+        return name
+    if parts[0].endswith("."):                             # J. Smith → Smith
+        return parts[-1]
+    return parts[0]                                        # Smith J → Smith
+
+
+def _author_key(e: dict[str, Any]) -> str:
+    return " ".join(_surname(n) for n in _author_list(e)).lower()
+
+
+def _ay_label(e: dict[str, Any], suffix: str = "") -> str:
+    """著者-出版年制正文标注：1–3 位著者全列，≥4 位用「等 / et al.」，同年加 a/b；缺年份按 n.d.。"""
+    names = _author_list(e)
+    year = str(e.get("year") or "").strip() or "n.d."
+    if not names:
+        return "(佚名, %s%s)" % (year, suffix)
+    cjk = any("\u4e00" <= ch <= "\u9fff" for ch in names[0])
+    sur = [_surname(n) for n in names if _surname(n)]
+    if len(sur) >= AY_ETAL_FROM:
+        who = sur[0] + (" 等" if cjk else " et al.")
+    else:
+        who = ("、" if cjk else ", ").join(sur)
+    return "(%s, %s%s)" % (who, year, suffix)
+
+
+def _ay_ref(e: dict[str, Any], suffix: str = "") -> str:
+    """著者-出版年制文后条目：著者. 年a. 题名[J]. 出处: 页. DOI: …"""
+    authors = str(e.get("authors") or "").strip().rstrip(".")
+    title = str(e.get("title") or "").strip().rstrip(".") or "（题名待补）"
+    year = (str(e.get("year") or "").strip() or "n.d.") + suffix
+    venue = str(e.get("venue") or "").strip()
+    pages = str(e.get("pages") or "").strip()
+    doi = str(e.get("doi") or "").strip()
+    url = str(e.get("url") or "").strip()
+    line = "%s. %s. %s[J]. " % (authors, year, title) if authors else "%s. %s[J]. " % (year, title)
+    tail = venue + (": " + pages if pages else "")
+    line += (tail + ".") if tail else ""
+    if doi:
+        line += " DOI: %s." % doi
+    elif url:
+        line += " %s" % url
+    return line.strip()
+
+
+def doc_cites(db: "WorkflowDB", task_id: str, md: str, cite_style: str = "") -> dict[str, Any]:
+    """Word / HTML / Markdown 导出用：正文 {{Cn}} → 标注，并给出文末参考文献条目。
+
+    cite_style 决定两种口径（跟 PDF 那条 .bst 对齐）：
+      * 顺序编码（默认，gbt7714 等）：正文 [n]（按出现顺序、同篇同号），文后按出现顺序；
+      * 著者-出版年制（gbt7714-ay / apa）：正文 (著者 等, 年)，文后按**著者字顺**，同著者同年加 a/b。
+    台账里找不到的编号原样保留标记，并在 missing 里报出来。
+    """
     entries = _cite_load(db, task_id)
     order: list[int] = []
     for m in CITE_MARK_RE.finditer(md or ""):
         num = int(m.group(1))
         if num not in order:
             order.append(num)
+    known = [num for num in order if 1 <= num <= len(entries)]
+    missing = [num for num in order if num not in known]
+
+    if is_author_year(cite_style):
+        groups: dict[tuple[str, str], list[int]] = {}
+        for num in known:
+            e = entries[num - 1]
+            groups.setdefault((_author_key(e), str(e.get("year") or "")), []).append(num)
+        suffix: dict[int, str] = {}
+        for nums in groups.values():                       # 同著者同年 → a/b/c，组内按题名排
+            if len(nums) == 1:
+                suffix[nums[0]] = ""
+            else:
+                for i, num in enumerate(sorted(nums, key=lambda n: str(entries[n - 1].get("title") or ""))):
+                    suffix[num] = "abcdefghij"[i] if i < 10 else str(i + 1)
+        labels = {num: _ay_label(entries[num - 1], suffix[num]) for num in known}
+        ordered = sorted(known, key=lambda n: (_author_key(entries[n - 1]),
+                                              str(entries[n - 1].get("year") or ""), suffix[n]))
+        refs = [_ay_ref(entries[n - 1], suffix[n]) for n in ordered]
+        body = CITE_MARK_RE.sub(
+            lambda m: labels[int(m.group(1))] if int(m.group(1)) in labels else m.group(0), md or "")
+        return {"md": body, "refs": refs, "used": len(order), "ledger": len(entries),
+                "missing": missing, "mode": "author-year"}
+
     numbers = {num: i + 1 for i, num in enumerate(order)}
-    known = {num: numbers[num] for num in order if 1 <= num <= len(entries)}
-
-    def _sub(m: Any) -> str:
-        num = int(m.group(1))
-        return "[%d]" % known[num] if num in known else m.group(0)   # 台账里没有的编号原样留着
-
-    body = CITE_MARK_RE.sub(_sub, md or "")
-    refs = [_ref_line(known[num], entries[num - 1]) for num in order if num in known]
+    known_nums = {num: numbers[num] for num in known}
+    body = CITE_MARK_RE.sub(
+        lambda m: "[%d]" % known_nums[int(m.group(1))] if int(m.group(1)) in known_nums else m.group(0), md or "")
+    refs = [_ref_line(known_nums[num], entries[num - 1]) for num in order if num in known_nums]
     return {"md": body, "refs": refs, "used": len(order), "ledger": len(entries),
-            "missing": [num for num in order if num not in known]}
+            "missing": missing, "mode": "numeric"}
 
 
 def with_references(md: str, refs: list[str]) -> str:
@@ -592,7 +696,7 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", templat
     # Word / HTML / Markdown 也带引用：{{Cn}} → [n]（按出现顺序），文末接「参考文献」
     doc_cite = {"used": 0, "missing": [], "refs": [], "ledger": 0}
     if fmt in ("md", "docx", "doc", "html") and CITE_MARK_RE.search(md or ""):
-        doc_cite = doc_cites(db, task_id, md)
+        doc_cite = doc_cites(db, task_id, md, cite_style)
         md = with_references(doc_cite["md"], doc_cite["refs"])
     if fmt == "md":
         out.write_text(md, encoding="utf-8")
@@ -679,8 +783,12 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", templat
                     "cite_style": meta.get("style", ""), "passes": meta.get("passes", 0),
                     "bibtex": meta.get("bibtex", ""), "cite_note": "；".join(meta.get("notes") or [])})
     else:
+        ay = doc_cite.get("mode") == "author-year"
         res["cites"] = {"used": doc_cite.get("used", 0), "missing": doc_cite.get("missing", []),
-                        "style": "顺序编码（按出现顺序，GB/T 7714 式条目）" if doc_cite.get("used") else ""}
+                        "mode": doc_cite.get("mode", ""),
+                        "style": (("著者-出版年制（正文 (著者 等, 年)，文后按著者字顺）" if ay
+                                   else "顺序编码（按出现顺序，GB/T 7714 式条目）")
+                                  if doc_cite.get("used") else "")}
         if doc_cite.get("missing"):
             res["cite_note"] = ("%d 处引用在台账里找不到（%s），正文里保留了 {{Cn}}"
                                 % (len(doc_cite["missing"]), "、".join("C%d" % n for n in doc_cite["missing"][:6])))
@@ -801,7 +909,7 @@ def convert_system(db: "WorkflowDB", task_id: str) -> str:
         "1. 图：正文里的 [图位] 与「图」文件夹里的成图，位置和数目对不对；" + chr(10) +
         "2. 成品：docx / doc（Word 97）/ pdf；" + chr(10) +
         "3. 范本：用下面哪个期刊模板，还是用户自己上传 .docx/.tex 范本；" + chr(10) +
-        "4. 参考文献样式（只对 pdf/latex 有效）：正文里写成 {{C3}} 的标记会变成正式引用，台账里的文献从 Zotero 取元数据。" +
+        "4. 参考文献样式（pdf / docx / html / md 都按它走）：正文里写成 {{C3}} 的标记会变成正式引用，台账里的文献从 Zotero 取元数据。" +
         "下面这套是可选样式，问他要哪一种（他不挑就按模板默认：中文稿 gbt7714）：" + chr(10) + style_lines + chr(10) + chr(10) +
         "四件都定下来之后：调 `format_convert`（format=pdf/docx/doc，template=模板名，cite_style=上一步选的样式；要 .tex→PDF 用 format=tex），"
         "把产出路径和页数/大小告诉用户，别贴正文。若返回里 cites.missing 不为空（这些 C 编号在 Zotero 里找不到），把缺的编号原样告诉他，"

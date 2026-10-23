@@ -376,8 +376,8 @@ def build(markdown: str, dest: Path | str, bases: Sequence[Path | str] = ()) -> 
             _inline(p, f"{num_idx}. {num_txt}")
             continue
 
-        # 9. 参考文献条目（在参考文献章节下）
-        if in_references and (stripped.startswith("[") or re.match(r"^\d+\.", stripped)):
+        # 9. 参考文献条目（在参考文献章节下）：顺序编码 [n] 与著者-出版年制都走这条
+        if in_references:
             p = doc.add_paragraph(style="Normal")
             _hanging_indent(p, 0.8)
             p.paragraph_format.line_spacing = 1.25
