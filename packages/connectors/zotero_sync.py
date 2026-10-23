@@ -174,6 +174,7 @@ def sync(db: Any, task_id: str, mode: str = "merge", dry_run: bool = True, plan_
     local = db.results(task_id)
     links = {r["result_id"]: dict(r) for r in db.db.execute("SELECT * FROM zotero_item_links WHERE task_id=?", (task_id,))}
     actions, conflicts, used = [], [], set()
+    matched = {}
     for row in local:
         link = links.get(row["id"])
         existing = by_key.get(link["item_key"]) if link else None
@@ -192,6 +193,7 @@ def sync(db: Any, task_id: str, mode: str = "merge", dry_run: bool = True, plan_
             existing = candidates[0] if candidates else None
         if existing:
             used.add(existing["key"])
+            matched.setdefault(existing["key"], []).append(row)
             lc = bool(link and link["local_hash"] != _hash(row))
             rc = bool(link and link["remote_version"] != existing["version"])
             if lc and rc and _local(row) != _local(_from_remote(existing)):
@@ -213,6 +215,13 @@ def sync(db: Any, task_id: str, mode: str = "merge", dry_run: bool = True, plan_
             else:
                 actions.append({"kind": "push", "result_id": row["id"], "key": "", "version": 0,
                                 "payload": _to_remote(row, collection)})
+    ambiguous = {key for key, rows in matched.items() if len(rows) > 1}
+    if ambiguous:
+        actions = [a for a in actions if a["key"] not in ambiguous]
+        for key in sorted(ambiguous):
+            for row in matched[key]:
+                conflicts.append({"result_id": row["id"], "key": key, "title": row["title"],
+                                  "reason": "多个本地文献匹配同一 Zotero 条目，请先明确条目映射再同步"})
     if mode in {"pull", "merge"}:
         for row in remote:
             if row["key"] not in used:

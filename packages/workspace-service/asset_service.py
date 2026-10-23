@@ -14,6 +14,7 @@ import shutil
 import uuid
 from pathlib import Path
 from typing import Any
+import project_notes
 
 
 def _conn(db):
@@ -343,6 +344,7 @@ def _legacy_note_asset(db, row: dict[str, Any], project_id: str, table: str) -> 
                           uri_prefix=table)
 
 
+@project_notes.synchronized
 def rebuild_project_index(db, project_id: str, *, include_files: bool = True) -> dict[str, Any]:
     """Idempotently project legacy rows and known project files into the asset graph.
 

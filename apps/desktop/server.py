@@ -1205,7 +1205,10 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                 if path == "/api/project/note/save":
                     with WorkflowDB(DB_PATH) as note_db:
                         return self._json(project_notes.write(note_db, str(data.get("project_id") or ""),
-                                                              str(data.get("path") or ""), str(data.get("content") or "")))
+                                                              str(data.get("path") or ""), str(data.get("content") or ""),
+                                                              title=str(data["title"]) if "title" in data else None,
+                                                              create=data.get("create") is True,
+                                                              expected_hash=str(data["expected_hash"]) if "expected_hash" in data else None))
                 if path == "/api/project/folder/create":
                     with WorkflowDB(DB_PATH) as note_db:
                         return self._json(project_notes.create_folder(note_db, str(data.get("project_id") or ""),

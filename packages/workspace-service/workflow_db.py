@@ -27,6 +27,7 @@ import fileguard        # 文件安全：子进程环境洗白 / 写前快照 / 
 import guards          # 出站脱敏 + 引用核验（见 guards.py）
 import memory_store    # 记忆体系：全局/项目两层、可改可删、FTS 检索
 import paths            # 唯一路径来源（data / user / executors 都在 HOME 下）
+import project_notes
 import securestore      # 凭据保护（DPAPI，见 securestore.py）
 from research_core import ResearchDB
 from workflow_search import make_project_tree   # 建项目骨架（pdir 里懒建目录用）
@@ -496,6 +497,7 @@ class WorkflowDB(ResearchDB):
                               (paper_id,)).fetchone()
         return dict(row) if row else None
 
+    @project_notes.synchronized
     def save_md_note(self, nid: str, title: str, content: str, task_id: str | None = None,
                      paper_id: str | None = None) -> dict[str, Any]:
         """task_id / paper_id 传 None 保持原绑定不变；传 "" 就是解绑。"""
@@ -594,6 +596,7 @@ class WorkflowDB(ResearchDB):
         else:
             self.db.commit()
 
+    @project_notes.synchronized
     def delete_md_note(self, nid: str) -> None:
         note = self.md_note(nid)
         path = self._md_note_path(note)
@@ -1138,6 +1141,7 @@ class WorkflowDB(ResearchDB):
             return STAGE_LABEL.get(current_stage_key(self.db, task_id, list(states), states), "未开始")
         return {"definition": STAGE_LABEL["idea"], "reading": STAGE_LABEL["download"]}.get(fallback, "未开始")
 
+    @project_notes.synchronized
     def delete_task(self, task_id: str) -> dict[str, Any]:
         """删掉一个项目连带它的全部数据。SQLite 默认不启用外键约束，子表得自己清
         （paper_pages / evidence 没有 task_id，只能经 papers 关联）。
@@ -1157,6 +1161,8 @@ class WorkflowDB(ResearchDB):
             signal = team._cancel_signals.get(row["id"])
             if signal:
                 signal.set()
+        import semantic
+        semantic.invalidate_project(self, task_id)
         self.db.execute("DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE owner_id=?)", (task_id,))
         self.db.execute("DELETE FROM run_events WHERE run_id IN (SELECT id FROM tasks WHERE owner_id=?)", (task_id,))
         self.db.execute("DELETE FROM tasks WHERE owner_id=?", (task_id,))
@@ -1479,6 +1485,7 @@ class WorkflowDB(ResearchDB):
         return [dict(r) for r in rows]
 
     # ---------- 笔记 ----------
+    @project_notes.synchronized
     def add_note(self, task_id: str, title: str, markdown: str, paper_id: str | None = None,
                  category: str = NOTE_CATEGORY) -> dict[str, Any]:
         nid = uuid.uuid4().hex

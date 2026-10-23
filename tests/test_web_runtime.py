@@ -40,6 +40,8 @@ class WebRuntimeTest(unittest.TestCase):
             port = probe.getsockname()[1]
         cls.url = f"http://127.0.0.1:{port}/"
         env = dict(os.environ, RESEARCH_WORKBENCH_DB=str(Path(temporary.name) / "research.sqlite3"),
+                   LANJI_ZHIYAN_DB=str(Path(temporary.name) / "research.sqlite3"),
+                   RW_HOME=temporary.name, LANJI_ZHIYAN_HOME=temporary.name,
                    PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
         server = subprocess.Popen(
             [sys.executable, str(ROOT / "apps/desktop/server.py"), "--port", str(port), "--no-open"],
@@ -66,7 +68,7 @@ class WebRuntimeTest(unittest.TestCase):
 
         playwright = sync_playwright().start()
         cls.addClassCleanup(playwright.stop)
-        cls.browser = playwright.chromium.launch(executable_path=str(EDGE), headless=False)
+        cls.browser = playwright.chromium.launch(executable_path=str(EDGE), headless=True)
         cls.addClassCleanup(cls.browser.close)
 
     def setUp(self) -> None:
@@ -131,6 +133,128 @@ class WebRuntimeTest(unittest.TestCase):
         self.page.locator("#projbind").select_option("")
         self.page.wait_for_function("S.chats.find(c => c.id === curChat)?.task_id === '' && !document.querySelector('#outpick')?.disabled")
         self.assertFalse(self.page.locator("#outpick").is_disabled())
+        self.assertEqual(self.errors, [])
+
+    def new_project_note(self, title="Browser audit", content="Initial content"):
+        self.load_page()
+        self.page.evaluate("openTab('notes')")
+        self.page.locator("#pnBtnSideNewFile").wait_for()
+        self.page.wait_for_load_state("networkidle")
+        self.page.locator("#pnBtnSideNewFile").click()
+        self.page.locator("#mdNoteTitle").fill(title)
+        self.page.locator("#mdSource").fill(content)
+
+    def read_project_note(self, path):
+        return self.page.evaluate("""async path => api(`/api/project/note?project_id=${encodeURIComponent(mdDashProject)}&path=${encodeURIComponent(path)}`)""", path)
+
+    def delay_note_save(self):
+        self.page.evaluate("""() => {
+          clearTimeout(mdSaveTimer);
+          window.auditOriginalApi = api;
+          window.auditSaveCalls = 0;
+          api = async (url, body) => {
+            if(url !== '/api/project/note/save') return window.auditOriginalApi(url, body);
+            window.auditSaveCalls++;
+            const result = await window.auditOriginalApi(url, body);
+            if(window.auditSaveCalls === 1) await new Promise(resolve => {window.auditRelease = resolve;});
+            return result;
+          };
+          window.auditFirstSave = mdSaveProj();
+        }""")
+        self.page.wait_for_function("!!window.auditRelease")
+
+    def test_same_title_notes_keep_both_files_and_rename_survives_reopen(self):
+        self.new_project_note("Same title", "FIRST_CONTENT")
+        self.assertTrue(self.page.evaluate("mdSaveProj()"))
+        first = self.page.evaluate("mdProj.path")
+        self.page.locator("#pnBtnSideNewFile").click()
+        self.page.wait_for_function("mdDraft && mdProj?.path === '' && document.querySelector('#mdNoteTitle')?.value === ''")
+        self.page.locator("#mdNoteTitle").fill("Same title")
+        self.page.locator("#mdSource").fill("SECOND_CONTENT")
+        self.assertTrue(self.page.evaluate("mdSaveProj()"))
+        second = self.page.evaluate("mdProj.path")
+        self.assertNotEqual(first, second)
+        self.assertIn("FIRST_CONTENT", self.read_project_note(first)["content"])
+        self.assertIn("SECOND_CONTENT", self.read_project_note(second)["content"])
+        self.page.locator("#mdNoteTitle").fill("Renamed title")
+        self.assertTrue(self.page.evaluate("mdSaveProj()"))
+        self.assertEqual(self.read_project_note(second)["title"], "Renamed title")
+        self.page.locator("#mdDashBackFiles").click()
+        card = self.page.locator(f'[data-pn-file="{second}"]')
+        card.wait_for()
+        self.assertIn("Renamed title", card.inner_text())
+        card.click()
+        self.page.wait_for_function("document.querySelector('#mdNoteTitle')?.value === 'Renamed title'")
+        self.assertEqual(self.page.locator("#mdEditorShell").count(), 1)
+        self.assertEqual(self.errors, [])
+
+    def test_new_note_flushes_debounced_edits_and_preserves_editor(self):
+        self.new_project_note()
+        self.assertTrue(self.page.evaluate("mdSaveProj()"))
+        previous = self.page.evaluate("mdProj.path")
+        self.page.evaluate("""() => {
+          $('mdSource').value = 'PENDING_EDITS_MUST_SURVIVE';
+          $('mdSource').dispatchEvent(new Event('input', {bubbles:true}));
+          $('pnBtnSideNewFile').click();
+        }""")
+        self.page.wait_for_function("mdDraft && mdProj?.path === '' && document.querySelector('#mdSource')?.value === ''")
+        self.assertIn("PENDING_EDITS_MUST_SURVIVE", self.read_project_note(previous)["content"])
+        self.page.wait_for_timeout(750)
+        self.assertEqual(self.page.locator("#mdEditorShell").count(), 1)
+        self.page.locator("#mdSource").fill("New draft still editable")
+        self.assertTrue(self.page.evaluate("mdSaveProj()"))
+        self.assertEqual(self.errors, [])
+
+    def test_late_save_cannot_change_another_drafts_title_or_saved_state(self):
+        self.new_project_note("First draft", "First content")
+        self.delay_note_save()
+        self.page.evaluate("""async () => {
+          mdProj = {pid:mdDashProject,path:'',folder:mdDashSelectedFolder,title:'',content:''};
+          mdDraft = true; mdDashPath = '';
+          await mdDashLoad();
+          window.auditRelease();
+          await window.auditFirstSave;
+          api = window.auditOriginalApi;
+        }""")
+        current = self.page.evaluate("({title:mdProj.title,path:mdProj.path,draft:mdDraft,state:$('mdSaveState').textContent})")
+        self.assertEqual(current, {"title": "", "path": "", "draft": True, "state": ""})
+        self.assertEqual(self.errors, [])
+
+    def test_overlapping_saves_keep_latest_edits_and_do_not_report_saved_early(self):
+        self.new_project_note()
+        self.delay_note_save()
+        self.page.locator("#mdSource").fill("LATEST_EDITS")
+        self.page.evaluate("window.auditSecondSave = mdSaveProj(); void 0")
+        self.assertEqual(self.page.evaluate("window.auditSaveCalls"), 1)
+        self.assertNotEqual(self.page.locator("#mdSaveState").inner_text(), "已保存")
+        saved = self.page.evaluate("""async () => {
+          window.auditRelease();
+          const results = await Promise.all([window.auditFirstSave, window.auditSecondSave]);
+          api = window.auditOriginalApi;
+          return results;
+        }""")
+        self.assertEqual(saved, [True, True])
+        self.assertEqual(self.read_project_note(self.page.evaluate("mdProj.path"))["content"], "LATEST_EDITS")
+        self.assertEqual(self.page.locator("#mdSaveState").inner_text(), "已保存")
+        self.assertEqual(self.errors, [])
+
+    def test_failed_save_keeps_editor_and_blocks_navigation_to_new_note(self):
+        self.new_project_note("Unsaved title", "UNSAVED_CONTENT")
+        self.page.evaluate("""() => {
+          clearTimeout(mdSaveTimer);
+          window.auditNote = mdProj;
+          window.auditOriginalApi = api;
+          api = async (url, body) => {
+            if(url === '/api/project/note/save') throw new Error('offline');
+            return window.auditOriginalApi(url, body);
+          };
+        }""")
+        self.page.locator("#pnBtnSideNewFile").click()
+        self.page.wait_for_function("document.querySelector('#mdSaveState')?.textContent === '保存失败'")
+        self.assertTrue(self.page.evaluate("mdProj === window.auditNote"))
+        self.assertIn("UNSAVED_CONTENT", self.page.locator("#mdSource").input_value())
+        self.page.evaluate("api = window.auditOriginalApi; void 0")
+        self.assertTrue(self.page.evaluate("mdSaveProj()"))
         self.assertEqual(self.errors, [])
 
 

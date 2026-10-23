@@ -145,9 +145,11 @@ function mdScheduleSave(){
   if(mdProj){                                        // 项目笔记：同样 650ms 防抖，只是落到项目里的 .md
     mdProj.title = $("mdNoteTitle").value.trim();
     mdProj.content = $("mdSource").value;
+    mdProj.editVersion = (mdProj.editVersion || 0) + 1;
     $("mdSaveState").textContent = "未保存";
     mdPaintPreview();
-    clearTimeout(mdSaveTimer); mdSaveTimer = setTimeout(mdSave, 650);
+    const note = mdProj;
+    clearTimeout(mdSaveTimer); mdSaveTimer = setTimeout(() => { if(mdProj === note) mdSaveProj(); }, 650);
     return;
   }
   const note = mdActive(); if(!note) return;
@@ -999,6 +1001,7 @@ async function renderSpace(m){
 
 let mdDashProject = "", mdDashSelectedFolder = "笔记/文献精读笔记", mdDashPath = "", mdDashQuery = "", mdDashMap = null;
 let mdProj = null, mdDraft = false;      // 项目笔记编辑状态：{pid, path, folder, title, content}
+let mdDashLoadId = 0;
 let mdDashTree = null;
 let pnSideCollapsed = localStorage.getItem("rw-pn-side-collapsed") === "true";
 const pnExpandedFolders = new Set(["笔记", "笔记/文献精读笔记"]);
@@ -1237,10 +1240,7 @@ function pnBindSideEvents(host){
   };
 
   const btnNewFile = side.querySelector("#pnBtnSideNewFile");
-  if(btnNewFile) btnNewFile.onclick = () => {
-    mdProj = {pid: mdDashProject, path: "", folder: mdDashSelectedFolder || "笔记/文献精读笔记", title: "", content: ""};
-    mdDraft = true; mdDashPath = ""; mdDashLoad();
-  };
+  if(btnNewFile) btnNewFile.onclick = () => pnNewNote();
 
   const btnNewFolder = side.querySelector("#pnBtnSideNewFolder");
   if(btnNewFolder) btnNewFolder.onclick = async () => {
@@ -1286,13 +1286,13 @@ function pnBindSideEvents(host){
       const p = row.dataset.treePath;
       const type = row.dataset.treeType;
       if(type === "dir"){
-        if(mdProj && (mdProj.path || $("mdSource").value.trim())) await mdSaveProj();
+        if(!await pnSaveCurrent()) return;
         mdProj = null; mdDraft = false; mdDashPath = "";
         mdDashSelectedFolder = p;
         pnExpandedFolders.add(p);
         mdDashLoad();
       }else if(type === "file"){
-        if(mdProj && (mdProj.path || $("mdSource").value.trim())) await mdSaveProj();
+        if(!await pnSaveCurrent()) return;
         mdDashPath = p;
         mdProj = null; mdDraft = false;
         mdDashLoad();
@@ -1307,11 +1307,7 @@ function pnBindSideEvents(host){
       const act = btn.dataset.act;
       const targetPath = btn.dataset.path;
       if(act === "new-file"){
-        mdDashSelectedFolder = targetPath;
-        pnExpandedFolders.add(targetPath);
-        mdProj = {pid: mdDashProject, path: "", folder: targetPath, title: "", content: ""};
-        mdDraft = true; mdDashPath = "";
-        mdDashLoad();
+        await pnNewNote(targetPath);
       }else if(act === "new-folder"){
         const name = prompt(`在 ${targetPath} 下新建子文件夹，请输入名称：`);
         if(!name || !name.trim()) return;
@@ -1351,7 +1347,29 @@ function pnBindSideEvents(host){
 
 function mdMountEditor(host){ const sh = $("mdEditorShell"); if(sh && host && sh.parentElement !== host) host.appendChild(sh); }
 
-function pnBackToDash(){
+async function pnSaveCurrent(){
+  const note = mdProj;
+  if(!note) return true;
+  while(mdProj === note){
+    const version = note.editVersion || 0;
+    if(!await mdSaveProj() || mdProj !== note) return false;
+    if((note.editVersion || 0) === version) return true;
+  }
+  return false;
+}
+
+async function pnNewNote(folder = mdDashSelectedFolder || "笔记/文献精读笔记"){
+  const pid = mdDashProject;
+  if(!await pnSaveCurrent() || mdDashProject !== pid) return;
+  mdDashSelectedFolder = folder;
+  pnExpandedFolders.add(folder);
+  mdProj = {pid, path: "", folder, title: "", content: ""};
+  mdDraft = true; mdDashPath = "";
+  await mdDashLoad();
+}
+
+async function pnBackToDash(){
+  if(!await pnSaveCurrent()) return;
   mdMountEditor(document.querySelector("#mdView .md-note-main"));
   $("mdView").style.display = "none";
   $("mdDashboard").style.display = "";
@@ -1360,27 +1378,57 @@ function pnBackToDash(){
 }
 
 async function mdSaveProj(){
-  const rawTitle = $("mdNoteTitle").value.trim();
-  if(!mdProj.path && !rawTitle && !$("mdSource").value.trim()) return;
+  clearTimeout(mdSaveTimer);
+  const note = mdProj, titleInput = $("mdNoteTitle"), source = $("mdSource");
+  if(!note) return true;
+  if(!titleInput || !source) return false;
+  const rawTitle = titleInput.value.trim();
+  if(!note.path && !rawTitle && !source.value.trim()) return true;
   const title = rawTitle || "未命名笔记";
-  let content = $("mdSource").value;
-  if(!mdProj.path){
-    const safe = title.replace(/[\\/:*?"<>|]/g,"_").slice(0,100);
-    const folder = mdProj.folder || mdDashSelectedFolder || "笔记/文献精读笔记";
-    mdProj.path = `${folder}/${safe}.md`;
+  let content = source.value;
+  if(!note.path){
+    const folder = note.folder || mdDashSelectedFolder || "笔记/文献精读笔记";
+    note.path = `${folder}/${crypto.randomUUID().replace(/-/g, "")}.md`;
+    note.newFile = true;
+    note.content_hash = "";
     if(!/^#\s/.test(content)) content = `# ${title}\n\n` + content;
   }else if(/^#\s/.test(content)){
     content = content.replace(/^#\s.*$/m, `# ${title}`);
   }
-  if(content !== $("mdSource").value) $("mdSource").value = content;
+  if(content !== source.value) source.value = content;
+  note.title = title; note.content = content;
   $("mdSaveState").textContent = "保存中…";
+  const version = note.editVersion || 0;
+  const pending = (note.savePromise || Promise.resolve(true)).then(async ok => {
+    if(!ok) return false;
+    try{
+      const data = await api("/api/project/note/save", {project_id: note.pid, path: note.path, title, content,
+        create: !!note.newFile, ...(note.content_hash !== undefined ? {expected_hash: note.content_hash} : {})});
+      note.content_hash = data.content_hash;
+      note.newFile = false;
+      if(mdProj === note && mdDashProject === note.pid){
+        mdDashPath = note.path;
+        mdDraft = false;
+        if((note.editVersion || 0) === version){
+          $("mdSaveState").textContent = "已保存";
+          $("mdSaveState").title = "";
+        }
+      }
+      return true;
+    }catch(e){
+      if(mdProj === note && mdDashProject === note.pid && $("mdSaveState")){
+        $("mdSaveState").textContent = "保存失败";
+        $("mdSaveState").title = e.message;
+      }
+      return false;
+    }
+  });
+  note.savePromise = pending;
   try{
-    await api("/api/project/note/save", {project_id: mdProj.pid, path: mdProj.path, content});
-    mdProj.title = title;
-    mdDashPath = mdProj.path;
-    mdDraft = false;
-    $("mdSaveState").textContent = "已保存";
-  }catch(e){ $("mdSaveState").textContent = "保存失败"; $("mdSaveState").title = e.message; }
+    return await pending;
+  }finally{
+    if(note.savePromise === pending) delete note.savePromise;
+  }
 }
 
 function mdPaintProj(){
@@ -1412,15 +1460,18 @@ function mdPaintProj(){
 
 async function mdDashLoad(){
   const host = $("mdDashboardBody"); if(!host) return;
+  const loadId = ++mdDashLoadId, pid = mdDashProject;
+  const current = () => loadId === mdDashLoadId && mdDashProject === pid && host.isConnected;
   if(!mdDashProject){ host.innerHTML = `<div class="hint">选择项目后浏览该项目中的 Markdown 笔记。</div>`; return; }
   try{
-    const data = await api(`/api/project/notes?project_id=${encodeURIComponent(mdDashProject)}`);
+    const data = await api(`/api/project/notes?project_id=${encodeURIComponent(pid)}`);
+    if(!current()) return;
     mdDashTree = data.tree || {type: "dir", name: "笔记", path: "笔记", children: []};
 
     if(!mdDashMap || mdDashMap.pid !== mdDashProject){
-      mdDashMap = { pid: mdDashProject, nodes: [], edges: [] };
-      api(`/api/map/state?id=${encodeURIComponent(mdDashProject)}`)
-        .then(d => { if(mdDashMap && mdDashMap.pid === mdDashProject){ mdDashMap.nodes = d.nodes||[]; mdDashMap.edges = d.edges||[]; if(!mdProj) mdDashLoad(); } })
+      const map = mdDashMap = { pid, nodes: [], edges: [] };
+      api(`/api/map/state?id=${encodeURIComponent(pid)}`)
+        .then(d => { if(mdDashMap === map && mdDashProject === pid){ map.nodes = d.nodes||[]; map.edges = d.edges||[]; if(!mdProj) mdDashLoad(); } })
         .catch(()=>{});
     }
 
@@ -1434,14 +1485,16 @@ async function mdDashLoad(){
 
     // 1. If currently editing a note or creating draft
     if(mdDashPath || mdDraft){
-      if(!mdProj || mdProj.pid !== mdDashProject || mdProj.path !== mdDashPath){
+      if(!mdProj || mdProj.pid !== mdDashProject || (!mdDraft && mdProj.path !== mdDashPath)){
         const file = mdDashPath
           ? await api(`/api/project/note?project_id=${encodeURIComponent(mdDashProject)}&path=${encodeURIComponent(mdDashPath)}`)
           : {title: "", content: ""};
-        mdProj = {pid: mdDashProject, path: mdDashPath, folder: mdDashSelectedFolder, title: file.title || "", content: file.content || ""};
+        if(!current()) return;
+        mdProj = {pid, path: mdDashPath, folder: mdDashSelectedFolder, title: file.title || "", content: file.content || "", content_hash: file.content_hash};
         mdDraft = !mdDashPath;
       }
       const hit = mdProj.path ? pnMapHit({path: mdProj.path, title: mdProj.title}) : null;
+      mdMountEditor(document.querySelector("#mdView .md-note-main"));
       host.innerHTML = `<div class="pn-layout${pnSideCollapsed ? " side-collapsed" : ""}">
         ${pnSideHTML(mdDashTree, q)}
         <section class="pn-pane">
@@ -1458,7 +1511,7 @@ async function mdDashLoad(){
 
       pnBindSideEvents(host);
       $("mdDashBackFiles").onclick = async () => {
-        if(mdProj && (mdProj.path || $("mdSource").value.trim())) await mdSaveProj();
+        if(!await pnSaveCurrent()) return;
         mdProj = null; mdDraft = false; mdDashPath = ""; mdDashLoad();
       };
       $("mdDashSave").onclick = () => mdSaveProj();
@@ -1527,10 +1580,7 @@ async function mdDashLoad(){
 
     const gm = $("pnGoMap"); if(gm) gm.onclick = pnJumpMap;
     const nb = $("mdDashNew");
-    if(nb) nb.onclick = () => {
-      mdProj = {pid: mdDashProject, path: "", folder: mdDashSelectedFolder, title: "", content: ""};
-      mdDraft = true; mdDashPath = ""; mdDashLoad();
-    };
+    if(nb) nb.onclick = () => pnNewNote();
     const nf = $("mdDashNewFolder");
     if(nf) nf.onclick = async () => {
       const name = prompt(`在 ${curFolderNode.path} 下新建子文件夹，请输入名称：`);
@@ -1556,14 +1606,15 @@ async function mdDashLoad(){
       }catch(err){ uiNotify("删除文件夹失败：" + err.message); }
     };
     const empNew = $("pnEmptyNewNote");
-    if(empNew) empNew.onclick = () => {
-      mdProj = {pid: mdDashProject, path: "", folder: mdDashSelectedFolder, title: "", content: ""};
-      mdDraft = true; mdDashPath = ""; mdDashLoad();
-    };
+    if(empNew) empNew.onclick = () => pnNewNote();
     const empFold = $("pnEmptyNewFolder");
     if(empFold) empFold.onclick = nf.onclick;
 
-  }catch(e){ host.innerHTML=`<div class="msg error">${esc(e.message)}</div>`; }
+  }catch(e){
+    if(!current()) return;
+    mdMountEditor(document.querySelector("#mdView .md-note-main"));
+    host.innerHTML=`<div class="msg error">${esc(e.message)}</div>`;
+  }
 }
 async function renderNotes(m){
   spTab = "notes";
