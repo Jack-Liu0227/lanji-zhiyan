@@ -1766,26 +1766,29 @@ def _start_inproc(port: int, url: str) -> None:
 
 
 def _compile_tex_host(tex: Path) -> dict[str, Any]:
-    """宿主（Medium）里跑 xelatex。
+    """宿主（Medium）里编译：xelatex →（.aux 要参考文献时）bibtex → xelatex ×2。
 
     沙箱（Low IL）里 dvipdfmx 写不了 MiKTeX 自己的 log/cache，实测整段崩（退出码 3221226505）：
     页都排出来了，PDF 却没写成。宿主是正常 Medium 进程，本地编译交给它最省事。
+    只跑一遍 xelatex 的话，带 \\cite 的稿子编号全是 ?? —— 所以这里跑完整条链。
     """
-    from workflow_converters import _xelatex
+    from workflow_converters import latex_chain, _xelatex
 
     exe = _xelatex()
     env = fileguard.clean_env(str(Path(exe).parent))
-    try:
-        proc = subprocess.run([exe, "-interaction=nonstopmode", "-halt-on-error", tex.name],
-                              cwd=str(tex.parent), env=env, capture_output=True, text=True,
+
+    def run(cmd: list, cwd: Path) -> Any:
+        return subprocess.run(cmd, cwd=str(cwd), env=env, capture_output=True, text=True,
                               timeout=300, creationflags=0x08000000)      # CREATE_NO_WINDOW，不闪黑框
+
+    try:
+        got = latex_chain(tex, run)
     except OSError as exc:
-        return {"error": f"起不来 xelatex：{exc}"}
-    pdf = tex.with_suffix(".pdf")
-    if proc.returncode != 0 or not pdf.is_file():
-        tail = "\n".join(((proc.stdout or "") + (proc.stderr or "")).splitlines()[-10:])
-        return {"error": f"xelatex 失败（退出码 {proc.returncode}）：{tail[-600:]}"}
-    return {"pdf": str(pdf), "name": pdf.name, "size": pdf.stat().st_size}
+        return {"error": f"起不来 LaTeX 工具链：{exc}"}
+    if got.get("error"):
+        return {"error": got["error"], "passes": got.get("passes", 0), "bibtex": got.get("bibtex", "")}
+    return {"pdf": got["pdf"], "name": Path(got["pdf"]).name, "size": Path(got["pdf"]).stat().st_size,
+            "passes": got.get("passes", 0), "bibtex": got.get("bibtex", "")}
 
 
 def _host_open(target: str) -> bool:

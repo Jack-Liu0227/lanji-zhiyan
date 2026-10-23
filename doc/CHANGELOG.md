@@ -2,6 +2,23 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 2026-10-23（PDF 真的带上引用：正文 {{C3}} → \cite，文末按样式出参考文献表）
+
+**口径**：正文里用双花括号包 C 编号（例如 C 的第 3 条写成两个花括号夹 C3）标引用，导出 PDF/LaTeX 时换成 `\cite{key}`，文末挂 `\bibliographystyle` + `\bibliography{refs}`。样式**问使用者**：格式助手开篇第 4 问给可选清单，`gbt7714`（GB/T 7714 顺序编码，中文稿默认）/ `unsrt` / `plain` / `ieeetr` / `elsarticle` / `aps`，工具参数 `cite_style`。key 与元数据全部来自 Zotero（台账缺条就报 missing，不自己编题录），对不上的编号在 PDF 里原样留着，不悄悄丢掉。
+
+**编译改成完整链**：xelatex →（.aux 里有 `\bibdata`/`\citation` 时）bibtex → xelatex ×2。以前只跑一遍 xelatex，带引用的稿子编号全是 `??`。
+
+**实测踩出的五个坑（都已修）**：
+1. `gbt7714-numeric.bst` 的 .bbl 用 `\doi{}` / `\cstr{}`，不 `\usepackage{gbt7714}` 就 Undefined control sequence，整份编不出来 → 选顺序编码时自动加宏包。
+2. 构建夹里用中文文件名 → bibtex 报 `I couldn't open file name '…aux'`、.bbl 是空的 → 构建一律 `paper.tex` / `refs.bib` 这类 ASCII 名，最终 PDF 再改回中文标题名（现成 .tex 是中文名时也先拷成 `paper.tex` 再编）。
+3. 本机经典 `bibtex.exe`（连带 `miktex-bibtex.exe`）会 0xC0000374 堆损坏直接崩，`bibtex8.exe` / `bibtexu.exe` 正常 → 候选按可靠性排序挨个试，成功判据是「.bbl 真的生成了」而不是退出码（弃用样式名会给 rc=1，但 .bbl 是对的）。
+4. 上一轮留下的 PDF 会被当成这一轮的产物（最后一趟 xelatex 崩了也不报）→ 编译前先删旧 PDF，并检查最后一趟的退出码。
+5. `gbt7714-numerical` 已是弃用名，用 `gbt7714-numeric`。
+
+**落点**：`workflow_converters.py`（`md_to_tex` 带 cite_keys/cite_style/cite_package；新增 `latex_chain` / `bib_style` / `_bibtex_candidates`；`cite_bib` 返回 C 编号→citekey 的 `keys`；`conv_run` 收 cite_style 并把 cites/passes/bibtex 报回去）、`apps/desktop/server.py`（宿主 `_compile_tex_host` 走同一条链）、`workflow.py`（format_convert 透传）、`workflow_prompts.py`（工具参数 cite_style）、`workflow_documents.py`（写作规则 8：写标记、不写 [1]）、`convert_system`（第 4 问 + 本机装了哪些 bst）。
+
+**验证**：`tests/test_cite_tex.py` 3 条（真跑 MiKTeX 编一份带 `\cite` 的 tex，断言 .aux 出现 `\bibcite{…}{1}`、passes=3）；端到端（临时 HOME + Zotero 桩）：台账 C1 → refs.bib → `\cite{smith2020}` → `\usepackage{gbt7714}` → PDF 文本里 `[1]` 与参考文献题名都在。全量 446 tests。
+
 ## 2026-10-23（确认交付必须留下这一步的产物）
 
 **口径**：交付不再是「点一下记个 done」。点「确认交付」时后端**现算**这一步到底产出了什么，跟台账一起落库 —— 全从库和文件里读，不采信模型自报（模型说「已交付 12 篇」不算数）。十步各有判据：创新点（原文/判定字数）、检索（结果条数+来源）、下载（入库篇数+最近三篇）、翻译笔记（条数）、大纲/正文/审查（文件名+字数+几节几小节）、谱系（节点/连线）、中译英（原文/译文字数）、格式转换（产物文件数+最新一份）。另存本轮提问数与该步最后一条助手回复（各 200 字 / 截断），事后能回答「这一步交付了什么、聊到哪」。

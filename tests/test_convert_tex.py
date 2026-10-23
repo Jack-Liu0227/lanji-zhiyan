@@ -68,7 +68,7 @@ class FormatToolRoutingTest(unittest.TestCase):
         self.wf = workflow
         self.seen = []
         self._old = workflow.conv_run
-        workflow.conv_run = lambda db, tid, fmt, source="", template="": self.seen.append((fmt, source)) or {"ok": True}
+        workflow.conv_run = lambda db, tid, fmt, source="", template="", cite_style="": self.seen.append((fmt, source)) or {"ok": True}
 
     def tearDown(self):
         self.wf.conv_run = self._old

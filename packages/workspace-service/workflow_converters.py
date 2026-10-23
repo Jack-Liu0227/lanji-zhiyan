@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -196,6 +197,7 @@ def cite_bib(db: "WorkflowDB", task_id: str, args: dict[str, Any] | None = None)
 
     entries = _cite_load(db, task_id)
     packed: dict[str, str] = {}
+    keys: dict[int, str] = {}                 # 台账编号 C<n> → BibTeX citekey（正文 {{Cn}} 靠它转 \cite）
     missing: list[dict[str, Any]] = []
     for i, e in enumerate(entries, 1):
         doi = str(e.get("doi") or "").strip()
@@ -216,6 +218,9 @@ def cite_bib(db: "WorkflowDB", task_id: str, args: dict[str, Any] | None = None)
         if not item:
             missing.append({"index": i, "title": title, "reason": "Zotero 导出的 BibTeX 解析不了"})
             continue
+        km = CITE_KEY_RE.match(item)
+        if km:
+            keys[i] = km.group(1)
         packed.setdefault((hit.get("doi") or doi or title).lower(), item)
 
     path = cite_bib_path(db, task_id)
@@ -227,7 +232,7 @@ def cite_bib(db: "WorkflowDB", task_id: str, args: dict[str, Any] | None = None)
     if packed:
         asset_service.register_file(db, path, project_id=task_id, kind="document", title=CITE_BIB,
                                     source="workflow", metadata={"document_kind": "citation_bib"})
-    return {"path": str(path), "count": len(packed), "ledger": len(entries), "missing": missing,
+    return {"path": str(path), "count": len(packed), "keys": keys, "ledger": len(entries), "missing": missing,
             "message": (f"{len(packed)} 条已写入 {CITE_BIB}" + (f"，{len(missing)} 条缺 Zotero 记录" if missing else "")
                         if packed else "一条都没写出来：台账是空的，或这些文献都还没进 Zotero")}
 
@@ -268,11 +273,154 @@ _TEX_HEAD = {
 CONV_FORMATS = {"docx": "Word (.docx)", "doc": "Word 97-2003 (.doc)", "html": "HTML", "md": "Markdown", "pdf": "PDF（正文.md → PDF）",
                 "latex": "LaTeX (.tex → PDF，本机 MiKTeX)", "tex": "现成 .tex → PDF（本机 MiKTeX）"}
 
+# ---------------- 引用：正文标记 {{C3}} ↔ 引用台账第 3 条 ↔ BibTeX key ----------------
+CITE_MARK_RE = re.compile(r"\{\{\s*C(\d+)\s*\}\}")
+CITE_KEY_RE = re.compile(r"@\w+\s*\{\s*([^,\s]+)\s*,")
+BIB_NAME = "refs"          # 构建夹里的 .bib 用纯 ASCII 名：老 bibtex 吃不动中文文件名（实测）
+BUILD_STEM = "paper"        # 同理：.tex/.aux 也得 ASCII，否则 bibtex 报「I couldn't open file name」，.bbl 空
+CITE_STYLES: dict[str, tuple[str, str]] = {
+    "gbt7714":    ("gbt7714-numeric", "GB/T 7714 顺序编码（中文期刊 / 学位论文）"),
+    "unsrt":      ("unsrt", "unsrt（英文通用，按正文出现顺序编号）"),
+    "plain":      ("plain", "plain（英文通用，按作者字母排序编号）"),
+    "ieeetr":     ("ieeetr", "ieeetr（IEEE 数字式）"),
+    "elsarticle": ("elsarticle-num", "elsarticle-num（Elsevier 数字式）"),
+    "aps":        ("apsrev4-2", "APS / revtex 数字式"),
+}
+_TEMPLATE_CITE = {"plain": "gbt7714", "elsevier": "elsarticle", "ieee": "ieeetr", "revtex": "aps"}
 
-def md_to_tex(md: str, title: str, template: str = "plain") -> str:
-    """极简 markdown → tex（标题/段落/列表够用）。真要投稿的排版还是走组内 revtex 规范。
-    注意：这里**不能**用 % 或 str.format 打模板（LaTeX 自带 {} 和 % 注释）。"""
-    head = list(_TEX_HEAD.get(template) or _TEX_HEAD["plain"]) + [
+
+def bib_style(template: str = "", cite_style: str = "") -> tuple[str, str, str]:
+    """→（.bst 名, 要顺手装的宏包, 退回说明）。用户选的优先，没选按期刊模板给默认；
+    本机没这个 bst 就退 plain。宏包那一项是 gbt7714 —— 它的 .bbl 用 \doi{}，不装宏包直接编不出。"""
+    key = (cite_style or "").strip().lower()
+    if key not in CITE_STYLES:
+        key = _TEMPLATE_CITE.get(template, "gbt7714")
+    bst, label = CITE_STYLES[key]
+    if not _kpsewhich(bst + ".bst"):
+        return "plain", "", "%s 的 %s.bst 本机没装，退回 plain" % (label, bst)
+    return bst, ("gbt7714" if bst.startswith("gbt7714") else ""), ""
+
+
+def _kpsewhich(name: str) -> bool:
+    """本机有没有这个 .bst/.sty。探测不出来就当有 —— 别把编译堵死在探路上。"""
+    exe = Path(_xelatex()).with_name("kpsewhich.exe")
+    try:
+        proc = subprocess.run([str(exe) if exe.is_file() else "kpsewhich", name],
+                              capture_output=True, text=True, timeout=20,
+                              creationflags=0x08000000 if os.name == "nt" else 0)
+        return bool((proc.stdout or "").strip())
+    except Exception:
+        return True
+
+
+def _kpse_path(name: str) -> str:
+    """kpsewhich 的完整路径版（找不到就空串）。"""
+    exe = Path(_xelatex()).with_name("kpsewhich.exe")
+    try:
+        proc = subprocess.run([str(exe) if exe.is_file() else "kpsewhich", name],
+                              capture_output=True, text=True, timeout=20,
+                              creationflags=0x08000000 if os.name == "nt" else 0)
+        lines = [x.strip() for x in (proc.stdout or "").splitlines() if x.strip()]
+        return lines[-1] if lines else ""
+    except Exception:
+        return ""
+
+
+def _aux_wants_bibtex(aux: Path) -> bool:
+    try:
+        text = aux.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return "\\bibdata" in text or "\\citation" in text
+
+
+def _bibtex_candidates() -> list[str]:
+    """候选按可靠性排：这台机器上经典 bibtex.exe 会 0xC0000374（堆损坏）直接崩，
+    bibtex8 / bibtexu 正常 —— 所以挨个试，谁真产出 .bbl 就用谁。"""
+    folder = Path(_xelatex()).parent
+    names = (["bibtex.exe", "bibtex8.exe", "bibtexu.exe"] if os.name == "nt"
+             else ["bibtex", "bibtex8", "bibtexu"])
+    return [str(folder / n) if (folder / n).is_file() else n for n in names]
+
+
+def _tail(proc: Any, n: int = 10) -> str:
+    text = (getattr(proc, "stdout", "") or "") + (getattr(proc, "stderr", "") or "")
+    return "\n".join(text.splitlines()[-n:])
+
+
+def latex_chain(tex: Path, run: Any) -> dict[str, Any]:
+    """xelatex →（.aux 要参考文献时）bibtex → xelatex ×2。
+
+    以前只跑一遍 xelatex：带 \\cite 的稿子编号全落成 ?? —— 既没跑 bibtex，也没第二遍排交叉引用。
+    run(cmd_list, cwd) 返回带 returncode/stdout/stderr 的东西（宿主 subprocess、沙箱 lowbox.run 都行）。
+    """
+    tex = Path(tex)
+    xel = _xelatex()
+    pdf = tex.with_suffix(".pdf")
+    if pdf.is_file():
+        pdf.unlink()                     # 上一轮留下的 PDF 不能冒充这一轮的产物
+    passes = 0
+
+    def once() -> Any:
+        nonlocal passes
+        passes += 1
+        return run([xel, "-interaction=nonstopmode", "-halt-on-error", tex.name], tex.parent)
+
+    last = once()
+    note = ""
+    aux = tex.with_suffix(".aux")
+    bbl = tex.with_suffix(".bbl")
+    if aux.is_file() and _aux_wants_bibtex(aux):
+        if bbl.is_file():
+            bbl.unlink()                 # 空/旧的 .bbl 会让「编出来了」变成假象
+        for exe in _bibtex_candidates():
+            proc = run([exe, tex.stem], tex.parent)
+            if bbl.is_file() and bbl.stat().st_size > 0:     # 判据是 .bbl 真生成了，不是退出码
+                note = "ok(%s)" % Path(exe).stem              # 弃用样式名会给 rc=1，但 .bbl 是对的
+                last = once()
+                last = once()            # 引文进 .bbl，再两遍编号才落定
+                break
+            note = "bibtex 失败（%s，退出码 %s）：%s" % (
+                Path(exe).stem, getattr(proc, "returncode", "?"), _tail(proc, 6)[-300:])
+    if getattr(last, "returncode", 0) != 0 or not pdf.is_file():
+        return {"error": "xelatex 失败（最后一趟退出码 %s）：%s"
+                         % (getattr(last, "returncode", "?"), _tail(last)[-600:]),
+                "passes": passes, "bibtex": note}
+    return {"pdf": str(pdf), "passes": passes, "bibtex": note}
+
+
+def _line_with_cites(line: str, cite_keys: dict[int, str] | None, missing: set[int]) -> str:
+    """一行正文 → tex：`{{C3}}` 换成 `\\cite{key}`；对不上编号的原样留着并记进 missing（不悄悄丢引用）。"""
+    out: list[str] = []
+    pos = 0
+    for m in CITE_MARK_RE.finditer(line):
+        out.append(tex_escape(line[pos:m.start()]))
+        num = int(m.group(1))
+        key = (cite_keys or {}).get(num)
+        if key:
+            out.append(r"\cite{%s}" % key)
+        else:
+            missing.add(num)
+            out.append(tex_escape(m.group(0)))
+        pos = m.end()
+    out.append(tex_escape(line[pos:]))
+    return "".join(out)
+
+
+def md_to_tex(md: str, title: str, template: str = "plain",
+              cite_keys: dict[int, str] | None = None, cite_style: str = "",
+              cite_package: str = "") -> str:
+    """极简 markdown → tex（标题/段落/列表够用），外加引用：正文 `{{C3}}` → `\\cite{}`，文末挂参考文献。
+
+    真要投稿的排版还是走组内 revtex 规范。注意：这里**不能**用 % 或 str.format 打模板（LaTeX 自带 {} 和 % 注释）。
+    """
+    missing: set[int] = set()
+    head = list(_TEX_HEAD.get(template) or _TEX_HEAD["plain"])
+    if (cite_package or cite_style or "").startswith("gbt7714"):
+        # gbt7714-numerical.bst 吐出来的 .bbl 用 \doi{} / \cstr{}，宏包不装就是 Undefined control
+        # sequence，整份直接编不出来（编号也就不会变成 [1]）。顺序编码必须先装它。
+        head.append(r"\usepackage{gbt7714}")
+    head += [
         r"\title{" + tex_escape(title) + r"}",
         r"\date{\today}",
         r"\begin{document}",
@@ -286,16 +434,19 @@ def md_to_tex(md: str, title: str, template: str = "plain") -> str:
             body += [r"\begin{itemize}", *bullets, r"\end{itemize}", ""]
             bullets = []
         if m:
-            lvl, txt = len(m.group(1)), tex_escape(m.group(2))
+            lvl, txt = len(m.group(1)), _line_with_cites(m.group(2), cite_keys, missing)
             body.append(r"\section{%s}" % txt if lvl <= 2 else (r"\subsection{%s}" % txt if lvl == 3 else r"\subsubsection{%s}" % txt))
         elif line.startswith("- "):
-            bullets.append(r"\item " + tex_escape(line[2:]))
+            bullets.append(r"\item " + _line_with_cites(line[2:], cite_keys, missing))
         elif line.strip():
-            body.append(tex_escape(line))
+            body.append(_line_with_cites(line, cite_keys, missing))
             body.append("")
     if bullets:
         body += [r"\begin{itemize}", *bullets, r"\end{itemize}"]
-    return "\n".join(head + body + ["", r"\end{document}", ""])
+    tail: list[str] = []
+    if cite_keys:
+        tail = ["", r"\bibliographystyle{%s}" % (cite_style or "plain"), r"\bibliography{%s}" % BIB_NAME]
+    return "\n".join(head + body + tail + ["", r"\end{document}", ""])
 
 
 _TEX_MAP = {"\\": r"\textbackslash{}", "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#", "_": r"\_",
@@ -339,7 +490,8 @@ def _newest_tex(db: "WorkflowDB", task_id: str) -> Path | None:
     return cands[0] if cands else None
 
 
-def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", template: str = "") -> dict[str, Any]:
+def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", template: str = "",
+             cite_style: str = "") -> dict[str, Any]:
     """一键格式转换：以正文.md（或指定文件）为源，导出到「最终产物」。
 
     pdf = 正文 → tex → PDF；latex = 同上但留一份 .tex；tex = 直接编手边那份现成 .tex
@@ -354,20 +506,29 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", templat
         if not src_tex or not src_tex.is_file():
             raise ValueError("找不到要编译的 .tex：把 path 指到文件，或者先导出一份 LaTeX")
         safe = re.sub(r"[^\w\-. ]+", "_", src_tex.stem)[:60] or "paper"
+        # 现成 .tex 若是中文名，先拷进构建夹用 ASCII 名编 —— bibtex 打不开中文 aux
+        if not src_tex.stem.isascii():
+            build = folder / "_tex"
+            build.mkdir(parents=True, exist_ok=True)
+            for bib in src_tex.parent.glob("*.bib"):
+                shutil.copy2(bib, build / bib.name)
+            target_tex = build / f"{BUILD_STEM}.tex"
+            shutil.copy2(src_tex, target_tex)
+            src_tex = target_tex
         done = host_compile(src_tex)
+        passes, bib_note = int((done or {}).get("passes") or 0), str((done or {}).get("bibtex") or "")
         pdf = Path(done["pdf"]) if done and done.get("pdf") else src_tex.with_suffix(".pdf")
         if not pdf.is_file():
             env = lowbox.sandbox_env(fileguard.clean_env(str(Path(_xelatex()).parent)), paths.LOWTMP)
-            proc = lowbox.run([_xelatex(), "-interaction=nonstopmode", "-halt-on-error", src_tex.name],
-                              cwd=str(src_tex.parent), env=env, timeout=180)
-            if proc.returncode != 0 or not pdf.is_file():
-                tail = "\n".join((proc.stdout or "").splitlines()[-12:])
-                raise RuntimeError(f"xelatex 失败（退出码 {proc.returncode}）：{tail[-600:]}")
+            got = latex_chain(src_tex, lambda cmd, cwd: lowbox.run(cmd, cwd=str(cwd), env=env, timeout=180))
+            passes, bib_note = got.get("passes", 0), got.get("bibtex", "")
+            if got.get("error") or not pdf.is_file():
+                raise RuntimeError(got.get("error") or "编译没出 PDF")
         out = folder / f"{safe}.pdf"
         shutil.copy2(pdf, out)
         db.log_step(task_id, "convert", "done", f"导出 {out.name}")
         return {"path": str(out), "name": out.name, "format": fmt, "size": out.stat().st_size,
-                "pdf": True, "source": str(src_tex)}
+                "pdf": True, "source": str(src_tex), "passes": passes, "bibtex": bib_note}
     src = Path(source) if source else doc_path(db, task_id, "write")
     md = src.read_text(encoding="utf-8", errors="replace") if src.is_file() else ""
     if not md.strip():
@@ -398,22 +559,47 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", templat
         build = folder / "_tex"
         build.mkdir(parents=True, exist_ok=True)
         tpl = template if template in TEMPLATES else "plain"
+        # 引用：正文里的 {{Cn}} → \cite{key}，台账 → refs.bib（元数据走 Zotero，缺的不编）
+        used = sorted({int(m) for m in CITE_MARK_RE.findall(md)})
+        cite_keys: dict[int, str] = {}
+        cite_missing: list[int] = []
+        cite_note = ""
+        if used:
+            got = cite_bib(db, task_id)
+            cite_keys = {n: got["keys"][n] for n in used if (got.get("keys") or {}).get(n)}
+            cite_missing = [n for n in used if n not in cite_keys]
+            src_bib = cite_bib_path(db, task_id)
+            if cite_keys and src_bib.is_file():
+                shutil.copy2(src_bib, build / (BIB_NAME + ".bib"))
+            if cite_missing:
+                cite_note = ("%d 处引用在 Zotero 里对不上（%s），PDF 里会原样留 {{Cn}}"
+                             % (len(cite_missing), "、".join("C%d" % n for n in cite_missing[:6])))
+            elif got.get("missing"):
+                cite_note = "%d 条台账条目在 Zotero 里没记录，已跳过" % len(got["missing"])
+        meta: dict[str, Any] = {"passes": 0, "bibtex": "", "style": "", "notes": [cite_note] if cite_note else []}
 
         def _build(name: str) -> Path:
-            tex_path = build / f"{safe}.tex"
-            tex_path.write_text(md_to_tex(md, title, template=name), encoding="utf-8", newline="\n")
+            style, pkg, style_note = bib_style(name, cite_style) if cite_keys else ("", "", "")
+            if style_note:
+                meta["notes"].append(style_note)
+            meta["style"] = style
+            tex_path = build / f"{BUILD_STEM}.tex"       # 构建夹里必须 ASCII：bibtex 打不开中文 aux
+            tex_path.write_text(md_to_tex(md, title, template=name, cite_keys=cite_keys, cite_style=style,
+                                                 cite_package=pkg),
+                                encoding="utf-8", newline="\n")
             done = host_compile(tex_path)
+            meta["passes"] = int((done or {}).get("passes") or 0)
+            meta["bibtex"] = str((done or {}).get("bibtex") or "")
             if done and not done.get("pdf") and done.get("error"):
                 raise RuntimeError(done["error"])
             if done and done.get("pdf"):
                 return Path(done["pdf"])
             env = lowbox.sandbox_env(fileguard.clean_env(str(Path(_xelatex()).parent)), paths.LOWTMP)
-            proc = lowbox.run([_xelatex(), "-interaction=nonstopmode", "-halt-on-error", tex_path.name],
-                              cwd=str(build), env=env, timeout=180)
-            made_pdf = build / f"{safe}.pdf"
-            if proc.returncode != 0 or not made_pdf.is_file():
-                tail = "\n".join((proc.stdout or "").splitlines()[-12:])
-                raise RuntimeError(f"xelatex 失败（退出码 {proc.returncode}）：{tail[-600:]}")
+            got_c = latex_chain(tex_path, lambda cmd, cwd: lowbox.run(cmd, cwd=str(cwd), env=env, timeout=180))
+            meta["passes"], meta["bibtex"] = got_c.get("passes", 0), got_c.get("bibtex", "")
+            made_pdf = build / f"{BUILD_STEM}.pdf"
+            if got_c.get("error") or not made_pdf.is_file():
+                raise RuntimeError(got_c.get("error") or "编译没出 PDF")
             return made_pdf
 
         fallback = ""
@@ -429,9 +615,14 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", templat
     else:
         raise ValueError(f"不支持的格式：{fmt}（可用 {'/'.join(CONV_FORMATS)}）")
     db.log_step(task_id, "convert", "done", f"导出 {out.name}")
-    return {"path": str(out), "name": out.name, "format": fmt, "size": out.stat().st_size,
-            "pdf": fmt == "latex", "source": str(src),
-            "template": tpl if fmt == "latex" else "", "template_fallback": fallback if fmt == "latex" else ""}
+    res = {"path": str(out), "name": out.name, "format": fmt, "size": out.stat().st_size,
+           "pdf": fmt == "latex", "source": str(src),
+           "template": tpl if fmt == "latex" else "", "template_fallback": fallback if fmt == "latex" else ""}
+    if fmt == "latex":
+        res.update({"cites": {"used": len(used), "linked": len(cite_keys), "missing": cite_missing},
+                    "cite_style": meta.get("style", ""), "passes": meta.get("passes", 0),
+                    "bibtex": meta.get("bibtex", ""), "cite_note": "；".join(meta.get("notes") or [])})
+    return res
 
 
 CONV_EXT = (".md", ".tex", ".txt", ".json", ".csv", ".html", ".docx", ".pdf")
@@ -538,16 +729,21 @@ def convert_system(db: "WorkflowDB", task_id: str) -> str:
     figs = fig_list(db, task_id)["files"]
     tpl_lines = chr(10).join(f"- `{k}`：{v['name']} —— {v['note']}" + (f"（来源 {v['repo']}）" if v["repo"] else "")
                              for k, v in TEMPLATES.items())
+    style_lines = chr(10).join(f"- `{k}`：{label}" + ("（本机没这个 bst，会退 plain）" if not _kpsewhich(bst + ".bst") else "")
+                               for k, (bst, label) in CITE_STYLES.items())
     return (
         "你是「览籍智研」里「格式转换」这一步的格式助手，用中文工作，站在排版工的位置。" + chr(10) + chr(10) +
         f"项目《{task['title']}》，你只做一件事：把「论文正文/正文.md」按用户要的格式与期刊模板导成成品，"
         "放进「最终产物」。" + chr(10) + chr(10) +
-        "**开场必须依次问三件事，一次只问一件，拿到回答再问下一件**（不要一口气问完，也不要自己替用户定）：" + chr(10) +
+        "**开场必须依次问四件事，一次只问一件，拿到回答再问下一件**（不要一口气问完，也不要自己替用户定）：" + chr(10) +
         "1. 图：正文里的 [图位] 与「图」文件夹里的成图，位置和数目对不对；" + chr(10) +
         "2. 成品：docx / doc（Word 97）/ pdf；" + chr(10) +
-        "3. 范本：用下面哪个期刊模板，还是用户自己上传 .docx/.tex 范本。" + chr(10) + chr(10) +
-        "三件都定下来之后：调 `format_convert`（format=pdf/docx/doc，template=模板名；要 .tex→PDF 用 format=tex），"
-        "把产出路径和页数/大小告诉用户，别贴正文。" + chr(10) + chr(10) +
+        "3. 范本：用下面哪个期刊模板，还是用户自己上传 .docx/.tex 范本；" + chr(10) +
+        "4. 参考文献样式（只对 pdf/latex 有效）：正文里写成 {{C3}} 的标记会变成正式引用，台账里的文献从 Zotero 取元数据。" +
+        "下面这套是可选样式，问他要哪一种（他不挑就按模板默认：中文稿 gbt7714）：" + chr(10) + style_lines + chr(10) + chr(10) +
+        "四件都定下来之后：调 `format_convert`（format=pdf/docx/doc，template=模板名，cite_style=上一步选的样式；要 .tex→PDF 用 format=tex），"
+        "把产出路径和页数/大小告诉用户，别贴正文。若返回里 cites.missing 不为空（这些 C 编号在 Zotero 里找不到），把缺的编号原样告诉他，"
+        "让他先导进 Zotero 再重编；cite_note / bibtex 字段有内容也要如实转述。" + chr(10) + chr(10) +
         "【可选模板】" + chr(10) + tpl_lines + chr(10) + chr(10) +
         f"【「图」文件夹现状】{len(figs)} 张：" + (chr(10) + chr(10).join(f"- {f['name']}" for f in figs[:20]) if figs else "（空）") + chr(10) + chr(10) +
         "规矩：不编数据；用户没明确说的模板不要自己拍；编译失败要把错误摘要原样告诉用户，并说清退回的是哪套模板。"
