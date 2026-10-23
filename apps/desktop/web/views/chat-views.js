@@ -744,9 +744,8 @@ function appendOne(box,ev,who){
     box.scrollTop=box.scrollHeight; return;
   }
   if(ev.replay && ev.type==="assistant" && (ev.events||[]).length){
-    // 事件流里已经含这条回复的 assistant 文本事件；再按整条消息渲染一次就会重复一整行，
-    // 所以嵌套事件里只要渲染出了 assistant 行，就不再画外层那一条。没有 assistant 事件的
-    // 老消息（只有 usage / 空回复）照旧走下面整条渲染，内容不丢。
+    // 事件流里已含这条回复的 assistant 文本：嵌套事件画过 assistant 行就不再画外层整条，否则重复一整行。
+    // 没有 assistant 事件的老消息（只有 usage / 空回复）照旧走整条渲染，内容不丢。
     const before = box.querySelectorAll(".msg-row.msg-assistant").length;
     ev.events.forEach(e=>appendOne(box,e,who));
     if((ev.events||[]).some(e=>e.type==="assistant" && e.content===ev.content) && box.querySelectorAll(".msg-row.msg-assistant").length > before) return;
@@ -770,8 +769,7 @@ function appendOne(box,ev,who){
   }
   else if(ev.type==="error"){ el.className="msg-err"; el.textContent="⚠ "+(ev.message||"出错了"); }
   else if(ev.type==="team"){
-    // 后台多 agent 协作：一条 = 一个 agent 说的一段话，头上写清「谁 → 谁」。
-    // role 只决定配色（跟团队页同一套身份），文案与标签都由后端给，前端不猜。
+    // 多 agent 协作：一条 = 一个 agent 的一段话，头上写「谁 → 谁」；role 只决定配色（同团队页），文案标签由后端给。
     el.className="team-blk"; el.dataset.role=ev.role||"";
     el.innerHTML=`<div class="team-hd"><span class="team-av">${esc(ev.emoji||"🤖")}</span><b>${esc(ev.name||"agent")}</b>`
       + (ev.to?`<span class="team-to">→ ${esc(ev.to)}</span>`:"")

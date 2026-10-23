@@ -33,7 +33,7 @@ from typing import Any
 
 from research_core import ResearchDB
 
-from workflow_db import (        # 库表那一层搬去 workflow_db.py 了 —— 这里原样再导出，41 处 import workflow 不用改
+from workflow_db import (        # 库表层在 workflow_db.py，这里原样再导出：各处 import workflow 不用改
     WorkflowDB, PROJ_DIRS, STAGES, STAGE_LABEL, WELCOME_TEXT, BUILTIN_SCHEDULES,
     BUILTIN_ASSISTANTS, PROVIDER_CATALOG,
     DATA, PAPERS, NOTES, OUT, NOTE_CATEGORY, UA,
@@ -963,8 +963,7 @@ STEP_AGENT = {                       # 十步各有一个助手身份（跟前�
     "entrans": "中译英助手", "convert": "格式助手",
 }
 
-# 检索这一步跑完要主动收口（问用户还改不改检索式）。提示词已经要求了，这里再兜一层：
-# 模型偶尔只回一句「检索完了」就收尾，用户就不知道该不该继续调关键词。
+# 检索跑完要主动收口（问用户还改不改检索式）：提示词已要求，这里再兜一层——模型偶尔只回一句「检索完了」。
 SEARCH_CLOSING = ("\n\n检索完毕。还要调整检索式吗——加点或减点关键词，"
                   "或者按年份、期刊、只看开放获取再筛一遍？")
 

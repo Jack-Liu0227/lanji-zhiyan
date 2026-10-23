@@ -655,7 +655,7 @@ def files_system(db: "WorkflowDB", task_id: str) -> str:
 
 def conv_preview(path: str) -> dict[str, Any]:
     """右栏展示区要什么：PDF/图片直接给 /api/file 的地址；Word 先转成 PDF 再展示。"""
-    p = _safe_path(str(path))          # 只认项目 / data 目录里的文件（以前这里没校验，任意路径都能拉去转换）
+    p = _safe_path(str(path))          # 只认项目 / data 目录里的文件（路径校验，防任意路径被拉去转换）
     if not p.is_file():
         raise ValueError("文件不存在")
     ext = p.suffix.lower()

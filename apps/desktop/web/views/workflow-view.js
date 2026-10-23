@@ -153,8 +153,7 @@ function docShow(k, d){
   const mb = docEl(k, "meta"); if(mb) mb.textContent = md.trim() ? `${d.sections || 0} 个大标题 · ${d.subs || 0} 个小标题 · ${d.chars || 0} 字` : "";
 }
 function docRestore(k, msgs, out){
-  /* 把存下来的对话装回右栏：doc 三步和谱系图那步共用（以前 mpLoad 调了个早就没了的 mpMsgs，
-     整段 throw 掉 → 重新整理之后右栏一句话不显示，看着就像按钮没反应） */
+  /* 把存下来的对话装回右栏：doc 三步和谱系图那步共用（这里 throw 掉的话右栏一句话不显示，像按钮没反应） */
   const st = docState(k);
   st.msgs = msgs || []; st.out = out || "";
   st.events = st.msgs.flatMap(x => x.events || []);
@@ -1064,8 +1063,7 @@ function wfPaintMsgs(step){
   box.scrollTop = box.scrollHeight;
 }
 function wfPaintStats(){
-  // 口径 = 这个助手自己（本步的对话 + 本步的事件流）。项目合计不再显示：
-  // 右栏标题写的是某个具体助手，混进别步/对话页的数字就定位不到「这一步花了多少」。
+  // 口径 = 这个助手自己（本步对话 + 本步事件流）；不显示项目合计，混进别步的数字就定位不到「这一步花了多少」。
   const turns = wfMsgs.filter(x=>x.role==="user").length;
   const calls = wfEvents.filter(e=>e.type==="tool_call");
   const tok = wfEvents.filter(e=>e.type==="usage").reduce((n,e)=>n+(e.total||0),0);
@@ -1110,8 +1108,8 @@ async function wfSend(m, step){
         if(ev.type === "done"){ final = ev.content || ""; continue; }
         if(ev.type === "user") continue;                 // 本地已经先画了，回声不再画、也不进事件流
         appendOne(box, ev, a); evs.push(ev);
-        // 边跑边记账：wfEvents 是统计的唯一来源，所以进来就 push，别攒到这一轮结束。
-        // 只在这三种事件上重画（content 是逐段文本，每段都重画笔工具/产出列表太重）。
+        // wfEvents 是统计的唯一来源，进来就 push（别攒到这一轮结束）；只在 usage/tool_call/tool_result
+        // 上重画，content 是逐段文本，每段都重画笔工具/产出列表太重。
         wfEvents.push(ev);
         if(ev.type === "usage" || ev.type === "tool_call" || ev.type === "tool_result") wfPaintStats();
       }
@@ -1519,7 +1517,6 @@ async function loadTaskState(){
 }
 /* ---------------- 项目 ---------------- */
 function renderTasks(m){
-  // 卡片色带 2026-10-08：原来按顺序轮换莫兰迪六色（豆沙/米驼那组偏暖），与主题脱节 → 撤掉，统一吃 --accent。
   const kws = t => String(t.material_system || "").split(/[，,、;；]+/).map(s => s.trim()).filter(Boolean)
     .slice(0, 4).map(s => `<span class="kw">${esc(s)}</span>`).join("");
   m.innerHTML = `
@@ -1821,7 +1818,7 @@ const MAIL_HTML = `<div class="mail-page"><!-- ===== 视图：邮箱 ===== -->
     </div>
   </div></div>`;
 
-  /* ---- 本项目缺的小工具（lit 那边是全局函数） ---- */
+  /* ---- 小工具 ---- */
   function toast(msg, type){
     let el = document.getElementById("toast");
     if(!el){ el = document.createElement("div"); el.id = "toast"; document.body.appendChild(el); }

@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-# ---- 仓库根与 packages/ 各包挂上 sys.path（照目标仓的 packages 布局）----
+# ---- 仓库根与 packages/ 各包挂上 sys.path ----
 ROOT = Path(__file__).resolve().parents[2]
 if not (ROOT / "packages").is_dir():            # 打包后模块被平铺到 exe 目录，数据目录也在那儿
     ROOT = Path(__file__).resolve().parent
@@ -142,7 +142,7 @@ def _front(hwnd: int) -> None:
     u.BringWindowToTop(hwnd)
 
 
-# ---------- 旧实例接管（以前这里退回 Edge --app，会先弹小窗再被拉满 = 用户报的「闪一个小卡片」）----------
+# ---------- 旧实例接管：老实例占着端口就杀掉，自己接管 ----------
 def _port_owner(port: int) -> int:
     """谁在听这个端口：netstat 输出是 GBK，只认 ASCII 的 PID 列。"""
     out = subprocess.run(["netstat", "-ano"], capture_output=True,
@@ -350,7 +350,7 @@ def _webview_window(url: str, stamp: int) -> bool:
             js_api=_WinBridge(),                  # 最小化/关闭绕开 Low IL 服务，直接在宿主进程里动手
             x=int(x / s), y=int(y / s), width=int(w / s), height=int(h / s),
             min_size=(int(420 / s), int(380 / s)), background_color="#0b0f14")   # 逻辑像素！专注模式的「窄栏」只有 580 物理，按 DPI 反算，否则会把窗口钳在 ~690 宽
-            # 窗口底色 = 深色主题的 --bg（原来是开始卡片的 #F9FCFE，卡片一删，那一下就变成白闪）
+            # 窗口底色 = 深色主题的 --bg：用白色会在开窗那一下白闪
         webview.start(gui="edgechromium", private_mode=False,   # 关掉隐私模式，localStorage/头像才留得住
                       storage_path=str(paths.CACHE / "webview"),
                       icon=str(icon) if icon.is_file() else None,
@@ -756,7 +756,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
             return True
 
         if path == "/api/mail/translate" and method == "POST":
-            # lit 那边走它自己的翻译模块；我们直接用手上配好的模型翻（前端拿 data.translation）
+            # 直接用本机配好的模型翻（前端拿 data.translation）
             text = (data.get("text") or "").strip()
             if not text:
                 self._json({"error": "这封邮件没有可翻译的正文"}, 400)
@@ -1546,8 +1546,8 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
 
         db = WorkflowDB(DB_PATH)
         tid = str(data.get("task_id") or data.get("chat_id") or "")
-        # 没带对话、或 localStorage 里那条已经删了 → 现开一个「不绑项目」的对话。
-        # 以前这里直接拿空 id 往下走，run_agent 里 db.summary('') 抛 KeyError，整轮发言变成一条报错。
+        # 没带对话、或 localStorage 里那条已经删了 → 现开一个「不绑项目」的对话
+        #（空 id 往下走会让 run_agent 里 db.summary('') 抛 KeyError，整轮发言变成一条报错）。
         if not (db.db.execute("SELECT 1 FROM chats WHERE id=?", (tid,)).fetchone()
                 or db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone()):
             tid = db.create_chat("")
@@ -1595,9 +1595,8 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     sel = str(data.get("sel") or "")
                     if sel:
                         extra = (extra + chr(10) * 2 if extra else "") + "【当前选中的文件】" + sel
-                # 对话落在这个步骤自己的 scope 里 —— 右栏是按 /api/step/messages?step=X 取历史的，
-                # 不落 scope 的话通用 Agent 这几步（检索/下载/笔记/翻译/转换）一换步就整段消失、
-                # 三块统计面板永远是 0 / 还没有。纯聊天（不绑项目）照旧 scope=''。
+                # 对话落在步骤自己的 scope 里（右栏按 /api/step/messages?step=X 取历史）：不落的话
+                # 通用 Agent 这几步一换步就整段消失、统计面板永远是 0。纯聊天（不绑项目）照旧 scope=''。
                 on_task = bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
                 run_agent(db, tid, data.get("message", ""), emit, extra_context=extra,
                           system=(files_system(db, tid) if wstep == "files"
@@ -1868,8 +1867,8 @@ def main() -> int:
             for h in same:
                 _front(h)
             return 0
-        # 端口被老构建占着（改过前端没重启）：杀掉老实例让自己接管，不再退回 Edge --app 兜底 ——
-        # 那条路径 --start-maximized 时常不生效，先弹个小窗再被拉满，就是「闪一个小卡片」。
+        # 端口被老构建占着（改过前端没重启）→ 杀掉老实例自己接管；不退回 Edge --app
+        # （--start-maximized 常不生效，先弹小窗再拉满，就是用户报的「闪一个小卡片」）。
         busy = not _takeover(port)
     global _LOW_SERVER
     if busy:
@@ -1891,7 +1890,6 @@ def main() -> int:
             print(f"览籍智研已启动（服务跑在低完整性沙箱里）：{url}")
     if "--no-open" not in sys.argv:
         # 自己的无边框窗口；起不来（没装 pywebview / WebView2 运行时）才退回系统浏览器。
-        # Edge --app 兜底已删：它会先弹个小窗再被 _maximize 拉满（「闪一个小卡片」）。
         _boot_mark("开始建窗口")
         if not busy and _webview_window(url, stamp):
             _stop_low_server()                    # 关窗 = 一起收掉沙箱里的服务端，不留僵尸

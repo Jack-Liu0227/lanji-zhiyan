@@ -164,7 +164,7 @@ class MiscRoutes:
                     for r in db.db.execute("SELECT id,task_id,title,source,year FROM search_cache"):
                         if needle in (r["title"] or "").lower():
                             hits.append({"kind": "文献", "id": r["task_id"], "title": r["title"], "sub": f"{r['source']} {r['year']}"})
-                    # evidence 没有 task_id，靠 papers 关联（原来直接 SELECT task_id 会 500）
+                    # evidence 没有 task_id,靠 papers 关联(直接查 task_id 会 500)
                     for e in db.db.execute("SELECT e.field, e.value, e.excerpt, p.task_id AS task_id"
                                            " FROM evidence e JOIN papers p ON p.id = e.paper_id"):
                         if needle in (e["value"] or "").lower() or needle in (e["excerpt"] or "").lower():

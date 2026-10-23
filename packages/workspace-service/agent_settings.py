@@ -26,8 +26,7 @@ def migrate(db):
     db.db.execute("""CREATE TABLE IF NOT EXISTS team_sessions (
       id TEXT PRIMARY KEY, team_id TEXT NOT NULL, title TEXT NOT NULL,
       active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
-    # 老迁移（teams → chats 复制）已删：它每次开库都跑，把固定团队「论文精读/论文写作」
-    # 反复塞回智研管家的对话列表，删了下次开库又回来。团队现在有独立的 team_sessions。
+    # 别加 teams → chats 的迁移：每次开库都跑，会把固定团队反复塞回对话列表；团队走独立的 team_sessions。
     for p in db.providers():
         adopted = {r["model"] for r in db.db.execute("SELECT model FROM model_profiles WHERE provider_id=?", (p["id"],))}
         if adopted != set(p["models"]):

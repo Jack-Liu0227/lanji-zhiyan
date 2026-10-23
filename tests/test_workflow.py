@@ -637,7 +637,7 @@ class DeepreadTest(unittest.TestCase):
         (self.d / "_build" / "main.pdf").write_bytes(b"%PDF-1.4" + b"x" * 30000)
         (self.d / "overleaf").mkdir()
         (self.d / "overleaf" / "main.pdf").write_bytes(b"%PDF-1.4" + b"x" * 30000)
-        # 翻译产物：BabelDOC 把译文写回「文献库」，以前会被当成新论文又精读一遍
+        # 翻译产物：BabelDOC 把译文写回「文献库」，不能被当成新论文再精读一遍
         (self.d / "s41586.no_watermark.zh.mono.pdf").write_bytes(b"%PDF-1.4" + b"x" * 30000)
         (self.d / "s41586.no_watermark.zh.dual.pdf").write_bytes(b"%PDF-1.4" + b"x" * 30000)
         (self.d / "s41586.zh.mono.no_watermark.zh.mono.pdf").write_bytes(b"%PDF-1.4" + b"x" * 30000)
@@ -667,6 +667,18 @@ class DeepreadTest(unittest.TestCase):
         self.assertTrue(hasattr(workflow, "deepread_kick"))
         self.assertTrue(hasattr(workflow, "deepread_stop"))
         self.assertIsNone(workflow.deepread_state("no-such-task"))
+
+    def test_04_refs_tail_skipped(self):
+        """参考文献（含 ■REFERENCES / References: / 参考文献）应从那一页起不再送模型；
+        正文里顺口提 references 的句子不能误伤；前 40% 的标题不算（那是引用别人的小节名）。"""
+        from workflow_stages import refs_first_page, REF_HEAD
+        body = {"page_no": 1, "text": "We compare against references to prior work.\nSee references below."}
+        for head in ("References", "REFERENCES", "References:", "■REFERENCES", "参考文献", "7 References"):
+            pages = [body] * 4 + [{"page_no": 5, "text": "Conclusions\n" + head}, {"page_no": 6, "text": "[1] A. Author 2020"}]
+            self.assertEqual(refs_first_page(pages), 4, head)
+        self.assertIsNone(refs_first_page([body] * 6))                       # 没有标题页 → 全文读
+        self.assertIsNone(refs_first_page([{"page_no": 1, "text": "References"}]))  # 只 1 页：40% 闸门兜住
+        self.assertFalse(REF_HEAD.match("references to the literature are listed"))  # 行内有内容 → 不算标题
 
 
 class ModelInvokerTest(unittest.TestCase):

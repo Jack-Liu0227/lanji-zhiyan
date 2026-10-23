@@ -62,8 +62,7 @@ class CoreRoutes:
                 tid = q["id"][0]
                 s = db.summary(tid)
                 task = dict(s["task"] or {})
-                # 卡片上的「阶段」要跟十步实时对齐：以前只给 research_tasks.stage（几乎不动），
-                # 于是走完谱系/写作了项目空间还写着「未开始」。stage_now 取最近一条步骤记录。
+                # 卡片「阶段」取最近一条步骤记录:research_tasks.stage 几乎不动,用它走完谱系还显示「未开始」
                 task["stage_now"] = db.stage_now(tid, task.get("stage") or "")
                 return self._json({
                     "task": task, "summary": s, "steps": db.steps(tid),

@@ -593,7 +593,7 @@ def shape_message(raw: bytes, uid: str) -> dict[str, Any]:
                             "contentType": part.get_content_type() or "application/octet-stream",
                             "size": len(payload), "inline": bool(cid) or (part.get("Content-Disposition") or "").startswith("inline")})
 
-    # 内嵌图片 cid: → data URL，正文里的图才显示得出来（同 lit）
+    # 内嵌图片 cid: → data URL，正文里的图才显示得出来
     if html and attachments:
         for idx, part, filename, cid in _iter_attachments(msg):
             if not cid:

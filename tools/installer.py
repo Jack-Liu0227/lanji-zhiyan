@@ -143,7 +143,6 @@ def main():
     say("  桌面快捷方式：%s" % ("已创建" if os.path.isfile(lnk) else "创建失败（可手动从安装目录启动）"))
     say()
 
-    # 启动
     try:
         subprocess.Popen([exe], cwd=app_dir)
         say("装好了！桌面上的「%s」双击就能用。" % TITLE)

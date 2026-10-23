@@ -46,12 +46,10 @@
     }
   }
 
-  // embedded=true 时嵌进「项目空间」当一块内容：不再自己画页头和项目下拉
-  // （外面已经有项目选择器和阶段），其余 KPI/三视图/拖拽/弹窗原样保留。
+  // embedded=true：嵌进「项目空间」，不自画页头/项目下拉，其余原样保留。
   let kbEmbed = false;
 
-  // 记住这次画在哪个容器里：模态框保存后要重画回这块，不能再去抓 #main
-  // （嵌进项目空间后 #main 是整个页面，抓它就等于把页面换成一块看板）。
+  // 记住挂载容器：模态框保存后要重画回这块（嵌进项目空间后抓 #main 会把整页换成看板）。
   let kbHost = null;
 
   window.renderKanban = async function (container, opts) {
@@ -63,9 +61,8 @@
     kbStartLive(container);
   };
 
-  // 页面开着的时候别处（科研台记一步、写笔记、导文献）会改数：挂个 8s 轻轮询，
-  // 数字真变了才整块重画。弹窗开着 / 正在拖拽时跳过，免得把用户手上的操作冲掉。
-  // ponytail: 8s 轮询，不是 SSE —— 写入也可能来自别的进程；真嫌慢再换推送。
+  // 外部写入（科研台/笔记/导文献）靠 8s 轮询感知，数字真变了才重画；弹窗开着或拖拽中跳过。
+  // ponytail: 轮询而非 SSE——写入也可能来自别的进程；嫌慢再换推送。
   let kbLive = null;
   function kbStopLive() { if (kbLive) { clearInterval(kbLive); kbLive = null; } }
 
@@ -415,7 +412,6 @@
 
   // ================= 事件与交互绑定 =================
   function bindBoardEvents(container, d) {
-    // 切换项目
     const projSelect = container.querySelector('#kbProjSelect');
     if (projSelect) {
       projSelect.onchange = async () => {
@@ -426,7 +422,6 @@
       };
     }
 
-    // 视图 TAB 切换
     container.querySelectorAll('.kb-view-tab').forEach(b => {
       b.onclick = () => {
         kbState.view = b.dataset.view;
@@ -434,7 +429,6 @@
       };
     });
 
-    // 搜索与过滤
     const searchInput = container.querySelector('#kbSearchInput');
     if (searchInput) {
       searchInput.oninput = () => {
@@ -465,18 +459,15 @@
       };
     }
 
-    // 新建任务按钮
     container.querySelector('#kbBtnNewTask')?.addEventListener('click', () => {
       openTaskModal(null, d);
     });
 
-    // 刷新按钮
     container.querySelector('#kbBtnRefresh')?.addEventListener('click', async () => {
       await fetchKanbanData(window.curTask);
       renderBoard(container);
     });
 
-    // 从工作流导入
     container.querySelector('#kbBtnImportWf')?.addEventListener('click', async () => {
       const tid = window.curTask || (d.task ? d.task.id : '');
       if (!tid) {
@@ -544,7 +535,6 @@
       };
     });
 
-    // 拖拽支持 (Drag and Drop)
     const cards = container.querySelectorAll('.kb-card');
     cards.forEach(card => {
       card.addEventListener('dragstart', (e) => {

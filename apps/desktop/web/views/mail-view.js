@@ -31,11 +31,8 @@
   }
 
   // ============ 新邮件提醒（轮询 + 桌面通知 + 未读角标） ============
-  // 设计要点：
-  //  · 每个账户记录「上次已看到的最高 uid」作为基线，存 localStorage，重启后不回到零。
-  //  · 首次运行没有基线时只记录基线、不弹提醒，避免把邮箱里的历史邮件一次性全弹出来。
-  //  · uid 变大且未读 => 新邮件 => 应用内浮层 + 系统桌面通知。
-  //  · 同一 uid 只提醒一次（notifiedUids 去重），避免轮询反复弹。
+  // 每账户存「已看到的最高 uid」当基线（localStorage，重启不归零）；首跑只记基线不弹，免得历史邮件全弹出来；
+  // uid 变大且未读 = 新邮件 → 浮层 + 系统通知；同一 uid 只提醒一次（notifiedUids 去重），免得轮询反复弹。
   const MAIL_SINCE_KEY = 'sci_mail_seen_uids';
   const NOTIFY_INTERVAL = 60 * 1000; // 轮询间隔：60 秒
   let mailNotifyTimer = null;
@@ -110,7 +107,6 @@
     } catch (_) { /* ignore */ }
   }
 
-  // 单轮轮询
   async function checkNewMail() {
     if (mailNotifyBusy || !mailNotifyEnabled) return;
     mailNotifyBusy = true;
@@ -820,7 +816,6 @@ a { color: #176b87; }
       else if (e.target.closest('[data-mail-del]')) removeMailMessage();
     });
 
-    // 账户管理弹窗
     $('btnMaClose').addEventListener('click', () => $('mailAccountModal').classList.add('hidden'));
     $('btnMaCancel').addEventListener('click', () => { resetMailAccountForm(); renderMaList(); });
     $('btnMaSave').addEventListener('click', saveMailAccountForm);
@@ -869,7 +864,6 @@ a { color: #176b87; }
       }
     });
 
-    // 写邮件弹窗
     $('btnMcClose').addEventListener('click', () => $('mailComposeModal').classList.add('hidden'));
     $('btnMcCancel').addEventListener('click', () => $('mailComposeModal').classList.add('hidden'));
     $('btnMcSend').addEventListener('click', sendMailCompose);

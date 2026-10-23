@@ -950,7 +950,6 @@ async function renderSpace(m){
     finally { rebuild.disabled = false; }
   };
 
-  // 全局搜索交互
   const sInp = $("spSearchInput"), sClear = $("spSearchClear"), sRes = $("spSearchResults");
   let sTimer = null;
   if(sInp){
@@ -1087,7 +1086,7 @@ function pnOpenLegacy(){
   mdProj = null;
   mdMountEditor(document.querySelector("#mdView .md-note-main"));
   $("mdDashboard").style.display = "none";
-  $("mdView").style.display = "";      // 交回 CSS 的 grid；原来写死 flex 会盖掉 grid，编辑器就铺不满
+  $("mdView").style.display = "";      // 交回 CSS 的 grid（写死 flex 会盖掉 grid，编辑器铺不满）
   mdPaint();
 }
 async function mdSaveProj(){
@@ -1272,7 +1271,6 @@ if(!window.__rwMdEsc){                     // Esc 退出专注（只注册一次
   });
 }
 
-/* ---------------- 模型 ---------------- */
 /* ---------------- 模型与 Agent（Provider 卡片） ----------------
    对齐科研工作台的「设置 → 模型与 Agent」：Provider 卡片 / Key 不回显 / 发现模型 / 候选采用 / 设默认。
    Key 只落本机 SQLite；接口只回「已保存 | 未配置」。 */
@@ -1408,7 +1406,7 @@ function renderModels(m){
 
 
 /* ---------------- 设置 ---------------- */
-/* ---- 主题：抄 zotero-lit-tool，一个「主色」推导整套配色（8 个预设 + 自定义色号） ---- */
+/* ---- 主题：一个「主色」推导整套配色（8 个预设 + 自定义色号） ---- */
 const DEFAULT_THEME = "#176B87";
 const THEME_PRESETS = [
   {name:"研究蓝",primary:"#176B87"},{name:"松柏绿",primary:"#28735D"},

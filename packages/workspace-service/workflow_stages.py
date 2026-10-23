@@ -318,7 +318,28 @@ def _deepread_worker(db_path: str, task_id: str) -> None:
 
 
 
-def stage_read(db: WorkflowDB, task_id: str, paper_id: str, per_page: int = 6000,
+REF_HEAD = re.compile(
+    r"^[^\w\u4e00-\u9fff\d]{0,3}\d{0,3}[.)]?\s{0,3}"
+    r"(references?|bibliography|literature cited|references and notes|参考文献)"
+    r"\s*[^\w\u4e00-\u9fff]{0,4}$", re.I)
+
+
+def refs_first_page(pages: list[dict[str, Any]]) -> int | None:
+    """参考文献起始页的下标（找不到返回 None）：那页及其后（附录/致谢）不再送模型。
+
+    ponytail: 只认「独立成行」的标题（含 ■REFERENCES / References: 这类偏饰）。
+    两栏 PDF 把标题并进上一行的那种会漏检 —— 那篇就按全文读，只多花 token，不丢内容。
+    """
+    n = len(pages)
+    for i, p in enumerate(pages):
+        if i < n * 0.4:
+            continue                       # 前 40% 不可能是参考文献，正文里提 references 的句子太多
+        if any(REF_HEAD.match(line.strip()) for line in (p["text"] or "").splitlines()):
+            return i
+    return None
+
+
+def stage_read(db: WorkflowDB, task_id: str, paper_id: str, per_page: int = 2500,
                should_stop: Any = None) -> dict[str, Any]:
     """逐页精读：把每页文本连同页码交给模型，要求中文要点 + 可引用原文。"""
     from workflow import chat
@@ -326,8 +347,12 @@ def stage_read(db: WorkflowDB, task_id: str, paper_id: str, per_page: int = 6000
     paper = db.paper(paper_id)
     if paper["text_chars"] < 100:
         raise ValueError("这篇 PDF 疑似扫描件，没有文本层，无法精读。")
+    pages = paper["pages"]
+    cut = refs_first_page(pages)
+    if cut:                                # 参考文献往后不精读：要点式笔记用不上，白烧 token
+        pages = pages[:cut]
     chunks, buf, size = [], [], 0
-    for p in paper["pages"]:
+    for p in pages:
         block = f"[PAGE {p['page_no']}]\n{p['text'][:per_page]}"
         if size + len(block) > 24000 and buf:
             chunks.append("\n\n".join(buf)); buf, size = [], 0

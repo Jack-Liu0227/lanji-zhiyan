@@ -20,8 +20,7 @@ TIMEOUT = 12
 MAX_ITEMS = 60                 # 单个源一次最多收 60 条（够看；多的下次刷新还会来）
 SUMMARY_MAX = 400
 
-# 固定 5 个来源（全都实测过能解析）。注意：`https://www.nature.com/nature.rss` 和 `npjnano.rss`
-# 实测返回的是网页（3038 字节 HTML），主刊 Nature 没有可用的 RSS —— 所以换成了 Nature Energy / Nature Materials。
+# 固定 5 个来源,全都实测能解析;Nature 主刊 rss 实测返回网页,故用 Nature Energy / Materials
 DEFAULT_SOURCES = [
     {"url": "https://www.nature.com/nenergy.rss", "title": "Nature Energy", "category": "学术论文"},
     {"url": "https://www.nature.com/nmat.rss", "title": "Nature Materials", "category": "学术论文"},

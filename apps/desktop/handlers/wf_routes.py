@@ -98,8 +98,7 @@ class WorkflowRoutes:
                      ".jpeg": "image/jpeg", ".svg": "image/svg+xml", ".md": "text/markdown; charset=utf-8",
                      ".tex": "text/plain; charset=utf-8", ".txt": "text/plain; charset=utf-8",
                      ".html": "text/html; charset=utf-8"}.get(ext, "application/octet-stream")
-            # inline 预览不带文件名：http.server 按 latin-1 编 header，中文文件名会让整条响应坏掉
-            # （Chromium 报「127.0.0.1 发送了无效的响应」）。要下载的文件名见 825 行的 filename*。
+            # inline 预览不带文件名:http.server 按 latin-1 编 header,中文名会让整条响应坏掉(Chromium 报「无效的响应」);下载走 filename*
             extra = {"Content-Disposition": "inline"} if (ext == ".pdf" or q.get("inline")) else None
             return self._send(200, p.read_bytes(), ctype, extra)
         if path == "/api/idea/memory":

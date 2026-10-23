@@ -51,7 +51,7 @@ def ensure_leader(task_id: str) -> dict[str, Any]:
     with workflow.WorkflowDB(_db_path()) as db:
         rows = [m for m in db.team_members(task_id) if m["role"] == "leader"]
         if rows:
-            if rows[0]["name"] == "全局 Leader":      # 旧库里还叫「全局 Leader」→ 顺手改成新称呼
+            if rows[0]["name"] == "全局 Leader":      # 旧库名「全局 Leader」→ 迁移成新称呼
                 return db.team_member_update(rows[0]["id"], name=LEADER_NAME)
             return rows[0]
         return db.team_member_add(task_id, LEADER_NAME, "leader", "", LEADER_BRIEF)
@@ -633,7 +633,7 @@ FIXED_TEAMS = [
     ("文献抽取", ["文献检索员", "分块员", "图表解读员", "数据抽取员"]),
     ("文件撰写", ["结构规划员", "写作搭档", "论文写作", "语言润色"]),
 ]
-_PLACEHOLDER = re.compile(r"^团队\s*\d+$")      # 第一版播的空占位团队
+_PLACEHOLDER = re.compile(r"^团队\s*\d+$")      # 早期播的空占位团队
 
 
 def _team_row(tid: str) -> dict[str, Any]:

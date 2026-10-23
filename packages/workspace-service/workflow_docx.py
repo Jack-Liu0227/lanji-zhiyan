@@ -94,7 +94,6 @@ def _setup(doc) -> None:
     for nm in ("List Bullet", "List Number"):
         _style(doc, nm, SONG, BODY_PT, after=0)
     _style(doc, "Footer", SONG, SMALL_PT, align=C)
-    # 页脚居中页码
     p = sec.footer.paragraphs[0]
     p.alignment = C
     _no_indent(p)

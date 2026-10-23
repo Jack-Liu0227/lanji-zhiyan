@@ -203,10 +203,8 @@ def kanban_overview(db: Any, task_id: str = "") -> dict[str, Any]:
     }
     stats["completion_rate"] = round((stats["done"] / stats["total"] * 100) if stats["total"] > 0 else 0, 1)
 
-    # 4. 科研阶段概览 (10 步) —— 用真正在记的那张 steps 表（stage/status）。
-    # 原来查的 workflow_steps / workflow_results 这两张表从来没建过，查询一直静默失败，
-    # 所以看板永远显示「第一步」；research_tasks.stage 存的是 definition/reading 这类旧口径，
-    # 跟 STAGES 对不上，也不能拿来当当前步骤。
+    # 4. 科研阶段概览 (10 步) —— 只用真正在记的那张 steps 表（stage/status）：research_tasks.stage
+    # 存的是 definition/reading 这类旧口径，跟 STAGES 对不上，当不了当前步骤。
     from workflow import STAGES, STAGE_LABEL, current_stage_key
     stage_list = []
     done_keys = set()

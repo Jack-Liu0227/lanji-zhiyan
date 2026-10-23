@@ -196,7 +196,6 @@ def list_project_notes(db: Any, task_id: str) -> list[dict[str, Any]]:
 def get_project_note_detail(db: Any, note_id: str) -> dict[str, Any]:
     """获取单篇笔记详情与 Markdown 内容（用于实时预览与编辑）。"""
     conn = _conn(db)
-    # 先查 md_notes
     try:
         row = conn.execute(
             "SELECT id, title, content, task_id, paper_id, created_at, updated_at FROM md_notes WHERE id=?",
@@ -216,7 +215,6 @@ def get_project_note_detail(db: Any, note_id: str) -> dict[str, Any]:
     except Exception:
         pass
 
-    # 再查 notes
     try:
         row = conn.execute("SELECT id, task_id, title, content, created_at FROM notes WHERE id=?", (note_id,)).fetchone()
         if row:

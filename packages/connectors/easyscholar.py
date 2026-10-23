@@ -141,30 +141,26 @@ def parse_badges(official: dict[str, Any], custom: dict[str, Any]) -> list[dict[
     
     all_ranks = official.get("select") or official.get("all") or {}
     
-    # 1. 中科院升级版
     sci_up = all_ranks.get("sciUp")
     if sci_up:
         val = str(sci_up).strip()
         label = f"中科院{val}区" if val.isdigit() or val in ("1", "2", "3", "4") else f"中科院 {val}"
         badges.append({"key": "sciUp", "label": label, "type": "sci", "weight": 100})
     
-    # 2. 中科院 Top
     sci_top = all_ranks.get("sciUpTop")
     if sci_top and str(sci_top).lower() not in ("0", "false", "no", "none", ""):
         badges.append({"key": "sciUpTop", "label": "TOP", "type": "top", "weight": 95})
 
-    # 3. 中科院预警 (高危提示)
+    # 中科院预警期刊(高危提示):weight 最高,排最前
     warn = all_ranks.get("sciwarn")
     if warn and str(warn).lower() not in ("0", "false", "no", "none", ""):
         badges.append({"key": "sciwarn", "label": "预警期刊", "type": "warn", "weight": 110})
 
-    # 4. JCR 分区
     sci = all_ranks.get("sci")
     if sci:
         val = str(sci).strip().upper()
         badges.append({"key": "sci", "label": f"JCR {val}" if not val.startswith("Q") else f"JCR {val}", "type": "jcr", "weight": 80})
 
-    # 5. 影响因子
     sciif = all_ranks.get("sciif")
     if sciif:
         try:
@@ -173,7 +169,6 @@ def parse_badges(official: dict[str, Any], custom: dict[str, Any]) -> list[dict[
         except (ValueError, TypeError):
             badges.append({"key": "sciif", "label": f"IF {sciif}", "type": "if", "weight": 75})
 
-    # 6. CCF 等级
     ccf = all_ranks.get("ccf")
     if ccf:
         badges.append({"key": "ccf", "label": f"CCF-{str(ccf).strip().upper()}", "type": "ccf", "weight": 90})
@@ -184,7 +179,7 @@ def parse_badges(official: dict[str, Any], custom: dict[str, Any]) -> list[dict[
         if dom_val and str(dom_val).lower() not in ("0", "false", "no", "none", ""):
             badges.append({"key": dom_k, "label": dom_l, "type": "domestic", "weight": 70})
 
-    # 8. 自定义数据集
+    # 自定义数据集:rank 每条是 "数据集uuid&&&档位序号"
     rank_infos = {it.get("uuid"): it for it in custom.get("rankInfo", []) if isinstance(it, dict) and it.get("uuid")}
     for r_entry in custom.get("rank", []):
         if isinstance(r_entry, str) and "&&&" in r_entry:
@@ -209,7 +204,6 @@ def query_publication_rank(conn: sqlite3.Connection, publication_name: str, forc
     ensure_table(conn)
     norm_name = name.casefold()
 
-    # 1. 读缓存
     if not force_refresh:
         row = conn.execute("SELECT official_rank, custom_rank, updated_at FROM easyscholar_cache WHERE publication_name=?", (norm_name,)).fetchone()
         if row:
@@ -229,7 +223,6 @@ def query_publication_rank(conn: sqlite3.Connection, publication_name: str, forc
             except Exception as e:
                 logger.warning("Cache parse error for %s: %s", name, e)
 
-    # 2. 检查配置
     cfg = get_config(conn)
     if not cfg["enabled"]:
         return {"ok": False, "msg": "easyScholar 接口未在设置中开启", "badges": []}
@@ -237,7 +230,6 @@ def query_publication_rank(conn: sqlite3.Connection, publication_name: str, forc
     if not secret_key:
         return {"ok": False, "msg": "easyScholar SecretKey 尚未配置", "badges": []}
 
-    # 3. 节流并发起 HTTP 请求
     _throttle()
     params = urllib.parse.urlencode({"secretKey": secret_key, "publicationName": name})
     url = f"{EASYSCHOLAR_API_URL}?{params}"
@@ -257,7 +249,6 @@ def query_publication_rank(conn: sqlite3.Connection, publication_name: str, forc
     official = res_data.get("officialRank") or {}
     custom = res_data.get("customRank") or {}
 
-    # 4. 写入缓存
     now_iso = datetime.now(timezone.utc).isoformat()
     conn.execute("""
     INSERT INTO easyscholar_cache (publication_name, official_rank, custom_rank, updated_at)

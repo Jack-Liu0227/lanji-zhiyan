@@ -299,7 +299,6 @@ async function renderTeamOffice(m) {
     </div>
   </div>`;
 
-  // 交互
   m.querySelectorAll(".tof-room[data-office]").forEach((el) => {
     el.onclick = () => {
       officeSel = el.dataset.office;

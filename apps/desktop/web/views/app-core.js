@@ -120,7 +120,7 @@ if(window.DOMPurify && window.DOMPurify.addHook){
     if(data.attrName === "href" && !/^(?:https?:|mailto:|#|\/)/i.test(String(data.attrValue||""))) data.keepAttr = false;
   });
 }
-const fmtDate = (iso)=>{ const d=new Date(iso||""); return isNaN(d) ? String(iso||"").slice(0,16).replace("T"," ") : d.toLocaleString("sv-SE",{hour12:false}).slice(0,16); };   // 本地时间、到分钟（原来直接切 ISO 字符串 = UTC，差 8 小时）
+const fmtDate = (iso)=>{ const d=new Date(iso||""); return isNaN(d) ? String(iso||"").slice(0,16).replace("T"," ") : d.toLocaleString("sv-SE",{hour12:false}).slice(0,16); };   // 本地时间、到分钟（直接切 ISO 字符串是 UTC，差 8 小时）
 const today = ()=>new Date().toLocaleDateString("sv-SE");
 const clock = (d = new Date())=>{ const w = "日一二三四五六"[d.getDay()];   // 2026.10.4 周日 23:55
   return `${d.getFullYear()}.${d.getMonth()+1}.${d.getDate()} 周${w} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
@@ -159,7 +159,7 @@ const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 
 function openTab(r, title){
   const t = tabs.find(x=>x.route===r);
-  if(t){ activeTab=t.id; render(); return; }          // ← 侧栏点了没反应就是这里之前没有 render()
+  if(t){ activeTab=t.id; render(); return; }          // 少了这行 render()，侧栏点了就没反应
   const id = "t"+(seq++); tabs.push({id,route:r,title:title||TITLES[r]||r}); activeTab=id;
   render();
 }
@@ -199,7 +199,6 @@ function renderSidebar(){
   bindSwatches($("sidebar").querySelector("#side-presets"));
   $("sidebar").querySelector(".collapse").onclick=()=>{sidebarCollapsed=!sidebarCollapsed;localStorage.setItem("rw-sidebar",sidebarCollapsed);renderSidebar();};
   $("theme-toggle").onclick=()=>setTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
-  // 个人资料卡片（点开填写页）
   $("profileCard").onclick = openProfileModal;
   $("btnProfClose").onclick = closeProfileModal;
   $("btnProfCancel").onclick = closeProfileModal;

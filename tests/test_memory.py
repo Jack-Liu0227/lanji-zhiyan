@@ -44,7 +44,7 @@ class MemorySystemTest(unittest.TestCase):
         self.assertIn("回复先给结论", other)
         self.assertNotIn("Cu 掺杂最优", other)
 
-    # ---- 改/删/归档（老实现根本没有）
+    # ---- 改/删/归档
     def test_patch_remove_archive_roundtrip(self):
         row = memory_store.add(self.db, "导师要求中文稿不用小括号", scope_id=self.a, kind="constraint", importance=3)
         memory_store.patch(self.db, row["id"], text="导师要求中文稿不用小括号、不用分号")
@@ -81,7 +81,7 @@ class MemorySystemTest(unittest.TestCase):
         self.assertIn("Cu 掺杂最优", text)
         self.assertNotIn("超预算", text)                                   # 一万字符的经过都没挤进预算
 
-    # ---- 全局记忆.md 手改要读得回来（dump 以前只写不读，手改下次被覆盖）
+    # ---- 全局记忆.md 手改要读得回来（否则下次写入把手改冲掉）
     def test_hand_edited_global_file_is_read_back_then_preserved(self):
         fake = self.root / "user"
         with patch.object(memory_store, "_user_root", return_value=fake):
