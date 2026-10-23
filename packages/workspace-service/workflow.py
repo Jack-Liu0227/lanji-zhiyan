@@ -1009,10 +1009,27 @@ def _plan_context(db: "WorkflowDB", tid: str, step: str) -> str:
     return "\n\n".join(parts)
 
 
+def step_done(db: "WorkflowDB", task_id: str, step: str) -> bool:
+    """这一步交付过没有：steps 台账里该步出现过 done 就算（跟 current_stage_key 一个口径）。"""
+    try:
+        return any(r.get("stage") == step and r.get("status") == "done" for r in db.steps(task_id))
+    except Exception:
+        return False
+
+
 def step_plan(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
     """每一步的「进度同步 + 本步计划」：让这一步的助手看着上一步的交付**现写**一条，
-    落成该步对话的第一条 assistant 消息（events=[{type:plan}]）。已有就复用，不重复烧模型。"""
+    落成该步对话的第一条 assistant 消息（events=[{type:plan}]）。已有就复用，不重复烧模型。
+
+    硬限制：上一步没交付（台账里没有 done）→ 这一步此刻不是流程步，只是独立功能块，
+    直接返回 blocked，既不写计划也不落库 —— 否则空计划会被缓存，上一步补完也不会重写。
+    """
     step = step if step in STAGES else "idea"
+    i = STAGES.index(step) if step in STAGES else 0
+    if i and not step_done(db, task_id, STAGES[i-1]):
+        prev = STAGES[i-1]
+        return {"text": "", "cached": False, "blocked": True, "prev": prev,
+                "prev_label": STAGE_LABEL.get(prev, prev)}
     msgs = db.messages(task_id, step)
     if msgs and msgs[-1].get("role") == "assistant" and any(
             isinstance(e, dict) and e.get("type") == "plan" for e in (msgs[-1].get("events") or [])):

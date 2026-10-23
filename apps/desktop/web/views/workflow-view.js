@@ -1245,8 +1245,33 @@ function wfPlanHTML(step, text, pending){
       <button class="btn ghost" id="wvPlanNo">先说要改什么</button></div>` : ""}</div>`;
 }
 let wfPlanSeq = 0;
+/* 硬限制：上一步台账里没有 done，这一步就不是流程步 —— 只当独立功能块用，
+   不写「已同步进度 + 计划」、不落库、不能点「确认交付」推进流程。 */
+let wfStageMap = {};
+const wfStepName = s => { const t = STAGE[s] || s; return t.slice(t.indexOf(" ") + 1); };
+function wfPrevBlocked(step){
+  const i = WF_ORDER.indexOf(step); if(i <= 0) return "";
+  const prev = WF_ORDER[i-1];
+  return wfStageMap[prev] === "done" ? "" : prev;
+}
+/* 上游没交付 → 右栏空态不是「新会话已就绪」，而是这张卡：这一步只当独立功能块用 */
+function wfBlockedCardHTML(step){
+  const a = WF_AGENT[step] || WF_AGENT.idea;
+  const blocked = wfPrevBlocked(step), name = wfStepName(blocked);
+  return `<div class="wf-plan wf-plan-blocked">
+      <div class="wf-plan-h"><span class="wf-av">${a.emoji}</span><b>${esc(a.name)}</b><span class="wf-plan-tag">独立功能块</span></div>
+      <p class="wf-plan-q">上一步「${esc(name)}」还没交付，所以这一步现在不在流程里跑：下面的工具照常能用，直接在这儿问我就行。但不写「已同步进度」，也会挡住「确认交付」，因为接不上流程。</p>
+      <p class="wf-plan-q">要接回流程，先回去把「${esc(name)}」交付了。</p>
+      <div class="wf-plan-b"><button class="btn" data-goto="${esc(blocked)}">去交付「${esc(name)}」</button></div></div>`;
+}
 async function wfPlanLoad(step){
   const box = $("wv-msgs"); if(!box) return;
+  if(wfPrevBlocked(step)){
+    box.innerHTML = wfBlockedCardHTML(step);
+    box.querySelector("[data-goto]").onclick = ()=> document.querySelector(`.wf-step[data-step="${wfPrevBlocked(step)}"]`)?.click();
+    wfMsgs = []; wfPaintFoot();
+    return;
+  }
   const a = WF_AGENT[step] || WF_AGENT.idea;
   box.innerHTML = `<div class="wf-plan wf-plan-wait"><div class="wf-plan-h"><span class="wf-av">${a.emoji}</span><b>${esc(a.name)}</b></div>
     <p class="wf-plan-sync">正在读上一步的交付，写这一步的计划…</p></div>`;
@@ -1264,6 +1289,12 @@ async function wfPlanLoad(step){
 function wfPaintMsgs(step){
   const box = $("wv-msgs"); if(!box) return;
   if(wfView === "trajectory"){ box.innerHTML = ""; renderTrajectory(box, wfEvents); return; }
+  if(!wfMsgs.length && wfPrevBlocked(step)){        // 上游没交付：空态就是「独立功能块」那张卡
+    box.innerHTML = wfBlockedCardHTML(step);
+    const go = box.querySelector("[data-goto]");
+    if(go) go.onclick = ()=> document.querySelector(`.wf-step[data-step="${wfPrevBlocked(step)}"]`)?.click();
+    return;
+  }
   if(!wfMsgs.length){
     const a = WF_AGENT[step] || WF_AGENT.idea;
     const suggestions = WF_SUGGESTIONS[step] || [
@@ -1521,9 +1552,8 @@ function renderWorkflow(m){
     if(downloading) startDlPoll();                                        // 下载进度条在「下载精读」页里转
   };
   bindStep();
-  wfAgentPaint(m, wfStep);
-  wfPaintFoot();
-  loadTaskState();
+  // 先拿到 stage_map 再画右栏：硬限制要判「上一步交付了没」，不能拿空的台账误判成拦截
+  loadTaskState().then(()=>{ wfAgentPaint(m, wfStep); wfPaintFoot(); });
 }
 function wfPaintFoot(){
   const a = WF_AGENT[wfStep];
@@ -1539,7 +1569,14 @@ function wfPaintFoot(){
   if(deliver) deliver.style.display = "";
   const name = (STAGE[wfStep]||wfStep).slice((STAGE[wfStep]||"").indexOf(" ")+1);
   if(pill) pill.textContent = `第 ${WF_ORDER.indexOf(wfStep)+1} / ${WF_ORDER.length} 步 · ${name}`;
-  if(hint && a) hint.textContent = `右侧「${a.name}」的产出看着没问题就交付`;
+  const blocked = wfPrevBlocked(wfStep);
+  if(deliver){
+    deliver.disabled = !!blocked;
+    deliver.title = blocked ? `上一步「${wfStepName(blocked)}」还没交付，这一步接不上流程` : "";
+  }
+  if(hint) hint.textContent = blocked
+    ? `上一步「${wfStepName(blocked)}」还没交付 —— 这一步先当独立功能块用，交付按钮停用`
+    : (a ? `右侧「${a.name}」的产出看着没问题就交付` : "");
 }
 function iwBind(m){
   const ta = $("iwMine"); if(!ta) return;
@@ -2452,12 +2489,16 @@ function wsBind(m){
 
 async function loadTaskState(){
   try{ const d=await api(`/api/task?id=${encodeURIComponent(curTask)}`);
-    const sm=d.stage_map||{}; Object.keys(STAGE).forEach(s=>{ const el=$("st-"+s); if(el&&sm[s]) el.className="pill ok"; });
-    // 左栏十步：已完成的亮、没开始的暗、当前步主色
+    const sm=d.stage_map||{};
+    wfStageMap = sm;                                   // 硬限制判据：这一步/上一步交付了没
+    Object.keys(STAGE).forEach(s=>{ const el=$("st-"+s); if(el&&sm[s]) el.className="pill ok"; });
+    // 左栏十步：已完成的亮、没开始的暗、当前步主色、上游没交付的标 lock（接不上流程）
     document.querySelectorAll(".wf-step[data-step]").forEach(b=>{
-      const s=b.dataset.step, st=sm[s];
+      const s=b.dataset.step, st=sm[s], gate=wfPrevBlocked(s);
       b.classList.toggle("done", !!st && st!=="failed");
       b.classList.toggle("todo", !st && s!==wfStep);
+      b.classList.toggle("lock", !!gate);
+      b.title = gate ? `${STAGE[s]}（上一步「${wfStepName(gate)}」还没交付，先当独立功能块用）` : STAGE[s];
       if(st==="failed") b.classList.add("fail");
     });
   }catch(e){}

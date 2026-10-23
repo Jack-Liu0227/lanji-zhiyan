@@ -70,7 +70,7 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       cite_read, conv_files, conv_compile, conv_open,
                       fig_list, fig_rename, conv_preview, open_convert, convert_system,
                       tree_list, files_system,
-                      en_state, en_run, _safe_path, step_plan,
+                      en_state, en_run, _safe_path, step_plan, step_done,
                       stage_download_selected, stage_zotero_import, test_provider,
                       deepread_kick, deepread_state, deepread_stop)
 
@@ -1385,6 +1385,10 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     if not tid or step not in ("idea", "search", "download", "notes", "outline",
                                                "map", "write", "review", "entrans", "convert"):
                         return self._json({"error": "缺 task_id 或 step 不认识"}, 400)
+                    idx = STAGES.index(step)
+                    if idx and not step_done(db, tid, STAGES[idx-1]):   # 硬限制：流程必须按步交付，不能跨步
+                        return self._json({"error": "上一步「%s」还没交付，这一步现在只能当独立功能块用，接不上流程"
+                                           % STAGE_LABEL.get(STAGES[idx-1], STAGES[idx-1])}, 409)
                     res = db.log_step(tid, step, "done", str(data.get("summary") or "用户确认交付")[:200])
                     if step == "map":                     # 交付谱系图 → 文章撰写接手，先说一句开场白
                         try:
