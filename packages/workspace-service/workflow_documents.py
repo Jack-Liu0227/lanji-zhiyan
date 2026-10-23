@@ -540,10 +540,10 @@ OUTLINE_TOOLS = doc_tools("outline")
 
 
 def map_tools() -> list[dict[str, Any]]:
-    """梳理精读这一步的工具：读写谱系 + 看数据源 + 附件/项目速览/检索/记忆（沿用 doc_tools 里那几个）。"""
+    """证据链谱系这一步的工具：读写证据链谱系 + 看数据源 + 附件/项目速览/检索/记忆（沿用 doc_tools 里那几个）。"""
     keep = {"read_attachment", "library_overview", "knowledge_query", "memory"}
     return [t for t in doc_tools("outline") if t["function"]["name"] in keep] + [
-        _schema("map_write", "把**整份**谱系图 JSON 覆盖写进项目那一份 谱系.json（就地改，不新建）。"
+        _schema("map_write", "把**整份**证据链谱系图 JSON 覆盖写进项目那一份 谱系.json（就地改，不新建）。"
                              "结构：{nodes:[{id,type,label,detail,ref}], edges:[{from,to,label}]}；"
                              "type = section（大纲小标题）/ paper（论文精读结论）/ note（笔记）/ data（实验数据）；"
                              "edges 的 from/to 必须都是已有节点 id。用户说「更新谱系」「按这个改」时就调它，给完整 JSON。",
@@ -559,7 +559,7 @@ def outline_system(db: "WorkflowDB", task_id: str) -> str:
     task = db.summary(task_id)["task"]
     cur = doc_read(db, task_id, "outline")
     body = cur["markdown"][:6000] or "（还没有，等你给第一版）"
-    return f"""你是「览籍智研」里「确认大纲」这一步的框架 agent，用中文工作，站在合作者（懂科研、但听用户拍板）的位置。
+    return f"""你是「览籍智研」里「拟定框架」这一步的论文框架助手，用中文工作，站在合作者（懂科研、但听用户拍板）的位置。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：把这份研究的**框架（大纲）**跟用户敲定。不做文献检索/下载/精读/撰写成稿/格式转换，用户要这些就说明去别的步骤。
@@ -580,7 +580,7 @@ def outline_system(db: "WorkflowDB", task_id: str) -> str:
 %%MEMORY%%"""
 
 
-MAP_FALLBACK = ("把「大纲每个小标题」和「项目里的精读笔记 / 实验数据」连成一张谱系图：每一节挂上支撑它的论文结论"
+MAP_FALLBACK = ("把「框架每个小标题」和「项目里的精读笔记 / 实验数据」连成一张证据链谱系图：每一节挂上支撑它的论文结论"
                 "（写清是哪篇、什么结论、支持还是反驳），没有出处的写「待补」，不要编。")
 
 
@@ -590,10 +590,10 @@ def map_system(db: "WorkflowDB", task_id: str) -> str:
     cur = map_read(db, task_id)
     src = map_sources(db, task_id)
     skills = skill_text("research", "paper-reading-reports", "SKILL.md", cap=2500, db=db, task_id=task_id) or MAP_FALLBACK
-    return f"""你是「览籍智研」里「梳理精读」这一步的**结构整理 agent**，用中文工作。
+    return f"""你是「览籍智研」里「证据链谱系」这一步的**证据链助手**，用中文工作。
 
 硬规则：
-1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：**维护一张谱系图**（思维导图），把大纲的每个小标题和「支撑它的精读结论 / 实验数据」连起来。不做检索、下载、翻译、写作。
+1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：**维护一张证据链谱系图**（思维导图），把框架的每个小标题和「支撑它的精读结论 / 实验数据」连起来构建严密证据链。不做检索、下载、翻译、写作。
 2. 图存在 `{cur['path']}`（{'已有图' if cur['exists'] else '还没有图'}）—— 结构：
    {{"nodes":[{{"id":"s1","type":"section","label":"2.1 掺杂元素筛选","detail":""}},
              {{"id":"p1","type":"paper","label":"Left 2025","detail":"Cu 掺杂使带隙…","ref":"<笔记文件名或 paper_id>"}},
@@ -769,7 +769,7 @@ def critic_system(db: "WorkflowDB", task_id: str, brief: str) -> str:
 
 
 
-# ---- 稿件审查：博导 skill 把关，先给大思路上的问题，再落到可改的细节 ----
+# ---- AI预审查：博导与同行评议视角把关，先给大思路上的问题，再落到可改的细节 ----
 REVIEW_FALLBACK = ("以严格审稿人的位置读全文：先说**大的思路层面**的问题（贡献是否成立、逻辑链是否闭合、"
                    "证据是否支撑结论、与前人工作的差别），再给可执行的修改建议；没说清的地方标注「需核实」。")
 
@@ -784,7 +784,7 @@ def review_system(db: "WorkflowDB", task_id: str) -> str:
         skill_text("manuscript-writing", "SKILL.md", cap=3000, db=db, task_id=task_id),
         skill_text("pre-submission-reviewer", "SKILL.md", cap=2500, db=db, task_id=task_id),
     ) if x) or REVIEW_FALLBACK
-    return f"""你是「览籍智研」里「稿件审查」这一步的审查 agent，用中文工作，站在**博导/审稿人**的位置：既严格，也给建设性意见。
+    return f"""你是「览籍智研」里「AI预审查」这一步的预审 agent，用中文工作，站在**博导/同行审稿人**的位置：既严格，也给建设性意见。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：审这篇文章的正文并帮用户改。
@@ -794,8 +794,8 @@ def review_system(db: "WorkflowDB", task_id: str) -> str:
    - **Reviewer 3 (落地派 / 工程与泛化应用)**：关注实验条件苛刻度、跨领域适用性、成本与工业放大限制；
    最后给出综合决议（Accept / Minor Revision / Major Revision / Reject）和逐段可操作的修改建议。没有正文就提醒他先去「论文撰写」。
 3. 用户把想改的细节贴在消息里（「[我的标注] …」这种也照此处理）—— 逐条回应，别漏。
-4. **产出是审稿意见，不是正文**：把审稿意见整份 markdown 用 doc_write 写进 `{rep['path']}`（左边展示区就是它，写完整份、不要只给片段），**不要覆盖正文**；正文要改就让用户回「论文撰写」那一步改。
-4.1 **能写就直接写**：用户说「审一遍」「给点意见」「放到左边」就是让你现在写出整份审查意见并 doc_write 落盘 —— 不要先反问「要不要我写成一份」；落盘后用一两句说清决议和最关键的三条。确实没正文才问。
+4. **产出是预审意见，不是正文**：把预审意见整份 markdown 用 doc_write 写进 `{rep['path']}`（左边展示区就是它，写完整份、不要只给片段），**不要覆盖正文**；正文要改就让用户回「论文撰写」那一步改。
+4.1 **能写就直接写**：用户说「审一遍」「给点意见」「放到左边」就是让你现在写出整份预审意见并 doc_write 落盘 —— 不要先反问「要不要我写成一份」；落盘后用一两句说清决议和最关键的三条。确实没正文才问。
 5. 不编造文献与数据；页码/数字对不上的不当结论。你的意见是草稿式判断，最终以导师与证据为准。
 6. 出现值得长期记住的结论/约束/导师要求时调用 memory 记一条（add）；做法留给 skill。
 7. 被审的正文：`{cur['path']}`（{'已有正文' if cur['exists'] else '还没有正文 —— 提醒他先去「论文撰写」写一版'}）。

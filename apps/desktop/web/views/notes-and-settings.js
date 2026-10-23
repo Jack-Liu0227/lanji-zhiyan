@@ -192,7 +192,27 @@ function mdCmd(command, value=""){
 }
 async function mdImport(files){
   const input=[...(files||[])], list=input.filter(f=>/\.(?:md|markdown)$/i.test(f.name));
-  if(!list.length) return uiNotify("请导入 .md 或 .markdown 文件");
+  if(!list.length) return uiNotify("请选择 .md 或 .markdown 文件（笔记仅读取 Markdown）");
+  if(mdProj || spTab === "notes"){
+    const targetFolder = (mdProj && mdProj.folder) || mdDashSelectedFolder || "笔记/文献精读笔记";
+    let n = 0;
+    for(const f of list.slice(0, 50)){
+      if(f.size > 5*1024*1024) continue;
+      try{
+        const content = (await f.text()).replace(/^\uFEFF/,"");
+        const title = f.name.replace(/\.(?:md|markdown)$/i,"") || "导入笔记";
+        const safe = title.replace(/[\\/:*?"<>|]/g,"_").slice(0,100);
+        const rel = `${targetFolder}/${safe}.md`;
+        await api("/api/project/note/save", {project_id: mdDashProject, path: rel, content});
+        n++;
+      }catch(e){ uiNotify(`无法导入「${f.name}」：${e.message}`); }
+    }
+    if(n){
+      uiNotify(`成功导入 ${n} 篇笔记至 ${targetFolder}`);
+      mdDashLoad();
+    }
+    return;
+  }
   let n=0;
   for(const f of list.slice(0,50)){
     if(f.size > 5*1024*1024) continue;
@@ -624,47 +644,70 @@ function spBodyHTML(d){
             ${total ? `<span class="hint">点右上角「生成星图」，算完自动刷新</span>` : ""}</div>`}</div>`;
   }
 
-  // ---------- 4. 笔记（左侧选择列表 + 右侧 Markdown 实时预览） ----------
+  // ---------- 4. 笔记（项目笔记分类看板 + 完整 Markdown 双栏/专注编辑器） ----------
   if(spTab === "notes"){
-    return `<div class="sp-notes-layout">
-      <div class="card">
-        <div class="sch-head" style="margin-bottom:8px">
-          <div><p class="inst-label">PROJECT NOTES</p><h3 style="margin:0">项目笔记</h3></div>
-          <span class="pill" id="spNotesCount">0 篇</span>
-        </div>
-        <div style="display:flex;gap:6px;margin-bottom:8px">
-          <input class="control" id="spNoteSearchInp" placeholder="筛选项目笔记…" style="flex:1">
-          <button class="btn ghost" id="spNoteNewBtn" title="新建项目笔记" style="padding:4px 10px;font-size:12px">＋ 新建</button>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--muted);padding:4px 0 8px;border-bottom:1px solid var(--line)">
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer">
-            <input type="checkbox" id="spNoteCheckAll"> <span>全选</span>
-          </label>
-          <span id="spNoteSelectedCount">已选 0 项</span>
-          <button class="btn ghost" id="spNoteBatchExport" style="padding:2px 8px;font-size:11px" disabled>批量导出 MD</button>
-        </div>
-        <div id="spNotesList" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:6px;margin-top:8px">
-          <div class="hint">正在加载项目笔记…</div>
-        </div>
+    return `<div id="mdDashboard" class="md-dashboard pn sp-notes-dash" style="background:var(--panel);border:1px solid var(--line);border-radius:10px;min-height:520px">
+      <div class="md-dash-head" style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <input id="mdDashSearch" class="pn-search" type="search" placeholder="🔍 搜索当前项目笔记…" style="flex:1;max-width:320px">
+        <span style="flex:1"></span>
       </div>
-      <div class="card" id="spNotePreviewCard">
-        <div id="spNotePreviewEmpty" style="margin:auto;text-align:center;color:var(--muted);padding:40px">
-          <div style="font-size:36px;margin-bottom:12px">📝</div>
-          <h4 style="margin:0 0 6px">请选择一篇笔记进行预览</h4>
-          <p class="hint">左侧勾选或点击笔记条目，即可在此处实时渲染 Markdown、公式与图表。</p>
+      <div id="mdDashboardBody"></div>
+    </div>
+    <div class="md-view" id="mdView" style="display:none;min-height:520px">
+      <aside class="md-note-side">
+        <button class="btn ghost md-back-dash" id="mdBackDash" title="回项目笔记">← 回项目笔记</button>
+        <div class="md-note-side-head">
+          <button class="btn" id="btnMdNew">＋ 新建</button>
+          <button class="btn ghost" id="btnMdImport">导入 .md</button>
+          <button class="btn ghost" id="btnMdZotero" title="从本机 Zotero 取文献或笔记，建成一篇笔记">Zotero</button>
         </div>
-        <div id="spNotePreviewBody" style="display:none;flex-direction:column;height:100%;overflow:hidden">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:10px;border-bottom:1px solid var(--line);margin-bottom:12px">
-            <div>
-              <h3 id="spPvTitle" style="margin:0 0 4px">未命名笔记</h3>
-              <div class="hint" id="spPvMeta">—</div>
-            </div>
-            <div style="display:flex;gap:8px">
-              <button class="btn ghost" id="spPvCopyBtn" style="font-size:12px;padding:4px 10px">复制原文</button>
-              <button class="btn" id="spPvOpenBtn" style="font-size:12px;padding:4px 10px">去笔记页编辑 ↗</button>
+        <input id="mdNoteSearch" class="ws-field-input" type="search" placeholder="搜索笔记" style="background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:7px 9px;font-size:12.5px;color:inherit;font-family:inherit;outline:none">
+        <div id="mdNoteList" class="md-note-list"></div>
+        <div id="mdDropZone" class="md-drop-zone">拖入 Markdown 文件</div>
+        <input type="file" id="mdFileInput" accept=".md,.markdown" multiple hidden>
+      </aside>
+      <div class="md-note-main">
+        <div id="mdEmpty" class="md-empty">新建或导入一篇 Markdown 笔记</div>
+        <div id="mdEditorShell" class="md-editor-shell hidden">
+          <div class="md-title-row">
+            <input id="mdNoteTitle" class="md-note-title" maxlength="160" placeholder="未命名笔记">
+            <select id="mdTask" class="md-task-select" title="绑定到项目" style="display:none"><option value="">当前项目</option></select>
+            <span id="mdSaveState" class="md-save-state"></span>
+            <button class="btn ghost" id="btnMdFocus" title="专注模式：整页缩成一长列记事本（Esc 退出）">⛶ 专注</button>
+            <button class="btn ghost" id="btnMdNarrow" title="窗口缩成右缘窄栏（再点回铺满）">▯ 窄栏</button>
+            <button class="btn ghost" id="btnMdFocusOut" title="退出专注模式（Esc）">退出专注</button>
+            <button class="btn ghost" id="btnMdExport">导出 MD</button>
+            <button class="btn ghost" id="btnMdPdf">导出 PDF</button>
+            <button class="btn ghost" id="btnMdDelete" title="删除笔记">🗑</button>
+          </div>
+          <div class="md-toolbar" id="mdToolbar">
+            <p class="md-focus-hint">专注模式 · 边读边记 · Esc 退出</p>
+            <select class="md-tool-select" data-md-command="heading" title="标题级别"><option value="">正文</option><option value="1">标题 1</option><option value="2">标题 2</option><option value="3">标题 3</option><option value="4">标题 4</option></select>
+            <button class="md-tool-btn" data-md-command="bold" title="加粗"><b>B</b></button>
+            <button class="md-tool-btn" data-md-command="italic" title="斜体"><i>I</i></button>
+            <button class="md-tool-btn" data-md-command="highlight" title="高亮">高亮</button>
+            <select class="md-tool-select" data-md-command="align" title="对齐方式"><option value="">对齐</option><option value="left">左对齐</option><option value="center">居中</option><option value="right">右对齐</option></select>
+            <select class="md-tool-select" data-md-command="font" title="字体"><option value="">字体</option><option value="Microsoft YaHei">微软雅黑</option><option value="SimSun">宋体</option><option value="KaiTi">楷体</option><option value="Times New Roman">Times New Roman</option></select>
+            <select class="md-tool-select" data-md-command="size" title="字号"><option value="">字号</option><option value="12px">12</option><option value="14px">14</option><option value="16px">16</option><option value="18px">18</option><option value="24px">24</option><option value="32px">32</option></select>
+            <span class="md-tool-sep"></span>
+            <button class="md-tool-btn" data-md-command="ul" title="无序列表">• 列表</button>
+            <button class="md-tool-btn" data-md-command="ol" title="有序列表">1. 列表</button>
+            <button class="md-tool-btn" data-md-command="quote" title="引用">引用</button>
+            <button class="md-tool-btn" data-md-command="link" title="插入链接">链接</button>
+            <button class="md-tool-btn" data-md-command="code" title="插入代码块">代码块</button>
+            <button class="md-tool-btn" data-md-command="formula" title="插入公式块">公式</button>
+            <button class="md-tool-btn" data-md-command="table" title="插入表格">表格</button>
+            <span class="md-tool-spacer"></span>
+            <div class="seg-tabs md-mode-tabs">
+              <button class="seg-tab active" data-md-mode="split">分栏</button>
+              <button class="seg-tab" data-md-mode="write">编辑</button>
+              <button class="seg-tab" data-md-mode="preview">预览</button>
             </div>
           </div>
-          <div id="spPvContent" style="flex:1;overflow-y:auto;line-height:1.7;padding-right:8px;font-size:14px"></div>
+          <div id="mdWorkspace" class="md-workspace split">
+            <textarea id="mdSource" class="md-source" spellcheck="true" aria-label="Markdown 编辑器"></textarea>
+            <article id="mdPreview" class="md-render md-preview"></article>
+          </div>
         </div>
       </div>
     </div>`;
@@ -753,143 +796,20 @@ function spBind(d){
     });
   }
 
-  // ---------- 笔记列表与 Markdown 实时预览 ----------
+  // ---------- 笔记：完整项目笔记仪表板 + 编辑器 ----------
   if(spTab === "notes"){
-    const nList = $("spNotesList"), nCount = $("spNotesCount"), selCount = $("spNoteSelectedCount");
-    const checkAll = $("spNoteCheckAll"), batchExp = $("spNoteBatchExport"), newBtn = $("spNoteNewBtn");
-    const pvEmpty = $("spNotePreviewEmpty"), pvBody = $("spNotePreviewBody");
-    const pvTitle = $("spPvTitle"), pvMeta = $("spPvMeta"), pvContent = $("spPvContent");
-    const pvOpen = $("spPvOpenBtn"), pvCopy = $("spPvCopyBtn");
-
-    let allNotes = [];
-    async function loadNotes(){
-      if(!nList) return;
-      try{
-        const res = await api(`/api/space/notes?task_id=${encodeURIComponent(curTask)}`);
-        allNotes = res.notes || [];
-        renderNoteRows();
-        if(spActiveNoteId){
-          showNotePreview(spActiveNoteId);
-        } else if(allNotes.length){
-          showNotePreview(allNotes[0].id);
-        }
-      }catch(e){
-        nList.innerHTML = `<div class="msg error">加载笔记失败：${esc(e.message)}</div>`;
-      }
-    }
-
-    function renderNoteRows(){
-      if(!nList) return;
-      const q = ($("spNoteSearchInp")?.value || "").trim().toLowerCase();
-      const filtered = allNotes.filter(n => !q || (n.title||"").toLowerCase().includes(q) || (n.snippet||"").toLowerCase().includes(q));
-      if(nCount) nCount.textContent = `${allNotes.length} 篇`;
-      if(selCount) selCount.textContent = `已选 ${spSelectedNoteIds.size} 项`;
-      if(batchExp) batchExp.disabled = spSelectedNoteIds.size === 0;
-
-      if(!filtered.length){
-        nList.innerHTML = `<div class="hint" style="padding:16px 0">${q ? '未检索到符合条件的笔记' : '当前项目暂无笔记。点击右上「＋ 新建」开始写作。'}</div>`;
-        return;
-      }
-
-      nList.innerHTML = filtered.map(n => `
-        <div class="sp-note-item ${n.id === spActiveNoteId ? 'active' : ''}" data-note-pick="${esc(n.id)}">
-          <input type="checkbox" data-note-chk="${esc(n.id)}" ${spSelectedNoteIds.has(n.id) ? 'checked' : ''} style="margin-top:2px;cursor:pointer">
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(n.title || "未命名笔记")}</div>
-            <div class="hint" style="font-size:11px;margin:2px 0 3px">${esc(n.updated_at || "")} · ${n.word_count || 0} 字</div>
-            <div class="hint" style="font-size:11.5px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc(n.snippet || "")}</div>
-          </div>
-        </div>
-      `).join("");
-
-      nList.querySelectorAll("[data-note-pick]").forEach(item => {
-        item.onclick = (e) => {
-          if(e.target.type === "checkbox") return;
-          showNotePreview(item.dataset.notePick);
-        };
-      });
-
-      nList.querySelectorAll("[data-note-chk]").forEach(chk => {
-        chk.onchange = () => {
-          const nid = chk.dataset.noteChk;
-          if(chk.checked) spSelectedNoteIds.add(nid);
-          else spSelectedNoteIds.delete(nid);
-          if(selCount) selCount.textContent = `已选 ${spSelectedNoteIds.size} 项`;
-          if(batchExp) batchExp.disabled = spSelectedNoteIds.size === 0;
-          if(checkAll) checkAll.checked = spSelectedNoteIds.size === allNotes.length && allNotes.length > 0;
-        };
-      });
-    }
-
-    async function showNotePreview(noteId){
-      spActiveNoteId = noteId;
-      document.querySelectorAll(".sp-note-item").forEach(el => {
-        el.classList.toggle("active", el.dataset.notePick === noteId);
-      });
-      if(!pvBody || !pvEmpty) return;
-      pvEmpty.style.display = "none";
-      pvBody.style.display = "flex";
-      pvContent.innerHTML = `<div class="hint">正在解析并渲染 Markdown 内容…</div>`;
-      try{
-        const res = await api(`/api/space/note?id=${encodeURIComponent(noteId)}`);
-        const note = res.note || {};
-        if(pvTitle) pvTitle.textContent = note.title || "未命名笔记";
-        if(pvMeta) pvMeta.textContent = `更新时间：${note.updated_at || "—"} · 字数：${note.word_count || 0} 字`;
-        if(pvContent) pvContent.innerHTML = renderMarkdown(note.content || "（笔记内容为空）");
-        if(pvOpen) pvOpen.onclick = () => {
-          mdActiveId = note.id;
-          openTab("notes");
-        };
-        if(pvCopy) pvCopy.onclick = () => {
-          navigator.clipboard.writeText(note.content || "");
-          toast("笔记 Markdown 原文已复制到剪贴板", "success");
-        };
-      }catch(err){
-        pvContent.innerHTML = `<div class="msg error">读取笔记详情失败：${esc(err.message)}</div>`;
-      }
-    }
-
-    if(checkAll){
-      checkAll.onchange = () => {
-        if(checkAll.checked) allNotes.forEach(n => spSelectedNoteIds.add(n.id));
-        else spSelectedNoteIds.clear();
-        renderNoteRows();
-      };
-    }
-
-    if(newBtn){
-      newBtn.onclick = () => {
-        openTab("notes");
-        const btnNew = $("btnMdNew");
-        if(btnNew) btnNew.click();
-      };
-    }
-
-    if(batchExp){
-      batchExp.onclick = async () => {
-        const selected = allNotes.filter(n => spSelectedNoteIds.has(n.id));
-        if(!selected.length) return;
-        let mdBundle = "";
-        for(const n of selected){
-          try{
-            const res = await api(`/api/space/note?id=${encodeURIComponent(n.id)}`);
-            mdBundle += `# ${res.note.title || "未命名笔记"}\n> 更新时间：${res.note.updated_at}\n\n${res.note.content || ""}\n\n---\n\n`;
-          }catch(_){}
-        }
-        const blob = new Blob([mdBundle], {type: "text/markdown;charset=utf-8"});
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url; a.download = `${(d.task||{}).title || "项目"}_已选笔记_${selected.length}篇.md`;
-        a.click();
-        URL.revokeObjectURL(url);
-        toast(`已成功打包导出 ${selected.length} 篇笔记`, "success");
-      };
-    }
-
-    const sInp = $("spNoteSearchInp");
-    if(sInp) sInp.oninput = () => renderNoteRows();
-
-    loadNotes();
+    mdBind(document.querySelector("#spBody"));
+    mdDashProject = curTask;
+    mdDashLoad();
+    let pnT = 0;
+    const sInp = $("mdDashSearch");
+    if(sInp) sInp.oninput = e => {
+      mdDashQuery = e.target.value.trim().toLowerCase();
+      clearTimeout(pnT);
+      pnT = setTimeout(()=>{ mdDashLoad(); }, 180);
+    };
+    const backBtn = $("mdBackDash");
+    if(backBtn) backBtn.onclick = pnBackToDash;
   }
 }
 
@@ -899,9 +819,22 @@ async function renderSpace(m){
   if(!curTask){ m.innerHTML = needTask(); return; }
   if(spId !== curTask){ spId = curTask; spTab = "overview"; spActiveNoteId = null; spSelectedNoteIds.clear(); }
   m.innerHTML = `<div class="muted">正在读取项目…</div>`;
-  let d;
-  try{ d = await api("/api/task?id=" + encodeURIComponent(curTask)); }
-  catch(e){ m.innerHTML = `<div class="msg error">读取项目失败：${esc(e.message)}</div>`; return; }
+  let d, lastErr;
+  for(let attempt = 0; attempt < 3; attempt++){
+    try{
+      d = await api("/api/task?id=" + encodeURIComponent(curTask));
+      lastErr = null;
+      break;
+    }catch(e){
+      lastErr = e;
+      if(/locked/i.test(e?.message||"") && attempt < 2){
+        await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+        continue;
+      }
+      break;
+    }
+  }
+  if(!d || lastErr){ m.innerHTML = `<div class="msg error">读取项目失败：${esc(lastErr ? lastErr.message : "未知错误")}</div>`; return; }
   const t = d.task||{};
   const opts = (S.tasks||[]).map(x=>`<option value="${x.id}" ${x.id===curTask?"selected":""}>${esc(x.title)}</option>`).join("");
   m.innerHTML = `
@@ -1046,19 +979,58 @@ async function renderSpace(m){
   }
 }
 
-let mdDashProject = "", mdDashGroup = "", mdDashPath = "", mdDashQuery = "", mdDashMap = null;
-let mdProj = null, mdDraft = false;      // 项目笔记的编辑状态：{pid, path, title, content}；path 空 = 还没落盘的新笔记
+let mdDashProject = "", mdDashSelectedFolder = "笔记/文献精读笔记", mdDashPath = "", mdDashQuery = "", mdDashMap = null;
+let mdProj = null, mdDraft = false;      // 项目笔记编辑状态：{pid, path, folder, title, content}
+let mdDashTree = null;
+let pnSideCollapsed = localStorage.getItem("rw-pn-side-collapsed") === "true";
+const pnExpandedFolders = new Set(["笔记", "笔记/文献精读笔记"]);
 
-/* 分类色点：精读用主色，未分类用警示色，其余按名字稳定散到莫兰迪色板（同一分类每次颜色一致） */
-const PN_COLORS = ["#176b87","#8e9aa6","#7d94a8","#8aa17f","#a8927c","#9a8fa8","#a8888a"];
-function pnColor(name){
-  if(name === "文献精读笔记") return "var(--accent)";
-  if(name === "未分类") return "var(--warn)";
-  let h = 0; for(const c of String(name)) h = (h * 31 + c.charCodeAt(0)) % 997;
-  return PN_COLORS[h % PN_COLORS.length];
+function pnCountFiles(node){
+  if(!node) return 0;
+  if(node.type === "file") return 1;
+  let c = 0;
+  for(const ch of (node.children || [])){
+    c += pnCountFiles(ch);
+  }
+  return c;
 }
-/* 这条精读笔记挂到谱系图的哪个节点上：先认 ref（文件名/标题都试），再拿标题跟节点 label 互包含。
-   命中就问边表要它的上位小节名 —— 「已挂 2.1 筛选」比「已挂」有用。 */
+
+function pnFindNode(node, p){
+  if(!node) return null;
+  if(node.path === p) return node;
+  for(const ch of (node.children || [])){
+    if(ch.path === p) return ch;
+    if(ch.type === "dir"){
+      const f = pnFindNode(ch, p);
+      if(f) return f;
+    }
+  }
+  return null;
+}
+
+function pnCollectFiles(node, q = ""){
+  if(!node) return [];
+  let files = [];
+  if(node.type === "file"){
+    if(!q || (node.title||"").toLowerCase().includes(q) || (node.name||"").toLowerCase().includes(q)){
+      files.push(node);
+    }
+  }else if(node.type === "dir"){
+    for(const ch of (node.children || [])){
+      files = files.concat(pnCollectFiles(ch, q));
+    }
+  }
+  return files;
+}
+
+function pnNodeMatches(node, q){
+  if(!q) return true;
+  if(node.type === "file"){
+    return (node.title || "").toLowerCase().includes(q) || (node.name || "").toLowerCase().includes(q);
+  }
+  return (node.name || "").toLowerCase().includes(q) || (node.children || []).some(ch => pnNodeMatches(ch, q));
+}
+
 function pnMapHit(file){
   const g = mdDashMap; if(!g || !(g.nodes||[]).length) return null;
   const norm = s => String(s||"").replace(/[\s·:：,，.。()（）\[\]【】\-—_]/g,"").toLowerCase();
@@ -1075,26 +1047,292 @@ function pnMapHit(file){
   }
   return null;
 }
+
 function pnJumpMap(){
   if(mdDashProject && curTask !== mdDashProject){ curTask = mdDashProject; localStorage.setItem("rw-task", curTask); }
-  wfStep = "map"; localStorage.setItem("rw-wf-step", wfStep);   // 谱系图就是「梳理精读」那一步
+  wfStep = "map"; localStorage.setItem("rw-wf-step", wfStep);
   openTab("workflow");
 }
-function pnSideHTML(groups, cur){
+
+function pnRenderTreeNode(node, depth = 0, q = ""){
+  if(!node) return "";
+  if(q && !pnNodeMatches(node, q)) return "";
+  const isDir = node.type === "dir";
+  const isRoot = node.path === "笔记";
+  const expanded = q ? true : pnExpandedFolders.has(node.path);
+  const isCurFolder = mdDashSelectedFolder === node.path;
+  const isCurFile = mdDashPath === node.path;
+  const count = isDir ? pnCountFiles(node) : 0;
+  const hit = (!isDir && node.path) ? pnMapHit(node) : null;
+  const indent = depth * 14;
+
+  let html = "";
+  if(!isRoot){
+    const rowClass = ["pn-tree-row", (isDir ? (isCurFolder ? "on" : "") : (isCurFile ? "on" : ""))].filter(Boolean).join(" ");
+    html += `<div class="${rowClass}" style="padding-left:${indent}px" data-tree-path="${esc(node.path)}" data-tree-type="${node.type}">
+      ${isDir ? `<button class="pn-tree-toggle" data-tree-toggle="${esc(node.path)}" title="${expanded?'收起':'展开'}">${expanded?'▼':'▶'}</button>` : `<span style="width:16px;display:inline-block"></span>`}
+      <span class="pn-tree-icon">${isDir ? (expanded ? "📂" : "📁") : "📝"}</span>
+      <span class="pn-tree-text" title="${esc(isDir ? node.name : (node.title || node.name))}">${esc(isDir ? node.name : (node.title || node.name))}</span>
+      ${isDir ? `<span class="pn-tree-badge">${count}</span>` : ""}
+      ${hit ? `<span class="pn-badge on" style="font-size:10px;padding:0 4px" title="已挂证据链谱系图">已挂</span>` : ""}
+      <div class="pn-tree-acts">
+        ${isDir ? `
+          <button class="pn-tree-act" data-act="new-file" data-path="${esc(node.path)}" title="在此文件夹新建笔记">＋</button>
+          <button class="pn-tree-act" data-act="new-folder" data-path="${esc(node.path)}" title="在此新建子文件夹">📁+</button>
+          <button class="pn-tree-act del" data-act="del-folder" data-path="${esc(node.path)}" title="删除文件夹">🗑</button>
+        ` : `
+          <button class="pn-tree-act del" data-act="del-file" data-path="${esc(node.path)}" title="删除笔记">🗑</button>
+        `}
+      </div>
+    </div>`;
+  }
+  if(isDir && (expanded || isRoot) && node.children && node.children.length){
+    html += `<div class="pn-tree-children">`;
+    for(const child of node.children){
+      html += pnRenderTreeNode(child, isRoot ? 0 : depth + 1, q);
+    }
+    html += `</div>`;
+  }
+  return html;
+}
+
+function pnSideHTML(tree, q){
+  if(pnSideCollapsed){
+    return `<aside class="pn-side collapsed">
+      <button class="pn-side-expand" id="pnBtnExpandSide" title="展开笔记目录">
+        <span>▶</span>
+        <span class="pn-side-expand-txt">笔记目录</span>
+      </button>
+    </aside>`;
+  }
   return `<aside class="pn-side">
-    <div class="pn-side-h">分类 · 按流程</div>
-    <div class="pn-cats">${groups.map(g => `<button class="pn-cat${g.name===cur?" on":""}${g.count?"":" zero"}${g.name==="未分类"?" legacy":""}" data-pn-cat="${esc(g.name)}">
-      <i class="pn-dot" style="background:${pnColor(g.name)}"></i><span class="pn-cat-n">${esc(g.name)}</span><span class="pn-n">${g.count}</span></button>`).join("")}</div>
-    <div class="pn-side-foot"><button class="pn-cat" data-pn-legacy="1" title="存在程序文件夹里的独立笔记（Zotero 导入也在这里）">
-      <i class="pn-dot" style="background:var(--muted)"></i><span class="pn-cat-n">独立笔记</span><span class="pn-n">${mdNotes.length}</span></button></div></aside>`;
+    <div class="pn-side-header">
+      <div class="pn-side-head-row">
+        <b class="pn-side-title">📁 笔记目录</b>
+        <button class="pn-side-collapse" id="pnBtnCollapseSide" title="折叠侧栏">◀</button>
+      </div>
+      <div class="pn-side-btns">
+        <button class="btn sm" id="pnBtnSideNewFile" title="在当前文件夹新建笔记">＋ 笔记</button>
+        <button class="btn sm ghost" id="pnBtnSideNewFolder" title="在当前文件夹新建子文件夹">📁+ 文件夹</button>
+        <button class="btn sm ghost" id="pnBtnSideImport" title="导入 Markdown 文件">导入</button>
+        <input type="file" id="pnSideFileInput" accept=".md,.markdown" multiple hidden>
+      </div>
+    </div>
+    <div class="pn-tree" id="pnTreeContainer">
+      ${pnRenderTreeNode(tree, 0, q) || `<div class="hint" style="padding:16px 10px;text-align:center">${q ? "没有匹配的笔记" : "没有 Markdown 笔记"}</div>`}
+    </div>
+  </aside>`;
 }
-function pnBindCats(host){
-  host.querySelectorAll("[data-pn-cat]").forEach(b => b.onclick = () => { mdDashGroup = b.dataset.pnCat; mdDashPath = ""; mdProj = null; mdDashLoad(); });
-  host.querySelectorAll("[data-pn-legacy]").forEach(b => b.onclick = pnOpenLegacy);
+
+function pnBreadcrumbHTML(curPath, isFile = false){
+  const parts = (curPath || "笔记").split("/").filter(Boolean);
+  let accumulated = "";
+  const crumbs = parts.map((part, idx) => {
+    accumulated = accumulated ? `${accumulated}/${part}` : part;
+    const isLast = idx === parts.length - 1;
+    if(isLast){
+      return `<span class="pn-crumb-item cur">${esc(part)}</span>`;
+    }
+    return `<span class="pn-crumb-item" data-crumb-path="${esc(accumulated)}">${esc(part)}</span>`;
+  });
+  return `<div class="pn-crumb"><span class="pn-crumb-icon">${isFile ? "📝" : "📁"}</span>${crumbs.join('<span class="pn-crumb-sep">/</span>')}</div>`;
 }
-/* 「独立笔记」整页（存程序文件夹，和项目笔记两套）：编辑器壳搬回 .md-note-main 再显示整页。
-   就地搬 DOM —— 同一套工具栏/导出/分栏代码，两种保存目标。 */
+
+function pnFolderViewHTML(folderNode, q){
+  if(q){
+    const allFiles = pnCollectFiles(folderNode, q);
+    return `<div class="pn-rows" style="padding:12px 14px">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:10px">搜索结果 · 共 ${allFiles.length} 篇</div>
+      ${allFiles.length ? allFiles.map(f => {
+        const hit = pnMapHit(f);
+        return `<div class="pn-row" data-pn-file="${esc(f.path)}">
+          <div class="pn-rt" title="${esc(f.title || f.name)}">${esc(f.title || f.name)}</div>
+          <div class="pn-rm">
+            <span style="color:var(--muted)">${esc(f.path)}</span>
+            <span>${new Date(f.updated_at*1000).toLocaleDateString()}</span>
+            ${hit ? `<span class="pn-badge on" data-pn-map="1" title="已挂进证据链谱系图">已挂 ${esc(hit.section||hit.label)}</span>` : ""}
+          </div>
+        </div>`;
+      }).join("") : `<div class="hint" style="padding:40px;text-align:center">没有找到与「${esc(q)}」匹配的笔记</div>`}
+    </div>`;
+  }
+
+  const subDirs = (folderNode.children || []).filter(c => c.type === "dir");
+  const files = (folderNode.children || []).filter(c => c.type === "file");
+
+  if(!subDirs.length && !files.length){
+    return `<div style="padding:48px 20px;text-align:center;color:var(--muted)">
+      <div style="font-size:28px;margin-bottom:10px">📂</div>
+      <div>此文件夹为空</div>
+      <div style="margin-top:14px;display:flex;gap:8px;justify-content:center">
+        <button class="btn sm" id="pnEmptyNewNote">＋ 新建笔记</button>
+        <button class="btn sm ghost" id="pnEmptyNewFolder">📁+ 新建文件夹</button>
+      </div>
+    </div>`;
+  }
+
+  let html = `<div style="overflow-y:auto;padding:12px 14px;flex:1">`;
+  if(subDirs.length){
+    html += `<div style="font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:8px">子文件夹 (${subDirs.length})</div>
+    <div class="pn-grid" style="padding:0;margin-bottom:18px">
+      ${subDirs.map(d => `<div class="pn-card" data-card-folder="${esc(d.path)}">
+        <div class="pn-card-h"><span style="font-size:18px">📁</span><span class="pn-card-title">${esc(d.name)}</span></div>
+        <div class="pn-card-meta"><span>${pnCountFiles(d)} 篇笔记</span></div>
+      </div>`).join("")}
+    </div>`;
+  }
+  if(files.length){
+    html += `<div style="font-size:11.5px;font-weight:600;color:var(--muted);margin-bottom:8px">笔记列表 (${files.length})</div>
+    <div class="pn-rows" style="padding:0">
+      ${files.map(f => {
+        const hit = pnMapHit(f);
+        return `<div class="pn-row" data-pn-file="${esc(f.path)}">
+          <div class="pn-rt" title="${esc(f.title || f.name)}">${esc(f.title || f.name)}</div>
+          <div class="pn-rm">
+            <span>${new Date(f.updated_at*1000).toLocaleDateString()}</span>
+            <span>${(f.size/1024).toFixed(1)} KB</span>
+            ${hit ? `<span class="pn-badge on" data-pn-map="1" title="已挂进证据链谱系图">已挂 ${esc(hit.section||hit.label)}</span>` : ""}
+          </div>
+        </div>`;
+      }).join("")}
+    </div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function pnBindSideEvents(host){
+  const side = host.querySelector(".pn-side");
+  if(!side) return;
+
+  const btnCollapse = side.querySelector("#pnBtnCollapseSide");
+  if(btnCollapse) btnCollapse.onclick = () => {
+    pnSideCollapsed = true;
+    localStorage.setItem("rw-pn-side-collapsed", "true");
+    mdDashLoad();
+  };
+  const btnExpand = side.querySelector("#pnBtnExpandSide");
+  if(btnExpand) btnExpand.onclick = () => {
+    pnSideCollapsed = false;
+    localStorage.setItem("rw-pn-side-collapsed", "false");
+    mdDashLoad();
+  };
+
+  const btnNewFile = side.querySelector("#pnBtnSideNewFile");
+  if(btnNewFile) btnNewFile.onclick = () => {
+    mdProj = {pid: mdDashProject, path: "", folder: mdDashSelectedFolder || "笔记/文献精读笔记", title: "", content: ""};
+    mdDraft = true; mdDashPath = ""; mdDashLoad();
+  };
+
+  const btnNewFolder = side.querySelector("#pnBtnSideNewFolder");
+  if(btnNewFolder) btnNewFolder.onclick = async () => {
+    const parentFolder = mdDashSelectedFolder || "笔记";
+    const name = prompt(`在 ${parentFolder} 下新建子文件夹，请输入名称：`);
+    if(!name || !name.trim()) return;
+    const safe = name.trim().replace(/[\\/:*?"<>|]/g,"_");
+    const targetPath = `${parentFolder}/${safe}`;
+    try{
+      await api("/api/project/folder/create", {project_id: mdDashProject, path: targetPath});
+      pnExpandedFolders.add(parentFolder);
+      pnExpandedFolders.add(targetPath);
+      mdDashSelectedFolder = targetPath;
+      mdDashLoad();
+    }catch(err){ uiNotify("创建文件夹失败：" + err.message); }
+  };
+
+  const btnImport = side.querySelector("#pnBtnSideImport");
+  const fileInp = side.querySelector("#pnSideFileInput");
+  if(btnImport && fileInp){
+    btnImport.onclick = () => fileInp.click();
+    fileInp.onchange = (e) => {
+      mdImport(e.target.files);
+      e.target.value = "";
+    };
+  }
+
+  // Toggle folder
+  side.querySelectorAll("[data-tree-toggle]").forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const p = btn.dataset.treeToggle;
+      if(pnExpandedFolders.has(p)) pnExpandedFolders.delete(p);
+      else pnExpandedFolders.add(p);
+      mdDashLoad();
+    };
+  });
+
+  // Click tree row (folder or file)
+  side.querySelectorAll("[data-tree-path]").forEach(row => {
+    row.onclick = async (e) => {
+      if(e.target.closest(".pn-tree-acts") || e.target.closest("[data-tree-toggle]")) return;
+      const p = row.dataset.treePath;
+      const type = row.dataset.treeType;
+      if(type === "dir"){
+        if(mdProj && (mdProj.path || $("mdSource").value.trim())) await mdSaveProj();
+        mdProj = null; mdDraft = false; mdDashPath = "";
+        mdDashSelectedFolder = p;
+        pnExpandedFolders.add(p);
+        mdDashLoad();
+      }else if(type === "file"){
+        if(mdProj && (mdProj.path || $("mdSource").value.trim())) await mdSaveProj();
+        mdDashPath = p;
+        mdProj = null; mdDraft = false;
+        mdDashLoad();
+      }
+    };
+  });
+
+  // Tree action buttons
+  side.querySelectorAll("[data-act]").forEach(btn => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const act = btn.dataset.act;
+      const targetPath = btn.dataset.path;
+      if(act === "new-file"){
+        mdDashSelectedFolder = targetPath;
+        pnExpandedFolders.add(targetPath);
+        mdProj = {pid: mdDashProject, path: "", folder: targetPath, title: "", content: ""};
+        mdDraft = true; mdDashPath = "";
+        mdDashLoad();
+      }else if(act === "new-folder"){
+        const name = prompt(`在 ${targetPath} 下新建子文件夹，请输入名称：`);
+        if(!name || !name.trim()) return;
+        const safe = name.trim().replace(/[\\/:*?"<>|]/g,"_");
+        const newFolder = `${targetPath}/${safe}`;
+        try{
+          await api("/api/project/folder/create", {project_id: mdDashProject, path: newFolder});
+          pnExpandedFolders.add(targetPath);
+          pnExpandedFolders.add(newFolder);
+          mdDashSelectedFolder = newFolder;
+          mdDashLoad();
+        }catch(err){ uiNotify("创建文件夹失败：" + err.message); }
+      }else if(act === "del-folder"){
+        if(targetPath === "笔记") return uiNotify("不能删除笔记根目录");
+        if(!confirm(`确定删除文件夹「${targetPath}」及其全部内容吗？`)) return;
+        try{
+          await api("/api/project/note/delete", {project_id: mdDashProject, path: targetPath});
+          pnExpandedFolders.delete(targetPath);
+          if(mdDashSelectedFolder === targetPath || mdDashSelectedFolder.startsWith(targetPath + "/")){
+            mdDashSelectedFolder = "笔记";
+          }
+          mdDashLoad();
+        }catch(err){ uiNotify("删除文件夹失败：" + err.message); }
+      }else if(act === "del-file"){
+        if(!confirm(`确定删除笔记「${targetPath}」吗？`)) return;
+        try{
+          await api("/api/project/note/delete", {project_id: mdDashProject, path: targetPath});
+          if(mdDashPath === targetPath){
+            mdDashPath = ""; mdProj = null; mdDraft = false;
+          }
+          mdDashLoad();
+        }catch(err){ uiNotify("删除笔记失败：" + err.message); }
+      }
+    };
+  });
+}
+
 function mdMountEditor(host){ const sh = $("mdEditorShell"); if(sh && host && sh.parentElement !== host) host.appendChild(sh); }
+
 function pnBackToDash(){
   mdMountEditor(document.querySelector("#mdView .md-note-main"));
   $("mdView").style.display = "none";
@@ -1102,23 +1340,18 @@ function pnBackToDash(){
   mdDashPath = ""; mdDraft = false; mdProj = null;
   mdDashLoad();
 }
-function pnOpenLegacy(){
-  mdProj = null;
-  mdMountEditor(document.querySelector("#mdView .md-note-main"));
-  $("mdDashboard").style.display = "none";
-  $("mdView").style.display = "";      // 交回 CSS 的 grid（写死 flex 会盖掉 grid，编辑器铺不满）
-  mdPaint();
-}
+
 async function mdSaveProj(){
   const rawTitle = $("mdNoteTitle").value.trim();
-  if(!mdProj.path && !rawTitle && !$("mdSource").value.trim()) return;   // 空草稿不落盘：点了新建又立刻返回，别留个「未命名笔记.md」
+  if(!mdProj.path && !rawTitle && !$("mdSource").value.trim()) return;
   const title = rawTitle || "未命名笔记";
   let content = $("mdSource").value;
-  if(!mdProj.path){                                    // 第一次保存才定文件名：标题即文件名
+  if(!mdProj.path){
     const safe = title.replace(/[\\/:*?"<>|]/g,"_").slice(0,100);
-    mdProj.path = `笔记/${mdDashGroup}/${safe}.md`;
+    const folder = mdProj.folder || mdDashSelectedFolder || "笔记/文献精读笔记";
+    mdProj.path = `${folder}/${safe}.md`;
     if(!/^#\s/.test(content)) content = `# ${title}\n\n` + content;
-  }else if(/^#\s/.test(content)){                      // 已有文件：改标题只改正文 H1，文件名不动（谱系图按它认笔记）
+  }else if(/^#\s/.test(content)){
     content = content.replace(/^#\s.*$/m, `# ${title}`);
   }
   if(content !== $("mdSource").value) $("mdSource").value = content;
@@ -1126,9 +1359,12 @@ async function mdSaveProj(){
   try{
     await api("/api/project/note/save", {project_id: mdProj.pid, path: mdProj.path, content});
     mdProj.title = title;
+    mdDashPath = mdProj.path;
+    mdDraft = false;
     $("mdSaveState").textContent = "已保存";
   }catch(e){ $("mdSaveState").textContent = "保存失败"; $("mdSaveState").title = e.message; }
 }
+
 function mdPaintProj(){
   const sh = $("mdEditorShell"); if(!sh) return;
   sh.classList.remove("hidden");
@@ -1136,42 +1372,75 @@ function mdPaintProj(){
   $("mdSource").value = mdProj.content || "";
   mdPaintPreview();
   $("mdSaveState").textContent = "";
-  [$("mdTask"), $("btnMdFocus"), $("btnMdNarrow"), $("btnMdFocusOut"), $("btnMdDelete")]
-    .forEach(el => { if(el) el.style.display = "none"; });     // 项目笔记里这几样没意义（无绑定下拉/专注靠整页/没有删文件接口）
+  [$("mdTask"), $("btnMdFocus"), $("btnMdNarrow"), $("btnMdFocusOut")]
+    .forEach(el => { if(el) el.style.display = "none"; });
+  const del = $("btnMdDelete");
+  if(del){
+    del.style.display = "";
+    del.onclick = async () => {
+      if(!confirm(`确定删除笔记「${mdProj.title || mdProj.path}」吗？此操作无法撤销。`)) return;
+      try{
+        if(mdProj.path){
+          await api("/api/project/note/delete", {project_id: mdProj.pid, path: mdProj.path});
+        }
+        mdProj = null; mdDraft = false; mdDashPath = "";
+        mdDashLoad();
+      }catch(e){
+        uiNotify("删除笔记失败：" + e.message);
+      }
+    };
+  }
 }
+
 async function mdDashLoad(){
   const host = $("mdDashboardBody"); if(!host) return;
   if(!mdDashProject){ host.innerHTML = `<div class="hint">选择项目后浏览该项目中的 Markdown 笔记。</div>`; return; }
   try{
     const data = await api(`/api/project/notes?project_id=${encodeURIComponent(mdDashProject)}`);
-    const rank = g => g.name === "文献精读笔记" ? -1 : g.name === "未分类" ? 1 : 0;   // 精读钉最上，未分类沉底
-    const groups = (data.groups||[]).slice().sort((a,b) => rank(a) - rank(b));
+    mdDashTree = data.tree || {type: "dir", name: "笔记", path: "笔记", children: []};
+
     if(!mdDashMap || mdDashMap.pid !== mdDashProject){
       mdDashMap = { pid: mdDashProject, nodes: [], edges: [] };
       api(`/api/map/state?id=${encodeURIComponent(mdDashProject)}`)
-        .then(d => { if(mdDashMap && mdDashMap.pid === mdDashProject){ mdDashMap.nodes = d.nodes||[]; mdDashMap.edges = d.edges||[]; if(mdDashGroup === "文献精读笔记" && !mdProj) mdDashLoad(); } })
+        .then(d => { if(mdDashMap && mdDashMap.pid === mdDashProject){ mdDashMap.nodes = d.nodes||[]; mdDashMap.edges = d.edges||[]; if(!mdProj) mdDashLoad(); } })
         .catch(()=>{});
     }
-    const cur = groups.find(g => g.name === mdDashGroup) || groups[0];
-    if(!cur){ host.innerHTML = `<div class="hint">这个项目还没有笔记分类。</div>`; return; }
-    mdDashGroup = cur.name;
+
+    if(!mdDashSelectedFolder || !pnFindNode(mdDashTree, mdDashSelectedFolder)){
+      const defaultFolder = pnFindNode(mdDashTree, "笔记/文献精读笔记") ? "笔记/文献精读笔记" : "笔记";
+      mdDashSelectedFolder = defaultFolder;
+    }
+    pnExpandedFolders.add(mdDashSelectedFolder);
+
+    const q = mdDashQuery.trim().toLowerCase();
+
+    // 1. If currently editing a note or creating draft
     if(mdDashPath || mdDraft){
       if(!mdProj || mdProj.pid !== mdDashProject || mdProj.path !== mdDashPath){
         const file = mdDashPath
           ? await api(`/api/project/note?project_id=${encodeURIComponent(mdDashProject)}&path=${encodeURIComponent(mdDashPath)}`)
           : {title: "", content: ""};
-        mdProj = {pid: mdDashProject, path: mdDashPath, title: file.title || "", content: file.content || ""};
+        mdProj = {pid: mdDashProject, path: mdDashPath, folder: mdDashSelectedFolder, title: file.title || "", content: file.content || ""};
         mdDraft = !mdDashPath;
       }
-      const hit = cur.name === "文献精读笔记" && mdProj.path ? pnMapHit({path: mdProj.path, title: mdProj.title}) : null;
-      host.innerHTML = `<div class="pn-layout">${pnSideHTML(groups, cur.name)}<section class="pn-pane">
-        <div class="pn-pane-h"><button class="btn ghost" id="mdDashBackFiles">← ${esc(cur.name)}</button><b>${esc(mdProj.title || "新笔记")}</b>
-          ${hit?`<span class="pn-badge on">已挂 ${esc(hit.section||hit.label)}</span>`:""}
-          <span style="flex:1"></span><button class="btn" id="mdDashSave">保存</button></div>
-        <div class="pn-editor-slot" id="pnEditorSlot"></div></section></div>`;
-      pnBindCats(host);
+      const hit = mdProj.path ? pnMapHit({path: mdProj.path, title: mdProj.title}) : null;
+      host.innerHTML = `<div class="pn-layout${pnSideCollapsed ? " side-collapsed" : ""}">
+        ${pnSideHTML(mdDashTree, q)}
+        <section class="pn-pane">
+          <div class="pn-pane-h">
+            <button class="btn ghost" id="mdDashBackFiles">← 返回目录</button>
+            ${pnBreadcrumbHTML(mdProj.path || `${mdDashSelectedFolder}/${mdProj.title || '新笔记.md'}`, true)}
+            ${hit ? `<span class="pn-badge on">已挂 ${esc(hit.section||hit.label)}</span>` : ""}
+            <span style="flex:1"></span>
+            <button class="btn" id="mdDashSave">保存</button>
+          </div>
+          <div class="pn-editor-slot" id="pnEditorSlot"></div>
+        </section>
+      </div>`;
+
+      pnBindSideEvents(host);
       $("mdDashBackFiles").onclick = async () => {
-        if(mdProj) await mdSaveProj();                  // 退出前先落盘，别丢正在写的
+        if(mdProj && (mdProj.path || $("mdSource").value.trim())) await mdSaveProj();
         mdProj = null; mdDraft = false; mdDashPath = ""; mdDashLoad();
       };
       $("mdDashSave").onclick = () => mdSaveProj();
@@ -1180,111 +1449,112 @@ async function mdDashLoad(){
       if(!mdProj.path) setTimeout(()=> $("mdNoteTitle")?.focus(), 40);
       return;
     }
-    mdMountEditor(document.querySelector("#mdView .md-note-main"));   // 离开编辑态：编辑器壳先放回独立笔记页，否则跟着 innerHTML 一起被抹掉
-    const q = mdDashQuery.trim().toLowerCase();
-    const files = (cur.files||[]).filter(f => !q || String(f.title||"").toLowerCase().includes(q));
-    const readGroup = cur.name === "文献精读笔记";
-    host.innerHTML = `<div class="pn-layout">${pnSideHTML(groups, cur.name)}<section class="pn-pane">
-      <div class="pn-pane-h"><b>${esc(cur.name)}</b><span class="pn-sub">· ${cur.count} 篇${cur.description?` · ${esc(cur.description)}`:""}</span>
-        ${readGroup?`<span class="pn-auto">精读完成自动归档到这里</span>`:""}
-        <span style="flex:1"></span>${readGroup?`<button class="btn ghost" id="pnGoMap">看谱系图 →</button>`:""}${cur.name==="未分类"?"":`<button class="btn" id="mdDashNew">＋ 新建</button>`}</div>
-      <div class="pn-rows">${files.length ? files.map(f => {
-        const hit = readGroup ? pnMapHit(f) : null;
-        return `<div class="pn-row" data-pn-file="${esc(f.path)}">
-          <div class="pn-rt" title="${esc(f.title)}">${esc(f.title)}</div>
-          <div class="pn-rm"><span>${new Date(f.updated_at*1000).toLocaleDateString()}</span>
-            ${readGroup ? (hit ? `<span class="pn-badge on" data-pn-map="1" title="这条已挂进谱系图，点它去「梳理精读」">已挂 ${esc(hit.section||hit.label)}</span>`
-                                : `<span class="pn-badge" data-pn-map="1" title="还没挂进谱系图，点它去「梳理精读」挂上">未挂谱系</span>`) : ""}</div></div>`;
-      }).join("") : `<div class="hint">${q?"没有匹配的笔记":(cur.name==="未分类"?"这里没有散落的笔记了":"这个分类还没有笔记")}</div>`}</div>
-      <div class="pn-pane-f">共 ${cur.count} 篇${files.length !== cur.count?` · 筛出 ${files.length} 篇`:""}${readGroup?" · 精读出的 .md 落在 笔记/文献精读笔记/":""}</div></section></div>`;
-    pnBindCats(host);
-    host.querySelectorAll("[data-pn-file]").forEach(b => b.onclick = (e) => {
-      if(e.target.closest("[data-pn-map]")) return pnJumpMap();     // 点徽标=跳谱系图，点别处=开笔记
-      mdDashPath = b.dataset.pnFile; mdDashLoad();
+
+    // 2. Folder Browse Mode
+    mdMountEditor(document.querySelector("#mdView .md-note-main"));
+    const curFolderNode = pnFindNode(mdDashTree, mdDashSelectedFolder) || mdDashTree;
+    const isRoot = curFolderNode.path === "笔记";
+    const totalFiles = pnCountFiles(curFolderNode);
+    const readGroup = curFolderNode.name === "文献精读笔记";
+
+    host.innerHTML = `<div class="pn-layout${pnSideCollapsed ? " side-collapsed" : ""}">
+      ${pnSideHTML(mdDashTree, q)}
+      <section class="pn-pane">
+        <div class="pn-pane-h">
+          ${pnBreadcrumbHTML(curFolderNode.path, false)}
+          <span class="pn-sub">· ${totalFiles} 篇笔记</span>
+          ${readGroup ? `<span class="pn-auto">精读完成自动归档到这里</span>` : ""}
+          <span style="flex:1"></span>
+          ${readGroup ? `<button class="btn ghost" id="pnGoMap">看谱系图 →</button>` : ""}
+          <button class="btn" id="mdDashNew">＋ 新建笔记</button>
+          <button class="btn ghost" id="mdDashNewFolder">📁+ 新建文件夹</button>
+          ${!isRoot ? `<button class="btn ghost" id="mdDashDelFolder" title="删除此文件夹" style="color:var(--err,#e5484d)">🗑 删除</button>` : ""}
+        </div>
+        ${pnFolderViewHTML(curFolderNode, q)}
+        <div class="pn-pane-f">当前目录：${esc(curFolderNode.path)} · 包含 ${totalFiles} 篇 Markdown 笔记</div>
+      </section>
+    </div>`;
+
+    pnBindSideEvents(host);
+
+    host.querySelectorAll("[data-crumb-path]").forEach(el => {
+      el.onclick = () => {
+        mdDashSelectedFolder = el.dataset.crumbPath;
+        pnExpandedFolders.add(mdDashSelectedFolder);
+        mdDashLoad();
+      };
     });
+
+    host.querySelectorAll("[data-card-folder]").forEach(card => {
+      card.onclick = () => {
+        mdDashSelectedFolder = card.dataset.cardFolder;
+        pnExpandedFolders.add(mdDashSelectedFolder);
+        mdDashLoad();
+      };
+    });
+
+    host.querySelectorAll("[data-pn-file]").forEach(b => {
+      b.onclick = (e) => {
+        if(e.target.closest("[data-pn-map]")) return pnJumpMap();
+        mdDashPath = b.dataset.pnFile;
+        const parts = mdDashPath.split("/");
+        let curP = "";
+        for(let i = 0; i < parts.length - 1; i++){
+          curP = curP ? `${curP}/${parts[i]}` : parts[i];
+          pnExpandedFolders.add(curP);
+        }
+        mdDashLoad();
+      };
+    });
+
     const gm = $("pnGoMap"); if(gm) gm.onclick = pnJumpMap;
-    const nb = $("mdDashNew"); if(nb) nb.onclick = () => {
-      mdProj = {pid: mdDashProject, path: "", title: "", content: ""};   // 标题在编辑器顶部输入，第一次保存才定文件名
+    const nb = $("mdDashNew");
+    if(nb) nb.onclick = () => {
+      mdProj = {pid: mdDashProject, path: "", folder: mdDashSelectedFolder, title: "", content: ""};
       mdDraft = true; mdDashPath = ""; mdDashLoad();
     };
+    const nf = $("mdDashNewFolder");
+    if(nf) nf.onclick = async () => {
+      const name = prompt(`在 ${curFolderNode.path} 下新建子文件夹，请输入名称：`);
+      if(!name || !name.trim()) return;
+      const safe = name.trim().replace(/[\\/:*?"<>|]/g,"_");
+      const newFolder = `${curFolderNode.path}/${safe}`;
+      try{
+        await api("/api/project/folder/create", {project_id: mdDashProject, path: newFolder});
+        pnExpandedFolders.add(curFolderNode.path);
+        pnExpandedFolders.add(newFolder);
+        mdDashSelectedFolder = newFolder;
+        mdDashLoad();
+      }catch(err){ uiNotify("创建文件夹失败：" + err.message); }
+    };
+    const df = $("mdDashDelFolder");
+    if(df) df.onclick = async () => {
+      if(!confirm(`确定删除文件夹「${curFolderNode.path}」及其全部内容吗？`)) return;
+      try{
+        await api("/api/project/note/delete", {project_id: mdDashProject, path: curFolderNode.path});
+        pnExpandedFolders.delete(curFolderNode.path);
+        mdDashSelectedFolder = "笔记";
+        mdDashLoad();
+      }catch(err){ uiNotify("删除文件夹失败：" + err.message); }
+    };
+    const empNew = $("pnEmptyNewNote");
+    if(empNew) empNew.onclick = () => {
+      mdProj = {pid: mdDashProject, path: "", folder: mdDashSelectedFolder, title: "", content: ""};
+      mdDraft = true; mdDashPath = ""; mdDashLoad();
+    };
+    const empFold = $("pnEmptyNewFolder");
+    if(empFold) empFold.onclick = nf.onclick;
+
   }catch(e){ host.innerHTML=`<div class="msg error">${esc(e.message)}</div>`; }
 }
 async function renderNotes(m){
-  m.style.padding = "";
-  m.innerHTML = `<div id="mdDashboard" class="md-dashboard pn"><div class="md-dash-head"><h2>项目笔记</h2><select id="mdDashProject"><option value="">选择项目</option>${(S.tasks||[]).map(t=>`<option value="${esc(t.id)}" ${t.id===(mdDashProject||curTask)?"selected":""}>${esc(t.title)}</option>`).join("")}</select><input id="mdDashSearch" class="pn-search" type="search" placeholder="🔍 搜索标题"></div><div id="mdDashboardBody"></div></div><div class="md-view" id="mdView" style="display:none">
-    <aside class="md-note-side">
-      <button class="btn ghost md-back-dash" id="mdBackDash" title="回项目笔记（笔记存在项目文件夹里的那套）">← 项目笔记</button>
-      <div class="md-note-side-head">
-        <button class="btn" id="btnMdNew">＋ 新建</button>
-        <button class="btn ghost" id="btnMdImport">导入 .md</button>
-        <button class="btn ghost" id="btnMdZotero" title="从本机 Zotero 取文献或笔记，建成一篇笔记">Zotero</button>
-      </div>
-      <input id="mdNoteSearch" class="ws-field-input" type="search" placeholder="搜索笔记" style="background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:7px 9px;font-size:12.5px;color:inherit;font-family:inherit;outline:none">
-      <div id="mdNoteList" class="md-note-list"></div>
-      <div id="mdDropZone" class="md-drop-zone">拖入 Markdown 文件</div>
-      <input type="file" id="mdFileInput" accept=".md,.markdown" multiple hidden>
-    </aside>
-    <div class="md-note-main">
-      <div id="mdEmpty" class="md-empty">新建或导入一篇 Markdown 笔记</div>
-      <div id="mdEditorShell" class="md-editor-shell hidden">
-        <div class="md-title-row">
-          <input id="mdNoteTitle" class="md-note-title" maxlength="160" placeholder="未命名笔记">
-          <select id="mdTask" class="md-task-select" title="绑定到项目（不绑也能写）"><option value="">不绑定项目</option></select>
-          <span id="mdSaveState" class="md-save-state"></span>
-          <button class="btn ghost" id="btnMdFocus" title="专注模式：整页缩成一长列记事本（Esc 退出）">⛶ 专注</button>
-          <button class="btn ghost" id="btnMdNarrow" title="窗口缩成右缘窄栏（再点回铺满）">▯ 窄栏</button>
-          <button class="btn ghost" id="btnMdFocusOut" title="退出专注模式（Esc）">退出专注</button>
-          <button class="btn ghost" id="btnMdExport">导出 MD</button>
-          <button class="btn ghost" id="btnMdPdf">导出 PDF</button>
-          <button class="btn ghost" id="btnMdDelete" title="删除笔记">🗑</button>
-        </div>
-        <div class="md-toolbar" id="mdToolbar">
-          <p class="md-focus-hint">专注模式 · 边读边记 · Esc 退出</p>
-          <select class="md-tool-select" data-md-command="heading" title="标题级别"><option value="">正文</option><option value="1">标题 1</option><option value="2">标题 2</option><option value="3">标题 3</option><option value="4">标题 4</option></select>
-          <button class="md-tool-btn" data-md-command="bold" title="加粗"><b>B</b></button>
-          <button class="md-tool-btn" data-md-command="italic" title="斜体"><i>I</i></button>
-          <button class="md-tool-btn" data-md-command="highlight" title="高亮">高亮</button>
-          <select class="md-tool-select" data-md-command="align" title="对齐方式"><option value="">对齐</option><option value="left">左对齐</option><option value="center">居中</option><option value="right">右对齐</option></select>
-          <select class="md-tool-select" data-md-command="font" title="字体"><option value="">字体</option><option value="Microsoft YaHei">微软雅黑</option><option value="SimSun">宋体</option><option value="KaiTi">楷体</option><option value="Times New Roman">Times New Roman</option></select>
-          <select class="md-tool-select" data-md-command="size" title="字号"><option value="">字号</option><option value="12px">12</option><option value="14px">14</option><option value="16px">16</option><option value="18px">18</option><option value="24px">24</option><option value="32px">32</option></select>
-          <span class="md-tool-sep"></span>
-          <button class="md-tool-btn" data-md-command="ul" title="无序列表">• 列表</button>
-          <button class="md-tool-btn" data-md-command="ol" title="有序列表">1. 列表</button>
-          <button class="md-tool-btn" data-md-command="quote" title="引用">引用</button>
-          <button class="md-tool-btn" data-md-command="link" title="插入链接">链接</button>
-          <button class="md-tool-btn" data-md-command="code" title="插入代码块">代码块</button>
-          <button class="md-tool-btn" data-md-command="formula" title="插入公式块">公式</button>
-          <button class="md-tool-btn" data-md-command="table" title="插入表格">表格</button>
-          <span class="md-tool-spacer"></span>
-          <div class="seg-tabs md-mode-tabs">
-            <button class="seg-tab active" data-md-mode="split">分栏</button>
-            <button class="seg-tab" data-md-mode="write">编辑</button>
-            <button class="seg-tab" data-md-mode="preview">预览</button>
-          </div>
-        </div>
-        <div id="mdWorkspace" class="md-workspace split">
-          <textarea id="mdSource" class="md-source" spellcheck="true" aria-label="Markdown 编辑器"></textarea>
-          <article id="mdPreview" class="md-render md-preview"></article>
-        </div>
-      </div>
-    </div>
-  </div>`;
-  mdBind(m);
-  if(!mdLoaded) await mdLoad(); else mdPaint();
-  mdDashProject = $("mdDashProject").value;
-  $("mdDashProject").onchange=e=>{ mdDashProject=e.target.value; mdDashGroup=""; mdDashPath=""; mdDashMap=null; mdDashLoad(); };
-  let pnT = 0;
-  $("mdDashSearch").oninput = e => { mdDashQuery = e.target.value; clearTimeout(pnT); pnT = setTimeout(()=>{ mdDashPath=""; mdDashLoad(); }, 180); };
-  mdDashLoad();
-  mdFocus(localStorage.getItem("rw-md-focus")==="true", true);     // 上次在专注模式就还在专注模式
-  $("mdBackDash").onclick = pnBackToDash;
-  if(mdNarrowOn){ $("mdView")?.classList.add("narrow"); document.body.classList.add("md-narrow"); }
-  const nb = $("btnMdNarrow"); if(nb && mdNarrowOn) nb.textContent = "▯ 铺满";
+  spTab = "notes";
+  return renderSpace(m);
 }
 if(!window.__rwMdEsc){                     // Esc 退出专注（只注册一次，renderNotes 会被反复调用）
   window.__rwMdEsc = 1;
   document.addEventListener("keydown", (e)=>{
-    if(e.key==="Escape" && mdFocusOn && route()==="notes"){
+    if(e.key==="Escape" && mdFocusOn && (route()==="notes" || (route()==="space" && spTab==="notes"))){
       if(mdNarrowOn) mdNarrow();          // 窄栏里 Esc = 退出专注 + 回铺满（别把人留在几十像素的分栏里）
       mdFocus(false);
     }

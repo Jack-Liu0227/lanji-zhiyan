@@ -11,7 +11,7 @@ function render(){
   else if(r==="calendar") renderCalendar(m);
   else if(r==="mail") renderMail(m);
   else if(r==="library") renderStar(m);                        // 知识星图整页（项目 → 文献/笔记/知识点/候选/工作流）
-  else if(r==="notes") renderNotes(m);
+  else if(r==="notes") { spTab = "notes"; renderSpace(m); }
   else if(r==="intel") renderIntel(m);
   else if(r==="assistants") renderAssistants(m);
   else if(r==="team") renderTeam(m);
@@ -442,7 +442,17 @@ function fmtAgo(iso){                        // 方案 A 的副标题用相对�
   return fmtDate(iso).slice(0, 10);
 }
 function projName(id){ return ((S.tasks||[]).find(x=>x.id===id)||{}).title || ""; }
+let ahCollapsed = localStorage.getItem("rw-ah-collapsed") === "true";
+
 function renderHistory(){
+  if(ahCollapsed){
+    return `<aside class="ah collapsed" aria-label="对话历史">
+      <button class="ah-expand-btn" id="ah-expand" title="展开对话历史">
+        <span>▶</span>
+        <span class="ah-expand-txt">对话历史</span>
+      </button>
+    </aside>`;
+  }
   const all = (S.chats||[]).slice();
   const groups = historyGroups(all);
   const byBorn = [...all].sort((a, b)=> String(a.created_at || "").localeCompare(String(b.created_at || "")));
@@ -464,7 +474,10 @@ function renderHistory(){
       ? `<div class="ah-group"><p class="ah-group-label">${k}<span class="ln"></span><i>${v.length}</i></p>${v.map(item).join("")}</div>` : "").join("");
   return `<aside class="ah" aria-label="对话历史">
     <div class="ah-head"><div><p class="eyebrow">WORKSPACE</p><h2>对话</h2></div>
-      <button class="ah-new" id="ah-new" title="新建对话">＋</button></div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button class="ah-new" id="ah-new" title="新建对话">＋</button>
+        <button class="ah-collapse" id="ah-collapse" title="折叠对话列表">◀</button>
+      </div></div>
     <div class="ah-list">
       <div class="ah-bar"><label><input type="checkbox" id="ah-all" ${ahSel.size&&ahSel.size===(S.chats||[]).length?"checked":""}>全选 ${all.length} 个对话</label>
         <button class="ah-del-sel" id="ah-del-sel" ${ahSel.size?"":"disabled"}>删除选中 ${ahSel.size}</button></div>
@@ -496,7 +509,7 @@ function renderAgent(m){
   const cur = (S.chats||[]).find(t=>t.id===curChat);
   const boundA = (S.assistants||[]).find(a=>a.id === ((cur&&cur.assistant_id)||"")) || null;
   const recs = (S.chatEvents||[]).length;
-  m.innerHTML = `<div class="agent">
+  m.innerHTML = `<div class="agent${ahCollapsed ? " ah-collapsed" : ""}">
     ${renderHistory()}
     <section class="at" aria-label="对话主线">
       <header class="at-head">
@@ -587,7 +600,19 @@ function renderAgent(m){
     if(curChat===b.dataset.del){ curChat=null; localStorage.removeItem("rw-chat"); }
     await refreshState(false); render();
   });
-  $("ah-new").onclick = async ()=>{
+  const colBtn = $("ah-collapse");
+  if(colBtn) colBtn.onclick = () => {
+    ahCollapsed = true;
+    localStorage.setItem("rw-ah-collapsed", "true");
+    render();
+  };
+  const expBtn = $("ah-expand");
+  if(expBtn) expBtn.onclick = () => {
+    ahCollapsed = false;
+    localStorage.setItem("rw-ah-collapsed", "false");
+    render();
+  };
+  if($("ah-new")) $("ah-new").onclick = async ()=>{
     const r = await api("/api/chat/create",{title:""});      // 通用助手对话：不绑项目
     curChat = r.chat.id; localStorage.setItem("rw-chat",curChat);
     await refreshState(false); render();

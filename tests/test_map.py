@@ -38,7 +38,7 @@ class MapStepTest(unittest.TestCase):
     def test_step_order_is_ten_with_map_after_outline(self):
         self.assertEqual(len(workflow.STAGES), 10)
         self.assertEqual(workflow.STAGES.index("map"), workflow.STAGES.index("outline") + 1)
-        self.assertEqual(workflow.STAGE_LABEL["map"], "梳理精读")
+        self.assertEqual(workflow.STAGE_LABEL["map"], "证据链谱系")
 
     def test_write_read_roundtrip_and_dirty_data_dropped(self):
         r = workflow.map_write(self.db, self.tid, {

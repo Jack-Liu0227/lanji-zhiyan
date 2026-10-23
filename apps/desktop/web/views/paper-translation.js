@@ -549,7 +549,7 @@ function trBind(){
 }
 
 
-/* ==== 梳理精读（第 5 步）：左 2/3 谱系图（大纲小标题 → 精读结论 / 实验数据）+ 右 1/3 结构 agent ==== */
+/* ==== 证据链谱系（工作流第 6 步）：左 2/3 证据链谱系图（框架小标题 → 精读结论 / 实验数据）+ 右 1/3 证据链 agent ==== */
 const MP = { nodes:[], edges:[], sel:"", src:null, busy:false, poll:0, outline:"", pos:{}, zoom:1 };
 const MP_COL = { section:"var(--muted)", paper:"var(--accent)", note:"#8f7fb5", data:"#4ade80" };
 const MP_TAG = { section:"小节", paper:"论文", note:"笔记", data:"数据" };
@@ -561,7 +561,7 @@ function mapPanelHTML(active){
     <div class="mp-grid">
       <div class="mp-left">
         <div class="mp-head">
-          <b>🧩 谱系图</b><span class="ol-tag" id="mp-file">谱系.json</span>
+          <b>🧩 证据链谱系图</b><span class="ol-tag" id="mp-file">谱系.json</span>
           <span class="mp-meta" id="mp-meta"></span>
           <span class="mp-spacer"></span>
           <div class="mp-filter-group" id="mpFilter" style="display:inline-flex;gap:4px;background:var(--panel2);padding:2px;border-radius:6px;border:1px solid var(--line)">
@@ -584,8 +584,8 @@ function mapPanelHTML(active){
       <div class="mp-right">
         <div class="at-head">
           <div class="at-heading"><span style="color:var(--accent);font-size:15px">🧩</span>
-            <div><h1 id="map-title">${esc(proj ? proj.title : "梳理精读")}</h1>
-            <p id="map-sub">与项目绑定 · 左边那张谱系图就是这一步的产物</p></div></div>
+            <div><h1 id="map-title">${esc(proj ? proj.title : "证据链谱系")}</h1>
+            <p id="map-sub">与项目绑定 · 左边那张证据链谱系图就是这一步的产物</p></div></div>
         </div>
         <div class="at-tabs">
           <button class="at-tab on" data-dv="map|conversation">对话</button>
@@ -602,7 +602,7 @@ function mapPanelHTML(active){
           </div>
           <div class="atts" id="map-atts"></div>
           <div class="composer" id="map-composer">
-            <textarea id="map-ask" rows="1" placeholder="说「按大纲建一版谱系图」/ 让它把某篇挂到某一节下面…（Enter 发送，Shift+Enter 换行）"></textarea>
+            <textarea id="map-ask" rows="1" placeholder="说「按框架建一版证据链谱系图」/ 让它把某篇挂到某一节下面…（Enter 发送，Shift+Enter 换行）"></textarea>
             <div class="at-tools">
               <div class="at-tools-l"><button class="icon-btn" id="map-plus" title="附加文件">＋</button>
                 <label class="at-sel" title="这一步用哪个模型档案">🔌<select id="map-modpick"><option value="">未配置模型</option>
@@ -786,8 +786,8 @@ function mpPaint(){
   if(!MP.nodes.length){
     box.style.width = ""; box.style.height = "";
     box.innerHTML = `<div class="mp-empty"><span class="big">🧩</span>
-      <span class="t1">还没有谱系图</span>
-      <span class="t2">右边跟 agent 说一句「按大纲建一版谱系图」，<br>它会把每个小标题挂上项目的精读结论；<br>实验数据直接拖到这块画布上。</span></div>`;
+      <span class="t1">还没有证据链谱系图</span>
+      <span class="t2">右边跟 agent 说一句「按框架建一版证据链谱系图」，<br>它会把每个小标题挂上项目的精读结论与实验数据；<br>实验数据直接拖到这块画布上。</span></div>`;
     return;
   }
   const L = mpLayout(), pos = L.pos;
@@ -1142,7 +1142,7 @@ async function mpUpload(files){
     }catch(e){ mpSay("上传失败：" + e.message); }
   }
   await mpLoad();
-  mpSay("数据文件进来了 —— 跟 agent 说一句「把刚上传的这份挂到某一节下面」它就会画进谱系图。");
+  mpSay("数据文件进来了 —— 跟 agent 说一句「把刚上传的这份挂到某一节下面」它就会画进证据链谱系图。");
 }
 
 function showAddNodeModal(){
@@ -1152,7 +1152,7 @@ function showAddNodeModal(){
   modal.innerHTML = `
     <div class="modal-mask"></div>
     <div class="modal-dialog" style="width:480px">
-      <div class="modal-head"><h3>＋ 添加谱系图节点</h3><button class="modal-close" id="btnMpClose">✕</button></div>
+      <div class="modal-head"><h3>＋ 添加证据链节点</h3><button class="modal-close" id="btnMpClose">✕</button></div>
       <div class="modal-body">
         <label class="field"><span>节点分类</span>
           <select id="mpNodeType" class="control" style="width:100%">
@@ -1207,7 +1207,7 @@ function showAddNodeModal(){
     }
     try{
       await api("/api/map/save", { task_id: curTask, data: { nodes: MP.nodes, edges: MP.edges } });
-      uiNotify("已添加新节点并保存谱系图");
+      uiNotify("已添加新节点并保存证据链谱系图");
       close();
       mpPaint();
     }catch(err){

@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import threading
 import urllib.error
 import urllib.request
 import uuid
@@ -102,12 +103,13 @@ class ManagedConnection:
         self.path = Path(path)
 
     @contextmanager
-    def transaction(self, timeout: float = 10.0):
+    def transaction(self, timeout: float = 60.0):
         if str(self.path) != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.path, timeout=timeout)
         conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA busy_timeout=60000")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.row_factory = sqlite3.Row
         try:
             yield conn
@@ -122,25 +124,35 @@ class ManagedConnection:
                 pass
 
 
+_RESEARCH_SCHEMA_INITIALIZED: set[str] = set()
+_RESEARCH_INIT_LOCK = threading.Lock()
+
+
 class ResearchDB:
     def __init__(self, path: str | Path):
         self.path = Path(path)
-        if str(self.path) != ":memory:":
+        is_memory = str(self.path) == ":memory:"
+        if not is_memory:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path)
+        self.db = sqlite3.connect(self.path, timeout=60.0)
         self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA busy_timeout=5000")   # 子 agent 并行时各自一条连接，别立刻报 database is locked
+        self.db.execute("PRAGMA busy_timeout=60000")   # 等待锁最多 60 秒
+        self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.row_factory = sqlite3.Row
-        try:
-            import migrations
-            migrations.run_migrations(self.db, db_path=self.path if str(self.path) != ":memory:" else None)
-        except ImportError:
-            # Source-only utilities may open a database without the migration package.
-            # Migration failures themselves must remain visible; otherwise a partially
-            # upgraded database fails later with misleading missing-column errors.
-            pass
-        self.db.executescript(SCHEMA)
-        self.db.commit()
+
+        db_key = ":memory:" if is_memory else str(self.path.resolve())
+        if is_memory or db_key not in _RESEARCH_SCHEMA_INITIALIZED:
+            with _RESEARCH_INIT_LOCK:
+                if is_memory or db_key not in _RESEARCH_SCHEMA_INITIALIZED:
+                    try:
+                        import migrations
+                        migrations.run_migrations(self.db, db_path=self.path if not is_memory else None)
+                    except ImportError:
+                        pass
+                    self.db.executescript(SCHEMA)
+                    self.db.commit()
+                    if not is_memory:
+                        _RESEARCH_SCHEMA_INITIALIZED.add(db_key)
 
     def close(self) -> None:
         try:

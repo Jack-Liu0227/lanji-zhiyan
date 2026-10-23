@@ -143,21 +143,22 @@ const NAV = [
     {id:"assistants",label:"专家",ico:"👨‍🔬"},
     {id:"team",label:"团队",ico:"👥"},
     {id:"calendar",label:"日历",ico:"📅"},
-    {id:"tasks",label:"项目",ico:"📁"},
+    {id:"tasks",label:"项目管理",ico:"📁"},
     {id:"space",label:"项目空间",ico:"🧭"}]},
   {g:"solo",items:[
     {id:"library",label:"知识库",ico:"📚"},
     {id:"workflow",label:"科研平台",ico:"🔬"},
     {id:"schedules",label:"定时任务",ico:"⏰"},
-    {id:"notes",label:"笔记",ico:"📝"},
+
     {id:"intel",label:"情报日报",ico:"📡"}]},
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {assistants:"专家",team:"团队",agent:"智研管家",calendar:"日历",tasks:"项目",workflow:"科研平台",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
+const TITLES = {assistants:"专家",team:"团队",agent:"智研管家",calendar:"日历",tasks:"项目管理",workflow:"科研平台",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 
 function openTab(r, title){
+  if(r === "notes"){ spTab = "notes"; r = "space"; title = "项目空间"; }
   const t = tabs.find(x=>x.route===r);
   if(t){ activeTab=t.id; render(); return; }          // 少了这行 render()，侧栏点了就没反应
   const id = "t"+(seq++); tabs.push({id,route:r,title:title||TITLES[r]||r}); activeTab=id;

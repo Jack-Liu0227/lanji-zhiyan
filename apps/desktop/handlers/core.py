@@ -58,21 +58,27 @@ class CoreRoutes:
                     "stages": [{"key": s, "label": STAGE_LABEL[s]} for s in STAGES],
                 })
         if path == "/api/task":
-            with WorkflowDB(DB_PATH) as db:
-                tid = q["id"][0]
-                s = db.summary(tid)
-                task = dict(s["task"] or {})
-                # 卡片「阶段」取最近一条步骤记录:research_tasks.stage 几乎不动,用它走完谱系还显示「未开始」
-                task["stage_now"] = db.stage_now(tid, task.get("stage") or "")
-                return self._json({
-                    "task": task, "summary": s, "steps": db.steps(tid),
-                    "stage_map": db.stage_map(tid), "results": db.results(tid),
-                    "notes": [{k: n[k] for k in ("id", "title", "created_at")} for n in db.notes(tid)],
-                    "papers": s["papers"], "evidence": s["evidence"],
-                    "paper_list": db.papers_of(tid),
-                    "paper_graph": db.paper_graph(tid),
-                    "evidence_list": [dict(r) for r in db.evidence(tid)],
-                })
+            tid = q["id"][0]
+            for attempt in range(4):
+                try:
+                    with WorkflowDB(DB_PATH) as db:
+                        s = db.summary(tid)
+                        task = dict(s["task"] or {})
+                        task["stage_now"] = db.stage_now(tid, task.get("stage") or "")
+                        return self._json({
+                            "task": task, "summary": s, "steps": db.steps(tid),
+                            "stage_map": db.stage_map(tid), "results": db.results(tid),
+                            "notes": [{k: n[k] for k in ("id", "title", "created_at")} for n in db.notes(tid)],
+                            "papers": s["papers"], "evidence": s["evidence"],
+                            "paper_list": db.papers_of(tid),
+                            "paper_graph": db.paper_graph(tid),
+                            "evidence_list": [dict(r) for r in db.evidence(tid)],
+                        })
+                except Exception as exc:
+                    if "locked" in str(exc).lower() and attempt < 3:
+                        time.sleep(0.25 * (attempt + 1))
+                        continue
+                    raise
         if path == "/api/note":
             with WorkflowDB(DB_PATH) as db:
                 return self._json(db.note(q["id"][0]))

@@ -63,7 +63,7 @@ window.addEventListener("message", e => {
   if(d.kind === "post" || d.kind === "paper"){
     const param = d.ref ? "?id=" + encodeURIComponent(d.ref) : (d.path ? "?path=" + encodeURIComponent(d.path) : "");
     if(param) api("/api/paper/open" + param).catch(err => uiNotify("打开失败：" + err.message));
-  } else if(d.kind === "note") openTab("notes");
+  } else if(d.kind === "note") { spTab = "notes"; openTab("space"); }
   else if(d.kind === "draft") {
     if(d.step) { wfStep = d.step; localStorage.setItem("rw-wf-step", wfStep); }
     openTab("workflow");

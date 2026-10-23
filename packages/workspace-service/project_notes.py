@@ -53,17 +53,61 @@ def note_path(db: Any, project_id: str, relative: str, *, create: bool = False) 
         raise ValueError("笔记路径须以 笔记/ 开头并以 .md 结尾，例如：笔记/研究计划/计划.md")
     path = root.joinpath(*parts)
     try:
-        path.resolve(strict=False).relative_to(root)
+        resolved = path.resolve(strict=False)
+        notes_dir = (root / "笔记").resolve()
+        resolved.relative_to(notes_dir)
     except ValueError:
         raise ValueError("笔记路径越过项目目录") from None
     if path.is_symlink():
         raise ValueError("不能打开符号链接笔记")
     if create:
-        category = root / "笔记" / parts[1]
-        if len(parts) > 2 and parts[1] not in {name for name, _ in CATEGORIES} and not category.is_dir():
-            raise ValueError("请先选择一个笔记分类")
         path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def folder_path(db: Any, project_id: str, relative: str, *, create: bool = False) -> Path:
+    root = project_root(db, project_id)
+    raw = str(relative or "").replace("\\", "/")
+    parts = [p for p in raw.split("/") if p]
+    if not parts or parts[0] != "笔记" or any(p in ("", ".", "..") or p.startswith(".") for p in parts):
+        raise ValueError("文件夹路径必须是 笔记/ 开头的相对路径")
+    path = root.joinpath(*parts)
+    try:
+        resolved = path.resolve(strict=False)
+        notes_dir = (root / "笔记").resolve()
+        resolved.relative_to(notes_dir)
+    except ValueError:
+        raise ValueError("文件夹路径越过项目目录") from None
+    if path.is_symlink():
+        raise ValueError("不能操作符号链接目录")
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def create_folder(db: Any, project_id: str, relative: str) -> dict:
+    path = folder_path(db, project_id, relative, create=True)
+    return {"ok": True, "path": relative}
+
+
+def delete(db: Any, project_id: str, relative: str) -> dict:
+    raw = str(relative or "").replace("\\", "/").strip("/")
+    if not raw or raw == "笔记":
+        raise ValueError("不能删除笔记根目录")
+    if raw.lower().endswith(".md"):
+        path = note_path(db, project_id, relative)
+        if not path.exists():
+            raise FileNotFoundError(f"笔记文件不存在: {relative}")
+        if path.is_file():
+            path.unlink()
+    else:
+        path = folder_path(db, project_id, relative)
+        if not path.exists():
+            raise FileNotFoundError(f"目录不存在: {relative}")
+        if path.is_dir():
+            import shutil
+            shutil.rmtree(path)
+    return {"ok": True, "deleted": relative}
 
 
 _LEGACY_TITLE_CATEGORY = (("精读 · ", "文献精读笔记"), ("笔记 · ", "文献精读笔记"),
@@ -110,11 +154,49 @@ def _file_rows(folder: Path, notes_root: Path, titles: dict[str, str]) -> list[d
     return files
 
 
+def build_tree(folder: Path, notes_root: Path, titles: dict[str, str]) -> dict:
+    children = []
+    try:
+        entries = sorted(folder.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    except Exception:
+        entries = []
+    for entry in entries:
+        if entry.name.startswith(".") or entry.is_symlink():
+            continue
+        if entry.is_dir():
+            children.append(build_tree(entry, notes_root, titles))
+        elif entry.is_file() and entry.name.lower().endswith(".md") and entry.name.lower() != "readme.md":
+            try:
+                rel = entry.resolve().relative_to(notes_root.parent).as_posix()
+            except ValueError:
+                continue
+            children.append({
+                "type": "file",
+                "name": entry.name,
+                "title": titles.get(entry.stem) or entry.stem,
+                "path": rel,
+                "updated_at": entry.stat().st_mtime,
+                "size": entry.stat().st_size
+            })
+    try:
+        rel_path = folder.resolve().relative_to(notes_root.parent).as_posix()
+    except ValueError:
+        rel_path = "笔记"
+    return {
+        "type": "dir",
+        "name": folder.name,
+        "path": rel_path,
+        "children": children
+    }
+
+
 def dashboard(db: Any, project_id: str) -> dict:
     notes = ensure_categories(db, project_id)
     rehome_legacy(db, project_id, notes)
     titles = {r["id"]: r["title"] for r in db.notes(project_id)}
     titles.update({n["id"]: n["title"] for n in db.md_notes() if n.get("task_id") == project_id})
+
+    tree = build_tree(notes, notes, titles)
 
     groups = []
     for name, description in CATEGORIES:
@@ -135,7 +217,7 @@ def dashboard(db: Any, project_id: str) -> dict:
     legacy.sort(key=lambda item: item["updated_at"], reverse=True)
     groups.append({"name": "未分类", "path": "笔记", "description": "笔记根目录下的散落笔记", "count": len(legacy), "files": legacy})
     return {"project_id": project_id, "path_format": "笔记/<分类>/<文件名>.md",
-            "groups": groups, "total": sum(g["count"] for g in groups)}
+            "tree": tree, "groups": groups, "total": sum(g["count"] for g in groups)}
 
 
 def _title_of(db: Any, project_id: str, stem: str) -> str:

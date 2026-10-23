@@ -1198,6 +1198,14 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     with WorkflowDB(DB_PATH) as note_db:
                         return self._json(project_notes.write(note_db, str(data.get("project_id") or ""),
                                                               str(data.get("path") or ""), str(data.get("content") or "")))
+                if path == "/api/project/folder/create":
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(project_notes.create_folder(note_db, str(data.get("project_id") or ""),
+                                                                      str(data.get("path") or "")))
+                if path == "/api/project/note/delete":
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(project_notes.delete(note_db, str(data.get("project_id") or ""),
+                                                               str(data.get("path") or "")))
                 if path == "/api/trans/start":
                     tid = (data.get("task_id") or "").strip()
                     pid = (data.get("id") or "").strip()
@@ -1284,9 +1292,9 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                         existing = db.messages(tid, step)
                         if existing and any(m.get("role") != "system" for m in existing):
                             stage_map = {
-                                "idea": "创新点审查", "search": "论文搜索", "download": "下载精读",
-                                "notes": "论文翻译", "outline": "确认大纲", "map": "梳理精读",
-                                "write": "文章撰写", "review": "稿件审查", "entrans": "中译英", "convert": "格式转换"
+                                "idea": "创新点审查", "search": "文献检索", "download": "文献入库",
+                                "notes": "文献精读", "outline": "拟定框架", "map": "证据链谱系",
+                                "write": "论文撰写", "review": "AI预审查", "entrans": "学术英译", "convert": "格式排版"
                             }
                             title = f"[{stage_map.get(step, step)}] 探讨 {time.strftime('%m-%d %H:%M')}"
                             cid = db.create_chat(title)

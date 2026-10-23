@@ -211,7 +211,8 @@ def project_roots() -> list[Path]:
     import sqlite3
     out: list[Path] = []
     try:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
+        conn.execute("PRAGMA busy_timeout=30000")
         try:
             for sql in ("SELECT base_dir FROM research_tasks WHERE base_dir<>''",
                         "SELECT out_dir FROM chats WHERE out_dir<>''"):

@@ -32,12 +32,12 @@ class StepGateTest(unittest.TestCase):
         got = step_plan(self.db, self.task, "outline")
         self.assertTrue(got.get("blocked"))
         self.assertEqual(got["prev"], STAGES[STAGES.index("outline") - 1])
-        self.assertEqual(got["prev_label"], "论文翻译")
+        self.assertEqual(got["prev_label"], "文献精读")
         self.assertEqual(self.db.messages(self.task, "outline"), [])   # 不写计划、不缓存空计划
 
     def test_交付后放行(self) -> None:
         orig = workflow.chat
-        workflow.chat = lambda *a, **k: "从「论文翻译」同步到：10 篇已译。计划：1 定框架 2 补引用 3 定稿"
+        workflow.chat = lambda *a, **k: "从「文献精读」同步到：10 篇已精读。计划：1 定框架 2 补引用 3 定稿"
         try:
             self.db.log_step(self.task, "notes", "done")
             self.assertTrue(step_done(self.db, self.task, "notes"))

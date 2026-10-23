@@ -959,9 +959,9 @@ def agent_profile(db: "WorkflowDB", task_id: str) -> dict[str, Any] | None:
 
 
 STEP_AGENT = {                       # 十步各有一个助手身份（跟前端 WF_AGENT 同名，改一处两边对齐）
-    "idea": "创新点审查助手", "search": "文献检索助手", "download": "入库助手", "notes": "翻译助手",
-    "outline": "框架助手", "map": "谱系助手", "write": "写作助手", "review": "审查助手",
-    "entrans": "中译英助手", "convert": "格式助手",
+    "idea": "创新点审查助手", "search": "文献检索助手", "download": "文献入库助手", "notes": "文献精读助手",
+    "outline": "论文框架助手", "map": "证据链助手", "write": "论文写作助手", "review": "AI预审助手",
+    "entrans": "学术英译助手", "convert": "格式排版助手",
 }
 
 # 检索跑完要主动收口（问用户还改不改检索式）：提示词已要求，这里再兜一层——模型偶尔只回一句「检索完了」。

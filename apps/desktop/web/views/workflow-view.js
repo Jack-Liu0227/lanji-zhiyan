@@ -1039,6 +1039,7 @@ const PANELS = {
 };   // 有专门功能区的步骤；其余留白卡
 let wfStep=localStorage.getItem("rw-wf-step")||"idea";
 let wfMin=localStorage.getItem("rw-wf-min")==="1";
+let wfAgentCollapsed=localStorage.getItem("rw-wf-agent-collapsed")==="1";
 let wfMsgs=[], wfEvents=[];   // 右栏「本步助手」的历史与事件（统计口径只算这个助手自己）
 
 /* ==== 三栏工作台：左十步 / 中展示区+确认交付 / 右本步助手 ==== */
@@ -1107,6 +1108,7 @@ function wfAgentHTML(step){
         <button class="btn ghost" id="wv-history-btn" title="查看对话历史与工作流切换" style="padding:3px 8px;font-size:11.5px">⏱ 历史</button>
         <button class="btn ghost" id="wv-newchat-btn" title="新建这一步的对话" style="padding:3px 8px;font-size:11.5px">＋ 新建</button>
         <span class="wf-mdl" title="这一步用的模型">${esc(mdl)}</span>
+        <button class="btn ghost wf-agent-collapse-btn" id="wv-agent-collapse" title="折叠助手（扩大工作区）" style="padding:3px 7px;font-size:11.5px">▶</button>
       </div>
     </div>
   </header>
@@ -1132,13 +1134,34 @@ function wfAgentHTML(step){
 
 async function wfAgentPaint(m, step){
   const host = m.querySelector("#wfAgent"); if(!host) return;
+  const a = WF_AGENT[step] || WF_AGENT.idea;
+  if(wfAgentCollapsed){
+    host.className = "wf-agent collapsed";
+    host.innerHTML = `<button class="wf-agent-expand-btn" id="wv-agent-expand" title="展开${esc(a.name || "智研助手")}">
+      <span>◀</span>
+      <span class="wf-agent-expand-txt">${esc(a.name || "智研助手")}</span>
+    </button>`;
+    const exp = host.querySelector("#wv-agent-expand");
+    if(exp) exp.onclick = ()=>{
+      wfAgentCollapsed = false;
+      localStorage.setItem("rw-wf-agent-collapsed", "0");
+      renderWorkflow(m);
+    };
+    return;
+  }
+  host.className = "wf-agent";
   // 论文翻译的「笔记模式」：右栏这一列换成阅读笔记窄栏（点「助手模式」再换回来）
   if(step === "notes" && window.TR && TR.noteMode && typeof trPaintNoteColumn === "function"){
     trPaintNoteColumn();
     return;
   }
   host.innerHTML = wfAgentHTML(step);
-  const a = WF_AGENT[step] || WF_AGENT.idea;
+  const colBtn = host.querySelector("#wv-agent-collapse");
+  if(colBtn) colBtn.onclick = ()=>{
+    wfAgentCollapsed = true;
+    localStorage.setItem("rw-wf-agent-collapsed", "1");
+    renderWorkflow(m);
+  };
   const box = $("wv-msgs"); if(!box) return;
 
   const stepPick = host.querySelector("#wvStepPick");
@@ -1428,7 +1451,7 @@ function renderWorkflow(m){
   const fName = fPath ? (fPath.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || fPath) : "未设置项目目录";
   if(wfStep !== "files" && !WF_ORDER.includes(wfStep)) wfStep = WF_ORDER[0];   // 老 localStorage 存了个不认识的步
   m.innerHTML = needTask() || `
-    <div class="wf-page${wfMin?" min":""}" id="wfPage">
+    <div class="wf-page${wfMin?" min":""}${wfAgentCollapsed?" agent-min":""}" id="wfPage">
       <aside class="wf-rail" id="wfRail">
         <div class="wf-proj" id="wfProjCard" title="点击切换项目">
           <div class="wf-proj-head">
@@ -1451,7 +1474,7 @@ function renderWorkflow(m){
             <option value="__new__">＋ 新建/管理项目…</option>
           </select>
         </button>
-        <button class="wf-fold" id="wf-collapse" title="${wfMin?"展开步骤":"折叠步骤"}">&lt; 折叠</button>
+        <button class="wf-fold" id="wf-collapse" title="${wfMin?"展开步骤导航":"折叠步骤导航"}">${wfMin ? "›" : "‹ 折叠"}</button>
         ${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}" title="${STAGE[s]}">
             <span class="wf-ico">${STAGE[s].split(" ")[0]}</span><span class="wf-lbl">${STAGE[s].slice(STAGE[s].indexOf(" ")+1)}</span>
             <span class="wf-dot"></span></button>`).join("")}
