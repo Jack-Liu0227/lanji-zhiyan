@@ -1,3 +1,20 @@
+// 打开 Zotero PDF 事件委托
+document.addEventListener("click", async (e)=>{
+  const b = e.target.closest(".zot-open-pdf");
+  if(!b) return;
+  const key = b.dataset.zotPdf;
+  const old = b.textContent;
+  try {
+    b.disabled = true; b.textContent = "打开中…";
+    const r = await api(`/api/zotero/open_pdf?key=${encodeURIComponent(key)}`);
+    if(r.error) throw new Error(r.error);
+    if(typeof uiNotify === "function") uiNotify("已在本地阅读器中打开 PDF");
+  } catch(err) {
+    if(typeof uiNotify === "function") uiNotify("打开失败：" + err.message);
+  } finally {
+    b.disabled = false; b.textContent = old;
+  }
+});
 function markdownNoteClean(html){
   return (window.DOMPurify && window.marked)
     ? window.DOMPurify.sanitize(html, {ADD_TAGS:["mark","math","semantics","annotation","mrow","mi","mo","mn","msup","msub","mfrac","mspace","mtext"],
@@ -286,7 +303,10 @@ function zotRowHTML(it){
         ${it.abstract ? `<div style="color:var(--muted);font-size:11.5px;line-height:1.4;max-height:2.8em;overflow:hidden;opacity:0.85">${esc(it.abstract)}</div>` : ""}
         ${tags ? `<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap">${tags}</div>` : ""}
       </div>
-      <button class="btn sm ghost zot-single-note" data-zot-note="${esc(it.key)}" title="将题录与批注存为单篇本地笔记" style="padding:2px 8px;font-size:11.5px;white-space:nowrap">存为笔记</button>
+      <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">
+        <button class="btn sm ghost zot-open-pdf" data-zot-pdf="${esc(it.key)}" title="直接在系统阅读器中打开该文献本地 PDF" style="padding:2px 8px;font-size:11.5px;white-space:nowrap;color:var(--accent)">📄 打开PDF</button>
+        <button class="btn sm ghost zot-single-note" data-zot-note="${esc(it.key)}" title="将题录与批注存为单篇本地笔记" style="padding:2px 8px;font-size:11.5px;white-space:nowrap">存为笔记</button>
+      </div>
   </div>`;
 }
 function zotClose(){ $("zoteroModal")?.classList.add("hidden"); }

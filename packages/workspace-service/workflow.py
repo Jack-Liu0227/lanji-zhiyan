@@ -829,10 +829,11 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
     if name == "calendar_add":
         return db.add_event(args.get("title", ""), args.get("date", ""), task_id, args.get("kind", "milestone"),
                             time=args.get("time", ""))
-    if name == "search":
-        return stage_search(db, task_id, args.get("query", ""), args.get("sources"), int(args.get("rows", 30)))
-    if name == "paper_search":
-        return stage_search(db, task_id, args.get("query", ""), args.get("sources"), int(args.get("rows", 30)))
+    if name in ("search", "paper_search"):
+        return stage_search(db, task_id, args.get("query", ""), args.get("sources"),
+                            int(args.get("rows", 30)),
+                            limit=int(args.get("limit") or 100),
+                            sort_by=str(args.get("sort_by") or "composite"))
     if name == "paper_download":
         return stage_download(db, task_id, args.get("result_id", ""))
     if name == "download":

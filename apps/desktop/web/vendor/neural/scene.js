@@ -324,19 +324,41 @@ export function mount(root, api, opts = {}) {
       const p = m.data || {};
       count = p.nodes || 0;
       sub = [p.papers || 0, `篇文献 · ${p.notes || 0} 笔记`, 'project'];
+      lab.innerHTML = `<span class="jl-icon">${m.icon}</span><span class="jl-count"><b>${count}</b></span>`
+        + `<span class="jl-const"><b>${esc(m.title)}</b><em>${m.en.toUpperCase()}</em></span>`
+        + `<span class="jl-sub">${sub[0]} ${sub[1]} <em>${sub[2]}</em></span>`
+        + `<div class="jl-acts" style="display:flex;gap:6px;margin-top:6px;justify-content:center;pointer-events:auto">`
+        + `<span class="jl-btn jl-btn-wf" data-enter-wf="${m.id}" title="进入科研平台十步工作流" style="background:#38bdf8;color:#04131d;font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px;cursor:pointer">🔬 科研平台</span>`
+        + `<span class="jl-btn jl-btn-sp" data-enter-sp="${m.id}" title="进入项目空间查看待办与笔记" style="background:rgba(255,255,255,0.14);color:#e2e8f0;font-size:11px;padding:2px 8px;border-radius:4px;cursor:pointer">📁 项目空间</span>`
+        + `</div>`;
     } else {
       const sm = moduleSummary(graph, m);
       count = sm.count; sub = sm.sub;
+      lab.innerHTML = `<span class="jl-icon">${m.icon}</span><span class="jl-count"><b>${count}</b></span>`
+        + `<span class="jl-const"><b>${esc(m.title)}</b><em>${m.en.toUpperCase()}</em></span>`
+        + `<span class="jl-sub">${sub[0]} ${sub[1]} <em>${sub[2]}</em></span>`;
     }
-    lab.innerHTML = `<span class="jl-icon">${m.icon}</span><span class="jl-count"><b>${count}</b></span>`
-      + `<span class="jl-const"><b>${esc(m.title)}</b><em>${m.en.toUpperCase()}</em></span>`
-      + `<span class="jl-sub">${sub[0]} ${sub[1]} <em>${sub[2]}</em></span>`;
     stageEl.appendChild(lab);
     refs.lab[m.id] = lab;
 
     const pick = () => m.kind === 'project' ? openProject(m.id) : setFocus({mod: m.id, sel: null});
     const enter = () => { L.hover = m.id; };
     const leave = () => { L.hover = null; L.hoverStar = null; };
+    lab.addEventListener('click', (e) => {
+      const wf = e.target.closest('[data-enter-wf]');
+      if (wf) {
+        e.stopPropagation();
+        parent.postMessage({rw: 'selectProject', id: wf.dataset.enterWf, view: 'workflow'}, '*');
+        return;
+      }
+      const sp = e.target.closest('[data-enter-sp]');
+      if (sp) {
+        e.stopPropagation();
+        parent.postMessage({rw: 'selectProject', id: sp.dataset.enterSp, view: 'space'}, '*');
+        return;
+      }
+      pick();
+    });
     hit.addEventListener('click', pick);
     hit.addEventListener('pointerenter', enter);
     hit.addEventListener('pointerleave', leave);
@@ -391,9 +413,11 @@ export function mount(root, api, opts = {}) {
       : [['内容节点', 'nodes', graph.stats.content], ['连接', 'links', graph.stats.links],
          ['双向', 'mutual', graph.stats.mutual], ['关键词', 'keywords', graph.stats.concepts]];
     const me = top ? '全部项目' : ((graph.task && graph.task.title) || '');
+    const curId = (!top && graph.task && graph.task.id) || L.curTaskId || '';
     dock.innerHTML = `<div class="dock-panel glass"><div class="dock-kpis">${kpis.map(([k, en, v]) =>
       `<div><span>${k} <em>${en}</em></span><strong class="mono">${fmt(v)}</strong></div>`).join('')}</div>`
       + `<div class="dock-chips"><span class="me">${esc(me)} <em>${top ? 'library' : 'project'}</em></span>`
+      + (!top && curId ? `<button data-act="enter-workflow" style="background:#38bdf8;color:#04131d;font-weight:600;padding:2px 8px;border-radius:4px;border:none;cursor:pointer">🔬 进入科研平台</button><button data-act="enter-space" style="cursor:pointer">📁 项目空间</button>` : '')
       + `<button data-act="replay">重播开场</button><button data-act="pause">${L.paused ? '继续' : '暂停'}</button></div></div>`;
   }
 
@@ -453,6 +477,8 @@ export function mount(root, api, opts = {}) {
   }
 
   function openProject(id) {
+    L.curTaskId = id;
+    parent.postMessage({rw: 'selectProject', id: id}, '*');
     const a = cache.byId[id];
     if (a && (a.nodes || []).length > 0) {
       applyProject(a);
@@ -910,6 +936,12 @@ export function mount(root, api, opts = {}) {
       L.paused = !L.paused;
       act.textContent = L.paused ? '继续' : '暂停';
       coreBox.classList.toggle('paused', L.paused);
+    } else if (act.dataset.act === 'enter-workflow') {
+      const tid = (graph.task && graph.task.id) || L.curTaskId;
+      if (tid) parent.postMessage({rw: 'selectProject', id: tid, view: 'workflow'}, '*');
+    } else if (act.dataset.act === 'enter-space') {
+      const tid = (graph.task && graph.task.id) || L.curTaskId;
+      if (tid) parent.postMessage({rw: 'selectProject', id: tid, view: 'space'}, '*');
     }
   });
 

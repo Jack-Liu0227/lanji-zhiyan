@@ -111,24 +111,37 @@ MAX_RESULTS = 100          # 一次检索落库上限
 
 
 def query_tokens(query: str) -> list[str]:
-    """查询实词（≥4 字符、去虚词）。相关度粗筛与排序共用这一份，口径才一致。"""
-    return [t for t in re.findall(r"[a-z0-9][a-z0-9\-]{3,}", (query or "").lower()) if t not in GLUE]
+    """查询实词（支持中英文分词与实词提取）。相关度粗筛与排序共用这一份。"""
+    q = (query or "").lower()
+    en_toks = [t for t in re.findall(r"[a-z0-9][a-z0-9\-]{2,}", q) if t not in GLUE]
+    cn_words = re.findall(r"[\u4e00-\u9fa5]{2,}", q)
+    cn_grams = []
+    for w in cn_words:
+        if len(w) <= 4:
+            cn_grams.append(w)
+        else:
+            cn_grams.extend(w[i:i+2] for i in range(len(w)-1))
+    return list(dict.fromkeys(en_toks + cn_grams))
 
 
-def _score(toks: list[str], item: dict[str, Any]) -> float:
-    """相关度 × 引用量系数：标题命中算两票、摘要命中算一票（标题是论文自己声明的主题），
-    再乘 1+log1p(引用数) 让高质量者往上走。arXiv 无引用数按 0，只靠相关度撑。
-    ponytail: 引用数没做年份/领域归一，跨领域比高低会偏；要改成 log1p(cites/年数) 就调这里。"""
+def _calc_scores(toks: list[str], item: dict[str, Any]) -> tuple[float, float]:
+    """计算 (相关度得分, 综合质量得分)。
+    标题命中算 2.5 票、摘要命中算 1 票。综合分乘 1+log1p(引用数) 与年份新颖性加权。"""
     if not toks:
-        return 0.0
+        cites = max(0, int(item.get("citations") or 0))
+        return 0.0, round(math.log1p(cites), 4)
     title = (item.get("title") or "").lower()
     blob = ("%s %s" % (title, item.get("abstract") or "")).lower()
-    rel = sum(2 * (t in title) + (t in blob) for t in toks) / (3.0 * len(toks))
-    return round(rel * (1.0 + math.log1p(max(0, int(item.get("citations") or 0)))), 4)
+    rel = sum(2.5 * (t in title) + (t in blob) for t in toks) / (3.5 * len(toks))
+    cites = max(0, int(item.get("citations") or 0))
+    yr = int((item.get("year") or "0") or 0)
+    yr_boost = 1.0 + max(0, yr - 2018) * 0.04 if yr > 2000 else 1.0
+    comp = rel * (1.0 + math.log1p(cites)) * yr_boost
+    return round(rel, 4), round(comp, 4)
 
 
-def rank(query: str, items: list[dict[str, Any]], limit: int = MAX_RESULTS) -> list[dict[str, Any]]:
-    """同 DOI / 同标题去重（留分数高的，顺手继承对方 PDF 直链）→ 按分数降序 → 最多 limit 条。"""
+def rank(query: str, items: list[dict[str, Any]], limit: int = MAX_RESULTS, sort_by: str = "composite") -> list[dict[str, Any]]:
+    """同 DOI / 同标题去重 → 按指定维度(综合/高度相关/引用量/最新年份)排序 → 最多 limit 条。"""
     toks = query_tokens(query)
     keep: dict[str, dict[str, Any]] = {}
     order: list[str] = []
@@ -136,7 +149,8 @@ def rank(query: str, items: list[dict[str, Any]], limit: int = MAX_RESULTS) -> l
         key = (it.get("doi") or "").strip().lower() or re.sub(r"[^a-z0-9]+", "", (it.get("title") or "").lower())[:80]
         if not key:
             continue
-        it = dict(it, score=_score(toks, it))
+        rel_sc, comp_sc = _calc_scores(toks, it)
+        it = dict(it, rel_score=rel_sc, score=comp_sc)
         old = keep.get(key)
         if old is None:
             keep[key] = it
@@ -147,7 +161,14 @@ def rank(query: str, items: list[dict[str, Any]], limit: int = MAX_RESULTS) -> l
         elif not (old.get("pdf_url") or "").strip():
             old["pdf_url"] = it.get("pdf_url") or ""
     out = [keep[k] for k in order]
-    out.sort(key=lambda x: (-x["score"], -int(x.get("citations") or 0), -int((x.get("year") or "0") or 0)))
+    if sort_by == "relevance":
+        out.sort(key=lambda x: (-x.get("rel_score", 0.0), -x.get("score", 0.0), -int(x.get("citations") or 0)))
+    elif sort_by == "citations":
+        out.sort(key=lambda x: (-int(x.get("citations") or 0), -x.get("score", 0.0)))
+    elif sort_by == "year":
+        out.sort(key=lambda x: (-int((x.get("year") or "0") or 0), -x.get("score", 0.0)))
+    else:  # "composite"
+        out.sort(key=lambda x: (-x.get("score", 0.0), -x.get("rel_score", 0.0), -int(x.get("citations") or 0)))
     return out[:limit]
 
 

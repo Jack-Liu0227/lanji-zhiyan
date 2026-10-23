@@ -103,13 +103,30 @@ def low_token():
 
 def mark_low(path: str | os.PathLike[str], recursive: bool = True) -> bool:
     """把目录标成 Low（含子项，用 /T）。Low 进程只有在这里才写得进去；Medium 进程照样能写。"""
+    if os.name != "nt":
+        return True
     try:
+        user = os.environ.get("USERNAME")
+        flags = 0x08000000 if os.name == "nt" else 0
+        if user:
+            subprocess.run(["icacls", str(path), "/grant", f"{user}:(OI)(CI)F"],
+                           capture_output=True, timeout=15, creationflags=flags)
         cmd = ["icacls", str(path), "/setintegritylevel", "(OI)(CI)L"]
         if recursive:
             cmd.append("/T")
         r = subprocess.run(cmd, capture_output=True, timeout=120,
-                           creationflags=0x08000000 if os.name == "nt" else 0)   # 别闪黑框
-        return r.returncode == 0
+                           creationflags=flags)   # 别闪黑框
+        if r.returncode == 0:
+            return True
+        # 降级写探针：某些非系统盘/文件系统不支持 integritylevel
+        test_file = os.path.join(str(path), ".rw_perm_test")
+        try:
+            with open(test_file, "w", encoding="utf-8") as f:
+                f.write("ok")
+            os.remove(test_file)
+            return True
+        except Exception:
+            return False
     except (OSError, subprocess.SubprocessError):
         return False
 

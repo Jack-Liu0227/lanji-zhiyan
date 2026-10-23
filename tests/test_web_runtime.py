@@ -101,14 +101,15 @@ class WebRuntimeTest(unittest.TestCase):
     def test_project_notes_dashboard_opens_existing_markdown(self) -> None:
         self.load_page()
         self.page.locator('[data-nav="notes"]').click()
-        self.page.locator('[data-md-group="文献矩阵"]').wait_for()
+        self.page.locator('[data-pn-cat="文献矩阵"]').wait_for()
         self.page.evaluate("""async () => {
           const project_id = S.tasks[0].id;
           await api('/api/project/note/save', {project_id, path:'笔记/文献矩阵/浏览器验证.md', content:'# 浏览器验证\\n\\n已有内容'});
         }""")
-        self.page.locator('[data-md-group="文献矩阵"]').click()
-        self.page.locator('[data-md-file="笔记/文献矩阵/浏览器验证.md"]').click()
-        self.assertIn("已有内容", self.page.locator("#mdDashSource").input_value())
+        self.page.locator('[data-pn-cat="文献矩阵"]').click()
+        self.page.locator('[data-pn-file="笔记/文献矩阵/浏览器验证.md"]').click()
+        self.page.locator("#mdSource").wait_for()
+        self.assertIn("已有内容", self.page.locator("#mdSource").input_value())
         self.assertEqual(self.errors, [])
 
     def test_steward_binds_existing_project_and_restores_selection(self) -> None:

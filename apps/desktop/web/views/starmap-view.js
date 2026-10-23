@@ -46,11 +46,28 @@ window.addEventListener("message", e => {
     }
     return;
   }
+  if(d.rw === "selectProject"){
+    if(d.id){
+      curTask = d.id;
+      localStorage.setItem("rw-task", curTask);
+      if(d.view === "workflow") openTab("workflow");
+      else if(d.view === "space") openTab("space");
+      else {
+        renderSidebar();
+        renderStatus();
+      }
+    }
+    return;
+  }
   if(d.rw !== "open") return;
   if(d.kind === "post" || d.kind === "paper"){
     const param = d.ref ? "?id=" + encodeURIComponent(d.ref) : (d.path ? "?path=" + encodeURIComponent(d.path) : "");
     if(param) api("/api/paper/open" + param).catch(err => uiNotify("打开失败：" + err.message));
   } else if(d.kind === "note") openTab("notes");
+  else if(d.kind === "draft") {
+    if(d.step) { wfStep = d.step; localStorage.setItem("rw-wf-step", wfStep); }
+    openTab("workflow");
+  }
 });
 
 /* ---------------- 笔记（大笔记：Markdown 编辑器，不绑项目） ---------------- */

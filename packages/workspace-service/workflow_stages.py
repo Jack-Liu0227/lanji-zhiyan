@@ -32,9 +32,11 @@ def stage_idea(db: WorkflowDB, task_id: str, idea: str) -> dict[str, Any]:
          '"dims_f":{"F1":0-10,"F2":0-10,"F3":0-10,"F4":0-10,"F5":0-10},'
          '"dims_evidence":{"F1":"","F2":"","F3":"","F4":"","F5":""},'
          '"falsifications":[{"risk":"HIGH|MEDIUM","criticism":"审稿人潜在质疑","defense":"防御实验设计"}],'
-         '"verdict":"Strong Accept|Accept with Revisions|Reject and Pivot","reason":"","next":["下一步 1","下一步 2"]}'
+         '"verdict":"Strong Accept|Accept with Revisions|Reject and Pivot","reason":"","next":["下一步 1","下一步 2"],'
+         '"improved_idea":"博导级改进推荐版本（针对审查意见与审稿人质疑，给出修改重构后的高水平创新点陈述方案，融合理论突破与防御闭环）"}'
          '。F1=理论突破度，F2=逻辑闭环度，F3=实验完备性，F4=数据可达性，F5=领域紧迫性。'
-         '反向证伪必须提出3种审稿人最尖锐的质疑与Reject风险，并设计防御实验。判 Strong Accept 必须 ≥2 个维度 ≥8 且无 CRITICAL 缺陷。'},
+         '反向证伪必须提出3种审稿人最尖锐的质疑与Reject风险，并设计防御实验。判 Strong Accept 必须 ≥2 个维度 ≥8 且无 CRITICAL 缺陷。'
+         '改进推荐必须具体、深刻、具备学术说服力。'},
         {"role": "user", "content": f"研究任务：{task['title']}\n研究问题：{task['question']}\n关键词 / 材料体系：{task['material_system']}\n\n待审查创新点：\n{idea}"},
     ])
     dims = out.get("dims") or {}
@@ -58,8 +60,11 @@ def stage_idea(db: WorkflowDB, task_id: str, idea: str) -> dict[str, Any]:
         f"- 判定：**{out.get('verdict','')}**", "", f"**理由**：{out.get('reason','')}", "",
         "## 致命缺陷", *flaw_lines,
     ]
+    improved = (out.get("improved_idea") or "").strip()
     if fal_lines:
         md_parts += ["", "## 反向证伪与防御实验设计", *fal_lines]
+    if improved:
+        md_parts += ["", "## AI 改进推荐版本", f"> 💡 **优化重构方案**：\n> {improved}"]
     md_parts += [
         "", "## 下一步", *next_lines, "",
         "> 模型意见是草稿式审查，最终判断以导师与证据为准。",
@@ -68,7 +73,9 @@ def stage_idea(db: WorkflowDB, task_id: str, idea: str) -> dict[str, Any]:
     note = db.add_note(task_id, f"创新点审查 · {task['title']}", md, category="研究计划")
     db.log_step(task_id, "idea", "done", f"判定 {out.get('verdict','')}")
     db.add_memory(task_id, "long", f"创新点审查结论：{out.get('verdict','')}｜理由：{out.get('reason','')[:160]}")
-    return {"verdict": out, "note_id": note["id"], "markdown": md}
+    if improved:
+        db.add_memory(task_id, "long", f"AI优化创新点推荐：{improved[:160]}")
+    return {"verdict": out, "note_id": note["id"], "markdown": md, "improved_idea": improved}
 
 
 def _relevant(query: str, item: dict[str, Any]) -> bool:
@@ -82,22 +89,22 @@ def _relevant(query: str, item: dict[str, Any]) -> bool:
 
 
 def stage_search(db: WorkflowDB, task_id: str, query: str, sources: list[str] | None = None, rows: int = 30,
-                 limit: int = MAX_RESULTS) -> dict[str, Any]:
+                 limit: int = MAX_RESULTS, sort_by: str = "composite") -> dict[str, Any]:
     query = (query or "").strip() or db.summary(task_id)["task"]["question"]
     if not query:
         raise ValueError("请填写检索关键词")
     rows = max(1, min(int(rows or 30), 50))       # 单源上限 50，三源够凑满 limit
-    limit = max(1, min(int(limit or MAX_RESULTS), MAX_RESULTS))
+    limit = max(1, min(int(limit or MAX_RESULTS), 100))
     raw = search(query, sources, rows)
-    rel = [x for x in raw if _relevant(query, x)]
-    found = rank(query, rel, limit)            # 去重 + 按 相关度×引用量 排序 + 限条数（在补 OA 前截，少发请求）
+    rel = [x for x in raw if _relevant(query, x)] or raw
+    found = rank(query, rel, limit, sort_by=sort_by)   # 去重 + 按 选项(综合/相关度/引用量/年份) 排序 + 限条数
     filled = enrich_oa(found)                  # 按 DOI 反查 OpenAlex，尽量把 OA 直链补全
     saved = db.cache_results(task_id, found)
     db.log_step(task_id, "search", "done",
-                f"检索到 {len(found)} 条（原始 {len(raw)}，粗筛掉 {len(raw) - len(rel)}，去重排序后限 {limit} 条），"
+                f"检索到 {len(found)} 条（原始 {len(raw)}，去重排序后限 {limit} 条，排序：{sort_by}），"
                 f"新增 {len(saved)} 条，补 OA 直链 {filled} 条")
     return {"query": query, "found": len(found), "raw": len(raw), "filtered": len(raw) - len(rel),
-            "limit": limit, "saved": saved, "enriched": filled, "results": db.results(task_id)}
+            "limit": limit, "sort_by": sort_by, "saved": saved, "enriched": filled, "results": db.results(task_id)}
 
 
 def stage_download(db: WorkflowDB, task_id: str, result_id: str) -> dict[str, Any]:

@@ -3,14 +3,29 @@ function ideaPanelHTML(active){
   return `<section class="iw-page" id="panel-idea"${active?"":' style="display:none"'}>
     <div class="iw-top">
       <div class="ol-head"><b>我的创新点</b><span class="ol-meta" id="iw-mine-state">自动保存</span>
-        <span class="ol-spacer"></span><span class="ol-meta">右边助手每轮都读这份文字</span></div>
+        <span class="ol-spacer"></span>
+        <button class="btn ghost" id="iw-save-mine" title="立即保存我修改的创新点">保存</button>
+        <span class="ol-meta">右边助手每轮都读这份文字</span></div>
       <textarea class="iw-mine" id="iwMine" spellcheck="true"
         placeholder="写清楚：做了什么、和谁不一样、凭什么能成（约束也写上：数据 / 算力 / 时间 / 目标期刊）"></textarea>
     </div>
+    <div class="iw-rec-card" id="iwRecCard" style="display:none;background:var(--bg-hover);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:12px">
+      <div class="ol-head"><span class="badge" style="background:var(--accent);color:var(--accent-ink);padding:2px 8px;border-radius:4px;font-weight:600">AI 改进推荐</span>
+        <span class="ol-spacer"></span>
+        <button class="btn ghost" id="iw-rec-adopt" title="将此建议采纳为我的创新点">↧ 采纳为此版本</button>
+        <button class="btn ghost" id="iw-rec-edit" title="直接手改此推荐">✎ 手改推荐</button>
+      </div>
+      <div class="md-render" id="iwRecBody" style="font-size:13px;line-height:1.6;color:var(--fg);padding:8px 0"></div>
+      <textarea class="hidden iw-mine" id="iwRecSrc" style="min-height:90px;margin-top:6px;font-size:13px"></textarea>
+    </div>
     <div class="iw-out">
       <div class="ol-head"><b>判定结果</b><span class="ol-tag" id="iw-verdict-at"></span>
-        <span class="ol-spacer"></span><span class="ol-meta">由右侧「创新点审查助手」产出</span></div>
+        <span class="ol-spacer"></span>
+        <button class="btn ghost" id="iw-edit-verdict" title="手改判定报告">✎ 手改判定</button>
+        <button class="btn ghost hidden" id="iw-save-verdict">保存判定</button>
+        <span class="ol-meta">由右侧「创新点审查助手」产出</span></div>
       <div class="md-render iw-verdict" id="iwVerdict"></div>
+      <textarea class="hidden iw-mine" id="iwVerdictSrc" style="min-height:220px;font-family:var(--font-mono);font-size:12.5px"></textarea>
     </div>
   </section>`;
 }
@@ -57,6 +72,7 @@ function docPanelHTML(k, active){
   return `<section class="at" id="panel-${k}"${active ? "" : ' style="display:none"'}>
     <div class="ol-grid">
       <div class="ol-left">
+        ${k === "write" ? `<div class="write-team-banner" id="writeTeamBanner"><span style="font-weight:600">👥 撰写团队：</span><span class="t-tag">🧑‍🔬 调研 (Researcher)</span><span class="t-tag">✍️ 主笔 (Writer)</span><span class="t-tag">🧐 评议 (Reviewer)</span><span class="t-tag">✨ 润色 (Polisher)</span><span style="flex:1"></span><span style="font-size:11px;color:var(--muted)">协同中</span></div>` : ""}
         <div class="ol-head">
           <b>${c.who}</b><span class="ol-tag" id="${k}-file">${c.file}.md</span>
           <span class="ol-spacer"></span>
@@ -68,6 +84,7 @@ function docPanelHTML(k, active){
           <button class="btn ghost" id="${k}-edit" title="直接在左边改 markdown">✎ 手改</button>
           <button class="btn ghost hidden" id="${k}-edit-save">保存</button>
           <button class="btn ghost hidden" id="${k}-restore" title="恢复自动保存的本地草稿快照">↻ 恢复快照</button>
+          ${k === "review" ? `<button class="btn ghost" id="review-rollback" title="回退到上一个审稿意见版本">↩ 回退意见</button>` : ""}
           ${c.cite ? `<button class="btn ghost" id="${k}-cite" title="后台的引用台账：每一处引用的位置 + 文献信息（题名/作者/出处/DOI/页数）">📑 引用台账</button>` : ""}
           <button class="btn ghost" id="${k}-reload" title="从磁盘重新读">↻</button>
         </div>
@@ -339,7 +356,22 @@ function docBind(k, m){
     });
   }
   if(DOC_UI[k].cite) docEl(k, "cite").onclick = ()=>{
-    if(docState(k).showCite) docLoad(k); else docShowCite(k); };
+    showCiteModal(curTask); };
+  const rb = $("review-rollback");
+  if(rb && k === "review") {
+    rb.onclick = async ()=>{
+      if(!confirm("确定要将审稿意见回退到上一版本吗？")) return;
+      try{
+        const r = await api("/api/doc/rollback", { task_id: curTask, step: "review" });
+        if(r.ok){
+          docShow("review", r);
+          uiNotify("已成功回退审稿意见");
+        }else{
+          uiNotify("回退失败：" + (r.error || "未找到上一快照"));
+        }
+      }catch(e){ uiNotify("回退失败：" + e.message); }
+    };
+  }
   if(docEl(k, "reload")) docEl(k, "reload").onclick = ()=>docLoad(k);
   if(docEl(k, "edit")) docEl(k, "edit").onclick = ()=>docEdit(k, true);
   if(docEl(k, "edit-save")) docEl(k, "edit-save").onclick = ()=>docSaveEdit(k);
@@ -514,6 +546,41 @@ let cvCur = { path: "", ext: "" };      // 展示区当前文件
 /* ==== 项目文件夹（左栏第 11 项：不是一步、不进 WF_ORDER；中栏 = 左目录 + 右预览）==== */
 const FL_TEXT = new Set(["md","markdown","txt","tex","bib","json","py","csv","yaml","yml","log","sh","js","css"]);
 let flRel = "", flSel = "", flRows = [];
+let flTreeCache = {};         // rel -> array of {name, rel, path, dir, ext, size, count, at}
+let flExpanded = new Set();   // set of expanded rel strings
+let flTreeLoading = new Set();// set of currently loading rel strings
+let flTreeRoot = "";
+
+function flGetIcon(ext){
+  ext = String(ext || "").toLowerCase().trim();
+  if(ext === "pdf") return "📕";
+  if(ext === "md" || ext === "markdown") return "📝";
+  if(ext === "txt" || ext === "log") return "📄";
+  if(ext === "docx" || ext === "doc") return "📘";
+  if(ext === "tex" || ext === "bib") return "📐";
+  if(["png","jpg","jpeg","svg","webp","gif","bmp"].includes(ext)) return "🖼️";
+  if(["py","js","json","html","css","sh","bat"].includes(ext)) return "⚙️";
+  return "📄";
+}
+
+function flFindRow(rel){
+  for(const k in flTreeCache){
+    const found = (flTreeCache[k] || []).find(x => x.rel === rel);
+    if(found) return found;
+  }
+  return null;
+}
+
+function flFlattenRows(){
+  const all = [];
+  for(const k in flTreeCache){
+    for(const r of (flTreeCache[k] || [])){
+      if(!all.some(x => x.rel === r.rel)) all.push(r);
+    }
+  }
+  flRows = all;
+  return all;
+}
 
 function flFmtSize(n){ n = Number(n || 0);
   if(!n) return "";
@@ -540,58 +607,129 @@ function filesPanelHTML(active){
     </div></section>`;
 }
 
+async function flLoadNode(rel){
+  rel = rel || "";
+  if(flTreeLoading.has(rel)) return;
+  flTreeLoading.add(rel);
+  try{
+    const d = await api(`/api/tree?id=${encodeURIComponent(curTask)}&rel=${encodeURIComponent(rel)}`);
+    if(d.root) flTreeRoot = d.root;
+    if(d.rows) flTreeCache[rel] = d.rows;
+  }catch(e){
+    console.error("加载文件夹内容失败", rel, e);
+  }finally{
+    flTreeLoading.delete(rel);
+    flFlattenRows();
+  }
+}
+
+async function flInitTree(){
+  const list = $("flList"); if(!list) return;
+  if(!curTask){ list.innerHTML = `<p class="fl-empty">先选一个项目</p>`; return; }
+  list.innerHTML = `<p class="fl-empty">读目录…</p>`;
+  flTreeCache = {};
+  flExpanded = new Set();
+  await flLoadNode("");
+  const tag = $("flRoot");
+  if(tag && flTreeRoot){
+    const parts = flTreeRoot.split(/[\\/]/).filter(Boolean);
+    tag.textContent = parts.slice(-2).join("/"); tag.title = flTreeRoot;
+  }
+  flRenderTree();
+}
+
+function flRenderTree(){
+  const list = $("flList"); if(!list) return;
+  const rootRows = flTreeCache[""] || [];
+  if(!rootRows.length){
+    list.innerHTML = `<p class="fl-empty">这个项目文件夹为空</p>`;
+    return;
+  }
+  let totalCount = 0;
+  function renderSubTree(parentRel, depth){
+    const rows = flTreeCache[parentRel] || [];
+    let html = "";
+    for(const r of rows){
+      totalCount++;
+      const isDir = !!r.dir;
+      const isOpen = flExpanded.has(r.rel);
+      const isSel = r.rel === flSel;
+      const padLeft = 8 + depth * 14;
+      if(isDir){
+        const isLoading = flTreeLoading.has(r.rel);
+        html += `
+          <div class="fl-tree-row dir ${isOpen ? 'open' : ''} ${isSel ? 'on' : ''}" data-rel="${esc(r.rel)}" data-dir="1" style="padding-left:${padLeft}px" title="${esc(r.name)}">
+            <span class="fl-chevron">${isLoading ? '⌛' : (isOpen ? '▾' : '▸')}</span>
+            <span class="fl-folder-ico">${isOpen ? '📂' : '📁'}</span>
+            <span class="fl-name">${esc(r.name)}</span>
+            <span class="fl-count">${r.count || 0}</span>
+          </div>`;
+        if(isOpen){
+          if(flTreeCache[r.rel]){
+            html += renderSubTree(r.rel, depth + 1);
+          } else if(isLoading){
+            html += `<div class="fl-tree-row" style="padding-left:${padLeft + 16}px;color:var(--muted);font-size:11px">读取中…</div>`;
+          }
+        }
+      } else {
+        html += `
+          <div class="fl-tree-row file ${isSel ? 'on' : ''}" data-rel="${esc(r.rel)}" data-dir="0" style="padding-left:${padLeft}px" title="${esc(r.name)}">
+            <span class="fl-indent-spacer"></span>
+            <span class="fl-file-ico">${flGetIcon(r.ext)}</span>
+            <span class="fl-name">${esc(r.name)}</span>
+            <span class="fl-ext-badge">${esc((r.ext || '').toUpperCase())}</span>
+          </div>`;
+      }
+    }
+    return html;
+  }
+  list.innerHTML = `<div class="fl-tree-box">${renderSubTree("", 0)}</div>`;
+  const footPill = $("wfFootPill");
+  if(wfStep === "files" && footPill){
+    footPill.textContent = `项目文件夹 · ${totalCount} 项`;
+  }
+}
+
 function flBind(){
   const list = $("flList");
-  if(list) list.onclick = (e)=>{
-    const row = e.target.closest(".fl-row"); if(!row) return;
-    if(row.dataset.up){ flLoad(flRel.split("/").slice(0,-1).join("/")); return; }
-    const r = flRows.find(x => x.rel === row.dataset.rel); if(!r) return;
-    if(r.dir){ flSel = ""; flLoad(r.rel); } else flShow(r);
+  if(list) list.onclick = async (e)=>{
+    const row = e.target.closest(".fl-tree-row"); if(!row) return;
+    const rel = row.dataset.rel;
+    const isDir = row.dataset.dir === "1";
+    if(isDir){
+      if(flExpanded.has(rel)){
+        flExpanded.delete(rel);
+        flRenderTree();
+      } else {
+        flExpanded.add(rel);
+        flRenderTree();
+        if(!flTreeCache[rel]){
+          await flLoadNode(rel);
+          flRenderTree();
+        }
+      }
+    } else {
+      const r = flFindRow(rel);
+      if(r) flShow(r);
+    }
   };
-  const rl = $("flReload"); if(rl) rl.onclick = ()=>flLoad(flRel);
+  const rl = $("flReload"); if(rl) rl.onclick = ()=> flInitTree();
   const hand = $("flHand"); if(hand) hand.onclick = ()=>{
     const ta = $("wv-ask");
     if(!flSel){ flMsg("先在左边点一个文件"); return; }
     if(ta){ ta.value = `把 ${flSel} 交给写作助手`; ta.focus(); }
   };
   const op = $("flOpen"); if(op) op.onclick = ()=>{
-    const r = flRows.find(x => x.rel === flSel);
+    const r = flFindRow(flSel);
     if(!r){ flMsg("先在左边点一个文件"); return; }
     api("/api/conv/open", { path: r.path }).catch(e => flMsg("打不开：" + e.message));
   };
-  flLoad(flRel);
-}
-
-async function flLoad(rel){
-  flRel = rel || "";
-  const list = $("flList"); if(!list) return;
-  if(!curTask){ list.innerHTML = `<p class="fl-empty">先选一个项目</p>`; return; }
-  list.innerHTML = `<p class="fl-empty">读目录…</p>`;
-  let d = {};
-  try{ d = await api(`/api/tree?id=${encodeURIComponent(curTask)}&rel=${encodeURIComponent(flRel)}`); }
-  catch(e){ list.innerHTML = `<p class="fl-empty">读失败：${esc(e.message)}</p>`; return; }
-  if(d.error){
-    if(flRel) return flLoad("");                 // 换了项目 / 这个夹没了 → 退回根，别卡在一句报错里
-    list.innerHTML = `<p class="fl-empty">${esc(d.error)}</p>`;
-    return;
-  }
-  if(d.missing){ list.innerHTML = `<p class="fl-empty">这个项目还没设项目位置 —— 在「项目空间」里选一个文件夹，这里就长出目录了</p>`; return; }
-  const tag = $("flRoot");
-  if(tag){ const parts = String(d.root || "").split(/[\\/]/).filter(Boolean);
-    tag.textContent = parts.slice(-2).join("/"); tag.title = d.root || ""; }
-  flRows = d.rows || [];
-  const up = flRel ? `<div class="fl-row dir" data-up="1"><span>↑</span><span class="fl-nm">上一层</span></div>` : "";
-  list.innerHTML = up + (flRows.length ? flRows.map(r=>`
-    <div class="fl-row${r.dir ? " dir" : " kid"}${r.rel === flSel ? " on" : ""}" data-rel="${esc(r.rel)}" data-dir="${r.dir ? 1 : 0}" title="${esc(r.name)}">
-      <span>${r.dir ? "▸" : "　"}</span><span class="fl-nm">${esc(r.name)}</span>
-      ${r.dir ? `<span class="fl-cnt">${r.count || 0}</span>` : `<span class="fl-ext">${esc(r.ext || "")}</span>`}</div>`).join("")
-    : `<p class="fl-empty">这个夹是空的</p>`);
-  if(wfStep === "files") wfPaintFoot();
+  flInitTree();
 }
 
 async function flShow(row){
   flSel = row.rel;
-  document.querySelectorAll("#flList .fl-row").forEach(x => x.classList.toggle("on", x.dataset.rel === flSel));
+  document.querySelectorAll("#flList .fl-tree-row").forEach(x => x.classList.toggle("on", x.dataset.rel === flSel));
   if($("flName")) $("flName").textContent = row.name;
   flMsg([flFmtSize(row.size), row.at, row.rel.split("/").slice(0,-1).join("/")].filter(Boolean).join(" · "));
   const stage = $("flStage"); if(!stage) return;
@@ -950,9 +1088,28 @@ const WF_PLAN = {
 function wfAgentHTML(step){
   const a = WF_AGENT[step] || WF_AGENT.idea;
   const mdl = (S.active && (S.active.name || S.active.model)) || "未配置模型";
-  return `<header class="at-head"><div class="at-heading"><span class="wf-av">${a.emoji}</span>
-      <div><h1>${esc(a.name)}</h1><p>${esc(a.sub)}</p></div>
-      <span class="wf-mdl" title="这一步用的模型">${esc(mdl)}</span></div></header>
+  return `<header class="at-head">
+    <div class="at-heading">
+      <span class="wf-av">${a.emoji}</span>
+      <div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <h1>${esc(a.name)}</h1>
+          <select id="wvStepPick" class="at-sel" style="padding:2px 6px;font-size:11.5px;background:var(--bg-hover);color:var(--fg);border:1px solid var(--border);border-radius:4px" title="切换助手并自动跳转工作流">
+            ${WF_ORDER.map(s => {
+              const ag = WF_AGENT[s] || {};
+              return `<option value="${s}" ${s === step ? "selected" : ""}>${ag.emoji || ""} ${esc(ag.name || s)}</option>`;
+            }).join("")}
+          </select>
+        </div>
+        <p>${esc(a.sub)}</p>
+      </div>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:6px">
+        <button class="btn ghost" id="wv-history-btn" title="查看对话历史与工作流切换" style="padding:3px 8px;font-size:11.5px">⏱ 历史</button>
+        <button class="btn ghost" id="wv-newchat-btn" title="新建这一步的对话" style="padding:3px 8px;font-size:11.5px">＋ 新建</button>
+        <span class="wf-mdl" title="这一步用的模型">${esc(mdl)}</span>
+      </div>
+    </div>
+  </header>
     <div class="at-tabs">
       <button class="at-tab on" data-wv="conversation">对话 <span id="wv-turns">0</span></button>
       <button class="at-tab" data-wv="trajectory">轨迹 <span id="wv-calls">0</span></button></div>
@@ -983,6 +1140,32 @@ async function wfAgentPaint(m, step){
   host.innerHTML = wfAgentHTML(step);
   const a = WF_AGENT[step] || WF_AGENT.idea;
   const box = $("wv-msgs"); if(!box) return;
+
+  const stepPick = host.querySelector("#wvStepPick");
+  if(stepPick){
+    stepPick.onchange = (e)=>{
+      const newStep = e.target.value;
+      const b = m.querySelector(`.wf-step[data-step="${newStep}"]`);
+      if(b) b.click();
+    };
+  }
+  const histBtn = host.querySelector("#wv-history-btn");
+  if(histBtn){
+    histBtn.onclick = ()=> showHistoryModal(curTask, step);
+  }
+  const newChatBtn = host.querySelector("#wv-newchat-btn");
+  if(newChatBtn){
+    newChatBtn.onclick = async ()=>{
+      try{
+        await api("/api/step/new_chat", { task_id: curTask, step });
+        uiNotify("已开启新对话");
+        wfMsgs = []; wfEvents = [];
+        wfPaintMsgs(step);
+        wfPaintStats();
+      }catch(e){ uiNotify("新建对话失败：" + e.message); }
+    };
+  }
+
   wfMsgs = []; wfEvents = [];
   try{
     const d = await api(`/api/step/messages?id=${encodeURIComponent(curTask)}&step=${encodeURIComponent(step)}`);
@@ -999,6 +1182,52 @@ async function wfAgentPaint(m, step){
   ta.oninput = ()=>{ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,120)+"px"; };
   const plus = $("wv-plus"); if(plus) plus.onclick = ()=>{ ta.value += (ta.value?"\n":"") + "（附件：把文件拖到这里或贴路径）"; ta.focus(); };
 }
+
+const WF_SUGGESTIONS = {
+  idea: [
+    { icon: "💡", title: "审查创新点立论", prompt: "审查我这篇论文的核心创新点与立论逻辑，指出潜在破绽" },
+    { icon: "🔍", title: "对比已有文献", prompt: "对比当前领域的代表性文献，我的方案在哪些关键维度具有独特优势？" },
+    { icon: "📋", title: "给出正式判定报告", prompt: "请结合当前讨论，为我的研究题目输出一版正式的创新点判定与建议" }
+  ],
+  search: [
+    { icon: "🔎", title: "构建高精度检索式", prompt: "根据我的研究方向与关键词，构建中英文高精度检索式（含同义词与排除词）" },
+    { icon: "📊", title: "按年份与指标精筛", prompt: "按近五年顶刊与高被引指标，帮我梳理值得精读的重点论文清单" },
+    { icon: "📥", title: "获取 OA 全文直链", prompt: "分析当前搜索结果中的文献，标记可直接下载全文的开放获取（OA）链接" }
+  ],
+  download: [
+    { icon: "⬇️", title: "检查文献入库状态", prompt: "检查下载队列中的文献，有哪些已成功入库？未获取全文的给出手动下载指引" },
+    { icon: "📖", title: "启动深度精读提炼", prompt: "对文献库中已下载的重点论文启动精读，提炼核心结论与实验数据" }
+  ],
+  notes: [
+    { icon: "🌐", title: "建立专业术语表", prompt: "针对本文涉及的专业术语，先制定并确认一份中英文统一术语对照表" },
+    { icon: "📄", title: "精读双语对照翻译", prompt: "对选中的章节进行学术中译，公式、图表引用与格式严格保持一致" }
+  ],
+  outline: [
+    { icon: "🗂️", title: "搭建立体论文大纲", prompt: "依据本研究的题目与核心问题，生成符合顶刊规范的三级大纲（含每节核心主张）" },
+    { icon: "🔗", title: "匹配大纲与证据链", prompt: "检查大纲每一章节，标出已有文献证据与仍需补充的数据缺口" }
+  ],
+  map: [
+    { icon: "🧩", title: "生成学术谱系图", prompt: "把已精读的文献按大纲节点挂载，绘制完整的观点演进与理论发展谱系图" },
+    { icon: "⚡", title: "梳理观点冲突点", prompt: "找出文献库中针对同一核心问题存在不同结论或分歧的学术流派" }
+  ],
+  write: [
+    { icon: "✍️", title: "撰写核心方法节", prompt: "按照大纲框架与已有实验数据，起草本论文的方法与设计章节" },
+    { icon: "📝", title: "起草引言与背景", prompt: "结合创新点审查结论与研究背景，起草学术引言（Introduction）" },
+    { icon: "🔎", title: "校对文献引用与编号", prompt: "核对正文已写部分的文献引用标号与文献库条目的一致性" }
+  ],
+  review: [
+    { icon: "🧐", title: "模拟 CNS 审稿人盲审", prompt: "以审稿人严格视角自查全文，挑出逻辑链漏洞、证据不足或过度解读之处" },
+    { icon: "📊", title: "审查实验与统计口径", prompt: "核查论文图表说明、样本量、对照组与统计学表述是否规范" }
+  ],
+  entrans: [
+    { icon: "🌍", title: "地道学术中译英", prompt: "将中文初稿翻译为地道的目标期刊英文，消除中式语病并统一学术句式" },
+    { icon: "🔤", title: "规范缩写与图注", prompt: "检查所有缩写是否在首次出现时展开，并规范图注与表格英译" }
+  ],
+  convert: [
+    { icon: "🔄", title: "一键导出目标格式", prompt: "根据目标期刊模板导出 Word (.docx) 或 LaTeX (.tex) 格式，检查排版与引用" },
+    { icon: "📁", title: "整理最终交付物包", prompt: "打包本项目的所有最终成果、图表文件与参考文献 BibTeX" }
+  ]
+};
 
 let wfView = "conversation";
 /* 右栏空态 = 这一步的助手看着上一步的交付现写的「进度同步 + 本步计划」（后端 step_plan 落库，
@@ -1036,12 +1265,44 @@ function wfPaintMsgs(step){
   const box = $("wv-msgs"); if(!box) return;
   if(wfView === "trajectory"){ box.innerHTML = ""; renderTrajectory(box, wfEvents); return; }
   if(!wfMsgs.length){
-    if(step === "files"){                       // 这一步不烧模型、不出「本步计划」：直接给一句引导
-      box.innerHTML = `<div class="wf-plan"><div class="wf-plan-h"><span class="wf-av">📁</span><b>文件管理助手</b></div>
-        <p class="wf-plan-q">左边点一个文件（或钻进子夹找），我告诉你里面是什么、和项目里别的文件对不对得上；说「把 论文正文/正文.md 交给写作助手」我就转进那一步的对话。</p></div>`;
-      return;
-    }
-    wfPlanLoad(step); return;
+    const a = WF_AGENT[step] || WF_AGENT.idea;
+    const suggestions = WF_SUGGESTIONS[step] || [
+      { icon: "💬", title: "向助手直接提问", prompt: `关于${a.name}，我想请教…` },
+      { icon: "📌", title: "同步当前研究进展", prompt: "同步一下当前项目的研究进度和接下来的计划" }
+    ];
+    box.innerHTML = `
+      <div class="wv-hero">
+        <div class="wv-hero-avatar-wrap">${a.emoji}</div>
+        <span class="wv-hero-badge">● 新会话已就绪</span>
+        <h2 class="wv-hero-title">${esc(a.name)}</h2>
+        <p class="wv-hero-desc">${esc(a.sub)}</p>
+        <div class="wv-prompt-grid">
+          ${suggestions.map((sg, idx) => `
+            <div class="wv-prompt-card" data-prompt="${esc(sg.prompt)}">
+              <span class="wv-prompt-card-icon">${sg.icon}</span>
+              <span class="wv-prompt-card-text"><b>${esc(sg.title)}</b><br><small style="color:var(--muted)">${esc(sg.prompt)}</small></span>
+              <span class="wv-prompt-card-arrow">➔</span>
+            </div>
+          `).join("")}
+        </div>
+        <div class="wv-hero-tags">
+          <span class="wv-hero-tag">💬 智能多轮探讨</span>
+          <span class="wv-hero-tag">📎 本地工程联动</span>
+          <span class="wv-hero-tag">🧠 长期项目记忆</span>
+        </div>
+      </div>
+    `;
+    box.querySelectorAll(".wv-prompt-card").forEach(c => {
+      c.onclick = ()=>{
+        const prompt = c.dataset.prompt;
+        const ta = $("wv-ask");
+        if(ta){
+          ta.value = prompt;
+          ta.focus();
+        }
+      };
+    });
+    return;
   }
   box.innerHTML = "";
   const who = WF_AGENT[step] || WF_AGENT.idea;          // 这一步的助手说话，不是智研管家
@@ -1132,18 +1393,48 @@ async function wfSend(m, step){
 function renderWorkflow(m){
   m.style.padding = "";        // 清掉别的页面留下的内边距
   const proj = (S.tasks||[]).find(t => t.id === curTask);
+  const fPath = (proj && (proj.base_dir || proj.root_dir)) || "";
+  const fName = fPath ? (fPath.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || fPath) : "未设置项目目录";
   if(wfStep !== "files" && !WF_ORDER.includes(wfStep)) wfStep = WF_ORDER[0];   // 老 localStorage 存了个不认识的步
   m.innerHTML = needTask() || `
     <div class="wf-page${wfMin?" min":""}" id="wfPage">
       <aside class="wf-rail" id="wfRail">
-        <div class="wf-proj"><small>项目名</small><b>${esc(proj?proj.title:"未命名项目")}</b></div>
+        <div class="wf-proj" id="wfProjCard" title="点击切换项目">
+          <div class="wf-proj-head">
+            <small>当前项目</small>
+            <span class="wf-proj-switch-badge">⇄ 切换项目</span>
+          </div>
+          <div class="wf-proj-body">
+            <b class="wf-proj-title" title="${esc(proj?proj.title:'未命名项目')}">${esc(proj?proj.title:"未命名项目")}</b>
+            <span class="wf-proj-caret">▾</span>
+          </div>
+          <select id="wfProjSelect" class="wf-proj-select-overlay" title="切换项目">
+            ${(S.tasks||[]).map(t => `<option value="${t.id}" ${t.id === curTask ? "selected" : ""}>${esc(t.title || t.name || "未命名项目")}</option>`).join("")}
+            <option value="__new__">＋ 新建/管理项目…</option>
+          </select>
+        </div>
+        <button class="wf-proj-min-btn" id="wfProjMinBtn" title="当前项目：${esc(proj?proj.title:'未命名')}（点击切换项目）" style="display:none">
+          📁
+          <select id="wfProjSelectMin" class="wf-proj-select-overlay" title="切换项目">
+            ${(S.tasks||[]).map(t => `<option value="${t.id}" ${t.id === curTask ? "selected" : ""}>${esc(t.title || t.name || "未命名项目")}</option>`).join("")}
+            <option value="__new__">＋ 新建/管理项目…</option>
+          </select>
+        </button>
         <button class="wf-fold" id="wf-collapse" title="${wfMin?"展开步骤":"折叠步骤"}">&lt; 折叠</button>
         ${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}" title="${STAGE[s]}">
             <span class="wf-ico">${STAGE[s].split(" ")[0]}</span><span class="wf-lbl">${STAGE[s].slice(STAGE[s].indexOf(" ")+1)}</span>
             <span class="wf-dot"></span></button>`).join("")}
         <div class="wf-vsep"></div>
-        <button class="wf-step${wfStep==="files"?" on":""}" data-step="files" title="📁 项目文件夹（整个文件夹，不是一步）">
-            <span class="wf-ico">📁</span><span class="wf-lbl">项目文件夹</span><span class="wf-dot"></span></button>
+        <div class="wf-file-loc-card${wfStep==="files"?" on":""}" id="wfFileLocCard" title="${esc(fPath ? `项目位置：${fPath}\n点击在右侧查看文件树与即时预览` : '尚未选择项目目录')}">
+          <div class="wfl-card-header">
+            <div class="wfl-card-icon">📁</div>
+            <div class="wfl-card-titles">
+              <span class="wfl-card-tag">项目文件</span>
+              <b class="wfl-card-name">${esc(fName)}</b>
+            </div>
+            <span class="wfl-card-arrow">➔</span>
+          </div>
+        </div>
       </aside>
       <main class="wf-stage" id="wfStage">
         <div class="wf-panels">${WF_ORDER.map(s=> PANELS[s] ? PANELS[s](s===wfStep)
@@ -1159,6 +1450,25 @@ function renderWorkflow(m){
       <aside class="wf-agent" id="wfAgent"></aside>
     </div>`;
   if(!curTask) return;
+  const bindProjSelect = (selEl) => {
+    if(!selEl) return;
+    selEl.onchange = (e) => {
+      const targetId = e.target.value;
+      if(targetId === "__new__"){
+        openTab("tasks");
+        return;
+      }
+      if(targetId && targetId !== curTask){
+        curTask = targetId;
+        localStorage.setItem("rw-task", curTask);
+        const pObj = (S.tasks || []).find(t => t.id === curTask);
+        uiNotify("已切换至项目：" + (pObj ? (pObj.title || pObj.name) : curTask));
+        renderWorkflow(m);
+      }
+    };
+  };
+  bindProjSelect(m.querySelector("#wfProjSelect"));
+  bindProjSelect(m.querySelector("#wfProjSelectMin"));
   const wfc = m.querySelector("#wf-collapse");
   if(wfc) wfc.onclick = ()=>{ wfMin=!wfMin; localStorage.setItem("rw-wf-min",wfMin?"1":"0"); renderWorkflow(m); };
   const bindStep = ()=>{
@@ -1175,10 +1485,22 @@ function renderWorkflow(m){
   m.querySelectorAll(".wf-step").forEach(b=>b.onclick=()=>{
     wfStep = b.dataset.step; localStorage.setItem("rw-wf-step", wfStep);
     m.querySelectorAll(".wf-step").forEach(x=>x.classList.toggle("on", x.dataset.step===wfStep));
+    const locCard = m.querySelector("#wfFileLocCard"); if(locCard) locCard.classList.remove("on");
     WF_ORDER.forEach(s=>{ const p=$("panel-"+s); if(p) { const on = s===wfStep; p.style.display = on ? "" : "none"; } });
     const pf = $("panel-files"); if(pf) pf.style.display = wfStep==="files" ? "" : "none";
     bindStep(); wfAgentPaint(m, wfStep); wfPaintFoot();
   });
+  const locCard = m.querySelector("#wfFileLocCard");
+  if(locCard){
+    locCard.onclick = ()=>{
+      wfStep = "files"; localStorage.setItem("rw-wf-step", wfStep);
+      m.querySelectorAll(".wf-step").forEach(x=>x.classList.remove("on"));
+      locCard.classList.add("on");
+      WF_ORDER.forEach(s=>{ const p=$("panel-"+s); if(p) p.style.display = "none"; });
+      const pf = $("panel-files"); if(pf) pf.style.display = "";
+      bindStep(); wfAgentPaint(m, wfStep); wfPaintFoot();
+    };
+  }
   const back = $("wfBack"); if(back) back.onclick = ()=>{
     const i = WF_ORDER.indexOf(wfStep); if(i > 0) m.querySelector(`.wf-step[data-step="${WF_ORDER[i-1]}"]`)?.click();
   };
@@ -1230,6 +1552,71 @@ function iwBind(m){
   ta.oninput = ()=>{ const st = $("iw-mine-state"); if(st) st.textContent = "未保存…";
     clearTimeout(t0); t0 = setTimeout(save, 700); };
   ta.onblur = ()=>{ clearTimeout(t0); save(); };
+
+  const saveBtn = $("iw-save-mine");
+  if(saveBtn) saveBtn.onclick = save;
+
+  const recAdopt = $("iw-rec-adopt");
+  if(recAdopt) recAdopt.onclick = ()=>{
+    const recSrc = $("iwRecSrc");
+    const val = (recSrc && !recSrc.classList.contains("hidden")) ? recSrc.value : ($("iwRecBody")?.dataset.raw || $("iwRecBody")?.textContent || "");
+    if(val.trim()){
+      ta.value = val.trim();
+      save();
+      uiNotify("已采纳 AI 推荐为我的创新点");
+    }
+  };
+
+  const recEdit = $("iw-rec-edit");
+  if(recEdit) recEdit.onclick = ()=>{
+    const body = $("iwRecBody"), src = $("iwRecSrc");
+    if(!body || !src) return;
+    const editing = !src.classList.contains("hidden");
+    if(editing){
+      src.classList.add("hidden");
+      body.classList.remove("hidden");
+      body.dataset.raw = src.value;
+      body.innerHTML = renderMarkdown(src.value);
+      recEdit.textContent = "✎ 手改推荐";
+    } else {
+      src.value = body.dataset.raw || body.textContent || "";
+      body.classList.add("hidden");
+      src.classList.remove("hidden");
+      src.focus();
+      recEdit.textContent = "完成修改";
+    }
+  };
+
+  const editVerd = $("iw-edit-verdict");
+  const saveVerd = $("iw-save-verdict");
+  if(editVerd && saveVerd){
+    editVerd.onclick = ()=>{
+      const body = $("iwVerdict"), src = $("iwVerdictSrc");
+      if(!body || !src) return;
+      src.value = body.dataset.raw || body.textContent || "";
+      body.classList.add("hidden");
+      src.classList.remove("hidden");
+      editVerd.classList.add("hidden");
+      saveVerd.classList.remove("hidden");
+      src.focus();
+    };
+    saveVerd.onclick = async ()=>{
+      const body = $("iwVerdict"), src = $("iwVerdictSrc");
+      if(!body || !src) return;
+      const text = src.value;
+      try{
+        await api("/api/idea/verdict_save", { task_id: curTask, text: text });
+        body.dataset.raw = text;
+        body.innerHTML = renderMarkdown(text);
+        src.classList.add("hidden");
+        body.classList.remove("hidden");
+        saveVerd.classList.add("hidden");
+        editVerd.classList.remove("hidden");
+        uiNotify("判定报告已保存");
+      }catch(e){ uiNotify("保存失败：" + e.message); }
+    };
+  }
+
   iwLoad();
 }
 async function iwFlush(){
@@ -1239,13 +1626,27 @@ async function iwFlush(){
 }
 function iwVerdictPaint(v){
   const box = $("iwVerdict"), at = $("iw-verdict-at"); if(!box) return;
+  const recCard = $("iwRecCard"), recBody = $("iwRecBody"), recSrc = $("iwRecSrc");
   if(!v || !v.markdown){
     box.innerHTML = `<p class="ol-empty">还没有判定 —— 在右边跟助手把约束问清，说「出一版判定」，结果落在这里。</p>`;
     if(at) at.textContent = "";
+    if(recCard) recCard.style.display = "none";
     return;
   }
+  box.dataset.raw = v.markdown;
   box.innerHTML = renderMarkdown(v.markdown);
   if(at) at.textContent = v.created_at ? `更新于 ${fmtDate(v.created_at)}` : "";
+
+  // 创新点 AI 改后推荐
+  const rec = v.improved_idea || v.recommendation || (v.payload && (v.payload.improved_idea || v.payload.recommendation));
+  if(rec && recCard && recBody){
+    recCard.style.display = "";
+    recBody.dataset.raw = rec;
+    recBody.innerHTML = renderMarkdown(rec);
+    if(recSrc) recSrc.value = rec;
+  } else if(recCard){
+    recCard.style.display = "none";
+  }
 }
 async function iwLoad(){
   if(!curTask) return;
@@ -1255,6 +1656,436 @@ async function iwLoad(){
     if(ta && document.activeElement !== ta && ta.value !== (d.mine || "")) ta.value = d.mine || "";
     iwVerdictPaint(d.verdict);
   }catch(e){}
+}
+
+function makeBibtex(r){
+  if(!r) return "";
+  const key = ((r.authors||"Unknown").split(/[, ，]+/)[0] || "Paper").replace(/[^a-zA-Z0-9]/g, "") + (r.year || "2024");
+  const authorStr = (r.authors || "Unknown").replace(/，/g, " and ");
+  const title = (r.title || "").replace(/[{}]/g, "");
+  const journal = r.venue || r.journal || r.source || "Journal";
+  return `@article{${key},\n  title={${title}},\n  author={${authorStr}},\n  journal={${journal}},\n  year={${r.year || ""}},\n  doi={${r.doi || ""}}\n}`;
+}
+
+async function showCiteModal(taskId){
+  let modal = $("citeModal");
+  if(!modal){
+    modal = document.createElement("div");
+    modal.id = "citeModal";
+    modal.className = "modal hidden";
+    modal.innerHTML = `
+      <div class="modal-mask" id="citeModalMask"></div>
+      <div class="modal-dialog modal-wide" style="max-width:850px;width:90vw;max-height:85vh;display:flex;flex-direction:column">
+        <div class="modal-head">
+          <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:6px"><span>📑</span> 引用台账与 BibTeX 导出</h3>
+          <span style="flex:1"></span>
+          <button class="btn ghost" id="citeCopyAll">📋 复制全部 BibTeX</button>
+          <button class="btn" id="citeExportBib">💾 导出 references.bib</button>
+          <button class="modal-close" id="citeCloseModal" style="margin-left:8px">✕</button>
+        </div>
+        <div class="modal-body" id="citeModalBody" style="padding:16px;overflow-y:auto;flex:1">
+          <p class="muted">加载引用记录中…</p>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    $("citeCloseModal").onclick = ()=> modal.classList.add("hidden");
+    $("citeModalMask").onclick = ()=> modal.classList.add("hidden");
+  }
+  modal.classList.remove("hidden");
+  const body = $("citeModalBody");
+  body.innerHTML = `<p class="muted">正在读取引用台账…</p>`;
+  try{
+    const d = await api(`/api/doc/cite?id=${encodeURIComponent(taskId || curTask)}`);
+    const entries = d.matched || [];
+    if(!entries.length){
+      body.innerHTML = `<p class="muted" style="text-align:center;padding:30px">正文中暂无已确认引用记录。可以在写作时向助手指定引用文献，或在正文中插入文献锚点。</p>`;
+      return;
+    }
+    const allBibs = entries.map(e => makeBibtex(e)).join("\n\n");
+    $("citeCopyAll").onclick = ()=>{
+      navigator.clipboard.writeText(allBibs);
+      uiNotify("已复制全部 BibTeX 引用到剪贴板！");
+    };
+    $("citeExportBib").onclick = ()=>{
+      const blob = new Blob([allBibs], { type: "text/plain;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "references.bib";
+      a.click();
+      uiNotify("已下载 references.bib");
+    };
+    body.innerHTML = `
+      <div style="margin-bottom:12px;font-size:12.5px;color:var(--muted)">
+        当前正文引用共 <b>${entries.length}</b> 处${d.stale ? `（另有 ${d.stale} 处未在正文中找到锚句）` : ""}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        ${entries.map((e, idx) => `
+          <div style="padding:10px 14px;background:var(--bg-hover);border:1px solid var(--border);border-radius:6px;font-size:13px">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+              <div>
+                <b>[${idx + 1}] ${esc(e.title || "未命名文献")}</b>
+                <div style="font-size:11.5px;color:var(--muted);margin-top:3px">
+                  ${esc(e.authors || "作者未知")} · ${esc(e.venue || e.journal || "出处未知")} (${esc(e.year || "未知")})
+                  ${e.doi ? ` · DOI: ${esc(e.doi)}` : ""}
+                </div>
+                ${e.anchor ? `<div style="font-size:11px;color:var(--dim);margin-top:4px">锚句: "${esc(e.anchor)}"${e.section ? ` (位于: ${esc(e.section)})` : ""}</div>` : ""}
+              </div>
+              <button class="btn ghost btn-sm cite-one-copy" data-idx="${idx}" style="white-space:nowrap;font-size:11px;padding:3px 8px">📋 复制 Bib</button>
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    `;
+    body.querySelectorAll(".cite-one-copy").forEach(btn => {
+      btn.onclick = ()=>{
+        const idx = parseInt(btn.dataset.idx);
+        if(entries[idx]){
+          navigator.clipboard.writeText(makeBibtex(entries[idx]));
+          btn.textContent = "已复制 ✓";
+          setTimeout(()=> btn.textContent = "📋 复制 Bib", 1500);
+        }
+      };
+    });
+  }catch(err){
+    body.innerHTML = `<p class="err">读取失败：${esc(err.message)}</p>`;
+  }
+}
+
+async function showHistoryModal(taskId, currentStep){
+  let modal = $("wfHistoryModal");
+  if(!modal){
+    modal = document.createElement("div");
+    modal.id = "wfHistoryModal";
+    modal.className = "modal hidden";
+    modal.innerHTML = `
+      <div class="modal-mask" id="wfHistMask"></div>
+      <div class="modal-dialog hist-modal-box">
+        <div class="modal-head">
+          <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:6px"><span>⏱</span> 对话历史与助手切换</h3>
+          <button class="modal-close" id="wfHistClose">✕</button>
+        </div>
+        <div class="hist-tabs">
+          <button class="hist-tab-btn on" data-htab="all">全部记录</button>
+          <button class="hist-tab-btn" data-htab="workflow">工作流节点 (10)</button>
+          <button class="hist-tab-btn" data-htab="assistant">一级助手</button>
+        </div>
+        <div class="modal-body" id="wfHistBody" style="padding:14px 18px;overflow-y:auto;flex:1">
+          <p class="muted">加载中…</p>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  const hideHist = () => {
+    modal.classList.add("hidden");
+    document.removeEventListener("keydown", onHistEsc);
+  };
+  const onHistEsc = (e) => {
+    if(e.key === "Escape") hideHist();
+  };
+  document.addEventListener("keydown", onHistEsc);
+  $("wfHistClose").onclick = hideHist;
+  $("wfHistMask").onclick = hideHist;
+  modal.classList.remove("hidden");
+  let activeTab = "all";
+  let openGroups = new Set();
+  let initializedGroups = false;
+
+  async function loadHistoryData(){
+    const body = $("wfHistBody");
+    body.innerHTML = `<p class="muted">正在读取历史对话…</p>`;
+    try{
+      const d = await api(`/api/step/sessions?id=${encodeURIComponent(taskId || curTask)}&step=${encodeURIComponent(currentStep || wfStep)}`);
+      const sessions = d.sessions || [];
+      const archived = d.archived_workflow || [];
+      const assistantChats = d.assistant_chats || [];
+
+      function renderList(){
+        const groups = [];
+
+        // 1. 工作流节点 (Level 1)
+        if(activeTab === "all" || activeTab === "workflow"){
+          WF_ORDER.forEach(s => {
+            const ag = WF_AGENT[s] || {};
+            const sess = sessions.find(x => x.step === s);
+            const isCurrent = s === (currentStep || wfStep);
+            const subItems = [];
+
+            // 当前步骤的活跃对话
+            if(sess && (sess.count > 0 || isCurrent)){
+              subItems.push({
+                kind: "workflow",
+                step: s,
+                isCurrent,
+                title: isCurrent ? "当前活跃对话" : "节点对话",
+                last_msg: sess.last_msg || "暂无最新消息",
+                count: sess.count || 0,
+                updated_at: sess.updated_at || "",
+                canDelete: !!(sess.count > 0)
+              });
+            }
+
+            // 该节点下的历史归档对话
+            archived.filter(a => a.step === s).forEach(arc => {
+              subItems.push({
+                kind: "archived",
+                id: arc.id,
+                step: s,
+                title: arc.title || "历史对话",
+                last_msg: arc.last_msg || "历史对话归档",
+                count: arc.count || 0,
+                updated_at: arc.updated_at || "",
+                canDelete: true
+              });
+            });
+
+            const cleanStage = (STAGE[s] || s).replace(/^[^\w\u4e00-\u9fa5]+/, '').trim();
+            groups.push({
+              key: `step:${s}`,
+              type: "workflow",
+              step: s,
+              emoji: ag.emoji || "🤖",
+              title: `${cleanStage} · ${ag.name || s}`,
+              isCurrent,
+              subItems
+            });
+          });
+        }
+
+        // 2. 一级助手分组 (Level 1)
+        if(activeTab === "all" || activeTab === "assistant"){
+          const asMap = new Map();
+          const defaultKey = "builtin-steward";
+          asMap.set(defaultKey, {
+            key: `as:${defaultKey}`,
+            type: "assistant",
+            assistant_id: "",
+            emoji: "🤖",
+            title: "智研管家",
+            isCurrent: false,
+            subItems: []
+          });
+
+          assistantChats.forEach(c => {
+            const aid = c.assistant_id || defaultKey;
+            if(!asMap.has(aid)){
+              asMap.set(aid, {
+                key: `as:${aid}`,
+                type: "assistant",
+                assistant_id: c.assistant_id,
+                emoji: "🤖",
+                title: c.assistant_name || "一级助手",
+                isCurrent: false,
+                subItems: []
+              });
+            }
+            const grp = asMap.get(aid);
+            grp.subItems.push({
+              kind: "assistant",
+              id: c.id,
+              assistant_id: c.assistant_id,
+              title: c.title || "助手对话",
+              last_msg: c.last_msg || "暂无最近消息",
+              count: c.count || 0,
+              updated_at: c.updated_at || "",
+              canDelete: true
+            });
+          });
+
+          for(const grp of asMap.values()){
+            if(grp.subItems.length > 0 || activeTab === "assistant" || grp.key === `as:${defaultKey}`){
+              groups.push(grp);
+            }
+          }
+        }
+
+        if(!groups.length){
+          body.innerHTML = `<p class="muted" style="text-align:center;padding:30px">暂无此分类的历史记录</p>`;
+          return;
+        }
+
+        // 默认做成折叠：初次加载保持全部折叠
+        if(!initializedGroups){
+          openGroups.clear();
+          initializedGroups = true;
+        }
+
+        const totalConvs = groups.reduce((acc, g) => acc + g.subItems.length, 0);
+
+        body.innerHTML = `
+          <div class="hist-toolbar">
+            <div style="font-size:12px;color:var(--muted)">
+              共 <b>${groups.length}</b> 个分组 · <b>${totalConvs}</b> 条对话
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn ghost btn-sm" id="hist-expand-all" style="font-size:11.5px;padding:2px 8px">全部展开</button>
+              <button class="btn ghost btn-sm" id="hist-collapse-all" style="font-size:11.5px;padding:2px 8px">全部折叠</button>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            ${groups.map(g => {
+              const isOpen = openGroups.has(g.key);
+              return `
+                <div class="hist-group ${isOpen ? 'open' : ''}" data-gkey="${g.key}">
+                  <div class="hist-group-header" data-toggle="${g.key}">
+                    <span class="hist-chevron">▶</span>
+                    <span style="font-size:16px;flex:none">${g.emoji}</span>
+                    <span class="hist-group-title" style="font-weight:600;font-size:13.5px;color:var(--fg);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(g.title)}</span>
+                    ${g.isCurrent ? `<span class="hist-current-pill" style="font-size:10.5px;padding:1px 6px;border-radius:10px;background:color-mix(in srgb,var(--accent) 15%,var(--panel));color:var(--accent);font-weight:600;flex:none">当前步骤</span>` : ''}
+                    <span class="hist-group-badge" style="font-size:11px;padding:2px 8px;border-radius:10px;background:var(--panel);color:var(--muted);border:1px solid var(--line);flex:none">${g.subItems.length} 条对话</span>
+                  </div>
+                  <div class="hist-group-children">
+                    ${g.subItems.length ? g.subItems.map(it => `
+                      <div class="hist-sub-card ${it.isCurrent ? 'current' : ''}" data-kind="${it.kind}" data-step="${it.step || ''}" data-cid="${it.id || ''}">
+                        <div style="flex:1;min-width:0">
+                          <div style="display:flex;align-items:center;gap:6px">
+                            <b style="font-size:13px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(it.title)}</b>
+                            ${it.isCurrent ? `<span style="font-size:10.5px;color:var(--accent);font-weight:600;flex:none">活跃</span>` : ''}
+                          </div>
+                          <div style="font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px">
+                            ${esc(it.last_msg)}
+                          </div>
+                        </div>
+                        <div style="display:flex;align-items:center;margin-left:12px;flex:none">
+                          <div style="text-align:right;margin-right:6px">
+                            <span class="badge" style="font-size:11px;background:var(--card);color:var(--fg);padding:2px 6px;border-radius:4px">${it.count} 条</span>
+                            ${it.updated_at ? `<div style="font-size:10.5px;color:var(--dim);margin-top:2px">${fmtDate(it.updated_at)}</div>` : ''}
+                          </div>
+                          ${it.canDelete ? `<button class="hist-del-btn" title="删除这条对话记录" data-del-kind="${it.kind}" data-del-step="${it.step || ''}" data-del-cid="${it.id || ''}">🗑</button>` : ''}
+                        </div>
+                      </div>
+                    `).join('') : `
+                      <div class="hist-empty-sub" data-empty-step="${g.step || ''}" data-empty-kind="${g.type}">
+                        <span>尚未建立独立对话</span>
+                        <span style="font-size:11px;color:var(--accent);cursor:pointer">${g.type === 'workflow' ? '点击切换至此节点 ➔' : '点击切换至此助手 ➔'}</span>
+                      </div>
+                    `}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `;
+
+        // 绑定折叠 / 展开
+        body.querySelectorAll(".hist-group-header").forEach(hdr => {
+          hdr.onclick = () => {
+            const gkey = hdr.dataset.toggle;
+            const groupEl = hdr.closest(".hist-group");
+            if(openGroups.has(gkey)){
+              openGroups.delete(gkey);
+              groupEl.classList.remove("open");
+            } else {
+              openGroups.add(gkey);
+              groupEl.classList.add("open");
+            }
+          };
+        });
+
+        // 绑定空状态点击跳转
+        body.querySelectorAll(".hist-empty-sub").forEach(emptyEl => {
+          emptyEl.onclick = () => {
+            hideHist();
+            if(emptyEl.dataset.emptyKind === "workflow"){
+              const targetStep = emptyEl.dataset.emptyStep;
+              if(targetStep){
+                wfStep = targetStep;
+                localStorage.setItem("rw-wf-step", wfStep);
+                const btn = document.querySelector(`.wf-step[data-step="${targetStep}"]`);
+                if(btn) btn.click();
+                else renderWorkflow($("main"));
+              }
+            } else {
+              openTab("agent");
+            }
+          };
+        });
+
+        // 绑定全部展开 / 全部折叠
+        const btnExp = $("hist-expand-all");
+        if(btnExp){
+          btnExp.onclick = () => {
+            groups.forEach(g => openGroups.add(g.key));
+            body.querySelectorAll(".hist-group").forEach(el => el.classList.add("open"));
+          };
+        }
+        const btnCol = $("hist-collapse-all");
+        if(btnCol){
+          btnCol.onclick = () => {
+            openGroups.clear();
+            body.querySelectorAll(".hist-group").forEach(el => el.classList.remove("open"));
+          };
+        }
+
+        // 点击二级对话卡片跳转
+        body.querySelectorAll(".hist-sub-card").forEach(card => {
+          card.onclick = (e)=>{
+            if(e.target.closest(".hist-del-btn")) return;
+            const kind = card.dataset.kind;
+            hideHist();
+            if(kind === "workflow" || kind === "archived"){
+              const targetStep = card.dataset.step;
+              if(targetStep){
+                wfStep = targetStep;
+                localStorage.setItem("rw-wf-step", wfStep);
+                const btn = document.querySelector(`.wf-step[data-step="${targetStep}"]`);
+                if(btn) btn.click();
+                else renderWorkflow($("main"));
+              }
+            } else if(kind === "assistant"){
+              const cid = card.dataset.cid;
+              curChat = cid;
+              localStorage.setItem("rw-chat", curChat);
+              openTab("agent");
+            }
+          };
+        });
+
+        // 删除按钮
+        body.querySelectorAll(".hist-del-btn").forEach(delBtn => {
+          delBtn.onclick = async (e)=>{
+            e.stopPropagation();
+            const kind = delBtn.dataset.delKind;
+            const stepName = delBtn.dataset.delStep;
+            const cid = delBtn.dataset.delCid;
+            try{
+              if(kind === "workflow"){
+                await api("/api/step/clear", { task_id: curTask, step: stepName });
+                if(stepName === wfStep){
+                  wfMsgs = []; wfEvents = [];
+                  wfPaintMsgs(stepName);
+                  wfPaintStats();
+                }
+              } else if(kind === "archived" || kind === "assistant"){
+                await api("/api/chat/delete", { id: cid });
+                if(curChat === cid){
+                  curChat = null; localStorage.removeItem("rw-chat");
+                }
+              }
+              uiNotify("已删除该对话记录");
+              loadHistoryData();
+            }catch(err){
+              uiNotify("删除失败：" + err.message);
+            }
+          };
+        });
+      }
+
+      const tabBtns = modal.querySelectorAll("[data-htab]");
+      tabBtns.forEach(b => {
+        b.onclick = ()=>{
+          activeTab = b.dataset.htab;
+          tabBtns.forEach(x => x.classList.toggle("on", x === b));
+          renderList();
+        };
+      });
+
+      renderList();
+    }catch(e){
+      body.innerHTML = `<p class="err">读取对话历史失败：${esc(e.message)}</p>`;
+    }
+  }
+
+  loadHistoryData();
 }
 
 /* ==== 论文搜索（照科研工作台 literature.tsx「联网检索」：工具条 + 筛选行 + 结果面板）==== */
@@ -1269,7 +2100,26 @@ function searchPanelHTML(active){
     <div class="ws-results">
       <div class="ws-head"><p class="eyebrow">SEARCH / FREE SOURCES</p>
         <h1>联网检索<span id="wsCount" class="hint" style="font-size:12px;font-weight:400"></span></h1>
-        <p class="hint">在右边助手说方向和年份（例：2020–2024 钠电 O3 型 NFM 掺杂），它并行检索 OpenAlex、Crossref、arXiv（只走开放获取）；结果回填到这里，勾选后可下载入库。</p></div>
+        <p class="hint">在右边助手说方向和年份（例：2020–2024 钠电 O3 型 NFM 掺杂），或直接在此输入关键词检索。多源聚合、综合高相关排序并自动关联 easyScholar 期刊分级。</p>
+        <div class="ws-toolbar">
+          <input type="text" id="wsInputQuery" placeholder="输入搜索关键词（支持中英文、方向、体系等）…" />
+          <select id="wsSort" title="检索排序方式">
+            <option value="composite">🌟 综合高相关推荐</option>
+            <option value="relevance">🎯 高度相关优先</option>
+            <option value="citations">📈 高被引质量优先</option>
+            <option value="year">🕒 最新年份优先</option>
+          </select>
+          <select id="wsLimit" title="返回最大文献数量">
+            <option value="20">20 篇</option>
+            <option value="30" selected>30 篇</option>
+            <option value="50">50 篇</option>
+            <option value="100">100 篇</option>
+          </select>
+          <button class="btn" id="wsBtnSearch" style="white-space:nowrap">🔍 检索文献</button>
+          <span style="flex:1"></span>
+          <span class="ol-meta" id="wsEsStatus">📊 easyScholar 期刊分级已接入</span>
+        </div>
+      </div>
       <div class="ws-list" id="wsList"></div>
       <div class="ws-foot">
         <label class="ws-field"><input type="checkbox" id="wsAll" style="width:15px;height:15px;accent-color:var(--accent)"><span>全选本页</span></label>
@@ -1291,8 +2141,13 @@ function downloadPanelHTML(active){
       <div class="dl-stat"><p class="k">已下载论文总数</p><p class="v" id="dlDone">0</p></div>
     </div>
     <div class="dl-box">
-      <div class="h"><span>待手动下载清单<span class="hint" id="dlN"></span></span>
-        <span class="hint" id="dlTip">无 OA 直链、或自动下载被挡（403/落地页）的论文都在这里</span></div>
+      <div class="h">
+        <span>待手动下载清单<span class="hint" id="dlN"></span></span>
+        <span style="flex:1"></span>
+        <button class="btn ghost" id="dlZoteroColBtn" title="在 Zotero 中新建分类">📁 新建 Zotero 分类</button>
+        <button class="btn" id="dlZoteroImportBtn" title="将已下载文献以项目标签导入 Zotero 并关联 PDF">📥 导入到 Zotero</button>
+      </div>
+      <p class="hint" id="dlTip" style="padding:0 14px 8px">无 OA 直链、或自动下载被挡（403/落地页）的论文都在这里；点击可复制 DOI 去机构库下载。</p>
       <div class="ws-list" id="dlList"></div>
     </div>
     <div class="dl-foot"><div class="dl-prog" id="dlProg" hidden></div><button class="btn" id="dlRead">一键精读</button></div>
@@ -1302,7 +2157,34 @@ function dlBind(m){
   if(!$("dlList")) return;
   if(dlPoll){ clearInterval(dlPoll); dlPoll=null; }
   $("dlRead").onclick = dlRead;
-  if($("dlList").onclick){
+  const zColBtn = $("dlZoteroColBtn");
+  if(zColBtn){
+    zColBtn.onclick = async ()=>{
+      const name = prompt("请输入新建 Zotero 分类名称：", "项目文献-" + (curTask||""));
+      if(!name || !name.trim()) return;
+      try{
+        await api("/api/zotero/collection/create", { name: name.trim() });
+        uiNotify(`Zotero 分类「${name}」创建成功`);
+      }catch(e){ uiNotify("创建分类失败：" + e.message); }
+    };
+  }
+  const zImportBtn = $("dlZoteroImportBtn");
+  if(zImportBtn){
+    zImportBtn.onclick = async ()=>{
+      if(!confirm("确定要将本项目已下载文献导入 Zotero 并自动打上项目标签吗？")) return;
+      zImportBtn.disabled = true;
+      zImportBtn.textContent = "正在导入…";
+      try{
+        const r = await api("/api/zotero/import_project_papers", { task_id: curTask });
+        uiNotify(`已成功导入 ${r.count || 0} 篇文献至 Zotero！`);
+      }catch(e){ uiNotify("导入 Zotero 失败：" + e.message); }
+      finally{
+        zImportBtn.disabled = false;
+        zImportBtn.textContent = "📥 导入到 Zotero";
+      }
+    };
+  }
+  if($("dlList")){
     $("dlList").onclick = (e)=>{
       const c = e.target.closest("[data-copy]"); if(!c) return;
       navigator.clipboard.writeText(c.dataset.copy);
@@ -1431,17 +2313,26 @@ async function dlReadPoll(){
 function wsCard(r, mode){
   const search = mode !== "manual";
   const pick = search ? `<label class="ws-pick" title="勾选后进「下载精读」处理"><input type="checkbox" data-pick="${r.id}"${wsPicked.has(r.id)?" checked":""}></label>` : "";
+  const vName = r.venue || r.journal || "";
+  const esInfo = (window.__esRanks && window.__esRanks[vName]) || null;
+  let esBadge = "";
+  if(esInfo){
+    const cls = esInfo.top ? "top" : (esInfo.sci ? ("sci" + esInfo.sci) : "other");
+    esBadge = ` <span class="es-badge ${cls}" title="${esc(esInfo.tip || "")}">📊 ${esc(esInfo.tag || esInfo.jcr || "SCI")}</span>`;
+  }
   const acts = search
-    ? `${r.url?`<a class="btn ghost" href="${esc(r.url)}" target="_blank" rel="noopener" style="text-decoration:none">来源</a>`:""}
+    ? `<button class="btn ghost btn-bib" data-bib="${r.id}" title="复制此文献的 BibTeX 引用">📋 BibTeX</button>
+       ${r.url?`<a class="btn ghost" href="${esc(r.url)}" target="_blank" rel="noopener" style="text-decoration:none">来源</a>`:""}
        ${r.pdf_url?`<button class="btn" data-dl="${r.id}">下载 OA</button>`:`<span class="hint">无 OA 全文</span>`}`
     : `${r.status==="downloaded"?`<span class="ws-chip ok">已下载</span>`:`<span class="ws-chip need">待手动下载</span>`}
+       <button class="btn ghost btn-bib" data-bib="${r.id}" title="复制此文献的 BibTeX 引用">📋 BibTeX</button>
        ${r.url?`<a class="btn ghost" href="${esc(r.url)}" target="_blank" rel="noopener" style="text-decoration:none">去来源页</a>`:""}
        ${r.doi?`<button class="btn ghost" data-copy="${esc(r.doi)}">复制 DOI</button>`:""}`;
   return `<div class="ws-row">
       ${pick}
       <div class="ws-row-main">
         <h3>${esc(r.title||"（无标题）")}</h3>
-        <p class="ws-meta">${esc(r.authors||"作者未知")} · ${esc(WS_LABEL[r.source]||r.source||"")} · ${esc(r.year||"年份未知")}${r.doi?` · ${esc(r.doi)}`:""}</p>
+        <p class="ws-meta">${esc(r.authors||"作者未知")} · ${esc(vName || WS_LABEL[r.source]||r.source||"")}${esBadge} · ${esc(r.year||"年份未知")}${r.doi?` · ${esc(r.doi)}`:""}</p>
         ${!search && r.error?`<p class="ws-meta" style="color:var(--err)">${esc(r.error)}</p>`:""}
         ${r.abstract?`<p class="ws-abs" title="${esc(r.abstract)}">${esc(r.abstract)}</p>`:""}</div>
       <div class="ws-row-actions" data-id="${r.id}">${acts}</div>
@@ -1461,10 +2352,20 @@ async function wsPaint(){
   const pages = Math.max(1, Math.ceil(all.length/per));
   wsPage = Math.min(Math.max(1, wsPage), pages);
   const slice = all.slice((wsPage-1)*per, wsPage*per);
+
+  // 批量拉取 easyScholar 评级
+  const venues = [...new Set(slice.map(r => r.venue || r.journal || "").filter(Boolean))];
+  if(venues.length && !window.__esRanks){
+    try{
+      const esRes = await api("/api/easyscholar/ranks", { venues });
+      if(esRes && esRes.ranks) window.__esRanks = esRes.ranks;
+    }catch(_){}
+  }
+
   listEl.innerHTML = slice.length ? slice.map(r=>wsCard(r,"search")).join("")
     : `<div style="display:grid;place-items:center;height:100%;padding:30px 16px;text-align:center">
         <div><p class="hint" style="font-size:13px;margin:0 0 6px">暂无检索结果</p>
-        <p class="hint">在右边助手说方向和年份，它检索完结果会回填到这里；同一个项目里会累积。</p></div></div>`;
+        <p class="hint">在右边助手说方向和年份，或在上方工具条输入关键词，检索完结果会回填到这里；同一个项目里会累积。</p></div></div>`;
   $("wsCount").textContent = all.length ? ` · ${all.length}` : "";
   $("wsNote").textContent = wsNote || (wsRes.length? `项目里累计 ${wsRes.length} 条检索结果` : "");
   wsSyncPick();
@@ -1481,6 +2382,40 @@ function wsBind(m){
   if(!$("wsList")) return;
   $("wsPrev").onclick = ()=>{ wsPage--; wsPaint(); };
   $("wsNext").onclick = ()=>{ wsPage++; wsPaint(); };
+  const btnSearch = $("wsBtnSearch");
+  const inputQuery = $("wsInputQuery");
+  const sortSel = $("wsSort");
+  const limitSel = $("wsLimit");
+  if(btnSearch && inputQuery){
+    const doSearch = async ()=>{
+      const q = inputQuery.value.trim();
+      if(!q) return uiNotify("请输入搜索关键词");
+      if(!curTask) return uiNotify("请先选择或创建一个项目");
+      btnSearch.disabled = true;
+      btnSearch.textContent = "检索中…";
+      $("wsNote").textContent = "正在并行检索高质量文献并计算高相关度评分…";
+      try{
+        const r = await api("/api/search", {
+          task_id: curTask,
+          query: q,
+          limit: parseInt(limitSel.value) || 30,
+          sort_by: sortSel.value || "composite"
+        });
+        wsRes = r.results || [];
+        wsPage = 1;
+        wsNote = `共检索到 ${wsRes.length} 篇文献（按${sortSel.options[sortSel.selectedIndex].text}）`;
+        window.__esRanks = null;
+        wsPaint();
+      }catch(err){
+        uiNotify("检索失败：" + err.message);
+      }finally{
+        btnSearch.disabled = false;
+        btnSearch.textContent = "🔍 检索文献";
+      }
+    };
+    btnSearch.onclick = doSearch;
+    inputQuery.onkeydown = (e)=>{ if(e.key === "Enter") doSearch(); };
+  }
   $("wsList").addEventListener("change", (e)=>{
     const cb = e.target.closest("[data-pick]"); if(!cb) return;
     if(cb.checked) wsPicked.add(cb.dataset.pick); else wsPicked.delete(cb.dataset.pick);
@@ -1492,6 +2427,18 @@ function wsBind(m){
     wsPaint();
   };
   $("wsList").onclick = async (e)=>{
+    const bibBtn = e.target.closest("[data-bib]");
+    if(bibBtn){
+      const id = bibBtn.dataset.bib;
+      const r = (wsRes || []).find(x => x.id === id) || (dlLastQueue?.manual || []).find(x => x.id === id);
+      if(r){
+        const bibText = makeBibtex(r);
+        navigator.clipboard.writeText(bibText);
+        bibBtn.textContent = "已复制 ✓";
+        setTimeout(()=> bibBtn.textContent = "📋 BibTeX", 1400);
+      }
+      return;
+    }
     const b = e.target.closest("[data-dl]"); if(!b) return;
     const act = b.parentElement; const old = b.textContent;
     b.disabled = true; b.textContent = "下载中…";
