@@ -528,12 +528,20 @@ class WorkflowDB(ResearchDB):
                                     title=note["title"], source="md_notes", body=note["content"],
                                     metadata={"paper_id": note["paper_id"], "legacy_id": nid})
         self._link_note_paper_asset(note["task_id"], note["paper_id"], path)
+        import semantic
+        semantic.invalidate_source(self, "md_note", nid)
+        self.db.commit()
         note["canonical_path"] = str(path)
         return note
 
     def _md_note_path(self, note: dict[str, Any] | None) -> Path | None:
         if not note:
             return None
+        import asset_service
+        for asset in asset_service.find_by_metadata(self, project_id=note["task_id"], kind="note",
+                                                    key="legacy_id", value=note["id"]):
+            if asset["storage"] == "file" and asset["status"] == "active" and asset["project_id"] == note["task_id"]:
+                return Path(asset["canonical_uri"])
         if not note["task_id"]:
             return NOTES / f"{note['id']}.md"
         return self._project_note_dir(note["task_id"]) / f"{note['id']}.md"
@@ -592,6 +600,8 @@ class WorkflowDB(ResearchDB):
         import asset_service
         assets = asset_service.find_by_metadata(self, kind="note", key="legacy_id", value=nid)
         self.db.execute("DELETE FROM md_notes WHERE id=?", (nid,))
+        import semantic
+        semantic.invalidate_source(self, "md_note", nid)
         for asset in assets:
             self.db.execute("UPDATE assets SET status='archived', updated_at=? WHERE id=?",
                             (now(), asset["id"]))
@@ -785,6 +795,8 @@ class WorkflowDB(ResearchDB):
 
     def schedule_delete(self, sid: str) -> None:
         import project_todos
+        import schedule
+        schedule.cancel_run(sid, self.path)
         project_todos.sync_execution(self, schedule_id=sid, status="cancelled")
         self.db.execute("DELETE FROM schedule_runs WHERE schedule_id=?", (str(sid or ""),))
         self.db.execute("DELETE FROM schedules WHERE id=?", (str(sid or ""),))
@@ -1132,6 +1144,25 @@ class WorkflowDB(ResearchDB):
         磁盘上只删 data/papers 里我们自己存的 PDF 副本，用户自己的原文件不动。"""
         if self.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone() is None:
             raise KeyError(task_id)
+        from run_manager import RunManager
+        manager = RunManager.get_instance()
+        async_ids = [r["id"] for r in self.db.execute("SELECT id FROM tasks WHERE owner_id=?", (task_id,))]
+        for rid in async_ids:
+            manager.cancel_run(rid)
+        import team
+        import schedule
+        for row in self.db.execute("SELECT id FROM schedules WHERE project_id=?", (task_id,)):
+            schedule.cancel_run(row["id"], self.path)
+        for row in self.db.execute("SELECT id FROM team_tasks WHERE task_id=?", (task_id,)):
+            signal = team._cancel_signals.get(row["id"])
+            if signal:
+                signal.set()
+        self.db.execute("DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE owner_id=?)", (task_id,))
+        self.db.execute("DELETE FROM run_events WHERE run_id IN (SELECT id FROM tasks WHERE owner_id=?)", (task_id,))
+        self.db.execute("DELETE FROM tasks WHERE owner_id=?", (task_id,))
+        self.db.execute("DELETE FROM schedule_runs WHERE schedule_id IN (SELECT id FROM schedules WHERE project_id=?)", (task_id,))
+        self.db.execute("DELETE FROM schedules WHERE project_id=?", (task_id,))
+        self.db.execute("DELETE FROM task_links WHERE project_id=?", (task_id,))
         files = [r["source_path"] for r in self.db.execute("SELECT source_path FROM papers WHERE task_id=?", (task_id,))]
         self.db.execute("DELETE FROM paper_pages WHERE paper_id IN (SELECT id FROM papers WHERE task_id=?)", (task_id,))
         self.db.execute("DELETE FROM evidence WHERE paper_id IN (SELECT id FROM papers WHERE task_id=?)", (task_id,))
@@ -1398,8 +1429,9 @@ class WorkflowDB(ResearchDB):
             if not it.get("title"):
                 continue
             key = (self.db.execute(
-                "SELECT 1 FROM search_cache WHERE task_id=? AND source=? AND (doi=? AND doi!='' OR title=?)",
-                (task_id, it.get("source", ""), it.get("doi", ""), it.get("title", "")),
+                "SELECT 1 FROM search_cache WHERE task_id=? AND source=? "
+                "AND (lower(trim(doi))=lower(trim(?)) AND trim(doi)!='' OR title=? AND (trim(doi)='' OR trim(?)=''))",
+                (task_id, it.get("source", ""), it.get("doi", ""), it.get("title", ""), it.get("doi", "")),
             ).fetchone())
             if key:
                 continue
@@ -1420,8 +1452,9 @@ class WorkflowDB(ResearchDB):
         if not title:
             raise ValueError("这条没有标题，跳过")
         row = self.db.execute(
-            "SELECT id FROM search_cache WHERE task_id=? AND source=? AND (doi=? AND doi!='' OR title=?)",
-            (task_id, it.get("source", ""), it.get("doi", ""), title),
+            "SELECT id FROM search_cache WHERE task_id=? AND source=? "
+            "AND (lower(trim(doi))=lower(trim(?)) AND trim(doi)!='' OR title=? AND (trim(doi)='' OR trim(?)=''))",
+            (task_id, it.get("source", ""), it.get("doi", ""), title, it.get("doi", "")),
         ).fetchone()
         if row:
             return row["id"]

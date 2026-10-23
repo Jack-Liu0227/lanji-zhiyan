@@ -194,10 +194,11 @@ def board(task_id: str, limit: int = 40) -> dict[str, Any]:
 
 
 def cancel(task_id_row: str) -> dict[str, Any]:
-    with workflow.WorkflowDB(_db_path()) as db:
+    with _lock, workflow.WorkflowDB(_db_path()) as db:
         row = db.team_task(task_id_row)
         if not row:
             raise ValueError("任务不存在")
+        _pending_retries.discard(task_id_row)
         if row["status"] in ("done", "failed", "canceled"):
             return {"status": row["status"], "id": task_id_row}
         signal = _cancel_signals.get(task_id_row)
@@ -208,12 +209,15 @@ def cancel(task_id_row: str) -> dict[str, Any]:
 
 
 def retry(task_id_row: str) -> dict[str, Any]:
-    with workflow.WorkflowDB(_db_path()) as db:
+    with _lock, workflow.WorkflowDB(_db_path()) as db:
         row = db.team_task(task_id_row)
         if not row:
             raise ValueError("任务不存在")
-        if row["status"] == "running":
+        signal = _cancel_signals.get(task_id_row)
+        if row["status"] == "running" or (signal and not signal.is_set()):
             raise ValueError("还在跑")
+        if task_id_row in _cancel_signals:
+            _pending_retries.add(task_id_row)
         db.team_task_mark(task_id_row, "queued", started_at="", ended_at="", reason="", result="", checkpoint={})
         db.team_event_add(task_id_row, row["task_id"], "note", "重新排队")
         return {"queued": task_id_row}
@@ -254,6 +258,7 @@ def review(task_id_row: str, approved: bool, reviewer_id: str = "", feedback: st
 
 # ---------------- 队列 worker（串行） ----------------
 _cancel_signals: dict[str, threading.Event] = {}
+_pending_retries: set[str] = set()
 
 
 def _run_one(row: dict[str, Any]) -> None:
@@ -268,6 +273,8 @@ def _run_one(row: dict[str, Any]) -> None:
         # input file). Persist that failure instead of leaving a running task.
         with workflow.WorkflowDB(_db_path()) as db:
             current = db.team_task(row["id"]) or {}
+            if not current:
+                return
             status = "canceled" if signal.is_set() else "failed"
             db.team_task_mark(row["id"], status, ended_at=_now(), reason=str(exc))
             db.team_member_update(row["member_id"], status="idle" if signal.is_set() else "failed")
@@ -278,7 +285,15 @@ def _run_one(row: dict[str, Any]) -> None:
                 import run_service
                 run_service.finish(db, current["run_id"], "cancelled" if signal.is_set() else "failed", error=str(exc))
     finally:
-        _cancel_signals.pop(row["id"], None)
+        with _lock:
+            _cancel_signals.pop(row["id"], None)
+            if row["id"] in _pending_retries:
+                _pending_retries.discard(row["id"])
+                with workflow.WorkflowDB(_db_path()) as db:
+                    if db.team_task(row["id"]):
+                        db.team_task_mark(row["id"], "queued", started_at="", ended_at="", reason="",
+                                          result="", checkpoint={}, retry_at="")
+                        db.team_member_update(row["member_id"], status="queued")
 
 
 def _execute_one(row: dict[str, Any], signal: threading.Event) -> None:
@@ -410,6 +425,8 @@ def _execute_one(row: dict[str, Any], signal: threading.Event) -> None:
                               "完成 → %s%s" % (path.name, "（等待 Reviewer）" if needs_review else ""))
     except Exception as exc:
         with workflow.WorkflowDB(_db_path()) as db:
+            if not db.team_task(row["id"]):
+                return
             cancelled = isinstance(exc, execution.Cancelled) or signal.is_set()
             if team_run_id:
                 import run_service

@@ -1065,8 +1065,11 @@ def step_delivery(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
             if e.get("result_exists"):
                 files.append(e["result_path"])
         elif step == "convert":
-            got = conv_files(db, task_id) or {}
-            fs = got.get("files") or []
+            fs = [{"path": r["canonical_uri"], "name": Path(r["canonical_uri"]).name}
+                  for r in db.db.execute(
+                      "SELECT canonical_uri FROM assets WHERE project_id=? AND kind='export' "
+                      "AND status='active' AND storage='file' ORDER BY updated_at DESC,id", (task_id,))
+                  if Path(r["canonical_uri"]).is_file() and Path(r["canonical_uri"]).stat().st_size]
             items["产物文件"] = "%d 个" % len(fs)
             items["最新"] = fs[0]["name"] if fs else "—"
             files += sorted(f["path"] for f in fs if f.get("path"))

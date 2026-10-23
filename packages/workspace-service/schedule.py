@@ -212,18 +212,45 @@ def next_run_at(expr: str, now: datetime | None = None) -> str:
 
 
 def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None) -> dict[str, Any]:
+    key = (str(Path(_db_path()).resolve()), sched["id"])
+    with _lock:
+        if key in _running:
+            return {"id": "", "schedule_id": sched["id"], "status": "skipped", "reason": "任务仍在运行"}
+        signal = threading.Event()
+        _running[key] = signal
+    try:
+        return _run_once(sched, trigger, emit, signal.is_set)
+    finally:
+        with _lock:
+            _running.pop(key, None)
+
+
+def cancel_run(schedule_id: str, db_path: str | Path) -> None:
+    with _lock:
+        signal = _running.get((str(Path(db_path).resolve()), schedule_id))
+        if signal:
+            signal.set()
+
+
+def _run_once(sched: dict[str, Any], trigger: str, emit: Any = None, cancel_check=None) -> dict[str, Any]:
     """跑一次并落运行记录。返回运行记录 dict。"""
     started = datetime.now()
     run = {"id": uuid.uuid4().hex, "schedule_id": sched["id"], "name": sched["name"],
            "trigger": trigger, "status": "running", "started_at": started.isoformat(timespec="seconds"),
            "ended_at": "", "output_path": "", "summary": "", "reason": ""}
     with workflow.WorkflowDB(_db_path()) as db:
+        current = db.schedule(sched["id"])
+        if not current or current.get("project_id") != sched.get("project_id"):
+            return {**run, "status": "canceled", "reason": "任务已删除或项目绑定已变更"}
         db.schedule_run_add(run)
 
     def finish(status: str, *, path: str = "", summary: str = "", reason: str = "") -> dict[str, Any]:
         run.update({"status": status, "output_path": path, "summary": summary, "reason": reason,
                     "ended_at": datetime.now().isoformat(timespec="seconds")})
         with workflow.WorkflowDB(_db_path()) as db:
+            current = db.schedule(sched["id"])
+            if not current or current.get("project_id") != sched.get("project_id"):
+                return run
             db.schedule_run_add(run)
             db.schedule_mark_run(sched["id"], run["ended_at"], next_run_at(sched["cron"]))
             import project_todos
@@ -270,8 +297,14 @@ def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None
             db.quiet_steps = not bool(stage)
             if stage:
                 db.log_step(sched["project_id"], stage, "running", "定时任务开始执行")
+            def removed():
+                current = db.schedule(sched["id"])
+                return not current or current.get("project_id") != sched.get("project_id") or not db.db.execute(
+                    "SELECT 1 FROM research_tasks WHERE id=?", (sched["project_id"],)).fetchone()
             out = workflow.run_agent(db, sched["project_id"], prompt, emit=emit,
-                                     publish=False, assistant_id=sched["assistant_id"], scope=stage)
+                                     publish=False, assistant_id=sched["assistant_id"], scope=stage, cancel_check=cancel_check)
+            if removed():
+                raise ValueError("项目或定时任务已删除")
             text = str(out.get("reply") or "").strip()
             if not text:
                 raise ValueError("定时任务没有产出内容")
@@ -293,8 +326,9 @@ def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None
     except Exception as exc:                       # 任何失败都记下来，不能让调度线程死掉
         if tracked_id:
             with workflow.WorkflowDB(_db_path()) as db:
-                run_service.finish_node(db, node["id"], "failed", error=str(exc))
-                if stage:
+                if db.db.execute("SELECT 1 FROM workflow_nodes WHERE id=?", (node["id"],)).fetchone():
+                    run_service.finish_node(db, node["id"], "failed", error=str(exc))
+                if stage and db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (sched["project_id"],)).fetchone():
                     db.log_step(sched["project_id"], stage, "failed", str(exc))
         return finish("failed", reason=f"{type(exc).__name__}: {exc}")
 
@@ -302,7 +336,7 @@ def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None
 # ------------------------------------------------------------------ 循环 ----
 
 _lock = threading.Lock()
-_running: set[str] = set()
+_running: dict[tuple[str, str], threading.Event] = {}
 _started = False
 
 
@@ -355,16 +389,8 @@ def tick(now: datetime | None = None) -> int:
     """到点了就按顺序跑（同一规则不重入）。返回本次跑了几条。"""
     ran = 0
     for sched in due_list(now):
-        with _lock:
-            if sched["id"] in _running:
-                continue
-            _running.add(sched["id"])
-        try:
-            run_once(sched, trigger="scheduler")
+        if run_once(sched, trigger="scheduler")["status"] != "skipped":
             ran += 1
-        finally:
-            with _lock:
-                _running.discard(sched["id"])
     return ran
 
 
@@ -386,7 +412,7 @@ def recover_runs() -> int:
         rows = db.db.execute("SELECT * FROM schedule_runs WHERE status='running'").fetchall()
         for record in rows:
             row = dict(record)
-            if row["schedule_id"] in _running:
+            if (str(Path(_db_path()).resolve()), row["schedule_id"]) in _running:
                 continue
             row.update(status="failed", ended_at=datetime.now().isoformat(timespec="seconds"),
                        reason="服务重启导致执行中断，请核对已有产物后手动重试")

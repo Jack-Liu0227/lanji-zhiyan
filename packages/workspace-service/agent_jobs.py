@@ -117,7 +117,7 @@ def _execute(db_path, run, request, step):
                 run.emit({"type": "done", "content": final or (result or {}).get("reply", "")}, db)
         except Exception as exc:
             cancelled = isinstance(exc, execution.Cancelled) or run.cancel_requested
-            if track:
+            if track and db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone():
                 db.log_step(tid, step, "cancelled" if cancelled else "failed", str(exc)[:300])
             run.emit({"type": "cancelled" if cancelled else "error", "message": str(exc)}, db)
 
@@ -141,6 +141,15 @@ def recover(db_path) -> dict:
                 db.update_async_task(rid, status="interrupted")
                 db.update_background_job(rid, status="interrupted")
                 interrupted.append(rid)
+    started = []
     for rid in resumed:
-        start(db_path, {}, resume_id=rid)
-    return {"resumed": resumed, "interrupted": interrupted}
+        try:
+            start(db_path, {}, resume_id=rid)
+            started.append(rid)
+        except Exception as exc:
+            with workflow.WorkflowDB(db_path) as db:
+                checkpoint = (db.get_async_task(rid) or {}).get("checkpoint", {})
+                db.update_async_task(rid, status="interrupted", checkpoint={**checkpoint, "recovery_error": str(exc)})
+                db.update_background_job(rid, status="interrupted")
+            interrupted.append(rid)
+    return {"resumed": started, "interrupted": interrupted}

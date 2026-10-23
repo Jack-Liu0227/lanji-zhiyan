@@ -3,8 +3,8 @@
 
 设计口径（改动前先读这四条）：
 
-1. 索引是派生数据。内容哈希 + 模型名都没变就跳过，所以**任何写入方都不用挂钩子**——
-   论文入库、笔记保存、证据摘录都不需要改代码，下次 sync 自然补上。
+1. 索引是派生数据。内容哈希 + 模型名都没变就跳过；笔记修改或删除会作废旧块，
+   下次 sync 再补齐当前内容，避免旧材料继续参与检索。
 2. 页码跟着块走。论文按页切块，命中就能回指「文件名 p.N」；这是科研检索的硬要求，
    比相似度多零点零几重要得多。
 3. 检索恒有两条腿。词法是 FTS5 trigram（中文可切），向量是 numpy 余弦。
@@ -346,6 +346,14 @@ def _drop_source(conn: sqlite3.Connection, kind: str, sid: str) -> None:
     conn.execute("DELETE FROM sem_fts WHERE rowid IN "
                  "(SELECT rowid FROM sem_chunks WHERE source_kind=? AND source_id=?)", (kind, sid))
     conn.execute("DELETE FROM sem_chunks WHERE source_kind=? AND source_id=?", (kind, sid))
+
+
+def invalidate_source(db: Any, kind: str, sid: str) -> None:
+    """Remove obsolete derived content; the next sync can index the current row."""
+    _drop_source(db.db, kind, sid)
+    db.db.execute("DELETE FROM sem_state WHERE source_kind=? AND source_id=?", (kind, sid))
+    with _LOCK:
+        _MATRIX_CACHE.clear()
 
 
 def _now() -> str:

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import json
+import uuid
 
 
 CATEGORIES = (
@@ -98,16 +100,50 @@ def delete(db: Any, project_id: str, relative: str) -> dict:
         path = note_path(db, project_id, relative)
         if not path.exists():
             raise FileNotFoundError(f"笔记文件不存在: {relative}")
+        files = [path]
         if path.is_file():
             path.unlink()
     else:
         path = folder_path(db, project_id, relative)
         if not path.exists():
             raise FileNotFoundError(f"目录不存在: {relative}")
+        files = [p for p in path.rglob("*.md") if p.is_file() and not p.is_symlink()]
         if path.is_dir():
             import shutil
             shutil.rmtree(path)
+    import semantic
+    for file in files:
+        table, row, asset = _record(db, project_id, file)
+        if row:
+            db.db.execute(f"DELETE FROM {table} WHERE id=? AND task_id=?", (row["id"], project_id))
+            semantic.invalidate_source(db, "note" if table == "notes" else "md_note", row["id"])
+            _archive_aliases(db, project_id, row["id"])
+        if asset:
+            db.db.execute("UPDATE assets SET status='archived' WHERE id=?", (asset["id"],))
+            db.db.execute("DELETE FROM asset_fts WHERE asset_id=?", (asset["id"],))
+    db.db.commit()
     return {"ok": True, "deleted": relative}
+
+
+def _record(db: Any, project_id: str, path: Path) -> tuple[str, dict, dict]:
+    asset_row = db.db.execute("SELECT * FROM assets WHERE project_id=? AND canonical_uri=?",
+                              (project_id, str(path.resolve()))).fetchone()
+    asset = dict(asset_row) if asset_row else {}
+    metadata = json.loads(asset.get("metadata") or "{}")
+    nid = metadata.get("legacy_id") or path.stem
+    for table in ("md_notes", "notes"):
+        row = db.db.execute(f"SELECT * FROM {table} WHERE id=? AND task_id=?", (nid, project_id)).fetchone()
+        if row:
+            return table, dict(row), asset
+    return "md_notes", {}, asset
+
+
+def _archive_aliases(db: Any, project_id: str, nid: str, keep: str = "") -> None:
+    import asset_service
+    for asset in asset_service.find_by_metadata(db, project_id=project_id, kind="note", key="legacy_id", value=nid):
+        if asset["id"] != keep:
+            db.db.execute("UPDATE assets SET status='archived' WHERE id=?", (asset["id"],))
+            db.db.execute("DELETE FROM asset_fts WHERE asset_id=?", (asset["id"],))
 
 
 _LEGACY_TITLE_CATEGORY = (("精读 · ", "文献精读笔记"), ("笔记 · ", "文献精读笔记"),
@@ -237,7 +273,8 @@ def read(db: Any, project_id: str, relative: str) -> dict:
         raise FileNotFoundError(relative)
     if path.stat().st_size > MAX_NOTE_BYTES:
         raise ValueError("笔记超过 5 MB")
-    return {"path": relative, "title": _title_of(db, project_id, path.stem) or path.stem,
+    _, row, _ = _record(db, project_id, path)
+    return {"path": relative, "title": row.get("title") or path.stem,
             "content": path.read_text(encoding="utf-8")}
 
 
@@ -250,5 +287,28 @@ def write(db: Any, project_id: str, relative: str, content: str) -> dict:
     path = note_path(db, project_id, relative, create=True)
     fileguard.before_write(path, "项目笔记保存")
     asset_service.atomic_write_text(path, content)
+    import semantic
+    import workflow
+    table, row, previous = _record(db, project_id, path)
+    stamp = workflow.now()
+    nid = row.get("id") or uuid.uuid4().hex
+    title = row.get("title") or path.stem
+    if row:
+        if table == "notes":
+            db.db.execute("UPDATE notes SET markdown=? WHERE id=? AND task_id=?", (content, nid, project_id))
+        else:
+            db.db.execute("UPDATE md_notes SET content=?,updated_at=? WHERE id=? AND task_id=?",
+                          (content, stamp, nid, project_id))
+        semantic.invalidate_source(db, "note" if table == "notes" else "md_note", nid)
+    else:
+        db.db.execute("INSERT INTO md_notes (id,title,content,task_id,paper_id,created_at,updated_at) VALUES (?,?,?,?,'',?,?)",
+                      (nid, title, content, project_id, stamp, stamp))
+    metadata = {**json.loads(previous.get("metadata") or "{}"), "legacy_id": nid,
+                "paper_id": row.get("paper_id") or "", "table": table}
+    asset = asset_service.register_file(db, path, project_id=project_id, kind="note", title=title,
+                                        source=previous.get("source") or "project_notes", body=content, metadata=metadata)
+    db.db.execute("UPDATE assets SET status='active' WHERE id=?", (asset["id"],))
+    _archive_aliases(db, project_id, nid, keep=asset["id"])
+    db.db.commit()
     fileguard.audit("save", path, bytes=path.stat().st_size)
-    return {"path": relative, "title": path.stem, "bytes": path.stat().st_size}
+    return {"path": relative, "title": title, "bytes": path.stat().st_size}

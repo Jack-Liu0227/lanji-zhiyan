@@ -409,7 +409,8 @@ def download_pdf(item: dict[str, Any], target_dir: Path | None = None) -> Path:
     target_dir = target_dir or PAPERS
     target_dir.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w\-. ]+", "_", item.get("title", "paper"))[:80].strip() or "paper"
-    dest = target_dir / f"{safe}.pdf"
+    import uuid
+    dest = target_dir / f"{safe}-{uuid.uuid4().hex}.pdf"
     req = urllib.request.Request(url, headers=UA)
     execution.check()
     temporary = None

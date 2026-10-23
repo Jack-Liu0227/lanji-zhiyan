@@ -1437,6 +1437,7 @@ function wfRemember(run){
 function wfRestoreRun(step){
   const key = wfRunKey(curTask, step);
   let run = wfRuns.get(key);
+  if(run && run.status !== "running"){ wfRunButton(); return null; }
   if(!run){
     try{
       const saved = JSON.parse(localStorage.getItem("rw-wf-run:" + key) || "null");
@@ -1461,13 +1462,22 @@ async function wfFollowRun(run){
     if(wfVisible(run) && $("wv-send")) $("wv-send").title = "连接中断，正在重连；按 Esc 停止";
   });
   localStorage.removeItem("rw-wf-run:" + wfRunKey(run.project,run.step));
-  wfRuns.delete(wfRunKey(run.project,run.step));
-  if(wfVisible(run)){
-    await loadTaskState();
-    wfAgentPaint(document.querySelector(".wf-page")?.parentElement,run.step);
-    if(run.step === "search") wsLoadState();
-    if(DOC_UI[run.step]) docLoad(run.step);
-    wfPaintFoot();
+  try{
+    if(wfVisible(run)){
+      await loadTaskState();
+      if(wfVisible(run)){
+        await wfAgentPaint(document.querySelector(".wf-page")?.parentElement,run.step);
+        if(wfVisible(run)){
+          if(run.step === "search") wsLoadState();
+          if(DOC_UI[run.step]) docLoad(run.step);
+          wfPaintFoot();
+        }
+      }
+    }
+  }catch(e){
+    if(wfVisible(run)) uiNotify("执行已结束，刷新状态失败：" + e.message);
+  }finally{
+    if(wfRuns.get(wfRunKey(run.project,run.step)) === run) wfRuns.delete(wfRunKey(run.project,run.step));
   }
 }
 async function wfSend(m, step){

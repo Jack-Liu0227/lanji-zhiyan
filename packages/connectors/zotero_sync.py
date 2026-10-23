@@ -178,8 +178,18 @@ def sync(db: Any, task_id: str, mode: str = "merge", dry_run: bool = True, plan_
         link = links.get(row["id"])
         existing = by_key.get(link["item_key"]) if link else None
         if not existing:
-            existing = next((r for r in remote if (row.get("doi") and row["doi"].lower() == _from_remote(r)["doi"].lower())
-                             or row["title"].strip().casefold() == _from_remote(r)["title"].strip().casefold()), None)
+            doi = (row.get("doi") or "").strip().casefold()
+            candidates = [r for r in remote if doi and doi == _from_remote(r)["doi"].strip().casefold()]
+            if not candidates:
+                candidates = [r for r in remote
+                              if row["title"].strip().casefold() == _from_remote(r)["title"].strip().casefold()
+                              and not (doi and _from_remote(r)["doi"].strip())]
+            if len(candidates) > 1:
+                conflicts.append({"result_id": row["id"], "key": "", "title": row["title"],
+                                  "reason": "匹配到多个文献，请先明确条目映射再同步"})
+                used.update(r["key"] for r in candidates)
+                continue
+            existing = candidates[0] if candidates else None
         if existing:
             used.add(existing["key"])
             lc = bool(link and link["local_hash"] != _hash(row))

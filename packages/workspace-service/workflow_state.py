@@ -54,7 +54,7 @@ def capture(db, project_id: str, step: str) -> dict:
     elif step in ("outline", "write", "review"):
         doc = workflow.doc_read(db, project_id, step)
         payload = doc.get("markdown", "") if doc.get("exists") else ""
-        valid = bool(payload.strip())
+        valid = bool(payload.strip()) and (step != "write" or "（本节未生成 ——" not in payload)
     elif step == "map":
         data = workflow.map_read(db, project_id)
         payload = {"nodes": data.get("nodes", []), "edges": data.get("edges", [])}
@@ -79,10 +79,31 @@ def capture(db, project_id: str, step: str) -> dict:
     return result
 
 
+def _running_stages(db, project_id: str) -> set[str]:
+    import project_todos
+    project_todos.ensure_table(db)
+    stages = set()
+    for row in db.db.execute("SELECT checkpoint FROM tasks WHERE owner_id=? AND kind='agent_run' "
+                             "AND status IN ('pending','running','suspended')", (project_id,)):
+        try:
+            stages.add(json.loads(row["checkpoint"] or "{}").get("step", ""))
+        except (TypeError, ValueError):
+            continue
+    stages.update(r["step"] for r in db.db.execute(
+        "SELECT m.step FROM team_tasks t JOIN team_members m ON m.id=t.member_id "
+        "WHERE t.task_id=? AND t.status='running'", (project_id,)))
+    stages.update(r["stage"] for r in db.db.execute(
+        "SELECT t.stage FROM project_todos t JOIN task_links l ON l.todo_id=t.id "
+        "JOIN schedule_runs r ON r.schedule_id=l.schedule_id "
+        "WHERE t.task_id=? AND r.status='running'", (project_id,)))
+    return stages
+
+
 def states(db, project_id: str, layout: dict | None = None) -> dict[str, dict]:
     import workflow_layout
     layout = layout or definition(db, project_id)
     evidence = workflow_layout._evidence(db, project_id)
+    running = _running_stages(db, project_id)
     latest = {}
     for row in db.db.execute("SELECT rowid AS sequence,* FROM steps WHERE task_id=? ORDER BY rowid", (project_id,)):
         latest[row["stage"]] = dict(row)
@@ -99,7 +120,9 @@ def states(db, project_id: str, layout: dict | None = None) -> dict[str, dict]:
             delivery = json.loads(row.get("delivery") or "{}")
         except (ValueError, TypeError):
             pass
-        if entry["status"] in ("running", "failed", "cancelled"):
+        if step in running:
+            entry.update(status="running", summary="本环节仍有执行中的任务")
+        elif entry["status"] in ("running", "failed", "cancelled"):
             pass
         elif row.get("status") in ("delivered", "done") and delivery:
             current = capture(db, project_id, step)

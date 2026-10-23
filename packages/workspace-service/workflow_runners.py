@@ -249,16 +249,19 @@ def _draft_from_map(db: Any, task_id: str, text: str, emit: Any, system: str) ->
             body = "\n".join(lines[1:]).strip()  # 模型自己带了标题就去掉，标题统一由这里出
         if not body:
             empty.append(sec["label"])
-            body = "（本节未生成 —— 跟 agent 说「重写 <这一节标题>」补上）"
+            continue
         parts.append(f"{'#' * sec['level']} {sec['label']}\n\n{body}")
 
+    if empty:
+        reason = "章节生成失败，原稿未改动：" + "、".join(empty)
+        db.log_step(task_id, "write", "failed", reason)
+        raise RuntimeError(reason)
     md = "\n\n".join(parts)
     doc_write(db, task_id, "write", md)
     cur = doc_read(db, task_id, "write")
     digest = (f"（按谱系图起稿完成：{len(plan)} 节逐节生成 → 拼成整份）\n"
               f"- 正文：{len(cur['markdown'])} 字，已落盘 `{cur['path']}`\n"
               f"- 依据：谱系图上挂的证据（每节只用挂在该节下面的那几条）\n"
-              + (f"- 没生成出来的节：{'、'.join(empty)}（说「重写 <标题>」补上）\n" if empty else "")
               + "- 后面改谱系图不会再动这份正文；要按新图重写就明说「按谱系图重写整篇」。")
     db.add_message(task_id, "assistant", digest, events, scope="write")
     db.log_step(task_id, "agent", "done", "文章撰写·按谱系图起稿")
@@ -274,10 +277,26 @@ def run_write(db: Any, task_id: str, text: str, emit: Any = None) -> dict[str, A
     # 按谱系图逐节起稿只干一件事：没有正文时从零写一遍（图是这次起稿的骨架，写完就与图脱钩）。
     # 已有正文 → 走对话改（说「整篇/全文/从头」才算要整篇重写），调图不该改变已成稿的输出。
     draft_map = bool(map_read(db, task_id)["sections"]) and _wants_draft(text, cur["exists"], has_outline)
-    system = write_system(db, task_id, draft=draft_map).replace("%%MEMORY%%", db.memory_block(task_id))
-    if draft_map:
+    checkpoint = getattr(db, "job_checkpoint", {})
+    mode = checkpoint.get("write_mode")
+    if not mode:
+        mode = "map" if draft_map else "pipeline" if _wants_draft(text, cur["exists"], has_outline) else "edit"
+        # Older checkpoints did not persist the chosen route. A completed writer
+        # call followed by an interrupted stage belongs to the original pipeline.
+        if getattr(db, "resuming", False) and has_outline and not map_read(db, task_id)["sections"]:
+            import hashlib
+            import json
+            signature = hashlib.sha256(json.dumps([(task_id, text), "write"]).encode()).hexdigest()
+            material = hashlib.sha256(json.dumps([(task_id, "整理这个项目可用于写正文的素材简报。"), "write"]).encode()).hexdigest()
+            completed = checkpoint.get("completed_calls", {})
+            if material in completed and (signature in completed or checkpoint.get("signature") == signature):
+                mode = "pipeline"
+        checkpoint["write_mode"] = mode
+        getattr(db, "save_agent_checkpoint", lambda **values: None)(write_mode=mode)
+    system = write_system(db, task_id, draft=mode == "map").replace("%%MEMORY%%", db.memory_block(task_id))
+    if mode == "map":
         return _draft_from_map(db, task_id, text, emit, system)
-    if not _wants_draft(text, cur["exists"], has_outline):
+    if mode == "edit":
         return workflow.run_agent(db, task_id, text, emit, max_steps=8, system=system,
                                  tools=doc_tools("write"), scope="write")
     return _run_write_pipeline(db, task_id, text, emit, system)

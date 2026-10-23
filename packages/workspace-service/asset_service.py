@@ -308,6 +308,11 @@ def _legacy_note_asset(db, row: dict[str, Any], project_id: str, table: str) -> 
     legacy_id = str(row["id"])
     title = str(row.get("title") or "项目笔记")
     body = str(row.get("markdown") if table == "notes" else row.get("content") or "")
+    for asset in find_by_metadata(db, project_id=project_id, kind="note", key="legacy_id", value=legacy_id):
+        if asset["storage"] == "file" and asset["status"] == "active" and Path(asset["canonical_uri"]).is_file():
+            body = Path(asset["canonical_uri"]).read_text(encoding="utf-8")
+            return register_file(db, asset["canonical_uri"], project_id=project_id, kind="note", title=title,
+                                 source=asset["source"], body=body, metadata=_metadata(asset["metadata"]))
     if project_id:
         path = db.pdir(project_id, "笔记") / f"{legacy_id}.md"
     else:
