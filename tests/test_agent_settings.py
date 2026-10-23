@@ -248,7 +248,12 @@ class AgentSettingsTest(unittest.TestCase):
         for wire, (first, payload_key) in variants.items():
             with self.subTest(wire=wire):
                 profile = {**self.db.models()[0], "api": wire, "reasoning": "high"}
-                with patch.object(agent_protocols, "_request", side_effect=[first, {}]) as transport, patch.object(workflow, "_tool_impl", return_value={"ok": True}):
+                final = {
+                    "openai-responses": {"output": [{"type": "message", "content": [{"type": "output_text", "text": "Done"}]}]},
+                    "anthropic-messages": {"content": [{"type": "text", "text": "Done"}]},
+                    "google-generative-ai": {"candidates": [{"content": {"parts": [{"text": "Done"}]}}]},
+                }[wire]
+                with patch.object(agent_protocols, "_request", side_effect=[first, final]) as transport, patch.object(workflow, "_tool_impl", return_value={"ok": True}):
                     workflow.run_agent(self.db, cid, "inspect", profile=profile, publish=False)
                 self.assertEqual(transport.call_count, 2)
                 continued = transport.call_args_list[1].args[1][payload_key]

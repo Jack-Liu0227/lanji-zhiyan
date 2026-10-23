@@ -26,7 +26,7 @@ END;
 """
 _ID = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
 DEFAULT_LAYOUT_ID = "builtin.workflow.research"    # 项目没选过布局时默认用它，别靠排序碰运气
-_DONE = {"done", "completed", "success", "succeeded", "downloaded"}
+_DONE = {"done", "completed", "success", "succeeded", "downloaded", "delivered"}
 _RUNNING = {"running", "in_progress", "downloading", "reading", "translating"}
 _FAILED = {"failed", "error", "manual"}
 
@@ -38,6 +38,8 @@ def _linear(stages: list[str]) -> dict[str, Any]:
 
 
 def ensure_schema(db: Any) -> None:
+    if getattr(db, "_workflow_layout_initialized", False):
+        return
     db.db.executescript(SCHEMA)
     seeds = [
         ("builtin.workflow.research", "完整科研工作流", "保留现有全部研究步骤", STAGES),
@@ -55,6 +57,7 @@ def ensure_schema(db: Any) -> None:
             db.db.execute("INSERT INTO workflow_layouts VALUES (?,?,?,?,?,?)",
                           (wid, name, description, json.dumps(_linear(stages), ensure_ascii=False), stamp, stamp))
     db.db.commit()
+    db._workflow_layout_initialized = True
 
 
 def validate_definition(data: dict[str, Any]) -> dict[str, Any]:
@@ -194,7 +197,7 @@ def _status(raw: str) -> str:
 
 def _evidence(db: Any, tid: str) -> dict[str, dict[str, Any]]:
     evidence: dict[str, dict[str, Any]] = {}
-    moments: dict[str, float] = {}
+    moments: dict[str, tuple[float, int]] = {}
 
     def moment(stamp: str) -> float:
         try:
@@ -209,7 +212,10 @@ def _evidence(db: Any, tid: str) -> dict[str, dict[str, Any]]:
             return
         value = {"status": _status(raw), "raw_status": raw, "summary": summary,
                  "updated_at": stamp, "source": source, "record_id": ref}
-        point = moment(stamp)
+        # Legacy records have second precision. Explicit stage results must win
+        # over a chat response from the same second. Within each source the
+        # ordered query still lets the latest record win.
+        point = (moment(stamp), 2 if source == "steps" else 1)
         if stage not in evidence or point >= moments[stage]:
             evidence[stage] = value
             moments[stage] = point
@@ -223,6 +229,8 @@ def _evidence(db: Any, tid: str) -> dict[str, dict[str, Any]]:
             events = json.loads(row["events"] or "[]")
         except (TypeError, ValueError):
             events = []
+        if any(isinstance(ev, dict) and ev.get("type") == "plan" for ev in events):
+            continue
         failed = any(isinstance(ev, dict) and ev.get("type") == "error" for ev in events)
         offer(stage, "failed" if failed else "done", "最近一次步骤对话" + ("失败" if failed else "已完成"),
               row["created_at"], "chat", row["id"])
@@ -253,7 +261,8 @@ def state(db: Any, task_id: str) -> dict[str, Any]:
         selected = layout["order"][0]
     else:
         selected = binding["selected_node"] or layout["order"][0]
-    evidence = _evidence(db, task_id)
+    import workflow_state
+    evidence = workflow_state.states(db, task_id, layout)
     nodes = {node["id"]: dict(node) for node in layout["nodes"]}
     for node in nodes.values():
         node.update(evidence.get(node["step"], {"status": "pending", "raw_status": "", "summary": "尚无执行记录",
@@ -264,7 +273,7 @@ def state(db: Any, task_id: str) -> dict[str, Any]:
         node["dependencies"] = parents
         node["level"] = max((nodes[parent]["level"] + 1 for parent in parents), default=0)
         if node["status"] == "pending":
-            node["status"] = "ready" if all(nodes[parent]["status"] == "done" for parent in parents) else "waiting"
+            node["status"] = "ready" if all(nodes[parent]["status"] == "delivered" for parent in parents) else "waiting"
     return {"task_id": task_id, "layouts": layouts, "layout": layout, "selected_node": selected,
             "nodes": [nodes[nid] for nid in layout["order"]], "edges": layout["edges"],
             "observed_at": now(), "status_note": "节点状态来自真实步骤、对话、团队任务和下载队列；依赖展示不会自动执行步骤。"}

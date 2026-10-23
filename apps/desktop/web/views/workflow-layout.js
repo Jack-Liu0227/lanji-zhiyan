@@ -25,7 +25,7 @@
     @media(max-width:700px){.wfl-project-dialog .row{grid-template-columns:1fr}}
   `;
   document.head.appendChild(root);
-  const labels = {pending:"未开始",ready:"可开始",waiting:"等待依赖",running:"运行中",done:"已完成",failed:"失败",cancelled:"已停止",blocked:"被阻塞"};
+  const labels = {pending:"未开始",ready:"可开始",waiting:"等待依赖",running:"运行中",done:"执行完成",succeeded:"待验收",delivered:"已交付",stale:"需重新确认",failed:"失败",cancelled:"已停止",blocked:"被阻塞"};
   let settingsData = null, draft = null, projectNotice = "";
   const byId = id => document.getElementById(id);
   const clone = value => JSON.parse(JSON.stringify(value));

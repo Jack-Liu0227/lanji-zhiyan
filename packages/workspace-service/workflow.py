@@ -105,6 +105,17 @@ class ModelInvoker:
 def chat_raw(profile: dict[str, Any], messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None,
              temperature: float = 0.2, timeout: int = 180, max_tokens: int = 4096,
              on_delta: Any = None, cancel_check: Any = None, on_reasoning: Any = None) -> dict[str, Any]:
+    import execution
+    callback = cancel_check or execution.current_check()
+    return execution.interruptible(_chat_raw, profile, messages, tools=tools, temperature=temperature,
+                                   timeout=timeout, max_tokens=max_tokens, on_delta=on_delta,
+                                   on_reasoning=on_reasoning, cancel_check=callback, model_cancel=callback)
+
+
+def _chat_raw(profile: dict[str, Any], messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None,
+              temperature: float = 0.2, timeout: int = 180, max_tokens: int = 4096,
+              on_delta: Any = None, model_cancel: Any = None, on_reasoning: Any = None) -> dict[str, Any]:
+    cancel_check = model_cancel
     """返回 assistant message 原始结构（含 tool_calls），供 agent 循环使用。"""
     if not profile:
         raise RuntimeError("尚未配置模型：到「模型」页添加一个 OpenAI 兼容接口并设为当前模型。")
@@ -490,6 +501,7 @@ def _schedule_manage(db: "WorkflowDB", args: dict[str, Any], project_id: str = "
         enabled = args.get("enabled", True) is not False
         saved = db.schedule_save({"name": name, "prompt": prompt, "project_id": pid,
                                   "assistant_id": assistant_id,
+                                  "todo_id": str(args.get("todo_id") or ""),
                                   "frequency": "cron", "cron": cron, "output_dir": folder,
                                   "enabled": enabled,
                                   "next_run_at": sched_lib.next_run_at(cron) if enabled else ""})
@@ -684,11 +696,14 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
             if action == "create":
                 return project_todos.add_todo(db, project_id, str(args.get("title") or ""),
                                               str(args.get("description") or ""), str(args.get("priority") or "P2"),
-                                              str(args.get("assistant_id") or ""), str(args.get("due_date") or ""))
-            if action == "update":
+                                              str(args.get("assistant_id") or ""), str(args.get("due_date") or ""),
+                                              str(args.get("stage") or ""))
+            if action in ("update", "dispatch"):
                 todo_id = str(args.get("id") or "")
                 if not any(row["id"] == todo_id for row in project_todos.list_todos(db, project_id)):
                     raise ValueError("这个待办不属于当前项目")
+                if action == "dispatch":
+                    return project_todos.dispatch(db, todo_id, reviewer_id=str(args.get("reviewer_id") or ""))
                 fields = {k: args[k] for k in ("title", "description", "status", "priority", "due_date") if k in args}
                 if "status" in fields:
                     fields["status"] = str(fields["status"]).upper()
@@ -697,7 +712,7 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
                 if "assistant_id" in args:
                     fields["assigned_assistant"] = args["assistant_id"]
                 return project_todos.update_todo(db, todo_id, **fields)
-            raise ValueError("action 只支持 list/create/update")
+            raise ValueError("action 只支持 list/create/update/dispatch")
         if name == "team_create":
             ids = args.get("assistant_ids") or ["builtin-steward"]
             if not isinstance(ids, list) or len(ids) > 12 or len(set(ids)) != len(ids):
@@ -975,21 +990,13 @@ def _plan_context(db: "WorkflowDB", tid: str, step: str) -> str:
     顺序就是发言顺序：**上一步的交付排在最前**（它才是这一步要同步的对象），
     项目最初的创新点降到最后当背景 —— 以前把它排前面，每个助手都开口就复述创新点审查。
     """
+    import workflow_state
+    handoff, _, _ = workflow_state.handoff(db, tid, step)
     task = (db.summary(tid) or {}).get("task") or {}
     parts = ["项目：%s\n研究问题：%s\n材料体系：%s" % (
         task.get("title") or "", task.get("question") or "（没填）", task.get("material_system") or "（没填）")]
-    i = STAGES.index(step) if step in STAGES else 0
-    prev = STAGES[i-1] if i else ""
-    if prev:
-        label = STAGE_LABEL.get(prev, prev)
-        pm = db.messages(tid, prev)
-        if pm:
-            parts.append("【上一步「%s」最后的结论 —— 你这一条要同步的就是它】\n%s"
-                         % (label, (pm[-1].get("content") or "")[:1500]))
-        if prev in ("outline", "write", "review"):
-            body = (doc_read(db, tid, prev) or {}).get("markdown") or ""
-            if body:
-                parts.append("【上一步「%s」落下的正文】\n%s" % (label, body[:3000]))
+    if handoff != "[]":
+        parts.append("【已确认的上游交付快照：按交付版本接手】\n" + handoff[:30000])
         pl = db.papers_of(tid) or []
         if pl:
             parts.append("【项目文献库里已有的】\n" + "\n".join(
@@ -1010,11 +1017,8 @@ def _plan_context(db: "WorkflowDB", tid: str, step: str) -> str:
 
 
 def step_done(db: "WorkflowDB", task_id: str, step: str) -> bool:
-    """这一步交付过没有：steps 台账里该步出现过 done 就算（跟 current_stage_key 一个口径）。"""
-    try:
-        return any(r.get("stage") == step and r.get("status") == "done" for r in db.steps(task_id))
-    except Exception:
-        return False
+    import workflow_state
+    return workflow_state.states(db, task_id).get(step, {}).get("status") == "delivered"
 
 
 def step_delivery(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
@@ -1035,6 +1039,7 @@ def step_delivery(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
             items["来源"] = "、".join(sorted({r.get("source") or "" for r in rs if r.get("source")})) or "—"
         elif step == "download":
             ps = db.papers_of(task_id) or []
+            files += [p["source_path"] for p in ps if p.get("source_path")]
             items["入库论文"] = "%d 篇" % len(ps)
             items["最近入库"] = "；".join((p.get("title") or p.get("filename") or "")[:40] for p in ps[:3]) or "—"
         elif step == "notes":
@@ -1064,7 +1069,7 @@ def step_delivery(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
             fs = got.get("files") or []
             items["产物文件"] = "%d 个" % len(fs)
             items["最新"] = fs[0]["name"] if fs else "—"
-            files += [f["path"] for f in fs[:5] if f.get("path")]
+            files += sorted(f["path"] for f in fs if f.get("path"))
     except Exception as exc:                       # 记产物失败不能连累交付
         items["读取产物出错"] = "%s: %s" % (type(exc).__name__, str(exc)[:80])
     msgs = db.messages(task_id, step) or []
@@ -1087,19 +1092,20 @@ def step_plan(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
     硬限制：上一步没交付（台账里没有 done）→ 这一步此刻不是流程步，只是独立功能块，
     直接返回 blocked，既不写计划也不落库 —— 否则空计划会被缓存，上一步补完也不会重写。
     """
-    step = step if step in STAGES else "idea"
-    i = STAGES.index(step) if step in STAGES else 0
-    if i and not step_done(db, task_id, STAGES[i-1]):
-        prev = STAGES[i-1]
-        return {"text": "", "cached": False, "blocked": True, "prev": prev,
-                "prev_label": STAGE_LABEL.get(prev, prev)}
+    import workflow_state
+    if step not in STAGES:
+        raise ValueError("不支持的工作流步骤")
+    gate = workflow_state.gate(db, task_id, step)
+    if gate["blocked"]:
+        return {"text": "", "cached": False, **gate}
+    _, handoff_hash, _ = workflow_state.handoff(db, task_id, step)
     msgs = db.messages(task_id, step)
     if msgs and msgs[-1].get("role") == "assistant" and any(
-            isinstance(e, dict) and e.get("type") == "plan" for e in (msgs[-1].get("events") or [])):
+            isinstance(e, dict) and e.get("type") == "plan" and e.get("handoff_hash") == handoff_hash
+            for e in (msgs[-1].get("events") or [])):
         return {"text": msgs[-1].get("content") or "", "cached": True}
     who, label = STEP_AGENT.get(step, ""), STAGE_LABEL.get(step, step)
-    i = STAGES.index(step) if step in STAGES else 0
-    prev_label = STAGE_LABEL.get(STAGES[i-1], STAGES[i-1]) if i else ""
+    prev_label = "、".join(STAGE_LABEL[p] for p in gate["dependencies"])
     sync_target = f"上一步「{prev_label}」" if prev_label else "项目最初的定义"
     system = (
         f"你在一套科研工作流里当「{who}」，现在轮到「{label}」这一步，只负责这一步的事。\n"
@@ -1117,7 +1123,9 @@ def step_plan(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
         return {"text": "", "cached": False, "error": f"{type(exc).__name__}: {exc}"[:200]}
     if not text:
         return {"text": "", "cached": False, "error": "模型没有返回内容"}
-    db.add_message(task_id, "assistant", text, [{"type": "plan"}], scope=step)
+    if workflow_state.gate(db, task_id, step)["blocked"] or workflow_state.handoff(db, task_id, step)[1] != handoff_hash:
+        return {"text": "", "cached": False, "error": "上游交付已变更，请重新生成计划"}
+    db.add_message(task_id, "assistant", text, [{"type": "plan", "handoff_hash": handoff_hash}], scope=step)
     return {"text": text, "cached": False}
 
 
@@ -1171,6 +1179,10 @@ def recent_dialogue(messages: list[dict[str, Any]], chars: int = HISTORY_CHARS) 
     return picked
 
 
+import run_service
+
+
+@run_service.agent_scope
 def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_steps: int = 6,
               system: str | None = None, tools: list[dict[str, Any]] | None = None,
               extra_context: str = "", scope: str = "", publish: bool = True,
@@ -1185,6 +1197,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     import agent_settings
     import capabilities
     import agent_integrations
+    import execution
+    cancel_check = cancel_check or execution.current_check()
     cfg = agent_settings.runtime_config(db, task_id, assistant_id or (profile or {}).get("assistant_id", ""), member)
     if profile is None:
         profile = db.model(cfg["model_id"]) if cfg["model_id"] else agent_profile(db, task_id)
@@ -1194,7 +1208,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     permission = profile.get("permission", "auto")
     aid = cfg["assistant_id"]
     profile["assistant_id"] = aid
-    if publish:
+    resume = getattr(db, "agent_resume", {}) or {}
+    save_checkpoint = getattr(db, "save_agent_checkpoint", lambda **values: None)
+    if publish and not resume.get("messages"):
         db.add_message(task_id, "user", text, scope=scope)
         say({"type": "user", "content": text})
     task = db.summary(task_id)["task"]
@@ -1221,8 +1237,22 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             raise ValueError("绑定项目尚未设置文件夹，请重新选择项目")
         paths.validate_project_dir(root)
     import run_service
-    tracked_run = run_service.start(db, ctx_id, "agent", idempotency_key="")
-    tracked_node = run_service.node_start(db, tracked_run["id"], scope or "agent")
+    tracked_run = run_service.get(db, resume.get("workflow_run_id", "")) if resume.get("messages") else None
+    tracked_run = tracked_run or run_service.start(db, ctx_id, "agent", idempotency_key="")
+    import workflow_state
+    import asset_service
+    handoff, _, input_assets = workflow_state.handoff(db, bound, scope) if bound and scope in STAGES else ("", "", [])
+    if bound and not input_assets:
+        input_assets = [a["id"] for a in asset_service.list_assets(db, bound, limit=200)]
+    restored_node = db.db.execute("SELECT * FROM workflow_nodes WHERE id=? AND run_id=?",
+                                 (resume.get("node_id", ""), tracked_run["id"])).fetchone()
+    tracked_node = dict(restored_node) if restored_node else run_service.node_start(db, tracked_run["id"], scope or "agent", inputs=input_assets)
+    if restored_node:
+        db.db.execute("UPDATE workflow_nodes SET status='running',error='',ended_at='' WHERE id=?", (tracked_node["id"],))
+        db.db.execute("UPDATE workflow_runs SET status='running',error='',ended_at='' WHERE id=?", (tracked_run["id"],))
+        db.db.commit()
+    db.asset_run = {"id": tracked_run["id"], "node_id": tracked_node["id"], "inputs": input_assets,
+                    "outputs": list(resume.get("output_assets") or [])}
     if chat_row and bound:                        # 绑了项目 → Partner Agent（对话历史独立，视野与产出跟项目走）
         pt = db.summary(bound)["task"]
         ctx = (f"你是《{pt['title']}》项目的 **Partner Agent**：这个对话绑在该项目上 —— 对话历史自己一份，"
@@ -1285,6 +1315,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         "workspace_write": "You may change workspace content. Sending mail or messages and remote writes require user enabled Full Access.",
         "full_access": "危险：用户授予完全访问权限，可使用所有已启用工具和外部写入，不再要求逐次确认；谨慎处理不可逆操作。",
     }[permission])
+    if handoff and handoff != "[]":
+        ctx += "\n\n【已验收的上游交付版本】\n" + handoff[:30000]
     history = [{"role": m["role"], "content": m["content"]}
                for m in recent_dialogue(db.messages(task_id, scope or "idea")[:-1], context_budget(db))]
     tool_specs = list(TOOL_SPECS if tools is None else tools)
@@ -1310,14 +1342,18 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         {"role": "system", "content": ctx},
         *history, {"role": "user", "content": text},
     ]
-    events: list[dict[str, Any]] = []
+    if resume.get("messages"):
+        messages = resume["messages"]
+    events: list[dict[str, Any]] = resume.get("events", [])
     final = ""
     tokens = {"prompt": 0, "completion": 0, "total": 0, "exact": True}
-    for turn in range(max_steps):   # 别用 step：它在上面是本步的名字（助手身份/收口规则都靠它）
+    first_turn = int(resume.get("turn", 0)) if resume.get("messages") else 0
+    save_checkpoint(phase="model", messages=messages, turn=first_turn, workflow_run_id=tracked_run["id"], node_id=tracked_node["id"])
+    for turn in range(first_turn, max_steps):
         if cancel_check and cancel_check():
             run_service.finish_node(db, tracked_node["id"], "failed", error="运行已中断")
             run_service.finish(db, tracked_run["id"], "failed", error="运行已中断")
-            raise RuntimeError("运行已中断")
+            raise execution.Cancelled("运行已中断")
         partial: list[str] = []
         reasoning_parts: list[str] = []
         reasoning_id = f"{tracked_run['id']}:{turn}"
@@ -1379,7 +1415,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             say({"type": "assistant", "content": msg["content"], "step": step})
             events.append({"type": "assistant", "content": msg["content"]})
         if not calls:
-            final = msg.get("content") or "（模型没有返回内容）"
+            final = (msg.get("content") or "").strip()
+            if not final:
+                raise RuntimeError("模型返回空内容，请检查配置后重试")
             messages.append({"role": "assistant", "content": final})
             break
         assistant_message = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
@@ -1390,7 +1428,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             if cancel_check and cancel_check():
                 run_service.finish_node(db, tracked_node["id"], "failed", error="运行已中断")
                 run_service.finish(db, tracked_run["id"], "failed", error="运行已中断")
-                raise RuntimeError("运行已中断")
+                raise execution.Cancelled("运行已中断")
             fn = (call.get("function") or {})
             name = fn.get("name") or "?"
             try:
@@ -1400,6 +1438,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             ev = {"type": "tool_call", "name": name, "args": args, "id": call.get("id")}
             say(ev); events.append(ev)
             t_tool_start = time.monotonic()
+            save_checkpoint(phase="tool", messages=messages, events=events, turn=turn)
             try:
                 if name not in allowed_names:
                     raise PermissionError("当前助手未获准使用此工具：" + name)
@@ -1414,6 +1453,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 if isinstance(result, dict) and result.get("sub_events"):
                     events.extend(result["sub_events"])      # 子 agent 的事件并进本轮 → 回放可还原
                 ok, brief = True, _brief(name, result)
+            except execution.Cancelled:
+                raise
             except Exception as exc:
                 result, ok, brief = {"error": f"{type(exc).__name__}: {exc}"}, False, f"失败：{exc}"
             duration_ms = int((time.monotonic() - t_tool_start) * 1000)
@@ -1429,6 +1470,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             say(ev2); events.append(ev2)
             messages.append({"role": "tool", "tool_call_id": call.get("id") or name, "name": name,
                              "content": json.dumps(result, ensure_ascii=False, default=str)[:4000]})
+        save_checkpoint(phase="model", messages=messages, events=events, turn=turn + 1,
+                        output_assets=db.asset_run["outputs"])
     else:
         outcomes = [event for event in events if event.get("type") == "tool_result"]
         lines = []
@@ -1441,6 +1484,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             final += "\n\n实际执行结果：\n" + "\n".join(lines)
         final += "\n\n以上为工具执行记录，尚未完成最终核验；可以发送后续指令继续。"
         say({"type": "assistant", "content": final})
+        if publish:
+            db.add_message(task_id, "assistant", final, [*events, {"type": "error", "content": final}], scope=scope)
+        raise RuntimeError(final)
     if publish:
         db.add_message(task_id, "assistant", final, events, scope=scope)
         db.log_step(task_id, "agent", "done", text[:60])
@@ -1451,9 +1497,10 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 db.db.execute("UPDATE chats SET title=? WHERE id=?", (text.strip().replace("\n", " ")[:24], task_id))
             db.db.commit()
         say({"type": "done", "content": final})
-    run_service.finish_node(db, tracked_node["id"], "succeeded")
+    execution.check()
+    run_service.finish_node(db, tracked_node["id"], "succeeded", outputs=db.asset_run["outputs"])
     run_service.finish(db, tracked_run["id"], "succeeded")
-    return {"reply": final, "events": events, "run_id": tracked_run["id"]}
+    return {"reply": final, "events": events, "run_id": tracked_run["id"], "output_assets": db.asset_run["outputs"]}
 
 
 def _brief(name: str, result: Any) -> str:

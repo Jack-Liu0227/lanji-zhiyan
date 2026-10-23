@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import math
 import re
+import os
+import tempfile
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -13,6 +15,7 @@ from typing import Any
 
 
 import paths
+import execution
 
 PAPERS = paths.PAPERS
 UA = {"User-Agent": "research-workbench-1.0 (mailto:local@localhost)"}
@@ -25,8 +28,10 @@ def open_url(req: Any, timeout: int = 30) -> Any:
     return workflow.open_url(req, timeout=timeout)
 
 def _get(url: str, timeout: int = 30) -> bytes:
-    with open_url(urllib.request.Request(url, headers=UA), timeout=timeout) as res:
-        return res.read()
+    def fetch():
+        with open_url(urllib.request.Request(url, headers=UA), timeout=timeout) as res:
+            return res.read()
+    return execution.interruptible(fetch)
 
 
 def search_crossref(query: str, rows: int = 10) -> list[dict[str, Any]]:
@@ -406,14 +411,26 @@ def download_pdf(item: dict[str, Any], target_dir: Path | None = None) -> Path:
     safe = re.sub(r"[^\w\-. ]+", "_", item.get("title", "paper"))[:80].strip() or "paper"
     dest = target_dir / f"{safe}.pdf"
     req = urllib.request.Request(url, headers=UA)
-    with open_url(req, timeout=120) as res, dest.open("wb") as fh:
-        head = res.read(5)
-        if head[:4] != b"%PDF":
-            raise ValueError(f"目标不是 PDF（返回：{head!r}）")
-        fh.write(head)
-        while True:
-            chunk = res.read(1 << 16)
-            if not chunk:
-                break
-            fh.write(chunk)
+    execution.check()
+    temporary = None
+    try:
+        with execution.interruptible(open_url, req, timeout=120) as res, \
+                tempfile.NamedTemporaryFile(dir=target_dir, suffix=".part", delete=False) as fh:
+            temporary = Path(fh.name)
+            head = execution.interruptible(res.read, 5)
+            if head[:4] != b"%PDF":
+                raise ValueError(f"目标不是 PDF（返回：{head!r}）")
+            fh.write(head)
+            while True:
+                chunk = execution.interruptible(res.read, 1 << 16)
+                if not chunk:
+                    break
+                execution.check()
+                fh.write(chunk)
+        import fileguard
+        fileguard.before_write(dest, "下载论文")
+        os.replace(temporary, dest)
+    finally:
+        if temporary:
+            temporary.unlink(missing_ok=True)
     return dest

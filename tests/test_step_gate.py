@@ -39,13 +39,19 @@ class StepGateTest(unittest.TestCase):
         orig = workflow.chat
         workflow.chat = lambda *a, **k: "从「文献精读」同步到：10 篇已精读。计划：1 定框架 2 补引用 3 定稿"
         try:
-            self.db.log_step(self.task, "notes", "done")
-            self.assertTrue(step_done(self.db, self.task, "notes"))
-            got = step_plan(self.db, self.task, "outline")
+            import workflow_layout
+            import workflow_state
+            workflow_layout.ensure_schema(self.db)
+            layout = workflow_layout.save_layout(self.db, {"name": "Writing", **workflow_layout._linear(["outline", "write"])})["layout"]
+            workflow_layout.select_layout(self.db, {"task_id": self.task, "layout_id": layout["id"]})
+            workflow.doc_write(self.db, self.task, "outline", "# Confirmed outline\nEvidence and methods")
+            workflow_state.accept(self.db, self.task, "outline")
+            self.assertTrue(step_done(self.db, self.task, "outline"))
+            got = step_plan(self.db, self.task, "write")
             self.assertFalse(got.get("blocked"))
             self.assertIn("同步", got["text"])
             self.assertFalse(got["cached"])
-            again = step_plan(self.db, self.task, "outline")
+            again = step_plan(self.db, self.task, "write")
             self.assertTrue(again["cached"])                      # 已有计划直接复用，不再烧模型
         finally:
             workflow.chat = orig

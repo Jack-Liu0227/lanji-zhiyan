@@ -19,6 +19,14 @@ class RunState:
         self.lock = threading.Lock()
         self.events: list[dict[str, Any]] = []
         self.created_at = time.time()
+        self.worker_started = False
+
+    def claim(self) -> bool:
+        with self.lock:
+            if self.worker_started or self.status in ("done", "failed", "cancelled"):
+                return False
+            self.worker_started = True
+            return True
 
     def add_listener(self, listener: Callable[[dict[str, Any]], None]) -> None:
         with self.lock:
@@ -31,6 +39,8 @@ class RunState:
 
     def emit(self, event: dict[str, Any], db: Any = None) -> dict[str, Any]:
         with self.lock:
+            if self.status in ("done", "failed", "cancelled"):
+                return {"event_id": self.event_counter, "run_id": self.run_id, "type": self.status, "payload": event}
             self.event_counter += 1
             eid = self.event_counter
             ev_record = {
@@ -40,27 +50,18 @@ class RunState:
                 "payload": event,
                 "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }
-            self.events.append(ev_record)
             ev_type = event.get("type")
-            if ev_type == "done":
-                self.status = "done"
-            elif ev_type == "error":
-                self.status = "failed"
-            elif ev_type == "cancelled":
-                self.status = "cancelled"
-
+            status = {"done": "done", "error": "failed", "failed": "failed", "cancelled": "cancelled"}.get(ev_type, self.status)
             if db is not None:
-                try:
-                    db.record_run_event(self.run_id, eid, ev_type or "unknown", event)
-                    if ev_type in ("done", "failed", "cancelled"):
-                        db.update_async_task(self.run_id, status=self.status, progress=1.0)
-                        if hasattr(db, "update_background_job"):
-                            db.update_background_job(self.run_id, status=self.status, progress=1.0, last_event_id=eid)
-                    else:
-                        if hasattr(db, "update_background_job"):
-                            db.update_background_job(self.run_id, last_event_id=eid)
-                except Exception:
-                    pass
+                db.record_run_event(self.run_id, eid, ev_type or "unknown", event)
+                if ev_type in ("done", "error", "failed", "cancelled"):
+                    db.update_async_task(self.run_id, status=status, progress=1.0)
+                    if hasattr(db, "update_background_job"):
+                        db.update_background_job(self.run_id, status=status, progress=1.0, last_event_id=eid)
+                elif hasattr(db, "update_background_job"):
+                    db.update_background_job(self.run_id, last_event_id=eid)
+            self.status = status
+            self.events.append(ev_record)
 
             for listener in list(self.listeners):
                 try:
@@ -71,8 +72,9 @@ class RunState:
 
     def cancel(self, db: Any = None) -> None:
         with self.lock:
+            if self.status in ("done", "failed", "cancelled"):
+                return
             self.cancel_requested = True
-            self.status = "cancelled"
             if db is not None:
                 try:
                     db.update_async_task(self.run_id, status="cancelled", cancel_requested=True)
@@ -104,20 +106,29 @@ class RunManager:
             if idempotency_key and idempotency_key in self.idempotency_map:
                 existing_id = self.idempotency_map[idempotency_key]
                 if existing_id in self.runs:
+                    if self.runs[existing_id].task_id != task_id:
+                        raise ValueError("运行请求不属于当前项目或会话")
                     return self.runs[existing_id]
 
             run_id = f"run-{uuid.uuid4().hex[:12]}"
+            old = db.get_async_task_by_idempotency(idempotency_key) if db is not None and idempotency_key else None
+            if old:
+                if old["owner_id"] != task_id:
+                    raise ValueError("运行请求不属于当前项目或会话")
+                run_id = old["id"]
             state = RunState(run_id, task_id=task_id, idempotency_key=idempotency_key)
+            if old:
+                state.status = old["status"] if old["status"] != "pending" else "running"
+                state.cancel_requested = bool(old["cancel_requested"])
+                last = db.db.execute("SELECT COALESCE(MAX(event_id),0) FROM run_events WHERE run_id=?", (run_id,)).fetchone()
+                state.event_counter = int(last[0])
             self.runs[run_id] = state
             if idempotency_key:
                 self.idempotency_map[idempotency_key] = run_id
-            if db is not None:
-                try:
-                    db.create_async_task("agent_run", owner_id=task_id, idempotency_key=idempotency_key, task_id=run_id)
-                    if hasattr(db, "create_background_job"):
-                        db.create_background_job(job_id=run_id, task_id=task_id, status="running", progress=0.0, last_event_id=0)
-                except Exception:
-                    pass
+            if db is not None and not old:
+                db.create_async_task("agent_run", owner_id=task_id, idempotency_key=idempotency_key, task_id=run_id)
+                if hasattr(db, "create_background_job"):
+                    db.create_background_job(job_id=run_id, task_id=task_id, status="running", progress=0.0, last_event_id=0)
             if idempotency_key in self.pending_cancels:
                 self.pending_cancels.discard(idempotency_key)
                 state.cancel(db=db)
@@ -128,8 +139,10 @@ class RunManager:
             return self.runs.get(run_id)
 
     def cancel_by_key(self, key: str, db: Any = None) -> bool:
+        old = db.get_async_task_by_idempotency(key) if db is not None and key else None
         with self._lock:
             run_id = self.idempotency_map.get(key) if key else None
+            run_id = run_id or (old["id"] if old else None)
             if key and not run_id:
                 if len(self.pending_cancels) >= 256:
                     self.pending_cancels.clear()
@@ -142,9 +155,9 @@ class RunManager:
             run.cancel(db=db)
             return True
         if db is not None:
-            try:
+            task = db.get_async_task(run_id)
+            if task and task["status"] not in ("done", "failed", "cancelled"):
                 db.update_async_task(run_id, status="cancelled", cancel_requested=True)
-                return True
-            except Exception:
-                pass
+                db.update_background_job(run_id, status="cancelled")
+            return bool(task)
         return False

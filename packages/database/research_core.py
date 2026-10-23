@@ -140,7 +140,9 @@ class ResearchDB:
         self.db.execute("PRAGMA synchronous=NORMAL")
         self.db.row_factory = sqlite3.Row
 
-        db_key = ":memory:" if is_memory else str(self.path.resolve())
+        db_key = ":memory:" if is_memory else f"{self.path.resolve()}:{self.path.stat().st_ino}"
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE name='assets'").fetchone():
+            _RESEARCH_SCHEMA_INITIALIZED.discard(db_key)
         if is_memory or db_key not in _RESEARCH_SCHEMA_INITIALIZED:
             with _RESEARCH_INIT_LOCK:
                 if is_memory or db_key not in _RESEARCH_SCHEMA_INITIALIZED:

@@ -1016,6 +1016,13 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
             with WorkflowDB(DB_PATH) as cancel_db:
                 return self._json({"cancelled": RunManager.get_instance().cancel_by_key(
                     str(data.get("idempotency_key") or ""), db=cancel_db)})
+        if path == "/api/agent/resume":
+            import agent_jobs
+            try:
+                run = agent_jobs.start(DB_PATH, {}, resume_id=str(data.get("run_id") or ""))
+                return self._json({"run_id": run.run_id})
+            except ValueError as exc:
+                return self._json({"error": str(exc)}, 409)
         if path == "/api/idea":
             return self._sse(data, "idea")
         if path == "/api/map":
@@ -1153,6 +1160,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                             if enabled and not wdb.base_dir(str(data.get("project_id") or "")):
                                 return self._json({"error": "请选择一个有文件夹的项目"}, 400)
                             row = wdb.schedule_save({"id": data.get("id"), "name": name,
+                                                     "todo_id": str(data.get("todo_id") or ""),
                                                      "prompt": str(data.get("prompt") or "").strip(),
                                                      "project_id": str(data.get("project_id") or ""),
                                                      "assistant_id": str(data.get("assistant_id") or ""),
@@ -1393,16 +1401,11 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     if not tid or step not in ("idea", "search", "download", "notes", "outline",
                                                "map", "write", "review", "entrans", "convert"):
                         return self._json({"error": "缺 task_id 或 step 不认识"}, 400)
-                    idx = STAGES.index(step)
-                    if idx and not step_done(db, tid, STAGES[idx-1]):   # 硬限制：流程必须按步交付，不能跨步
-                        return self._json({"error": "上一步「%s」还没交付，这一步现在只能当独立功能块用，接不上流程"
-                                           % STAGE_LABEL.get(STAGES[idx-1], STAGES[idx-1])}, 409)
-                    # 交付即留痕：现算这一步的产物（库 + 文件），跟台账一起落库，别只记「用户确认交付」
-                    delivery = step_delivery(db, tid, step)
-                    summary = "；".join("%s %s" % (k, v) for k, v in (delivery.get("items") or {}).items())
-                    res = db.log_step(tid, step, "done",
-                                      (str(data.get("summary") or "").strip() or summary or "用户确认交付")[:200],
-                                      delivery=delivery)
+                    import workflow_state
+                    try:
+                        res = workflow_state.accept(db, tid, step, str(data.get("summary") or "").strip())
+                    except ValueError as exc:
+                        return self._json({"error": str(exc)}, 409)
                     if step == "map":                     # 交付谱系图 → 文章撰写接手，先说一句开场白
                         try:
                             res["write_opening"] = open_write(db, tid)
@@ -1563,7 +1566,11 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
             self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
 
     # ---------- Agent 事件流（SSE，支持 HTTP/1.1 长连接、事件持久化与 Last-Event-ID 重放） ----------
-    def _stream_run(self, run_id: str, after_id: int = 0) -> None:
+    def _stream_run(self, run_id: str, after_id: int = 0, *, wrapped: bool = True) -> None:
+        import agent_jobs
+        with WorkflowDB(DB_PATH) as db:
+            if not db.get_async_task(run_id):
+                return self._json({"error": "?????"}, 404)
         self._responded = True
         self.protocol_version = "HTTP/1.1"
         self.close_connection = True
@@ -1573,165 +1580,39 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
         self.send_header("X-Accel-Buffering", "no")
         self.send_header("Connection", "close")
         self.end_headers()
-
+        cursor, heartbeat = after_id, time.monotonic()
         with WorkflowDB(DB_PATH) as db:
-            past_events = db.get_run_events(run_id, after_id=after_id)
-
-        last_sent = after_id
-        for ev in past_events:
-            last_sent = ev["event_id"]
-            wire = {
-                "event_id": ev["event_id"],
-                "run_id": ev["run_id"],
-                "type": ev["kind"],
-                "payload": ev["payload"],
-                "created_at": ev["created_at"],
-            }
-            try:
-                self.wfile.write(f"id: {ev['event_id']}\ndata: {json.dumps(wire, ensure_ascii=False, default=str)}\n\n".encode("utf-8"))
-                self.wfile.flush()
-            except OSError:
-                return
-
-        run = RunManager.get_instance().get_run(run_id)
-        if not run or run.status in ("done", "failed", "cancelled"):
-            return
-
-        queue = []
-        cond = threading.Condition()
-
-        def on_event(ev_record: dict[str, Any]) -> None:
-            with cond:
-                if ev_record.get("event_id", 0) > last_sent:
-                    queue.append(ev_record)
-                    cond.notify()
-
-        run.add_listener(on_event)
-        try:
-            while run.status == "running":
-                with cond:
-                    if not queue:
-                        signaled = cond.wait(timeout=15.0)
-                        if not signaled:
-                            try:
-                                self.wfile.write(b": keep-alive\n\n")
-                                self.wfile.flush()
-                            except OSError:
-                                if run and run.status == "running":
-                                    run.status = "suspended"
-                                    try:
-                                        with WorkflowDB(DB_PATH) as cdb:
-                                            cdb.update_background_job(run_id, status="suspended")
-                                    except Exception:
-                                        pass
-                                return
-                    to_send = list(queue)
-                    queue.clear()
-
-                for ev in to_send:
+            while True:
+                events = db.get_run_events(run_id, after_id=cursor)
+                for ev in events:
+                    payload = ev["payload"]
+                    wire = {"event_id": ev["event_id"], "run_id": run_id, "type": ev["kind"],
+                            "payload": payload, "created_at": ev["created_at"]} if wrapped else payload
                     try:
-                        self.wfile.write(f"id: {ev.get('event_id', '')}\ndata: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n".encode("utf-8"))
+                        self.wfile.write((f"id: {ev['event_id']}\ndata: " + json.dumps(wire, ensure_ascii=False, default=str) + "\n\n").encode("utf-8"))
                         self.wfile.flush()
                     except OSError:
-                        if run and run.status == "running":
-                            run.status = "suspended"
-                            try:
-                                with WorkflowDB(DB_PATH) as cdb:
-                                    cdb.update_background_job(run_id, status="suspended")
-                            except Exception:
-                                pass
                         return
-                    if ev.get("type") in ("done", "cancelled", "error"):
+                    cursor = ev["event_id"]
+                task = db.get_async_task(run_id)
+                if not task or task["status"] in agent_jobs.TERMINAL:
+                    if not db.get_run_events(run_id, after_id=cursor):
                         return
-        finally:
-            run.remove_listener(on_event)
+                    continue
+                if time.monotonic() - heartbeat >= 10:
+                    try:
+                        self.wfile.write(b": keep-alive\n\n")
+                        self.wfile.flush()
+                    except OSError:
+                        return
+                    heartbeat = time.monotonic()
+                time.sleep(0.1)
 
     def _sse(self, data: dict[str, Any], step: str = "") -> None:
-        self._responded = True
-        self.protocol_version = "HTTP/1.1"
-        self.close_connection = True
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Accel-Buffering", "no")
-        self.send_header("Connection", "close")
-        self.end_headers()
+        import agent_jobs
+        run = agent_jobs.start(DB_PATH, data, step)
+        self._stream_run(run.run_id, wrapped=False)
 
-        db = WorkflowDB(DB_PATH)
-        tid = str(data.get("task_id") or data.get("chat_id") or "")
-        # 没带对话、或 localStorage 里那条已经删了 → 现开一个「不绑项目」的对话
-        #（空 id 往下走会让 run_agent 里 db.summary('') 抛 KeyError，整轮发言变成一条报错）。
-        if not (db.db.execute("SELECT 1 FROM chats WHERE id=?", (tid,)).fetchone()
-                or db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone()):
-            tid = db.create_chat("")
-            data = {**data, "task_id": tid}
-        idemp = str(data.get("idempotency_key") or "")
-        run = RunManager.get_instance().create_run(task_id=tid, idempotency_key=idemp, db=db)
-
-        had_error = False
-        client_disconnected = False
-
-        def emit(ev: dict[str, Any]) -> None:
-            nonlocal had_error, client_disconnected
-            if client_disconnected:
-                return
-            # Some runners report failures as an event and return normally;
-            # retain that state so the persisted step cannot be marked done.
-            if isinstance(ev, dict) and ev.get("type") == "error":
-                had_error = True
-            ev_record = run.emit(ev, db=db)
-            try:
-                eid = ev_record.get("event_id", 0)
-                self.wfile.write(f"id: {eid}\n".encode("utf-8"))
-                self.wfile.write(("data: " + json.dumps(ev, ensure_ascii=False, default=str) + "\n\n").encode("utf-8"))
-                self.wfile.flush()
-            except OSError:
-                client_disconnected = True
-
-        track = bool(step and db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
-        try:
-            if track:
-                db.log_step(tid, step, "running", "开始执行")
-            runners = {"idea": run_idea, "outline": run_outline, "map": run_map, "write": run_write, "review": run_review}
-            fn = runners.get(step)
-            if fn:
-                fn(db, tid, data.get("message", ""), emit)
-            else:
-                # 通用 Agent（含「论文翻译」步的助手）：把荧光笔圈中的原文塞进上下文，它才答得上「这句什么意思」
-                try:
-                    extra = db.tr_hl_context(tid)
-                except Exception:
-                    extra = ""
-                # step 只用来给这个助手一个身份（前端在 body 里带上）；不参与下面的 log_step，那一步照旧只记 runners
-                wstep = step or str(data.get("step") or "")
-                if wstep == "files":                  # 项目文件夹：把左边选中的文件带进来，它才答得上「这个文件…」
-                    sel = str(data.get("sel") or "")
-                    if sel:
-                        extra = (extra + chr(10) * 2 if extra else "") + "【当前选中的文件】" + sel
-                # 对话落在步骤自己的 scope 里（右栏按 /api/step/messages?step=X 取历史）：不落的话
-                # 通用 Agent 这几步一换步就整段消失、统计面板永远是 0。纯聊天（不绑项目）照旧 scope=''。
-                on_task = bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
-                run_agent(db, tid, data.get("message", ""), emit, extra_context=extra,
-                          system=(files_system(db, tid) if wstep == "files"
-                                  else convert_system(db, tid) if wstep == "convert" else None),   # 格式转换：三件事依次问
-                          step=wstep, scope=wstep if (wstep and on_task) else "",
-                          cancel_check=lambda: run.cancel_requested)
-            if track:
-                db.log_step(tid, step, "failed" if had_error else "done",
-                            "执行过程报告错误" if had_error else "执行完成")
-        except Exception as exc:
-            if track:
-                db.log_step(tid, step, "failed", str(exc)[:300])
-            if run.cancel_requested:
-                emit({"type": "cancelled", "message": "运行已中断"})
-            else:
-                emit({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
-                emit({"type": "done", "content": ""})
-        finally:
-            db.close()
-
-
-    # ---------- 通用 Agent 对话（不绑项目） ----------
     def _pick_folder(self, initial: str = "", title: str = "选择产出文件夹") -> dict[str, Any]:
         return paths.host_pick_folder(initial, title)
 
@@ -1769,6 +1650,8 @@ def _start_inproc(port: int, url: str) -> None:
     schedule.start()           # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
     feishu.start_bridge(DB_PATH)
     team.start_worker()        # 团队派活队列（串行：一次跑一个成员）
+    import agent_jobs
+    agent_jobs.recover(DB_PATH)
     _semantic_boot()           # 语义索引后台预热（内容没变就全跳过，幂等）
     print(f"览籍智研已启动：{url}")
 

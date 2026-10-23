@@ -759,12 +759,18 @@ class PlanContextTest(unittest.TestCase):
         db = workflow.WorkflowDB(P(td.name) / "wb.sqlite3")
         try:
             tid = db.create_task("测试项目", "研究问题", "体系")
-            db.add_message(tid, "assistant", "上一步结论：大纲共 15 节，主线是局部电阻梯度。", [], scope="outline")
+            import workflow_layout
+            import workflow_state
+            workflow_layout.ensure_schema(db)
+            layout = workflow_layout.save_layout(db, {"name": "Plan", **workflow_layout._linear(["outline", "map"])})["layout"]
+            workflow_layout.select_layout(db, {"task_id": tid, "layout_id": layout["id"]})
+            workflow.doc_write(db, tid, "outline", "大纲共 15 节，主线是局部电阻梯度。")
+            workflow_state.accept(db, tid, "outline")
             db.idea_input_save(tid, "用户写的创新点原文 ABC")
             ctx = workflow._plan_context(db, tid, "map")
-            self.assertIn("上一步「", ctx)
+            self.assertIn("已确认的上游交付", ctx)
             self.assertIn("背景：项目最初的创新点", ctx)
-            self.assertLess(ctx.index("上一步「"), ctx.index("背景：项目最初的创新点"))   # 上一步在前
+            self.assertLess(ctx.index("已确认的上游交付"), ctx.index("背景：项目最初的创新点"))
             self.assertIn("大纲共 15 节", ctx)
         finally:
             db.close()
@@ -822,13 +828,14 @@ class KanbanProgressTest(unittest.TestCase):
             db.log_step(tid, "agent", "done", "普通对话，不算阶段")
             ov = project_todos.kanban_overview(db, tid)
             stages = {s["key"]: s for s in ov["stages"]}
-            self.assertTrue(stages["idea"]["done"])
-            self.assertTrue(stages["search"]["done"])
+            self.assertFalse(stages["idea"]["done"], "执行成功仍需验收")
+            self.assertEqual(stages["idea"]["status"], "succeeded")
+            self.assertFalse(stages["search"]["done"])
             self.assertFalse(stages["download"]["done"])
             self.assertTrue(stages["download"]["current"], "正在跑的那一步要标成当前")
             self.assertFalse(stages["outline"]["done"])
             self.assertEqual(ov["current_stage"]["key"], "download")
-            self.assertEqual(ov["stats"]["stages_done"], 2)
+            self.assertEqual(ov["stats"]["stages_done"], 0)
             self.assertEqual(ov["stats"]["stage_total"], len(workflow.STAGES))
         finally:
             db.close()

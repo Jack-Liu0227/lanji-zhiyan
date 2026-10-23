@@ -192,7 +192,7 @@
               📋 待办状态看板
             </button>
             <button class="kb-view-tab ${kbState.view === 'pipeline' ? 'active' : ''}" data-view="pipeline">
-              🔬 十步科研流程
+              🔬 项目科研流程
             </button>
             <button class="kb-view-tab ${kbState.view === 'timeline' ? 'active' : ''}" data-view="timeline">
               📅 排期概览
@@ -209,9 +209,8 @@
             </select>
             <select class="kb-filter-select" id="kbFilterAssistant">
               <option value="ALL" ${kbState.filterAssistant === 'ALL' ? 'selected' : ''}>全部执行人</option>
-              <option value="智研管家" ${kbState.filterAssistant === '智研管家' ? 'selected' : ''}>🤖 智研管家</option>
               ${(d.assistants || []).map(a => `
-                <option value="${a.name}" ${kbState.filterAssistant === a.name ? 'selected' : ''}>
+                 <option value="${escapeHtml(a.id)}" ${kbState.filterAssistant === a.id ? 'selected' : ''}>
                   👨‍🔬 ${escapeHtml(a.name)}
                 </option>
               `).join('')}
@@ -247,7 +246,8 @@
     const rawTodos = d.todos || [];
     const filtered = rawTodos.filter(t => {
       if (kbState.filterPriority !== 'ALL' && t.priority !== kbState.filterPriority) return false;
-      if (kbState.filterAssistant !== 'ALL' && t.assigned_assistant !== kbState.filterAssistant) return false;
+      const expert = (d.assistants || []).find(a => a.id === t.assigned_assistant || a.name === t.assigned_assistant);
+      if (kbState.filterAssistant !== 'ALL' && (expert?.id || t.assigned_assistant) !== kbState.filterAssistant) return false;
       if (kbState.searchQuery) {
         const q = kbState.searchQuery.toLowerCase();
         const mTitle = (t.title || '').toLowerCase().includes(q);
@@ -304,7 +304,7 @@
           <span class="kb-prio-badge ${prioCls}">${prioLabel}</span>
           ${t.assigned_assistant ? `
             <span class="kb-agent-tag" title="指派助手/专家">
-              <span>🤖</span> ${escapeHtml(t.assigned_assistant)}
+              <span>🤖</span> ${escapeHtml((kbState.data.assistants || []).find(a => a.id === t.assigned_assistant)?.name || t.assigned_assistant)}
             </span>
           ` : ''}
           ${t.stage ? `
@@ -319,6 +319,8 @@
 
         <div class="kb-card-foot">
           <div class="kb-card-actions">
+            ${t.assigned_assistant && !['queued','running','review'].includes(t.execution?.status) && colStatus !== 'DONE' ? `<button class="kb-btn-mini" data-act="dispatch" data-id="${t.id}">交给专家</button>` : ''}
+            ${t.stage && colStatus === 'REVIEW' ? `<button class="kb-btn-mini" data-act="accept" data-id="${t.id}">验收交付</button>` : ''}
             ${colStatus !== 'TODO' ? `<button class="kb-btn-mini" data-act="move-prev" data-id="${t.id}" title="移到上一列">‹</button>` : ''}
             ${colStatus !== 'DONE' ? `<button class="kb-btn-mini" data-act="move-next" data-id="${t.id}" title="移到下一列">›</button>` : ''}
           </div>
@@ -503,7 +505,14 @@
         const t = (kbState.data.todos || []).find(x => x.id === todoId);
         if (!t) return;
 
-        if (act === 'toggle') {
+        try {
+        if (act === 'dispatch') {
+          await window.api('/api/todos/dispatch', {id:todoId});
+          await fetchKanbanData(window.curTask); renderBoard(container);
+        } else if (act === 'accept') {
+          await window.api('/api/step/done', {task_id:t.task_id,step:t.stage});
+          await fetchKanbanData(window.curTask); renderBoard(container);
+        } else if (act === 'toggle') {
           await window.api('/api/todos/toggle', { id: todoId });
           await fetchKanbanData(window.curTask);
           renderBoard(container);
@@ -532,6 +541,7 @@
             renderBoard(container);
           }
         }
+        } catch(error) { uiNotify(error.message); }
       };
     });
 
@@ -579,7 +589,7 @@
             await fetchKanbanData(window.curTask);
             renderBoard(container);
           } catch (err) {
-            console.error('Drag update failed:', err);
+            uiNotify(err.message);
           }
         }
       });
@@ -635,9 +645,8 @@
                 <span>指派助手 / 专家</span>
                 <select id="kbTaskAssistant" class="control" style="width:100%">
                   <option value="">未指派</option>
-                  <option value="智研管家" ${todo && todo.assigned_assistant === '智研管家' ? 'selected' : ''}>🤖 智研管家</option>
                   ${assistants.map(a => `
-                    <option value="${a.name}" ${todo && todo.assigned_assistant === a.name ? 'selected' : ''}>
+                    <option value="${escapeHtml(a.id)}" ${todo && [a.id,a.name].includes(todo.assigned_assistant) ? 'selected' : ''}>
                       👨‍🔬 ${escapeHtml(a.name)}
                     </option>
                   `).join('')}

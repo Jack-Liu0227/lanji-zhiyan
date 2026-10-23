@@ -177,7 +177,8 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def current_stage_key(conn: Any, task_id: str) -> str:
+def current_stage_key(conn: Any, task_id: str, order: list[str] | None = None,
+                      states: dict | None = None) -> str:
     """当前阶段 = 十步里「按顺序最靠后的已完成步」（用户 2026-10-21 定的口径）。
 
     他跳着做：正文写了、格式转了，精读/翻译还没补完。按「第一处缺口」算会永远停在
@@ -185,28 +186,33 @@ def current_stage_key(conn: Any, task_id: str) -> str:
     正在跑的那步、再退回第一步。
     项目空间的页头 pill 与「进度与计划」看板都走这一个函数，别各算一套。
     """
+    order = order or STAGES
     done: set[str] = set()
     running: list[str] = []
     try:
-        for row in conn.execute("SELECT stage,status FROM steps WHERE task_id=? ORDER BY rowid", (task_id,)):
-            if row["stage"] not in STAGE_LABEL:
+        latest = {r["stage"]: r["status"] for r in conn.execute(
+            "SELECT stage,status FROM steps WHERE task_id=? ORDER BY rowid", (task_id,))}
+        if states is not None:
+            latest = {key: value["status"] for key, value in states.items()}
+        for stage, status in latest.items():
+            if stage not in order:
                 continue                       # agent 之类不属于十步
-            if row["status"] == "done":
-                done.add(row["stage"])
-            elif row["status"] == "running":
-                running.append(row["stage"])
+            if status in ("done", "succeeded", "delivered", "stale"):
+                done.add(stage)
+            elif status == "running":
+                running.append(stage)
     except Exception:
         pass
-    ordered = [s for s in STAGES if s in done]
+    ordered = [s for s in order if s in done]
     pending = [k for k in running if k not in done]
     # 当前步 = 最后一个已完成步之后的 running；其前的 running 是崩溃残留，不算。
-    last_done_idx = STAGES.index(ordered[-1]) if ordered else -1
-    frontier = [k for k in pending if STAGES.index(k) >= last_done_idx]
+    last_done_idx = order.index(ordered[-1]) if ordered else -1
+    frontier = [k for k in order if k in pending and order.index(k) >= last_done_idx]
     if frontier:
         return frontier[-1]
     if ordered:
         return ordered[-1]
-    return pending[-1] if pending else (STAGES[0] if STAGES else "")
+    return pending[-1] if pending else (order[0] if order else "")
 
 
 def _text(value: str) -> str:
@@ -276,7 +282,9 @@ class WorkflowDB(ResearchDB):
     def __init__(self, path: str | Path):
         super().__init__(path)
         is_memory = str(self.path) == ":memory:"
-        db_key = ":memory:" if is_memory else str(self.path.resolve())
+        db_key = ":memory:" if is_memory else f"{self.path.resolve()}:{self.path.stat().st_ino}"
+        if not self.db.execute("SELECT 1 FROM sqlite_master WHERE name='steps'").fetchone():
+            _WORKFLOW_SCHEMA_INITIALIZED.discard(db_key)
         if is_memory or db_key not in _WORKFLOW_SCHEMA_INITIALIZED:
             with _WORKFLOW_INIT_LOCK:
                 if is_memory or db_key not in _WORKFLOW_SCHEMA_INITIALIZED:
@@ -393,12 +401,12 @@ class WorkflowDB(ResearchDB):
                             self.db.execute(f"ALTER TABLE {_t} ADD COLUMN key_host TEXT NOT NULL DEFAULT ''")
                     encrypt_legacy_secrets(self)                   # 老库里的明文 key → DPAPI 密文（幂等）
                     self.db.commit()
-                    import project_sources
-                    project_sources.restore_source_protection(self)
                     for folder in (PAPERS, NOTES, OUT):
                         folder.mkdir(parents=True, exist_ok=True)
                     if not is_memory:
                         _WORKFLOW_SCHEMA_INITIALIZED.add(db_key)
+        import project_sources
+        project_sources.restore_source_protection(self)
 
     def create_task(self, title: str, question: str = "", material_system: str = "", base_dir: str = "") -> str:
         chosen = str(base_dir or "").strip()
@@ -440,15 +448,22 @@ class WorkflowDB(ResearchDB):
         if getattr(self, "quiet_steps", False):
             return {"id": "", "stage": stage, "status": status, "summary": summary,
                     "delivery": blob, "created_at": now(), "skipped": True}
+        if stage in STAGES and status == "done" and not delivery:
+            status = "succeeded"
         row = (uuid.uuid4().hex, task_id, stage, status, summary, now())
         self.db.execute("INSERT INTO steps (id,task_id,stage,status,summary,created_at,delivery)"
                         " VALUES (?,?,?,?,?,?,?)", row + (blob,))
         self.db.commit()
+        if stage in STAGES:
+            import project_todos
+            project_todos.sync_stage(self, task_id, stage, {
+                "running": "IN_PROGRESS", "succeeded": "REVIEW", "delivered": "DONE",
+                "failed": "TODO", "cancelled": "TODO"}.get(status, "TODO"))
         return {"id": row[0], "stage": stage, "status": status, "summary": summary,
                 "delivery": blob, "created_at": row[5]}
 
     def steps(self, task_id: str) -> list[dict[str, Any]]:
-        rows = self.db.execute("SELECT * FROM steps WHERE task_id=? ORDER BY created_at DESC", (task_id,))
+        rows = self.db.execute("SELECT * FROM steps WHERE task_id=? ORDER BY rowid DESC", (task_id,))
         return [dict(r) for r in rows]
 
     def out_dir(self, task_id: str) -> Path:
@@ -723,10 +738,12 @@ class WorkflowDB(ResearchDB):
 
     # ---------- 定时任务（规则 + 每次运行一条记录） ----------
     def schedules(self) -> list[dict[str, Any]]:
-        return [dict(r) for r in self.db.execute("SELECT * FROM schedules ORDER BY created_at").fetchall()]
+        return [dict(r) for r in self.db.execute("SELECT s.*,COALESCE(l.todo_id,'') AS todo_id FROM schedules s "
+                    "LEFT JOIN task_links l ON l.schedule_id=s.id ORDER BY s.created_at").fetchall()]
 
     def schedule(self, sid: str) -> dict[str, Any] | None:
-        row = self.db.execute("SELECT * FROM schedules WHERE id=?", (str(sid or ""),)).fetchone()
+        row = self.db.execute("SELECT s.*,COALESCE(l.todo_id,'') AS todo_id FROM schedules s "
+                              "LEFT JOIN task_links l ON l.schedule_id=s.id WHERE s.id=?", (str(sid or ""),)).fetchone()
         return dict(row) if row else None
 
     def schedule_save(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -736,6 +753,13 @@ class WorkflowDB(ResearchDB):
         assistant_id = str(data.get("assistant_id") or "").strip()
         if assistant_id and (not self.assistant(assistant_id) or not self.assistant(assistant_id).get("enabled")):
             raise ValueError("绑定的专家不存在或已停用")
+        linked = self.db.execute("SELECT project_id FROM task_links WHERE schedule_id=?", (sid,)).fetchone()
+        if linked and linked["project_id"] != str(data.get("project_id") or ""):
+            raise ValueError("已关联待办的定时任务不能转移到其他项目")
+        if data.get("todo_id"):
+            import project_todos
+            project_todos.bind_execution(self, str(data["todo_id"]), str(data.get("project_id") or ""),
+                                         schedule_id=sid, commit=False)
         fields = (str(data.get("name") or "未命名任务"), str(data.get("prompt") or ""),
                   str(data.get("project_id") or ""), str(data.get("frequency") or "daily"),
                   str(data.get("cron") or "0 9 * * *"), str(data.get("output_dir") or "定时任务"),
@@ -760,6 +784,8 @@ class WorkflowDB(ResearchDB):
         self.db.commit()
 
     def schedule_delete(self, sid: str) -> None:
+        import project_todos
+        project_todos.sync_execution(self, schedule_id=sid, status="cancelled")
         self.db.execute("DELETE FROM schedule_runs WHERE schedule_id=?", (str(sid or ""),))
         self.db.execute("DELETE FROM schedules WHERE id=?", (str(sid or ""),))
         self.db.commit()
@@ -868,7 +894,8 @@ class WorkflowDB(ResearchDB):
 
     def team_task_add(self, task_id: str, member_id: str, member_name: str, title: str, prompt: str,
                       trigger: str = "leader", origin: str = "", depends_on: list[str] | None = None,
-                      output_contract: dict[str, Any] | None = None, reviewer_id: str = "") -> dict[str, Any]:
+                      output_contract: dict[str, Any] | None = None, reviewer_id: str = "",
+                      *, commit: bool = True) -> dict[str, Any]:
         depends = json.dumps(depends_on or [], ensure_ascii=False)
         contract = json.dumps(output_contract or {}, ensure_ascii=False)
         review_status = "pending" if reviewer_id else "not_required"
@@ -881,7 +908,8 @@ class WorkflowDB(ResearchDB):
              output_path,result,reason,trigger,origin,attempt,checkpoint,retry_at,run_id,input_assets,output_assets,review_status,
              depends_on,output_contract,reviewer_id,review_attempt,approved_at,review_feedback)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", row)
-        self.db.commit()
+        if commit:
+            self.db.commit()
         return dict(self.db.execute("SELECT * FROM team_tasks WHERE id=?", (row[0],)).fetchone())
 
     def team_task_mark(self, tid: str, status: str, **fields: Any) -> None:
@@ -904,6 +932,9 @@ class WorkflowDB(ResearchDB):
         sets = ", ".join("%s=?" % k for k in allow)
         self.db.execute("UPDATE team_tasks SET %s WHERE id=?" % sets, (*allow.values(), tid))
         self.db.commit()
+        import project_todos
+        project_todos.sync_execution(self, team_task_id=tid, status=status,
+                                     run_id=str(fields.get("run_id") or ""), assets=fields.get("output_assets"))
 
     # ---------- 团队表（一个团队 = 一条记录；成员/记录都挂在它的 id 上） ----------
     def teams(self) -> list[dict[str, Any]]:
@@ -1082,17 +1113,17 @@ class WorkflowDB(ResearchDB):
 
 
     def stage_map(self, task_id: str) -> dict[str, str]:
-        out: dict[str, str] = {}
-        for row in reversed(self.steps(task_id)):
-            out[row["stage"]] = row["status"]
-        return out
+        import workflow_state
+        return {step: item["status"] for step, item in workflow_state.states(self, task_id).items()}
 
     def stage_now(self, task_id: str, fallback: str = "") -> str:
         """项目现在走到哪一步：十步里「按顺序最靠后的已完成步」（和看板同一个口径）。
         一条步骤记录都没有的项目才按任务自身阶段兜底。"""
         has_step = self.db.execute("SELECT 1 FROM steps WHERE task_id=? LIMIT 1", (task_id,)).fetchone()
         if has_step:
-            return STAGE_LABEL.get(current_stage_key(self.db, task_id), "未开始")
+            import workflow_state
+            states = workflow_state.states(self, task_id)
+            return STAGE_LABEL.get(current_stage_key(self.db, task_id, list(states), states), "未开始")
         return {"definition": STAGE_LABEL["idea"], "reading": STAGE_LABEL["download"]}.get(fallback, "未开始")
 
     def delete_task(self, task_id: str) -> dict[str, Any]:

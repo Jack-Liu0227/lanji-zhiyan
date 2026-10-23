@@ -71,6 +71,9 @@ class TestOutputDir(unittest.TestCase):
 
 class TestStore(unittest.TestCase):
     def setUp(self):
+        previous = schedule.DB_PATH
+        schedule.DB_PATH = _DB
+        self.addCleanup(setattr, schedule, "DB_PATH", previous)
         with workflow.WorkflowDB(_DB) as db:
             for row in db.schedules():
                 db.schedule_delete(row["id"])
@@ -159,6 +162,11 @@ if __name__ == "__main__":
 
 class TestBuiltinSchedules(unittest.TestCase):
     """内置定时任务 = 那 4 条，只补缺、不重复、不覆盖。"""
+
+    def setUp(self):
+        previous = schedule.DB_PATH
+        schedule.DB_PATH = _DB
+        self.addCleanup(setattr, schedule, "DB_PATH", previous)
 
     def test_seeded_and_idempotent(self):
         want = {b["id"] for b in workflow.BUILTIN_SCHEDULES}

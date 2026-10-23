@@ -3,7 +3,43 @@ from __future__ import annotations
 
 import json
 import uuid
+from functools import wraps
 from typing import Any
+
+
+def agent_scope(function):
+    @wraps(function)
+    def wrapped(db, *args, **kwargs):
+        import execution
+        import hashlib
+        signature = hashlib.sha256(json.dumps([args[:2], kwargs.get("scope", "")], default=str).encode()).hexdigest()
+        checkpoint = getattr(db, "job_checkpoint", {})
+        save = getattr(db, "save_agent_checkpoint", lambda **values: None)
+        completed = checkpoint.get("completed_calls", {})
+        if signature in completed:
+            return completed[signature]
+        previous = getattr(db, "asset_run", None)
+        previous_resume = getattr(db, "agent_resume", None)
+        db.agent_resume = dict(checkpoint) if checkpoint.get("signature") == signature else {}
+        db.asset_run = None
+        try:
+            with execution.scope(kwargs.get("cancel_check")):
+                save(signature=signature)
+                result = function(db, *args, **kwargs)
+                execution.check()
+                completed[signature] = result
+                save(completed_calls=completed, phase="ready", messages=[])
+                return result
+        except Exception as exc:
+            current = getattr(db, "asset_run", None)
+            if current:
+                status = "cancelled" if isinstance(exc, execution.Cancelled) else "failed"
+                finish_node(db, current["node_id"], status, outputs=current["outputs"], error=str(exc))
+            raise
+        finally:
+            db.asset_run = previous
+            db.agent_resume = previous_resume
+    return wrapped
 
 
 def _conn(db):
@@ -110,7 +146,7 @@ def list_runs(db, project_id: str = "", limit: int = 100) -> list[dict[str, Any]
 
 
 def recover_stale(db, max_age_minutes: int = 15) -> int:
-    """Move abandoned running runs back to queued so the caller can retry them."""
+    """Mark abandoned legacy runs honestly; saved requests resume via agent_jobs."""
     conn = _conn(db)
     stale = [row["id"] for row in conn.execute(
         "SELECT id FROM workflow_runs WHERE status='running' "
@@ -118,9 +154,9 @@ def recover_stale(db, max_age_minutes: int = 15) -> int:
         (f"-{max(1, int(max_age_minutes))} minutes",)).fetchall()]
     if stale:
         marks = ",".join("?" for _ in stale)
-        conn.execute(f"UPDATE workflow_nodes SET status='queued', ended_at='', error='requeued after restart' "
+        conn.execute(f"UPDATE workflow_nodes SET status='interrupted', ended_at='', error='interrupted after restart' "
                      f"WHERE run_id IN ({marks}) AND status='running'", stale)
-    cur = conn.execute("""UPDATE workflow_runs SET status='queued', error='服务重启后恢复'
+    cur = conn.execute("""UPDATE workflow_runs SET status='interrupted', error='执行中断，请从已保存的请求恢复'
         WHERE status='running' AND datetime(replace(started_at, 'T', ' ')) < datetime('now', ?)""",
                        (f"-{max(1, int(max_age_minutes))} minutes",))
     conn.commit()

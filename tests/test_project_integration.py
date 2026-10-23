@@ -85,13 +85,16 @@ class ProjectIntegrationTest(unittest.TestCase):
             for i, path in enumerate(("研究计划/rejected.md", relative))]
         with workflow.WorkflowDB(self.db_path) as db, patch.object(workflow, "chat_raw", return_value={
                 "content": "", "tool_calls": calls}):
-            result = workflow.run_agent(db, self.project_id, "write test", max_steps=1,
-                                        profile={"permission": "workspace_write"})
-            self.assertIn(relative, result["reply"])
-            self.assertIn("失败", result["reply"])
-            self.assertIn("成功", result["reply"])
-            self.assertIn("尚未完成最终核验", result["reply"])
-            self.assertEqual(db.messages(self.project_id)[-1]["content"], result["reply"])
+            with self.assertRaises(RuntimeError) as failure:
+                workflow.run_agent(db, self.project_id, "write test", max_steps=1,
+                                   profile={"permission": "workspace_write"})
+            reply = str(failure.exception)
+            self.assertIn(relative, reply)
+            self.assertIn("失败", reply)
+            self.assertIn("成功", reply)
+            self.assertIn("尚未完成最终核验", reply)
+            self.assertEqual(db.messages(self.project_id)[-1]["content"], reply)
+            self.assertEqual(db.db.execute("SELECT status FROM workflow_runs ORDER BY started_at DESC LIMIT 1").fetchone()[0], "failed")
         self.assertTrue((self.root / relative).is_file())
         self.assertFalse((self.root / "研究计划/rejected.md").exists())
 
@@ -118,7 +121,7 @@ class ProjectIntegrationTest(unittest.TestCase):
                                     "output_dir": "笔记/每日推送", "enabled": True})
         with patch.object(workflow, "run_agent", return_value={"reply": "今天的摘要"}) as agent:
             result = schedule.run_once(row, trigger="manual")
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["status"], "completed", result)
         self.assertTrue(Path(result["output_path"]).is_relative_to(self.root))
         self.assertIn("今天的摘要", Path(result["output_path"]).read_text(encoding="utf-8"))
         self.assertEqual(agent.call_args.kwargs["assistant_id"], "builtin-steward")

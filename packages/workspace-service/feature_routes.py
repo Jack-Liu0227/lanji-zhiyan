@@ -52,7 +52,8 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[st
                                           idempotency_key=str(body.get("idempotency_key") or ""))}
 
     if path == "/api/workflow/recover" and method == "POST":
-        return {"recovered": run_service.recover_stale(db, int(body.get("max_age_minutes") or 15))}
+        import agent_jobs
+        return agent_jobs.recover(db.path)
 
     # ---------------- 1. easyScholar ----------------
     if path == "/api/easyscholar/config" and method == "GET":
@@ -122,6 +123,10 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[st
 
     if path == "/api/todos/import_workflow" and method == "POST":
         return {"created": project_todos.import_workflow_stages_as_todos(db, str(body.get("task_id", "")))}
+
+    if path == "/api/todos/dispatch" and method == "POST":
+        return {"task": project_todos.dispatch(db, str(body.get("id") or ""),
+                                               reviewer_id=str(body.get("reviewer_id") or ""))}
 
     # ---------------- 4. 项目空间搜索与笔记预览 ----------------
     if path == "/api/space/search" and method == "GET":

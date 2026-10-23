@@ -123,8 +123,8 @@ class AssetGraphTest(unittest.TestCase):
         )
         self.db.db.commit()
         self.assertEqual(run_service.recover_stale(self.db, 1), 1)
-        self.assertEqual(run_service.get(self.db, "wrun-stale")["status"], "queued")
-        self.assertEqual(self.db.db.execute("SELECT status FROM workflow_nodes WHERE id='wnode-stale'").fetchone()[0], "queued")
+        self.assertEqual(run_service.get(self.db, "wrun-stale")["status"], "interrupted")
+        self.assertEqual(self.db.db.execute("SELECT status FROM workflow_nodes WHERE id='wnode-stale'").fetchone()[0], "interrupted")
 
     def test_asset_routes(self):
         asset_service.register(self.db, project_id=self.project, kind="note",

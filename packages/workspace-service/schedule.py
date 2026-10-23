@@ -226,6 +226,9 @@ def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None
         with workflow.WorkflowDB(_db_path()) as db:
             db.schedule_run_add(run)
             db.schedule_mark_run(sched["id"], run["ended_at"], next_run_at(sched["cron"]))
+            import project_todos
+            project_todos.sync_execution(db, schedule_id=sched["id"], status=status,
+                                         run_id=run.get("workflow_run_id", ""), assets=run.get("output_assets"))
         return run
 
     if not sched.get("enabled"):
@@ -241,6 +244,8 @@ def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None
     if not str(sched.get("assistant_id") or "").strip():
         return finish("blocked", reason="未绑定专家：请在任务中选择一个已启用的专家")
 
+    tracked_id = ""
+    stage = ""
     try:
         with workflow.WorkflowDB(_db_path()) as db:
             assistant = db.assistant(str(sched["assistant_id"]))
@@ -248,19 +253,49 @@ def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None
                 return finish("blocked", reason="绑定的专家不存在或已停用")
             folder = output_dir_for(db, sched)
             prompt = sched["prompt"]
-            db.quiet_steps = True         # 定时任务的产出不算科研台十步，别往进度账上写
+            import asset_service
+            import run_service
+            import project_todos
+            project_todos.ensure_table(db)
+            linked = db.db.execute("SELECT p.stage FROM task_links l JOIN project_todos p ON p.id=l.todo_id "
+                                   "WHERE l.schedule_id=?", (sched["id"],)).fetchone()
+            stage = linked["stage"] if linked else ""
+            inputs = [a["id"] for a in asset_service.list_assets(db, sched["project_id"], limit=200)]
+            tracked = run_service.start(db, sched["project_id"], "schedule", idempotency_key="schedule:" + run["id"])
+            tracked_id = tracked["id"]
+            node = run_service.node_start(db, tracked_id, "schedule", inputs=inputs)
+            db.asset_run = {"id": tracked_id, "node_id": node["id"], "inputs": inputs, "outputs": []}
+            run["workflow_run_id"] = tracked_id
+            project_todos.sync_execution(db, schedule_id=sched["id"], status="running", run_id=tracked_id)
+            db.quiet_steps = not bool(stage)
+            if stage:
+                db.log_step(sched["project_id"], stage, "running", "定时任务开始执行")
             out = workflow.run_agent(db, sched["project_id"], prompt, emit=emit,
-                                     publish=False, assistant_id=sched["assistant_id"])
-            text = str(out.get("reply") or "").strip() or "（模型没有返回内容）"
+                                     publish=False, assistant_id=sched["assistant_id"], scope=stage)
+            text = str(out.get("reply") or "").strip()
+            if not text:
+                raise ValueError("定时任务没有产出内容")
             stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-            path = folder / f"{_safe_name(sched['name'])[:60]}-{stamp}.md"
+            path = folder / f"{_safe_name(sched['name'])[:60]}-{stamp}-{run['id'][:8]}.md"
             header = (f"# {sched['name']}\n\n"
                       f"> 由「定时任务」生成 · {datetime.now().strftime('%Y-%m-%d %H:%M')} · "
                       f"触发：{'手动' if trigger == 'manual' else ('启动补跑' if trigger == 'catchup' else '定时')} · "
                       f"Cron `{sched['cron']}`\n\n")
-            path.write_text(header + text + "\n", encoding="utf-8")
+            asset_service.atomic_write_text(path, header + text + "\n")
+            asset = asset_service.register_file(db, path, project_id=sched["project_id"], kind="schedule_output",
+                                                source="schedule", run_id=tracked_id, body=header + text,
+                                                metadata={"schedule_id": sched["id"], "schedule_run_id": run["id"]})
+            run["output_assets"] = list(dict.fromkeys([*(out.get("output_assets") or []), asset["id"]]))
+            run_service.finish_node(db, node["id"], "succeeded", outputs=run["output_assets"])
+            if stage:
+                db.log_step(sched["project_id"], stage, "succeeded", "定时任务产物已生成，等待交付验收")
         return finish("completed", path=str(path), summary=text[:160].replace("\n", " "))
     except Exception as exc:                       # 任何失败都记下来，不能让调度线程死掉
+        if tracked_id:
+            with workflow.WorkflowDB(_db_path()) as db:
+                run_service.finish_node(db, node["id"], "failed", error=str(exc))
+                if stage:
+                    db.log_step(sched["project_id"], stage, "failed", str(exc))
         return finish("failed", reason=f"{type(exc).__name__}: {exc}")
 
 
@@ -341,8 +376,43 @@ def start() -> None:
     threading.Thread(target=_loop, daemon=True, name="schedule-loop").start()
 
 
+def recover_runs() -> int:
+    """Close abandoned attempts without replaying tools with unknown results."""
+    import project_todos
+    import run_service
+    count = 0
+    with workflow.WorkflowDB(_db_path()) as db:
+        project_todos.ensure_table(db)
+        rows = db.db.execute("SELECT * FROM schedule_runs WHERE status='running'").fetchall()
+        for record in rows:
+            row = dict(record)
+            if row["schedule_id"] in _running:
+                continue
+            row.update(status="failed", ended_at=datetime.now().isoformat(timespec="seconds"),
+                       reason="服务重启导致执行中断，请核对已有产物后手动重试")
+            db.schedule_run_add(row)
+            tracked = db.db.execute("SELECT id FROM workflow_runs WHERE idempotency_key=?",
+                                    ("schedule:" + row["id"],)).fetchone()
+            if tracked:
+                for node in run_service.nodes(db, tracked["id"]):
+                    if node["status"] == "running":
+                        run_service.finish_node(db, node["id"], "failed", error=row["reason"])
+                run_service.finish(db, tracked["id"], "interrupted", error=row["reason"])
+            project_todos.sync_execution(db, schedule_id=row["schedule_id"], status="failed")
+            sched = db.schedule(row["schedule_id"])
+            if sched:
+                db.schedule_mark_run(sched["id"], row["ended_at"], next_run_at(sched["cron"]))
+            linked = db.db.execute("SELECT p.task_id AS project_id,p.stage FROM task_links l JOIN project_todos p ON p.id=l.todo_id "
+                                   "WHERE l.schedule_id=?", (row["schedule_id"],)).fetchone()
+            if linked and linked["stage"]:
+                db.log_step(linked["project_id"], linked["stage"], "failed", row["reason"])
+            count += 1
+    return count
+
+
 def _loop() -> None:
     try:
+        recover_runs()
         arrange()        # 先给新种的内置任务排期，再判断有没有错过的点
         catch_up()
     except Exception:

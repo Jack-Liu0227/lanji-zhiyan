@@ -10,6 +10,7 @@ import json
 import mimetypes
 import os
 import tempfile
+import shutil
 import uuid
 from pathlib import Path
 from typing import Any
@@ -139,6 +140,10 @@ def register(db, *, project_id: str = "", kind: str, title: str = "", canonical_
 def register_file(db, path: str | Path, *, project_id: str = "", kind: str = "document",
                   title: str = "", source: str = "local", run_id: str = "",
                   body: str = "", metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    import execution
+    execution.check()
+    context = getattr(db, "asset_run", None)
+    run_id = run_id or (context["id"] if context else "")
     target = Path(path).resolve()
     if not target.is_file():
         raise FileNotFoundError(target)
@@ -152,6 +157,16 @@ def register_file(db, path: str | Path, *, project_id: str = "", kind: str = "do
                             force=bool(existing and existing["content_hash"] != current_hash))
     if revision:
         asset = get(db, asset["id"]) or asset
+    if context:
+        if asset["id"] not in context["outputs"]:
+            context["outputs"].append(asset["id"])
+        for input_id in context["inputs"]:
+            if input_id != asset["id"]:
+                link(db, asset["id"], "derived_from", input_id)
+    if run_id and revision:
+        provenance(db, asset["id"], run_id, "file_written", actor=source,
+                   input_snapshot={"inputs": context["inputs"] if context else [],
+                                   "revision_id": revision["id"]})
     return asset
 
 
@@ -167,6 +182,21 @@ def add_revision(db, asset_id: str, content_uri: str, content_hash: str, *,
     row = conn.execute("SELECT COALESCE(MAX(revision),0) + 1 AS next FROM asset_revisions WHERE asset_id=?",
                        (asset_id,)).fetchone()
     revision = int(row["next"])
+    if asset.get("storage") == "file" and Path(content_uri).is_file():
+        import paths
+        destination = paths.DATA / "revisions" / asset_id / (content_hash + Path(content_uri).suffix)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.exists():
+            fd, temporary = tempfile.mkstemp(dir=destination.parent, suffix=".tmp")
+            os.close(fd)
+            try:
+                shutil.copyfile(content_uri, temporary)
+                if sha256_file(temporary) != content_hash:
+                    raise ValueError("文件在登记版本时发生变化，请重试")
+                os.replace(temporary, destination)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+        content_uri = str(destination)
     rid = "rev-" + uuid.uuid4().hex
     stamp = _now(db)
     conn.execute("""INSERT INTO asset_revisions

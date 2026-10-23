@@ -1024,7 +1024,8 @@ function enBind(){
 
 /* ---------------- 工作流 ---------------- */
 const STAGE={idea:"🔍 创新点审查",search:"📚 论文搜索",download:"⬇️ 下载精读",notes:"🌐 论文翻译",outline:"🗂 确认大纲",map:"🧩 梳理精读",write:"✍️ 文章撰写",review:"🧐 稿件审查",entrans:"🌍 中译英",convert:"🔄 格式转换"};
-const WF_ORDER=["idea","search","download","notes","outline","map","write","review","entrans","convert"];
+let WF_ORDER=["idea","search","download","notes","outline","map","write","review","entrans","convert"];
+let wfNodes = {};
 const PANELS = {
   idea: (a) => typeof ideaPanelHTML === "function" ? ideaPanelHTML(a) : "",
   search: (a) => typeof searchPanelHTML === "function" ? searchPanelHTML(a) : "",
@@ -1133,6 +1134,8 @@ function wfAgentHTML(step){
 }
 
 async function wfAgentPaint(m, step){
+  if(!m || !m.isConnected) return;
+  const paintProject = curTask;
   const host = m.querySelector("#wfAgent"); if(!host) return;
   const a = WF_AGENT[step] || WF_AGENT.idea;
   if(wfAgentCollapsed){
@@ -1192,6 +1195,7 @@ async function wfAgentPaint(m, step){
   wfMsgs = []; wfEvents = [];
   try{
     const d = await api(`/api/step/messages?id=${encodeURIComponent(curTask)}&step=${encodeURIComponent(step)}`);
+    if(curTask !== paintProject || step !== wfStep || !host.isConnected) return;
     wfMsgs = d.messages || [];
   }catch(e){}
   wfEvents = wfMsgs.flatMap(mv => mv.events || []);
@@ -1201,9 +1205,22 @@ async function wfAgentPaint(m, step){
   tabs.forEach(b => b.onclick = ()=>{ wfView = b.dataset.wv; tabs.forEach(x=>x.classList.toggle("on", x===b)); wfPaintMsgs(step); });
   const ta = $("wv-ask"), send = $("wv-send");
   send.onclick = ()=> wfSend(m, step);
-  ta.onkeydown = e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); wfSend(m, step); } };
+  let historyIndex = -1, historyDraft = "";
+  ta.onkeydown = e=>{
+    if(e.key === "Escape" && wfActiveRun(step)){ e.preventDefault(); wfStop(step); return; }
+    if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); wfSend(m, step); return; }
+    if(["ArrowUp","ArrowDown"].includes(e.key) && !e.shiftKey && !ta.value.includes("\n")){
+      const history = wfMsgs.filter(x=>x.role === "user").map(x=>x.content);
+      if(!history.length) return;
+      if(historyIndex < 0){ historyDraft = ta.value; historyIndex = history.length; }
+      historyIndex = Math.max(0,Math.min(history.length,historyIndex+(e.key === "ArrowUp"?-1:1)));
+      ta.value = historyIndex === history.length ? historyDraft : history[historyIndex]; e.preventDefault();
+    }
+  };
   ta.oninput = ()=>{ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,120)+"px"; };
   const plus = $("wv-plus"); if(plus) plus.onclick = ()=>{ ta.value += (ta.value?"\n":"") + "（附件：把文件拖到这里或贴路径）"; ta.focus(); };
+  const activeRun = wfRestoreRun(step);
+  if(!activeRun && !wfMsgs.length && step !== "files" && !wfPrevBlocked(step)) wfPlanLoad(step);
 }
 
 const WF_SUGGESTIONS = {
@@ -1273,9 +1290,7 @@ let wfPlanSeq = 0;
 let wfStageMap = {};
 const wfStepName = s => { const t = STAGE[s] || s; return t.slice(t.indexOf(" ") + 1); };
 function wfPrevBlocked(step){
-  const i = WF_ORDER.indexOf(step); if(i <= 0) return "";
-  const prev = WF_ORDER[i-1];
-  return wfStageMap[prev] === "done" ? "" : prev;
+  return (wfNodes[step]?.blocked_by || [])[0] || "";
 }
 /* 上游没交付 → 右栏空态不是「新会话已就绪」，而是这张卡：这一步只当独立功能块用 */
 function wfBlockedCardHTML(step){
@@ -1298,15 +1313,20 @@ async function wfPlanLoad(step){
   const a = WF_AGENT[step] || WF_AGENT.idea;
   box.innerHTML = `<div class="wf-plan wf-plan-wait"><div class="wf-plan-h"><span class="wf-av">${a.emoji}</span><b>${esc(a.name)}</b></div>
     <p class="wf-plan-sync">正在读上一步的交付，写这一步的计划…</p></div>`;
-  const my = ++wfPlanSeq;
+  const my = ++wfPlanSeq, project = curTask;
   let text = "";
+  let blocked = false;
   try{
     // 没配 Key 就别去敲后端（会静默失败，一直停在「正在读…」）→ 直接落到 WF_PLAN 静态兜底
-    if(hasModelKey()){ const d = await api("/api/step/plan", {task_id:curTask, step}); text = (d && d.text) || ""; }
+    if(hasModelKey()){
+      const d = await api("/api/step/plan", {task_id:project, step});
+      text = (d && d.text) || ""; blocked = !!d?.blocked;
+    }
   }catch(e){}
-  if(my !== wfPlanSeq || wfStep !== step) return;          // 期间换步 / 又发了一轮 → 丢弃这次结果
+  if(my !== wfPlanSeq || wfStep !== step || curTask !== project) return;
   if($("wv-msgs") !== box) return;
-  wfMsgs = [{role:"assistant", content:text, events:[{type:"plan"}], created_at:new Date().toISOString()}];
+  if(blocked) await loadTaskState();
+  wfMsgs = text ? [{role:"assistant", content:text, events:[{type:"plan"}], created_at:new Date().toISOString()}] : [];
   wfPaintMsgs(step);
 }
 function wfPaintMsgs(step){
@@ -1392,64 +1412,98 @@ function wfPaintStats(){
   log("wv-tools", calls.map(e=>e.name), "还没有工具调用");
   log("wv-outs", wfEvents.filter(e=>e.type==="tool_result"&&e.path).map(e=>e.path), "还没有产出");
 }
-async function wfSend(m, step){
-  const ta = $("wv-ask"), btn = $("wv-send"), box = $("wv-msgs");
-  const text = (ta.value||"").trim(); if(!text) return;
-  if(!(await requireModelKey())) return;          // 没配 Key：先提示去设置，不发请求
-  const a = WF_AGENT[step] || WF_AGENT.idea;
-  if(step === "idea" && typeof iwFlush === "function") await iwFlush();   // 上区刚改的字先落库，这一轮就读到最新的
-  ta.value = ""; ta.style.height = "auto";
-  if(box.querySelector(".wf-empty")) box.innerHTML = "";
-  appendOne(box, {type:"user", content:text});
-  wfMsgs.push({role:"user", content:text, events:[]});
-  wfPaintStats();                                  // 轮数当场 +1，不等这一轮跑完
-  btn.disabled = true; btn.textContent = "■";
-  const evs = [];
+const wfRuns = new Map();
+
+const wfRunKey = (project, step) => `${project}:${step}`;
+function wfActiveRun(step = wfStep){ return wfRuns.get(wfRunKey(curTask, step)); }
+function wfVisible(run){ return curTask === run.project && wfStep === run.step && $("wv-msgs"); }
+function wfRunButton(){
+  const button = $("wv-send"); if(!button) return;
+  const run = wfActiveRun();
+  button.disabled = false; button.textContent = run?.status === "running" ? "■" : "↑";
+  button.title = run?.status === "running" ? "停止执行（Esc）" : "发送";
+}
+async function wfStop(step = wfStep){
+  const run = wfActiveRun(step); if(!run || run.status !== "running") return;
   try{
-    const res = await fetch(a.api, {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({task_id:curTask, message:text, step:step,
-        sel: step === "files" ? ((flRows.find(r => r.rel === flSel) || {}).path || "") : ""})});
-    if(!res.ok || !res.body) throw new Error("HTTP "+res.status);
-    const reader = res.body.getReader(), dec = new TextDecoder();
-    let buf = "", final = "";
-    for(;;){
-      const {value, done} = await reader.read(); if(done) break;
-      buf += dec.decode(value, {stream:true});
-      let i;
-      while((i = buf.indexOf("\n\n")) >= 0){
-        const chunk = buf.slice(0,i); buf = buf.slice(i+2);
-        const line = chunk.split("\n").find(l=>l.startsWith("data: ")); if(!line) continue;
-        let ev; try{ ev = JSON.parse(line.slice(6)); }catch{ continue; }
-        if(ev.type === "done"){ final = ev.content || ""; continue; }
-        if(ev.type === "user") continue;                 // 本地已经先画了，回声不再画、也不进事件流
-        appendOne(box, ev, a); evs.push(ev);
-        // wfEvents 是统计的唯一来源，进来就 push（别攒到这一轮结束）；只在 usage/tool_call/tool_result
-        // 上重画，content 是逐段文本，每段都重画笔工具/产出列表太重。
-        wfEvents.push(ev);
-        if(ev.type === "usage" || ev.type === "tool_call" || ev.type === "tool_result") wfPaintStats();
-      }
-    }
-    if(final && !evs.some(e=>e.type==="assistant")){ appendOne(box, {type:"assistant", content:final}, a); evs.push({type:"content", content:final}); }
-  }catch(err){
-    appendOne(box, {type:"error", message:"发送失败：" + err.message});
-  }finally{
-    btn.disabled = false; btn.textContent = "↑";
-    wfMsgs.push({role:"assistant", content:"", events:evs});   // evs 已经逐条进过 wfEvents，别再整份 concat（会双份）
-    wfPaintStats();
-    box.scrollTop = box.scrollHeight;
-    if(step === "search") wsLoadState();      // 助手检索完 → 左边结果立刻回填
-    if(step === "convert") cvLoad();          // 助手导出完 → 左边文件/预览立刻刷新
-    if(step === "files") flLoad(flRel);       // 助手可能刚落了文件 → 目录刷新
-    if(step === "idea" && typeof iwLoad === "function") iwLoad();   // 刚出的判定 → 左边下区刷新
+    await api("/api/agent/cancel", {idempotency_key:run.key});
+  }catch(e){ uiNotify("停止失败：" + e.message); }
+}
+function wfRemember(run){
+  localStorage.setItem("rw-wf-run:" + wfRunKey(run.project,run.step), JSON.stringify({
+    project:run.project,step:run.step,key:run.key,runId:run.runId,request:run.request,api:run.api
+  }));
+}
+function wfRestoreRun(step){
+  const key = wfRunKey(curTask, step);
+  let run = wfRuns.get(key);
+  if(!run){
+    try{
+      const saved = JSON.parse(localStorage.getItem("rw-wf-run:" + key) || "null");
+      if(saved){ run = {...saved,status:"running",cursor:0,events:[]}; wfRuns.set(key,run); wfFollowRun(run); }
+    }catch(e){ localStorage.removeItem("rw-wf-run:" + key); }
+  }
+  if(run){
+    const box = $("wv-msgs"), who = WF_AGENT[step] || WF_AGENT.idea;
+    run.events.forEach(ev=>appendOne(box,ev,who));
+  }
+  wfRunButton();
+  return run;
+}
+async function wfFollowRun(run){
+  await observeAgentRun(run, ev=>{
+    if(["done","user"].includes(ev.type)) return;
+    if(ev.type === "error" && wfVisible(run)) uiNotify(ev.message || "执行失败");
+    run.events.push(ev);
+    const box = wfVisible(run);
+    if(box){ appendOne(box,ev,WF_AGENT[run.step]); wfEvents.push(ev); wfPaintStats(); }
+  },wfRemember,()=>{
+    if(wfVisible(run) && $("wv-send")) $("wv-send").title = "连接中断，正在重连；按 Esc 停止";
+  });
+  localStorage.removeItem("rw-wf-run:" + wfRunKey(run.project,run.step));
+  wfRuns.delete(wfRunKey(run.project,run.step));
+  if(wfVisible(run)){
+    await loadTaskState();
+    wfAgentPaint(document.querySelector(".wf-page")?.parentElement,run.step);
+    if(run.step === "search") wsLoadState();
+    if(DOC_UI[run.step]) docLoad(run.step);
+    wfPaintFoot();
   }
 }
+async function wfSend(m, step){
+  if(wfActiveRun(step)?.status === "running") return wfStop(step);
+  const ta = $("wv-ask"), text = (ta.value || "").trim(); if(!text) return;
+  if(!(await requireModelKey())) return;
+  if(step === "idea" && typeof iwFlush === "function") await iwFlush();
+  ++wfPlanSeq;
+  const project = curTask, key = crypto.randomUUID();
+  const historyKey = wfRunKey(project,step);
+  const run = {project,step,key,status:"running",runId:"",cursor:0,events:[],api:WF_AGENT[step].api,
+    request:{task_id:project,message:text,step,idempotency_key:key,
+      sel:step === "files" ? ((flRows.find(r=>r.rel===flSel)||{}).path||"") : ""}};
+  wfRuns.set(historyKey,run); wfRemember(run);
+  ta.value = ""; ta.style.height = "auto";
+  const box = $("wv-msgs"); if(box.querySelector(".wv-hero,.wf-plan")) box.innerHTML = "";
+  appendOne(box,{type:"user",content:text}); wfMsgs.push({role:"user",content:text,events:[]});
+  wfPaintStats(); wfRunButton(); wfFollowRun(run);
+}
 
-function renderWorkflow(m){
+async function renderWorkflow(m){
+  const projectId = curTask;
+  if(projectId){
+    try{
+      const state = await api(`/api/workflow/layouts/state?task_id=${encodeURIComponent(projectId)}`);
+      if(curTask !== projectId || route() !== "workflow" || !m.isConnected) return;
+      wfNodes = Object.fromEntries(state.nodes.map(n=>[n.step,n]));
+      WF_ORDER = state.nodes.map(n=>n.step);
+    }catch(e){ m.innerHTML = `<div class="none">工作流读取失败：${esc(e.message)}</div>`; return; }
+  }
   m.style.padding = "";        // 清掉别的页面留下的内边距
   const proj = (S.tasks||[]).find(t => t.id === curTask);
   const fPath = (proj && (proj.base_dir || proj.root_dir)) || "";
   const fName = fPath ? (fPath.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || fPath) : "未设置项目目录";
   if(wfStep !== "files" && !WF_ORDER.includes(wfStep)) wfStep = WF_ORDER[0];   // 老 localStorage 存了个不认识的步
+  localStorage.setItem("rw-wf-step", wfStep);
   m.innerHTML = needTask() || `
     <div class="wf-page${wfMin?" min":""}${wfAgentCollapsed?" agent-min":""}" id="wfPage">
       <aside class="wf-rail" id="wfRail">
@@ -2518,8 +2572,11 @@ function wsBind(m){
 }
 
 async function loadTaskState(){
-  try{ const d=await api(`/api/task?id=${encodeURIComponent(curTask)}`);
+  const projectId = curTask;
+  try{ const d=await api(`/api/task?id=${encodeURIComponent(projectId)}`);
+    if(curTask !== projectId) return;
     const sm=d.stage_map||{};
+    if(d.workflow) wfNodes = Object.fromEntries(d.workflow.nodes.map(n=>[n.step,n]));
     wfStageMap = sm;                                   // 硬限制判据：这一步/上一步交付了没
     const dlv = {};                                     // 每一步最近一次交付的产物（steps 已按时间倒序）
     (d.steps||[]).forEach(r=>{ if(r.delivery && r.delivery !== "{}" && !dlv[r.stage]) dlv[r.stage] = r.summary || ""; });
@@ -2527,12 +2584,14 @@ async function loadTaskState(){
     // 左栏十步：已完成的亮、没开始的暗、当前步主色、上游没交付的标 lock（接不上流程）
     document.querySelectorAll(".wf-step[data-step]").forEach(b=>{
       const s=b.dataset.step, st=sm[s], gate=wfPrevBlocked(s);
-      b.classList.toggle("done", !!st && st!=="failed");
-      b.classList.toggle("todo", !st && s!==wfStep);
+      b.classList.toggle("done", st === "delivered");
+      b.classList.toggle("todo", ["ready","waiting"].includes(st) && s!==wfStep);
       b.classList.toggle("lock", !!gate);
       b.title = gate ? `${STAGE[s]}（上一步「${wfStepName(gate)}」还没交付，先当独立功能块用）`
-              : dlv[s] ? `${STAGE[s]} · 已交付：${dlv[s].slice(0, 80)}` : STAGE[s];
-      if(st==="failed") b.classList.add("fail");
+              : st === "stale" ? `${STAGE[s]} · 产物或上游已变更，请重新确认交付`
+              : st === "succeeded" ? `${STAGE[s]} · 执行完成，等待确认交付`
+              : st === "delivered" && dlv[s] ? `${STAGE[s]} · 已交付：${dlv[s].slice(0, 80)}` : STAGE[s];
+      b.classList.toggle("fail", st === "failed");
     });
   }catch(e){}
 }

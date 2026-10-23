@@ -99,6 +99,8 @@ def stage_search(db: WorkflowDB, task_id: str, query: str, sources: list[str] | 
     rel = [x for x in raw if _relevant(query, x)] or raw
     found = rank(query, rel, limit, sort_by=sort_by)   # 去重 + 按 选项(综合/相关度/引用量/年份) 排序 + 限条数
     filled = enrich_oa(found)                  # 按 DOI 反查 OpenAlex，尽量把 OA 直链补全
+    import execution
+    execution.check()
     saved = db.cache_results(task_id, found)
     db.log_step(task_id, "search", "done",
                 f"检索到 {len(found)} 条（原始 {len(raw)}，去重排序后限 {limit} 条，排序：{sort_by}），"
@@ -114,6 +116,8 @@ def stage_download(db: WorkflowDB, task_id: str, result_id: str) -> dict[str, An
     if not item:
         raise ValueError("这条检索结果不在了（可能被清过），重新搜一次")
     path = download_pdf(item, target_dir=db.pdir(task_id, "文献库"))
+    import execution
+    execution.check()
     paper = db.ingest_pdf(task_id, path)
     db.log_step(task_id, "download", "done", f"已入库 {paper['filename']}（{len(paper['pages'])} 页）")
     return {"paper": paper, "pdf_path": str(path)}
@@ -460,11 +464,17 @@ def stage_review(db: WorkflowDB, task_id: str, draft: str) -> dict[str, Any]:
 
 
 def stage_convert(db: WorkflowDB, task_id: str, markdown: str, fmt: str = "docx", name: str = "paper") -> dict[str, Any]:
+    import asset_service
+    import execution
+    execution.check()
+    if not markdown.strip():
+        raise ValueError("导出内容不能为空")
     fmt = (fmt or "docx").lower()
     safe = re.sub(r"[^\w\-. ]+", "_", name)[:60] or "paper"
     folder = db.pdir(task_id, "最终产物")
     if fmt == "md":
-        dest = folder / f"{safe}.md"; dest.write_text(markdown, encoding="utf-8")
+        dest = folder / f"{safe}.md"
+        asset_service.atomic_write_text(dest, markdown)
     elif fmt == "html":
         import html as _html
         body = "\n".join(
@@ -473,7 +483,7 @@ def stage_convert(db: WorkflowDB, task_id: str, markdown: str, fmt: str = "docx"
             else (f"<li>{_html.escape(line[2:])}</li>" if line.startswith("- ") else f"<p>{_html.escape(line)}</p>" if line.strip() else "")
             for line in markdown.splitlines())
         dest = folder / f"{safe}.html"
-        dest.write_text(f"<!doctype html><meta charset='utf-8'><body>{body}</body>", encoding="utf-8")
+        asset_service.atomic_write_text(dest, f"<!doctype html><meta charset='utf-8'><body>{body}</body>")
     elif fmt == "docx":
         try:
             from workflow_docx import build as _build_docx
@@ -489,5 +499,6 @@ def stage_convert(db: WorkflowDB, task_id: str, markdown: str, fmt: str = "docx"
         _build_docx(markdown, dest, bases=bases)
     else:
         raise ValueError(f"不支持的格式：{fmt}（可用 md/html/docx）")
+    asset_service.register_file(db, dest, project_id=task_id, kind="export", source="workflow_convert", body=markdown)
     db.log_step(task_id, "convert", "done", f"导出 {dest.name}")
     return {"path": str(dest), "format": fmt, "size": dest.stat().st_size}

@@ -136,6 +136,13 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, Any], d
         return {"task": team.assign(tid, body.get("member", ""), body.get("prompt", ""),
                                     body.get("title", ""), body.get("trigger", "leader"))}
 
+    m = re.match(r"^/api/runs/([^/]+)$", path)
+    if method == "GET" and m:
+        task = db.get_async_task(m.group(1))
+        if not task:
+            raise KeyError("运行不存在")
+        return {key: task[key] for key in ("id", "owner_id", "status", "cancel_requested", "progress")}
+
     m = re.match(r"^/api/runs/([^/]+)/cancel$", path)
     if method == "POST" and m:
         run_id = m.group(1)

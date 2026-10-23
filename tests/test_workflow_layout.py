@@ -70,10 +70,10 @@ class WorkflowLayoutTest(unittest.TestCase):
         self.db.log_step(self.tid, "search", "running", "Requesting articles")
         self.db.log_step(self.tid, "outline", "done", "Outline saved")
         state = self.call("GET", "/state", query={"task_id": self.tid})
-        self.assertEqual([n["status"] for n in state["nodes"]], ["running", "done", "waiting"])
+        self.assertEqual([n["status"] for n in state["nodes"]], ["running", "succeeded", "waiting"])
         self.db.log_step(self.tid, "search", "done", "Found articles")
         state = self.call("GET", "/state", query={"task_id": self.tid})
-        self.assertEqual([n["status"] for n in state["nodes"]], ["done", "done", "ready"])
+        self.assertEqual([n["status"] for n in state["nodes"]], ["succeeded", "succeeded", "waiting"])
         self.db.log_step(self.tid, "review", "failed", "Provider rejected the request")
         node = self.call("GET", "/state", query={"task_id": self.tid})["nodes"][2]
         self.assertEqual(node["status"], "failed")

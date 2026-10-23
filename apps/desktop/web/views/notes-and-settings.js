@@ -458,7 +458,7 @@ function schWhen(iso){ return iso ? fmtDate(iso) : "—"; }
 function schEditSeed(row){
   return { id: row?.id||"", name: row?.name||"每日科研摘要", prompt: row?.prompt||"请根据项目中的最新文献与笔记，生成一份可核验的研究摘要。",
     project_id: row?.project_id||curTask||"", assistant_id: row?.assistant_id||"", frequency: row?.frequency||"daily", cron: row?.cron||"0 9 * * *",
-    output_dir: row?.output_dir||"定时任务", enabled: row ? !!row.enabled : true };
+    output_dir: row?.output_dir||"定时任务", todo_id:row?.todo_id||"", enabled: row ? !!row.enabled : true };
 }
 function schEditorHTML(){
   if(!schEdit) return "";
@@ -479,6 +479,7 @@ function schEditorHTML(){
       <label><span>Cron（分 时 日 月 周）</span><input id="schCron" value="${esc(e.cron)}" style="font-family:ui-monospace,Consolas,monospace"></label>
       <label><span>项目</span><select id="schProj">${projOpts}</select></label>
        <label><span>执行专家</span><select id="schAssistant">${assistantOpts}</select></label>
+       <label><span>关联项目待办（可选）</span><select id="schTodo"><option value="">正在读取…</option></select></label>
       <label><span>输出目录（项目目录内的相对路径）</span><input id="schOut" value="${esc(e.output_dir)}"></label>
       <label><span>启用</span><select id="schOn"><option value="1" ${e.enabled?"selected":""}>已启用</option><option value="0" ${e.enabled?"":"selected"}>已暂停</option></select></label>
       <label class="full"><span>Prompt（到点了让 Agent 做什么）</span><textarea id="schPrompt">${esc(e.prompt)}</textarea></label>
@@ -526,6 +527,7 @@ async function renderSchedules(m){
   m.innerHTML = `<div class="muted">正在读取定时任务…</div>`;
   try{ await schLoad(true); }
   catch(e){ m.innerHTML = `<div class="msg error">读取失败：${esc(e.message)}</div>`; return; }
+  if(route() !== "schedules" || !m.isConnected) return;
   m.innerHTML = `
     <div class="card"><div class="sch-head">
       <div><p class="sch-eyebrow">AUTOMATION / SCHEDULES</p><h3>定时任务</h3>
@@ -549,13 +551,27 @@ async function renderSchedules(m){
   const nm = () => esc($("schName").value.trim() || "未命名任务");
   const bindEditor = ()=>{
     if(!schEdit) return;
+    const selected = schEdit.todo_id;
+    const loadTodos = async ()=>{
+      const project = $("schProj").value, select = $("schTodo");
+      select.disabled = true;
+      try{
+        const data = project ? await api("/api/todos?task_id="+encodeURIComponent(project)) : {todos:[]};
+        if(!select.isConnected || $("schProj").value !== project) return;
+        const rows = (data.todos||[]).filter(t=>t.id===selected || !t.execution || !["queued","running","review"].includes(t.execution.status));
+        select.innerHTML = '<option value="">不关联待办</option>' + rows.map(t=>`<option value="${esc(t.id)}" ${t.id===selected?"selected":""}>${esc(t.title)}</option>`).join("");
+        select.disabled = !!selected;
+      }catch(e){ select.innerHTML='<option value="">读取失败，请重新选择项目</option>'; uiNotify(e.message); }
+    };
+    $("schProj").onchange = loadTodos;
+    loadTodos();
     $("schCancel") && ($("schCancel").onclick = ()=>{ schEdit=null; render(); });
     $("schCancel2") && ($("schCancel2").onclick = ()=>{ schEdit=null; render(); });
     $("schFreq").onchange = (e)=>{ const k=e.target.value; const c=SCH_PRESETS[k]; if(c) $("schCron").value=c;
       schEdit.frequency=k; if(c) schEdit.cron=c; };
     $("schSave").onclick = async ()=>{
       const body = { id: schEdit.id, name: nm(), prompt: $("schPrompt").value.trim(),
-         project_id: $("schProj").value, assistant_id: $("schAssistant").value, frequency: $("schFreq").value, cron: $("schCron").value.trim(),
+         project_id: $("schProj").value, assistant_id: $("schAssistant").value, todo_id:$("schTodo").value, frequency: $("schFreq").value, cron: $("schCron").value.trim(),
         output_dir: $("schOut").value.trim() || "定时任务", enabled: $("schOn").value === "1" };
       if(!body.prompt) return uiNotify("Prompt 必填");
       try{ await api("/api/schedule/save", body); schEdit=null; await schLoad();
@@ -714,18 +730,18 @@ function spBodyHTML(d){
   }
 
   // ---------- 5. 概览 ----------
-  const stages = (S.stages||[]).map(s=>({key:s.key, label:s.label, st:(d.stage_map||{})[s.key]||""}));
+  const stages = (d.workflow?.nodes||[]).map(s=>({key:s.key, label:s.label, st:s.status}));
   const recent = (d.steps||[]).slice(0,6);
   return `
     <div class="sp-grid2" style="margin-top:12px">
       <div class="card sp-kpi"><p class="inst-label">RESEARCH</p><strong>${sum.papers||0}</strong>
         <p class="sp-kpi-note">项目文献 · 证据 ${sum.evidence||0} 条</p></div>
       <div class="card sp-kpi sp-kpi-text"><p class="inst-label">QUESTION</p><strong>${esc(t.question||"未填研究问题")}</strong></div></div>
-    <div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">WORKFLOW PIPELINE</p><h3>十步科研流程</h3></div>
+    <div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">WORKFLOW PIPELINE</p><h3>项目科研流程</h3></div>
         <button class="btn ghost" id="spToFlow">去科研台 →</button></div>
         <div class="sp-pipe">
-          ${stages.map((s,i)=>`<button class="sp-pipe-cell ${s.st==="done"?"on":(s.st?"run":"")}" data-sp-flow="${esc(s.key)}"
-              title="${esc(s.label)}：${s.st==="done"?"已完成":(s.st?"已记录 · "+esc(s.st):"未开始")}">
+          ${stages.map((s,i)=>`<button class="sp-pipe-cell ${s.st==="delivered"?"on":(s.st==="running"?"run":"")}" data-sp-flow="${esc(s.key)}"
+              title="${esc(s.label)}：${esc(({delivered:"已确认交付",succeeded:"待确认交付",stale:"产物已变更，需重新确认",running:"执行中",failed:"执行失败",cancelled:"已停止",waiting:"等待上游交付",ready:"可开始"})[s.st]||"未开始")}">
             <b>${String(i+1).padStart(2,"0")}</b><span>${esc(s.label)}</span></button>`).join("")}
         </div>
         <div class="hint" style="margin-top:8px">最近步骤：${recent.length?esc(recent.map(r=>r.stage).join(" → ")):"—"}</div></div>
@@ -817,12 +833,13 @@ async function renderSpace(m){
   m.style.padding = "";
   m.classList.remove("sp-fill");
   if(!curTask){ m.innerHTML = needTask(); return; }
+  const project = curTask;
   if(spId !== curTask){ spId = curTask; spTab = "overview"; spActiveNoteId = null; spSelectedNoteIds.clear(); }
   m.innerHTML = `<div class="muted">正在读取项目…</div>`;
   let d, lastErr;
   for(let attempt = 0; attempt < 3; attempt++){
     try{
-      d = await api("/api/task?id=" + encodeURIComponent(curTask));
+      d = await api("/api/task?id=" + encodeURIComponent(project));
       lastErr = null;
       break;
     }catch(e){
@@ -834,6 +851,7 @@ async function renderSpace(m){
       break;
     }
   }
+  if(curTask !== project || route() !== "space" || !m.isConnected) return;
   if(!d || lastErr){ m.innerHTML = `<div class="msg error">读取项目失败：${esc(lastErr ? lastErr.message : "未知错误")}</div>`; return; }
   const t = d.task||{};
   const opts = (S.tasks||[]).map(x=>`<option value="${x.id}" ${x.id===curTask?"selected":""}>${esc(x.title)}</option>`).join("");
@@ -1880,6 +1898,10 @@ function initTheme(){
   setFont(localStorage.getItem("rw-font") || "comfortable");
 }
 initTheme();
+const savedRoute = localStorage.getItem("rw-route");
+if(savedRoute && TITLES[savedRoute] && savedRoute !== "agent"){
+  tabs.push({id:"restored",route:savedRoute,title:TITLES[savedRoute]}); activeTab="restored";
+}
 setInterval(()=>{ const el=document.querySelector(".topbar .date"); if(el) el.textContent=clock();
   const g=$("calHelloText"); if(g) g.textContent=helloText(); }, 30000);   // 顶栏日期/时间自己走；问候语跟着时间变
 refreshState().catch(e=>{ $("main").innerHTML=`<div class="msg error">加载失败：${esc(e.message)}</div>`; });

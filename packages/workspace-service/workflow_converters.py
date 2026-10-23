@@ -681,6 +681,9 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", templat
                 raise RuntimeError(got.get("error") or "编译没出 PDF")
         out = folder / f"{safe}.pdf"
         shutil.copy2(pdf, out)
+        import asset_service
+        asset_service.register_file(db, out, project_id=task_id, kind="export", source="format_convert",
+                                    metadata={"source_path": str(src_tex), "format": fmt})
         db.log_step(task_id, "convert", "done", f"导出 {out.name}")
         return {"path": str(out), "name": out.name, "format": fmt, "size": out.stat().st_size,
                 "pdf": True, "source": str(src_tex), "passes": passes, "bibtex": bib_note}
@@ -774,6 +777,9 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", templat
         shutil.copy2(made, out)
     else:
         raise ValueError(f"不支持的格式：{fmt}（可用 {'/'.join(CONV_FORMATS)}）")
+    import asset_service
+    asset_service.register_file(db, out, project_id=task_id, kind="export", source="format_convert",
+                                body=md, metadata={"source_path": str(src), "format": fmt})
     db.log_step(task_id, "convert", "done", f"导出 {out.name}")
     res = {"path": str(out), "name": out.name, "format": fmt, "size": out.stat().st_size,
            "pdf": fmt == "latex", "source": str(src),
@@ -1173,6 +1179,7 @@ EN_SYSTEM = EN_SYSTEM_STYLES["formal"] + (
 def en_translate(profile: dict[str, Any], md: str, style: str = "formal") -> dict[str, Any]:
     """分片并发翻（顺序保持），返回 {text, chunks, ms}。"""
     from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
     chunks = en_chunks(md)
     if not chunks:
         return {"text": "", "chunks": 0, "ms": 0}
@@ -1195,7 +1202,11 @@ def en_translate(profile: dict[str, Any], md: str, style: str = "formal") -> dic
         return out
 
     with ThreadPoolExecutor(max_workers=4) as pool:
-        parts = list(pool.map(one, chunks))
+        futures = [pool.submit(copy_context().run, one, piece) for piece in chunks]
+        parts = [future.result() for future in futures]
+    missing = [str(i + 1) for i, part in enumerate(parts) if not part.strip()]
+    if missing:
+        raise RuntimeError("翻译分片返回空内容（第 " + "、".join(missing) + " 段），原译文保留，请重试")
     return {"text": "\n\n".join(p for p in parts if p), "chunks": len(chunks),
             "ms": int((time.time() - t0) * 1000), "style": style}
 
@@ -1204,7 +1215,16 @@ def en_state(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     """默认拿「正文.md」当源；同时把上次译好的 <名字>_en.md 读回来。"""
     src = doc_path(db, task_id, "write")
     res = src.with_name(src.stem + "_en.md")
-    return {"source_path": str(src), "source_text": src.read_text(encoding="utf-8", errors="replace") if src.is_file() else "",
+    import service_settings
+    saved = service_settings.read(db, "translation:" + task_id)
+    if saved.get("result_path"):
+        candidate = Path(saved["result_path"]).resolve()
+        if candidate.parent == src.parent.resolve():
+            res = candidate
+    source = src.read_text(encoding="utf-8", errors="replace") if src.is_file() else ""
+    if saved.get("custom_source"):
+        source = saved.get("source_text", "")
+    return {"source_path": str(src), "source_text": source,
             "result_path": str(res), "result_text": res.read_text(encoding="utf-8", errors="replace") if res.is_file() else "",
             "source_exists": src.is_file(), "result_exists": res.is_file()}
 
@@ -1224,7 +1244,15 @@ def en_run(db: "WorkflowDB", task_id: str, text: str, name: str = "", style: str
     folder.mkdir(parents=True, exist_ok=True)
     dest = folder / f"{stem}_en.md"
     fileguard.before_write(dest, "中译英覆盖")
-    dest.write_text(out["text"] + "\n", encoding="utf-8", newline="\n")
+    if not out["text"].strip():
+        raise RuntimeError("模型没有返回译文，原译文保留，请重试")
+    import asset_service
+    asset_service.atomic_write_text(dest, out["text"] + "\n")
+    asset_service.register_file(db, dest, project_id=task_id, kind="document", source="translation",
+                                body=out["text"], metadata={"document_kind": "entrans"})
+    import service_settings
+    service_settings.write(db, "translation:" + task_id, {"result_path": str(dest), "source_text": md,
+                           "custom_source": stem != doc_path(db, task_id, "write").stem})
     db.log_step(task_id, "entrans", "done", f"译成 {dest.name}")
     return {"path": str(dest), "name": dest.name, "text": out["text"], "chars": len(out["text"]),
             "sections": len(re.findall(r"(?m)^#{1,6} ", out["text"])), "src_chars": len(md),

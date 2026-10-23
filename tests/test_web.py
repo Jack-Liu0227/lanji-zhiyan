@@ -45,9 +45,19 @@ class ChatWithoutConversationTest(unittest.TestCase):
         self.chat_js = (JS / "chat-views.js").read_text(encoding="utf-8")
 
     def test_server_creates_chat_when_task_id_is_empty_or_stale(self) -> None:
-        self.assertIn("db.create_chat(\"\")", self.server)
-        self.assertIn("SELECT 1 FROM chats WHERE id=?", self.server)
-        self.assertIn("SELECT 1 FROM research_tasks WHERE id=?", self.server)
+        import agent_jobs
+        import workflow
+        from unittest.mock import patch
+        from run_manager import RunManager
+        with tempfile.TemporaryDirectory() as tmp, patch.object(RunManager, "_instance", RunManager()), \
+                patch.object(agent_jobs.threading.Thread, "start"):
+            db_path = pathlib.Path(tmp) / "test.sqlite3"
+            for owner in ("", "deleted-chat"):
+                run = agent_jobs.start(db_path, {"task_id": owner, "message": "Hello"})
+                with workflow.WorkflowDB(db_path) as db:
+                    row = db.db.execute("SELECT task_id FROM chats WHERE id=?", (run.task_id,)).fetchone()
+                    self.assertIsNotNone(row)
+                    self.assertEqual(row["task_id"], "")
 
     def test_frontend_no_longer_blocks_send(self) -> None:
         self.assertNotIn('alert("先新建一个对话（左上角 ＋）")', self.chat_js)

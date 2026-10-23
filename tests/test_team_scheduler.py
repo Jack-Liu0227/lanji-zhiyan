@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import threading
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +35,7 @@ class TeamSchedulerTest(unittest.TestCase):
 
     def _run_fake(self):
         def fake_run_agent(db, task_id, prompt, **kwargs):
-            return {"reply": "completed: " + prompt}
+            return {"reply": "# summary\ncompleted: " + prompt + "\n# gaps\nNone"}
 
         return fake_run_agent
 
@@ -115,6 +117,46 @@ class TeamSchedulerTest(unittest.TestCase):
     def test_reviewer_must_belong_to_project_team(self) -> None:
         with self.assertRaisesRegex(ValueError, "Reviewer"):
             team.assign(self.project, self.worker["id"], "draft", reviewer_id="external-member")
+
+    def test_running_task_can_stop_without_late_success(self):
+        entered, release = threading.Event(), threading.Event()
+        row = team.assign(self.project, self.worker["id"], "collect sources")
+        def model(*args, **kwargs):
+            entered.set()
+            release.wait(5)
+            return {"content": "Late response"}
+        with patch.object(workflow, "_chat_raw", side_effect=model):
+            worker = threading.Thread(target=team.tick)
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(5))
+                team.cancel(row["id"])
+                worker.join(2)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(self._status(row["id"])["status"], "canceled")
+                self.assertFalse(self._status(row["id"])["output_path"])
+            finally:
+                release.set()
+                worker.join(5)
+
+    def test_restart_queues_saved_model_boundary_and_blocks_unknown_tool(self):
+        safe = team.assign(self.project, self.worker["id"], "safe restart")
+        unsafe = team.assign(self.project, self.worker["id"], "unsafe restart")
+        with workflow.WorkflowDB(self.path) as db:
+            db.team_task_mark(safe["id"], "running", checkpoint={"phase": "model", "messages": [{"role": "user", "content": "saved"}]})
+            db.team_task_mark(unsafe["id"], "running", checkpoint={"phase": "tool"})
+        result = team.recover_tasks()
+        self.assertEqual(result["resumed"], [safe["id"]])
+        self.assertEqual(result["interrupted"], [unsafe["id"]])
+        def restored(db, *args, **kwargs):
+            self.assertTrue(db.resuming)
+            self.assertEqual(db.job_checkpoint["messages"][0]["content"], "saved")
+            return {"reply": "Recovered output"}
+        with patch.object(workflow, "run_agent", side_effect=restored) as run:
+            self.assertEqual(team.tick(), 1)
+            self.assertEqual(run.call_count, 1)
+        self.assertEqual(self._status(safe["id"])["status"], "done")
+        self.assertEqual(self._status(unsafe["id"])["status"], "blocked")
 
 
 if __name__ == "__main__":

@@ -28,7 +28,7 @@ class MigrationsTest(unittest.TestCase):
 
         rows = self.conn.execute("SELECT version, checksum FROM schema_migrations ORDER BY version").fetchall()
         versions = [r[0] for r in rows]
-        self.assertEqual(versions, ["001_core_schema", "002_workflow_schema", "003_reliability_tables", "004_v130_features", "005_asset_graph_upgrade", "006_team_task_dag", "007_search_rank", "008_semantic", "009_step_delivery"])
+        self.assertEqual(versions, ["001_core_schema", "002_workflow_schema", "003_reliability_tables", "004_v130_features", "005_asset_graph_upgrade", "006_team_task_dag", "007_search_rank", "008_semantic", "009_step_delivery", "010_workflow_coordination"])
 
         tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         self.assertIn("research_tasks", tables)
@@ -36,6 +36,7 @@ class MigrationsTest(unittest.TestCase):
         self.assertIn("tasks", tables)
         self.assertIn("task_attempts", tables)
         self.assertIn("run_events", tables)
+        self.assertIn("task_links", tables)
         self.assertIn("audit_events", tables)
         self.assertIn("easyscholar_cache", tables)
         self.assertIn("project_todos", tables)

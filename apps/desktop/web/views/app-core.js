@@ -158,7 +158,10 @@ const TITLES = {assistants:"专家",team:"团队",agent:"智研管家",calendar:
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 
 function openTab(r, title){
-  if(r === "notes"){ spTab = "notes"; r = "space"; title = "项目空间"; }
+  if(r === "notes"){
+    if(spId !== curTask){ spActiveNoteId = null; spSelectedNoteIds.clear(); }
+    spId = curTask; spTab = "notes"; r = "space"; title = "项目空间";
+  }
   const t = tabs.find(x=>x.route===r);
   if(t){ activeTab=t.id; render(); return; }          // 少了这行 render()，侧栏点了就没反应
   const id = "t"+(seq++); tabs.push({id,route:r,title:title||TITLES[r]||r}); activeTab=id;
@@ -258,6 +261,7 @@ function winSet(zoom){
 }
 
 function renderTabs(){
+  localStorage.setItem("rw-route", route());
   $("tabsbar").innerHTML = tabs.map(t=>`<button class="tab ${t.id===activeTab?"active":""}" data-t="${t.id}">${esc(t.title)}${tabs.length>1?`<span class="x" data-x="${t.id}">✕</span>`:""}</button>`).join("")
     + `<button class="tab" id="newtab">＋</button>`;
   $("tabsbar").querySelectorAll("[data-t]").forEach(b=>b.onclick=(e)=>{
