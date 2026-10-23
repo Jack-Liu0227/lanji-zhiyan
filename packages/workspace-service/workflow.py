@@ -1017,6 +1017,69 @@ def step_done(db: "WorkflowDB", task_id: str, step: str) -> bool:
         return False
 
 
+def step_delivery(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
+    """这一步「交付了什么」—— 交付那一刻现算一份记录，落进 steps.delivery。
+
+    全从库和文件里读，不采信模型自报（模型说「已交付 12 篇」不算数）。
+    下一步的同步、交接、事后追查都看这份，而不是重算一遍猜。
+    """
+    items: dict[str, Any] = {}
+    files: list[str] = []
+    try:
+        if step == "idea":
+            items["创新点原文"] = "%d 字" % len((db.idea_input(task_id) or "").strip())
+            items["判定报告"] = "%d 字" % len((db.idea_verdict(task_id) or {}).get("markdown") or "")
+        elif step == "search":
+            rs = db.results(task_id) or []
+            items["检索结果"] = "%d 条" % len(rs)
+            items["来源"] = "、".join(sorted({r.get("source") or "" for r in rs if r.get("source")})) or "—"
+        elif step == "download":
+            ps = db.papers_of(task_id) or []
+            items["入库论文"] = "%d 篇" % len(ps)
+            items["最近入库"] = "；".join((p.get("title") or p.get("filename") or "")[:40] for p in ps[:3]) or "—"
+        elif step == "notes":
+            items["项目笔记"] = "%d 条" % len(db.notes(task_id) or [])
+        elif step in ("outline", "write", "review"):
+            d = doc_read(db, task_id, step)
+            items["文件"] = Path(d["path"]).name if d.get("path") else "—"
+            items["字数"] = "%d" % d.get("chars", 0)
+            items["结构"] = "%d 节 / %d 小节" % (d.get("sections", 0), d.get("subs", 0))
+            if d.get("exists"):
+                files.append(d["path"])
+        elif step == "map":
+            m = map_read(db, task_id)
+            items["谱系节点"] = "%d 个（正文 %d / 资料 %d）" % (
+                len(m.get("nodes") or []), m.get("sections", 0), m.get("refs", 0))
+            items["连线"] = "%d 条" % len(m.get("edges") or [])
+            if m.get("exists"):
+                files.append(m["path"])
+        elif step == "entrans":
+            e = en_state(db, task_id)
+            items["原文"] = "%d 字" % len(e.get("source_text") or "")
+            items["译文"] = "%d 字" % len(e.get("result_text") or "")
+            if e.get("result_exists"):
+                files.append(e["result_path"])
+        elif step == "convert":
+            got = conv_files(db, task_id) or {}
+            fs = got.get("files") or []
+            items["产物文件"] = "%d 个" % len(fs)
+            items["最新"] = fs[0]["name"] if fs else "—"
+            files += [f["path"] for f in fs[:5] if f.get("path")]
+    except Exception as exc:                       # 记产物失败不能连累交付
+        items["读取产物出错"] = "%s: %s" % (type(exc).__name__, str(exc)[:80])
+    msgs = db.messages(task_id, step) or []
+    last = next((m.get("content") or "" for m in reversed(msgs) if m.get("role") == "assistant"), "")
+    return {
+        "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "step": step,
+        "step_label": STAGE_LABEL.get(step, step),
+        "items": items,
+        "files": files,
+        "turns": len([m for m in msgs if m.get("role") == "user"]),
+        "last_reply": last[:200],
+    }
+
+
 def step_plan(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
     """每一步的「进度同步 + 本步计划」：让这一步的助手看着上一步的交付**现写**一条，
     落成该步对话的第一条 assistant 消息（events=[{type:plan}]）。已有就复用，不重复烧模型。

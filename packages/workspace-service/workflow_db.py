@@ -421,14 +421,19 @@ class WorkflowDB(ResearchDB):
         self.close()
 
     # ---------- 任务 / 步骤 ----------
-    def log_step(self, task_id: str, stage: str, status: str, summary: str = "") -> dict[str, Any]:
+    def log_step(self, task_id: str, stage: str, status: str, summary: str = "",
+                 delivery: dict[str, Any] | None = None) -> dict[str, Any]:
         # quiet_steps：定时任务这类后台跑不记到十步账上（否则进度虚高）。
+        blob = json.dumps(delivery or {}, ensure_ascii=False) if delivery else ""
         if getattr(self, "quiet_steps", False):
-            return {"id": "", "stage": stage, "status": status, "summary": summary, "created_at": now(), "skipped": True}
+            return {"id": "", "stage": stage, "status": status, "summary": summary,
+                    "delivery": blob, "created_at": now(), "skipped": True}
         row = (uuid.uuid4().hex, task_id, stage, status, summary, now())
-        self.db.execute("INSERT INTO steps VALUES (?,?,?,?,?,?)", row)
+        self.db.execute("INSERT INTO steps (id,task_id,stage,status,summary,created_at,delivery)"
+                        " VALUES (?,?,?,?,?,?,?)", row + (blob,))
         self.db.commit()
-        return {"id": row[0], "stage": stage, "status": status, "summary": summary, "created_at": row[5]}
+        return {"id": row[0], "stage": stage, "status": status, "summary": summary,
+                "delivery": blob, "created_at": row[5]}
 
     def steps(self, task_id: str) -> list[dict[str, Any]]:
         rows = self.db.execute("SELECT * FROM steps WHERE task_id=? ORDER BY created_at DESC", (task_id,))

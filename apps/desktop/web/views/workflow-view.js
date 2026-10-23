@@ -1538,7 +1538,14 @@ function renderWorkflow(m){
   const deliver = $("wfDeliver"); if(deliver) deliver.onclick = async ()=>{
     deliver.disabled = true; const old = deliver.textContent;
     const leaving = wfStep;
-    try{ await api("/api/step/done", {task_id:curTask, step:wfStep}); }catch(e){ deliver.disabled=false; return uiNotify("确认失败：" + e.message); }
+    let res = null;
+    try{ res = await api("/api/step/done", {task_id:curTask, step:wfStep}); }catch(e){ deliver.disabled=false; return uiNotify("确认失败：" + e.message); }
+    // 后端已经把这一步的产物记进台账了（steps.delivery），这里把它回显给人看
+    try{
+      const dv = JSON.parse((res && res.delivery) || "{}");
+      const line = Object.entries(dv.items || {}).map(([k, v]) => k + " " + v).join(" · ");
+      if(line) uiNotify("已交付，产物已记下：" + line);
+    }catch(e){}
     // 论文搜索交付 = 进下载：勾中的这批当场提交自动下载（没勾就只跳步）
     const downloading = leaving === "search" ? wsKickDownload() : false;
     // 先让按钮绿一下（「点下去有反应」），再跳下一步；跳完 restoring 文字
@@ -2491,6 +2498,8 @@ async function loadTaskState(){
   try{ const d=await api(`/api/task?id=${encodeURIComponent(curTask)}`);
     const sm=d.stage_map||{};
     wfStageMap = sm;                                   // 硬限制判据：这一步/上一步交付了没
+    const dlv = {};                                     // 每一步最近一次交付的产物（steps 已按时间倒序）
+    (d.steps||[]).forEach(r=>{ if(r.delivery && r.delivery !== "{}" && !dlv[r.stage]) dlv[r.stage] = r.summary || ""; });
     Object.keys(STAGE).forEach(s=>{ const el=$("st-"+s); if(el&&sm[s]) el.className="pill ok"; });
     // 左栏十步：已完成的亮、没开始的暗、当前步主色、上游没交付的标 lock（接不上流程）
     document.querySelectorAll(".wf-step[data-step]").forEach(b=>{
@@ -2498,7 +2507,8 @@ async function loadTaskState(){
       b.classList.toggle("done", !!st && st!=="failed");
       b.classList.toggle("todo", !st && s!==wfStep);
       b.classList.toggle("lock", !!gate);
-      b.title = gate ? `${STAGE[s]}（上一步「${wfStepName(gate)}」还没交付，先当独立功能块用）` : STAGE[s];
+      b.title = gate ? `${STAGE[s]}（上一步「${wfStepName(gate)}」还没交付，先当独立功能块用）`
+              : dlv[s] ? `${STAGE[s]} · 已交付：${dlv[s].slice(0, 80)}` : STAGE[s];
       if(st==="failed") b.classList.add("fail");
     });
   }catch(e){}

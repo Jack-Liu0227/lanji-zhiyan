@@ -55,6 +55,28 @@ class StepGateTest(unittest.TestCase):
         self.db.log_step(self.task, "idea", "done")
         self.assertTrue(step_plan(self.db, self.task, "notes").get("blocked"))
 
+    def test_交付时把这一步的产物落库(self) -> None:
+        """确认交付不能只记一句「用户确认交付」：产物现算出来、跟着台账一起存。"""
+        import json
+        from workflow import doc_write, step_delivery
+        doc_write(self.db, self.task, "outline", "# 大纲\n## 一 引言\n### 1.1 背景\n## 二 方法\n")
+        dv = step_delivery(self.db, self.task, "outline")
+        self.assertEqual(dv["step"], "outline")
+        self.assertEqual(dv["items"]["结构"], "2 节 / 1 小节")
+        self.assertNotEqual(dv["items"]["字数"], "0")
+        self.assertTrue(dv["files"] and dv["files"][0].endswith(".md"))
+
+        self.db.log_step(self.task, "idea", "done", "创新点 12 字", delivery=dv)
+        row = self.db.steps(self.task)[0]
+        self.assertEqual(row["stage"], "idea")
+        self.assertEqual(json.loads(row["delivery"])["items"]["结构"], "2 节 / 1 小节")
+
+    def test_产物读失败也不连累交付(self) -> None:
+        from workflow import step_delivery
+        dv = step_delivery(self.db, self.task, "convert")      # 项目目录还没建也得出得来
+        self.assertEqual(dv["step"], "convert")
+        self.assertIn("items", dv)
+
 
 if __name__ == "__main__":
     unittest.main()

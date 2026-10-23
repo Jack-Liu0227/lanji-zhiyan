@@ -70,7 +70,7 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       cite_read, conv_files, conv_compile, conv_open,
                       fig_list, fig_rename, conv_preview, open_convert, convert_system,
                       tree_list, files_system,
-                      en_state, en_run, _safe_path, step_plan, step_done,
+                      en_state, en_run, _safe_path, step_plan, step_done, step_delivery,
                       stage_download_selected, stage_zotero_import, test_provider,
                       deepread_kick, deepread_state, deepread_stop)
 
@@ -1389,7 +1389,12 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     if idx and not step_done(db, tid, STAGES[idx-1]):   # 硬限制：流程必须按步交付，不能跨步
                         return self._json({"error": "上一步「%s」还没交付，这一步现在只能当独立功能块用，接不上流程"
                                            % STAGE_LABEL.get(STAGES[idx-1], STAGES[idx-1])}, 409)
-                    res = db.log_step(tid, step, "done", str(data.get("summary") or "用户确认交付")[:200])
+                    # 交付即留痕：现算这一步的产物（库 + 文件），跟台账一起落库，别只记「用户确认交付」
+                    delivery = step_delivery(db, tid, step)
+                    summary = "；".join("%s %s" % (k, v) for k, v in (delivery.get("items") or {}).items())
+                    res = db.log_step(tid, step, "done",
+                                      (str(data.get("summary") or "").strip() or summary or "用户确认交付")[:200],
+                                      delivery=delivery)
                     if step == "map":                     # 交付谱系图 → 文章撰写接手，先说一句开场白
                         try:
                             res["write_opening"] = open_write(db, tid)
