@@ -23,6 +23,9 @@ a = Analysis(
         (os.path.join(_ROOT, 'tools', 'home'), 'tools/home'),
         (os.path.join(_ROOT, 'tools', 'build', 'icon.ico'), 'build'),
         (os.path.join(_ROOT, 'packages', 'contracts', 'providers_catalog.json'), 'packages/contracts'),
+        # 迁移脚本：run_migrations() 读 exe 目录下的 migrations/，缺了就静默不升级 schema
+        # （task_links 等表建不出来 → /api/state 500、界面白屏；1.1 就这么坏过）
+        (os.path.join(_ROOT, 'migrations'), 'migrations'),
     ],
     hiddenimports=['pdfplumber', 'pypdf', 'cryptography', 'PIL', 'pypdfium2', 'webview',
                    'research_core', 'workflow', 'team', 'schedule', 'papertran', 'zotero', 'vault',

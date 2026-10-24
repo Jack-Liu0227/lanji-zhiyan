@@ -72,8 +72,10 @@ def main():
         say("包里没有 %s.exe，安装包损坏。" % APP)
         return 1
 
-    root = os.path.join(os.environ["LOCALAPPDATA"], APP)          # 数据根
-    app_dir = os.path.join(root, "app")                          # 程序根
+    root = os.path.join(os.environ["LOCALAPPDATA"], APP)          # 数据根（保持中文名，老数据在这儿）
+    # 程序根单独放纯 ASCII 目录：.NET 侧（pythonnet 的 assembly 加载、WebView2 的 interop dll）
+    # 遇到中文路径会当成「网络位置」拒掉，无边框窗口就起不来（server.py 里还有 junction 兜底）
+    app_dir = os.path.join(os.environ["LOCALAPPDATA"], "LanjiZhiyan", "app")
     exe = os.path.join(app_dir, APP + ".exe")
 
     say("=" * 46)
@@ -119,6 +121,12 @@ def main():
             if n % 25 == 0:
                 print("\r  正在复制 ... %d 个文件" % n, end="", flush=True)
     say("\r  已复制 %d 个文件%s" % (n, "，%d 个跳过" % skipped if skipped else "  "))
+
+    # 老版把程序装在数据根下的 app/：留着白占 138MB，还容易点到旧 exe
+    stale = os.path.join(root, "app")
+    if os.path.isdir(stale) and os.path.isfile(os.path.join(stale, APP + ".exe")):
+        shutil.rmtree(stale, ignore_errors=True)
+        say("  已清掉旧版程序目录：%s" % stale)
 
     # 桌面快捷方式：优先 pywin32；没有就退回 PowerShell（两者任一都能成）
     lnk = os.path.join(os.path.expanduser("~"), "Desktop", TITLE + ".lnk")

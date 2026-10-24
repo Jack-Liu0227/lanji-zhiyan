@@ -25,6 +25,51 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+# ---- 程序装在中文路径下时，先从 ASCII 的 junction 重启自己 ----
+def _reexec_from_ascii() -> None:
+    """.NET 侧对「带中文的路径」会当成网络位置/Sandbox 处理：pythonnet 加载
+    Python.Runtime.dll 报 `Failed to resolve Python.Runtime.Loader.Initialize`，
+    pywebview 加载 WebView2 的 interop dll 报 `FileLoadException ... 网络位置` ——
+    两种都是无边框窗口直接起不来，只能退回浏览器标签页。从源码跑在 site-packages
+    下是 ASCII，所以只有装在「览籍智研」这种目录里的包会犯。
+
+    做法：在 %LOCALAPPDATA% 建一个纯 ASCII 的目录 junction 指向程序目录，再从那条
+    路径重启自己 —— sys.executable 与所有模块的 __file__ 就都成了 ASCII。
+    # ponytail: 只赌「同一磁盘卷能建 junction」这一手；建不出来就照旧跑，窗口退回浏览器
+    """
+    if not getattr(sys, "frozen", False) or os.environ.get("LANJI_ASCII_REEXEC"):
+        return
+    exe = Path(sys.executable)                  # 不能用 resolve()：会把 junction 还原回中文真路径
+    if str(exe).isascii():
+        return
+    base = os.environ.get("LOCALAPPDATA")
+    # junction 只能建在同一卷内：装到 LOCALAPPDATA 下的走第一条，免安装版放在别的盘走第二条
+    spots = [Path(base) / "Lanji-run"] if base else []
+    spots.append(Path(exe.drive + "\\") / "LanjiZhiyan-run")
+    real = Path(os.path.realpath(exe.parent))      # junction 也算：realpath 会解开
+    for link in spots:
+        try:
+            if link.exists():
+                # 注意别拿 islink 判 junction：Windows 的 junction 在 islink 眼里不是链接
+                if Path(os.path.realpath(link)) != real:
+                    continue                           # 那儿已经是别的目录，不碰
+            else:
+                subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                "New-Item -ItemType Junction -Path '%s' -Target '%s' | Out-Null"
+                                % (link, exe.parent)],
+                               capture_output=True, timeout=30)
+            target = link / exe.name
+            if not target.is_file():
+                continue
+            subprocess.Popen([str(target), *sys.argv[1:]],
+                             env=dict(os.environ, LANJI_ASCII_REEXEC="1"), close_fds=True)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        raise SystemExit(0)
+
+
+_reexec_from_ascii()
+
 # ---- 仓库根与 packages/ 各包挂上 sys.path ----
 ROOT = Path(__file__).resolve().parents[2]
 if not (ROOT / "packages").is_dir():            # 打包后模块被平铺到 exe 目录，数据目录也在那儿
