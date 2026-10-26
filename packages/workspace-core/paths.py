@@ -54,6 +54,8 @@ def _env(*names: str) -> str:
 
 def app_dir() -> Path:
     """程序目录：源码运行 = 仓库根；打包后 = exe 所在目录。"""
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
     root = Path(__file__).resolve().parents[2]
     if (root / "packages").is_dir():
         return root

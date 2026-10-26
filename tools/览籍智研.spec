@@ -7,6 +7,8 @@
 #   3) upx=False：UPX 压缩是杀软误报的主要来源
 
 import os
+import runpy
+from pathlib import Path
 
 _ROOT = os.path.dirname(os.path.abspath(SPECPATH))          # SPECPATH = tools/，仓库根在上一层
 _PKGS = [os.path.join(_ROOT, 'packages', n) for n in
@@ -81,3 +83,5 @@ coll = COLLECT(
     upx_exclude=[],
     name='览籍智研',
 )
+
+runpy.run_path(os.path.join(_ROOT, 'tools', 'installer.py'))['write_manifest'](Path(coll.name))

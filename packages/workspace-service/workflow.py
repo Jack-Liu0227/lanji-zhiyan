@@ -203,7 +203,8 @@ def _json_in(text: str) -> Any | None:
 
 
 _JSON_MAX_TOKENS = 8000   # 推理模型的思维链也记在这个上限里，见 chat_json
-WRITE_MAX_TOKENS = 8000   # 写作那步要吐整份正文（一个巨大的 markdown 参数），预算得跟 chat_json 一档
+WRITE_MAX_TOKENS = 8000
+TOOL_RESULT_MAX = 40000   # 单个工具结果回给模型最多多少字（read_attachment 读整份正文用得上）   # 写作那步要吐整份正文（一个巨大的 markdown 参数），预算得跟 chat_json 一档
 
 
 def chat_json(profile: dict[str, Any], messages: list[dict[str, str]], **kw: Any) -> Any:
@@ -874,7 +875,8 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
     if name == "map_sources":
         return map_sources(db, task_id)
     if name == "doc_write":
-        return doc_write(db, task_id, scope or "outline", args.get("markdown", ""))
+        return doc_write(db, task_id, scope or "outline", args.get("markdown", ""),
+                         str(args.get("mode") or "replace"))       # append = 逐节写，写完一段左边长一段
     if name == "doc_read":
         return doc_read(db, task_id, scope or "outline")
     if name == "cite_add":
@@ -883,6 +885,9 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         return cite_read(db, task_id)
     if name == "cite_bib":
         return cite_bib(db, task_id, args)
+    if name == "translate_doc":
+        import workflow_runners
+        return workflow_runners.translate_doc(db, task_id, str(args.get("style") or "formal"))
     if name == "read_attachment":
         return read_attachment(args.get("path", ""), int(args.get("chars") or 8000))
     if name == "file_list":                                   # 项目文件夹：看一层目录
@@ -1186,7 +1191,7 @@ import run_service
 
 
 @run_service.agent_scope
-def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_steps: int = 6,
+def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_steps: int = 24,
               system: str | None = None, tools: list[dict[str, Any]] | None = None,
               extra_context: str = "", scope: str = "", publish: bool = True,
               profile: dict[str, Any] | None = None, assistant_id: str = "",
@@ -1351,6 +1356,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     final = ""
     tokens = {"prompt": 0, "completion": 0, "total": 0, "exact": True}
     first_turn = int(resume.get("turn", 0)) if resume.get("messages") else 0
+    # 同一轮 run 内模型重复发「同名同参数」的调用，直接复用上次结果（实测有轮次把同一份 map_write 发了 4 次）
+    _done_calls: dict[str, Any] = {}
+
     save_checkpoint(phase="model", messages=messages, turn=first_turn, workflow_run_id=tracked_run["id"], node_id=tracked_node["id"])
     for turn in range(first_turn, max_steps):
         if cancel_check and cancel_check():
@@ -1370,9 +1378,10 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             say({"type": "assistant_delta", "content": piece})
         try:
             msg = chat_raw(profile, messages, tools=tool_specs,
-                           # 写作这步的产出（整份正文）就是一个大参数：4096 预算下推理模型的思维链把额度吃光，
-                           # doc_write 的 markdown 直接被截断 → 工具调用变成「空参数」，文件被清空、左边永远空白。
-                           max_tokens=WRITE_MAX_TOKENS if scope == "write" else 4096,
+                           # 写作那步的产出（整份正文）就是一个大参数：4096 预算下推理模型的思维链把额度吃光，
+                           # doc_write / skill_write / project_note_write 的 markdown 直接被截断 → 工具调用变成「空参数」或半截。
+                           # 所以每一步都跟写作共用同一档预算（deepseek 这档上限 8192，取 8000 留余地）。
+                           max_tokens=WRITE_MAX_TOKENS,
                            on_delta=forward_delta if emit else None, cancel_check=cancel_check,
                            on_reasoning=forward_reasoning if emit else None)
         except Exception as exc:
@@ -1440,6 +1449,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 args = {}
             ev = {"type": "tool_call", "name": name, "args": args, "id": call.get("id")}
             say(ev); events.append(ev)
+            cache_key = name + "\x00" + json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
             t_tool_start = time.monotonic()
             save_checkpoint(phase="tool", messages=messages, events=events, turn=turn)
             try:
@@ -1447,7 +1457,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                     raise PermissionError("当前助手未获准使用此工具：" + name)
                 enforce_tool_policy(name, args, permission)
                 enforce_project_scope(db, bound, name, args)
-                if name in integration_names:
+                if name != "delegate" and cache_key in _done_calls:
+                    result = _done_calls[cache_key]
+                elif name in integration_names:
                     result = agent_integrations.invoke(name, db, ctx_id, args, assistant_id=aid, permission=permission)
                 elif name in ("skill_read", "skill_write") or (name.startswith("mcp_") and name != "mcp_register"):
                     result = capabilities.invoke_tool(db, aid, name, args, project_dir)
@@ -1456,6 +1468,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 if isinstance(result, dict) and result.get("sub_events"):
                     events.extend(result["sub_events"])      # 子 agent 的事件并进本轮 → 回放可还原
                 ok, brief = True, _brief(name, result)
+                if name != "delegate" and not (isinstance(result, dict) and result.get("sub_events")):
+                    _done_calls[cache_key] = result      # 带 sub_events 的结果不缓存：复用会重复回放子事件
+
             except execution.Cancelled:
                 raise
             except Exception as exc:
@@ -1472,7 +1487,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                    "path": path or "", "id": call.get("id")}
             say(ev2); events.append(ev2)
             messages.append({"role": "tool", "tool_call_id": call.get("id") or name, "name": name,
-                             "content": json.dumps(result, ensure_ascii=False, default=str)[:4000]})
+                             # 工具结果回喂给模型的字符数上限：读一份 3 万字的正文，4000 字只够看到标题
+                             "content": json.dumps(result, ensure_ascii=False, default=str)[:TOOL_RESULT_MAX]})
         save_checkpoint(phase="model", messages=messages, events=events, turn=turn + 1,
                         output_assets=db.asset_run["outputs"])
     else:
@@ -1488,7 +1504,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         final += "\n\n以上为工具执行记录，尚未完成最终核验；可以发送后续指令继续。"
         say({"type": "assistant", "content": final})
         if publish:
-            db.add_message(task_id, "assistant", final, [*events, {"type": "error", "content": final}], scope=scope)
+            # soft=True：撞上限是「暂停」，不是失败 —— 结果都在，别把下游交付锁死
+            db.add_message(task_id, "assistant", final, [*events, {"type": "error", "content": final, "soft": True}], scope=scope)
         raise RuntimeError(final)
     if publish:
         db.add_message(task_id, "assistant", final, events, scope=scope)

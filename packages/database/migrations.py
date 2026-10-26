@@ -56,8 +56,8 @@ def backup_database(db_path: Path) -> Path | None:
 def run_migrations(conn: sqlite3.Connection, migrations_dir: Path | None = None,
                    db_path: Path | None = None, create_backup: bool = False) -> list[str]:
     mdir = migrations_dir or DEFAULT_MIGRATIONS_DIR
-    if not mdir.is_dir():
-        return []
+    if not mdir.is_dir() or not any(mdir.glob("*.sql")):
+        raise FileNotFoundError(f"Database migration scripts are missing: {mdir}")
 
     ensure_migration_table(conn)
     applied = get_applied_migrations(conn)

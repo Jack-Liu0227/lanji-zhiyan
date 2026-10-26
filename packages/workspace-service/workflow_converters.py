@@ -1136,7 +1136,7 @@ def _safe_path(path: str, extra_roots: list[Path] | None = None) -> Path:
 
 # ============================ 中译英（中文 markdown → 英文 markdown，左右对照）============================
 EN_STEP = "entrans"
-EN_LIMIT = 1800                                        # 每片多少字送去翻（太大容易截断）
+EN_LIMIT = 1000                                        # 每片多少字送去翻（太大容易截断）
 
 
 def en_chunks(md: str, limit: int = EN_LIMIT) -> list[str]:
@@ -1176,6 +1176,9 @@ EN_SYSTEM = EN_SYSTEM_STYLES["formal"] + (
 )
 
 
+EN_WORKERS = 24         # 翻译分片并发数：片小、并发高，墙钟≈最慢那一片（实测单次 17–50s，纯看接口抖动）
+
+
 def en_translate(profile: dict[str, Any], md: str, style: str = "formal") -> dict[str, Any]:
     """分片并发翻（顺序保持），返回 {text, chunks, ms}。"""
     from concurrent.futures import ThreadPoolExecutor
@@ -1195,13 +1198,24 @@ def en_translate(profile: dict[str, Any], md: str, style: str = "formal") -> dic
 
     from workflow import chat                          # chat 住在 workflow.py，反向 import 会成环
 
-    def one(piece: str) -> str:
+    def one(piece: str, budget: int = 4096) -> str:
+        """翻一段。空回不许直接算失败（推理模型的思维链会吃满额度）：
+        先翻倍预算重来一次，还空就把这段劈成两半各翻一次 —— 一片空不该毁掉整篇 3 万字。"""
         out = chat(profile, [{"role": "system", "content": sys_prompt},
-                             {"role": "user", "content": piece}], temperature=0.1, max_tokens=4096)
+                             {"role": "user", "content": piece}], temperature=0.1, max_tokens=budget)
         out = re.sub(r"^```(?:markdown|md)?\s*\n|```\s*$", "", (out or "").strip()).strip()
-        return out
+        if out:
+            return out
+        if budget < 8192:
+            return one(piece, 8192)
+        if len(piece) > 600:
+            cut = piece.rfind("\n", 0, len(piece) // 2) or (len(piece) // 2)
+            head = one(piece[:cut], 4096)
+            tail = one(piece[cut:], 4096)
+            return (head + "\n\n" + tail).strip()
+        return ""
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=EN_WORKERS) as pool:
         futures = [pool.submit(copy_context().run, one, piece) for piece in chunks]
         parts = [future.result() for future in futures]
     missing = [str(i + 1) for i, part in enumerate(parts) if not part.strip()]

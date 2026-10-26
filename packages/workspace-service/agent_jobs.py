@@ -7,6 +7,8 @@ import uuid
 import execution
 from run_manager import RunManager
 
+import workflow_runners
+
 
 TERMINAL = {"done", "failed", "cancelled", "interrupted"}
 
@@ -107,7 +109,8 @@ def _execute(db_path, run, request, step):
                     on_project = bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
                     result = workflow.run_agent(db, tid, request.get("message", ""), emit, extra_context=extra,
                         system=(workflow.files_system(db, tid) if wstep == "files" else
-                                workflow.convert_system(db, tid) if wstep == "convert" else None),
+                                workflow.convert_system(db, tid) if wstep == "convert" else
+                                workflow_runners.entrans_system(db, tid) if wstep == "entrans" else None),
                         step=wstep, scope=wstep if on_project else "", cancel_check=lambda: run.cancel_requested)
                 execution.check()
                 if error:

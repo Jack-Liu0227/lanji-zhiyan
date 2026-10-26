@@ -19,10 +19,21 @@ sys.path.insert(0, str(ROOT / "packages" / "workspace-core"))
 
 
 class PathsTest(unittest.TestCase):
+    def test_frozen_resources_do_not_fall_back_to_source_tree(self) -> None:
+        import paths
+        # A dist/app build is two levels below a real source tree with packages/.
+        # Frozen modules must still use the resources shipped with that build.
+        with patch.object(sys, "frozen", True, create=True), \
+             patch.object(sys, "_MEIPASS", str(ROOT / "dist" / "app"), create=True):
+            self.assertEqual(paths.app_dir(), ROOT / "dist" / "app")
+
     def setUp(self) -> None:
         self.home = Path(tempfile.mkdtemp(prefix="rw-paths-"))
         self._saved = {k: os.environ.get(k) for k in
-                       ("RW_HOME", "RESEARCH_WORKBENCH_DATA", "RESEARCH_WORKBENCH_DB")}
+                       ("LANJI_ZHIYAN_HOME", "LANJI_ZHIYAN_DATA", "LANJI_ZHIYAN_DB",
+                        "RW_HOME", "RESEARCH_WORKBENCH_DATA", "RESEARCH_WORKBENCH_DB")}
+        for key in ("LANJI_ZHIYAN_HOME", "LANJI_ZHIYAN_DATA", "LANJI_ZHIYAN_DB"):
+            os.environ.pop(key, None)
         os.environ["RW_HOME"] = str(self.home)
         os.environ.pop("RESEARCH_WORKBENCH_DATA", None)
         os.environ.pop("RESEARCH_WORKBENCH_DB", None)

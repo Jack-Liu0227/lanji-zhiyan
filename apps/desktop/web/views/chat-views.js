@@ -398,13 +398,13 @@ async function deleteAssistant(id, name){
   try{ await api("/api/assistant/delete", {id}); }catch(e){ return uiNotify("删除失败：" + e.message); }
   await refreshState(false); asView = "mine"; render();
 }
-async function useAssistant(id){                       // 用它对话：绑到当前对话（没有就新建一个），切到 Agent 页
+async function useAssistant(id, title = ""){           // 用它对话：每次都开一个新对话窗口（不复用当前会话），切到 Agent 页
   const a = (S.assistants||[]).find(x=>x.id===id);
   if(a && a.enabled === 0){
     try{ await api("/api/assistant/toggle", {id, enabled: 1}); a.enabled = 1; }catch(_){}
   }
-  let cid = curChat;
-  if(!cid){ const r = await api("/api/chat/create", {}); cid = r.id || (r.chat && r.chat.id); }
+  const r = await api("/api/chat/create", {title});
+  const cid = r.id || (r.chat && r.chat.id);
   try{ await api("/api/chat/assistant", {id: cid, assistant_id: id}); }catch(e){ return uiNotify("绑定失败：" + e.message); }
   curChat = cid; localStorage.setItem("rw-chat", cid);
   await refreshState(false); openTab("agent");

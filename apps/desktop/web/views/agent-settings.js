@@ -176,7 +176,7 @@
           const remove = document.createElement("button"); remove.className = "btn ghost"; remove.textContent = "删除助手";
           remove.onclick = async () => { if (!await uiConfirm("删除此助手？已有会话和历史消息仍保留。")) return; try { await api("/api/assistant/delete",{id:a.id}); assistantId = null; await saved(); render(); } catch(e) { uiNotify(e.message); } }; actions.append(remove);
         }
-        el("ag-a-chat").onclick = async () => { try { const r = await api("/api/chat/create",{title:a.name}); curChat = r.id || r.chat?.id; await useAssistant(a.id === "builtin-steward" ? "" : a.id); } catch(e) { uiNotify(e.message); } };
+        el("ag-a-chat").onclick = async () => { try { await useAssistant(a.id === "builtin-steward" ? "" : a.id, a.name); } catch(e) { uiNotify(e.message); } };
         if (el("ag-a-toggle")) el("ag-a-toggle").onclick = async () => { try { await request("assistant-save",{id:a.id,enabled:!a.enabled}); await saved(); render(); } catch(e) { uiNotify(e.message); } };
         container.querySelectorAll("[data-ag-history]").forEach(b => b.onclick = async () => { curChat = b.dataset.agHistory; localStorage.setItem("rw-chat",curChat); await refreshState(false); openTab("agent"); });
         document.dispatchEvent(new CustomEvent("rw:assistant-detail",{detail:{assistant:a,container}}));

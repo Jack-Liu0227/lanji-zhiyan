@@ -48,6 +48,13 @@ class MigrationsTest(unittest.TestCase):
         applied2 = migrations.run_migrations(self.conn, db_path=self.db_path)
         self.assertEqual(applied2, [])
 
+    def test_missing_or_empty_scripts_fail_before_creating_partial_database(self):
+        missing = Path(self.tmp.name) / "missing"
+        for directory in (missing, Path(self.tmp.name)):
+            with self.assertRaisesRegex(FileNotFoundError, "migration scripts are missing"):
+                migrations.run_migrations(self.conn, migrations_dir=directory)
+        self.assertEqual(self.conn.execute("SELECT name FROM sqlite_master").fetchall(), [])
+
     def test_backup_creates_checkpoint_file(self):
         migrations.run_migrations(self.conn, db_path=self.db_path)
         backup = migrations.backup_database(self.db_path)

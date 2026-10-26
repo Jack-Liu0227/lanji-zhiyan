@@ -37,15 +37,17 @@ def _reexec_from_ascii() -> None:
     路径重启自己 —— sys.executable 与所有模块的 __file__ 就都成了 ASCII。
     # ponytail: 只赌「同一磁盘卷能建 junction」这一手；建不出来就照旧跑，窗口退回浏览器
     """
-    if not getattr(sys, "frozen", False) or os.environ.get("LANJI_ASCII_REEXEC"):
+    if (not getattr(sys, "frozen", False) or "--no-open" in sys.argv
+            or os.environ.get("LANJI_ASCII_REEXEC")):
         return
     exe = Path(sys.executable)                  # 不能用 resolve()：会把 junction 还原回中文真路径
-    if str(exe).isascii():
+    if str(exe.parent).isascii():
         return
     base = os.environ.get("LOCALAPPDATA")
     # junction 只能建在同一卷内：装到 LOCALAPPDATA 下的走第一条，免安装版放在别的盘走第二条
-    spots = [Path(base) / "Lanji-run"] if base else []
-    spots.append(Path(exe.drive + "\\") / "LanjiZhiyan-run")
+    alias = "Lanji-run-" + hashlib.sha256(str(exe.parent).encode("utf-8")).hexdigest()[:12]
+    spots = [Path(base) / alias] if base and base.isascii() else []
+    spots.append(Path(exe.drive + "\\") / alias)
     real = Path(os.path.realpath(exe.parent))      # junction 也算：realpath 会解开
     for link in spots:
         try:
@@ -56,7 +58,7 @@ def _reexec_from_ascii() -> None:
             else:
                 subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
                                 "New-Item -ItemType Junction -Path '%s' -Target '%s' | Out-Null"
-                                % (link, exe.parent)],
+                                % (str(link).replace("'", "''"), str(exe.parent).replace("'", "''"))],
                                capture_output=True, timeout=30)
             target = link / exe.name
             if not target.is_file():
@@ -71,9 +73,8 @@ def _reexec_from_ascii() -> None:
 _reexec_from_ascii()
 
 # ---- 仓库根与 packages/ 各包挂上 sys.path ----
-ROOT = Path(__file__).resolve().parents[2]
-if not (ROOT / "packages").is_dir():            # 打包后模块被平铺到 exe 目录，数据目录也在那儿
-    ROOT = Path(__file__).resolve().parent
+ROOT = (Path(sys._MEIPASS) if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parents[2])
 for _p in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
     _d = ROOT / "packages" / _p
     if _d.is_dir() and str(_d) not in sys.path:

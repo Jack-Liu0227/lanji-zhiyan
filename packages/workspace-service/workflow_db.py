@@ -34,7 +34,7 @@ from workflow_search import make_project_tree   # 建项目骨架（pdir 里懒�
 
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[1] if (HERE.parents[1] / "packages").is_dir() else HERE   # 程序根（只读资源）
+ROOT = paths.APP
 DATA, PAPERS, NOTES, OUT = paths.DATA, paths.PAPERS, paths.NOTES, paths.OUT   # 唯一路径来源
 NOTE_CATEGORY = "文献精读笔记"    # 项目笔记按分类落盘（同 project_notes.CATEGORIES）：精读/翻译产出的走这一类
 

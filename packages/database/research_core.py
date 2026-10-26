@@ -146,11 +146,8 @@ class ResearchDB:
         if is_memory or db_key not in _RESEARCH_SCHEMA_INITIALIZED:
             with _RESEARCH_INIT_LOCK:
                 if is_memory or db_key not in _RESEARCH_SCHEMA_INITIALIZED:
-                    try:
-                        import migrations
-                        migrations.run_migrations(self.db, db_path=self.path if not is_memory else None)
-                    except ImportError:
-                        pass
+                    import migrations
+                    migrations.run_migrations(self.db, db_path=self.path if not is_memory else None)
                     self.db.executescript(SCHEMA)
                     self.db.commit()
                     if not is_memory:

@@ -274,6 +274,7 @@ def read_done_filenames(db: Any, task_id: str) -> set[str]:
 
 
 def _deepread_worker(db_path: str, task_id: str) -> None:
+    from workflow import WorkflowDB        # 只在 TYPE_CHECKING 下导入过：后台线程里直接用它必 NameError（一键精读秒崩）
     st = DEEPREAD[task_id]
     try:
         with WorkflowDB(db_path) as db:

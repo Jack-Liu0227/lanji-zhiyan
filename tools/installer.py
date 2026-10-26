@@ -1,172 +1,175 @@
 # -*- coding: utf-8 -*-
-"""览籍智研安装程序（单文件 exe）
+"""Per-user Windows installer. Verify a staged application before replacing it."""
+from __future__ import annotations
 
-用户双击即装，装完是这一套布局（程序、数据、用户、执行器分开）：
-    %LOCALAPPDATA%\\览籍智研\\
-        app\\          程序（览籍智研.exe 与只读资源）
-        data\\         运行数据（库 / 文献 / 产物 / 备份），重装不覆盖
-        user\\         用户资料与加密凭据
-        executors\\    agents / skills / tools（模型和用户都能写）
-        layout.json    布局版本
-
-重新打包（改完程序代码后，在仓库根目录跑）：
-    "%LOCALAPPDATA%\\Programs\\Python\\Python310\\python.exe" -m PyInstaller tools\\installer.spec --noconfirm --clean
-生成 dist\\览籍智研-安装程序.exe，改名成「览籍智研-<版本>-安装程序.exe」发人即可。
-"""
+import argparse
+import hashlib
+import json
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
-import time
+import tempfile
 
 APP = "览籍智研"
-TITLE = APP
 LEGACY_APPS = ("ResearchWorkbench",)
+MANIFEST = "package-manifest.json"
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
-def say(msg=""):
-    print(msg, flush=True)
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
-def _copy_missing(src, dst):
-    """复制缺失项；目标已有文件不覆盖，保证升级不碰用户数据。"""
-    if os.path.isdir(src):
-        os.makedirs(dst, exist_ok=True)
-        for name in os.listdir(src):
-            _copy_missing(os.path.join(src, name), os.path.join(dst, name))
-    elif os.path.isfile(src) and not os.path.exists(dst):
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
+def write_manifest(directory: Path) -> None:
+    files = {p.relative_to(directory).as_posix(): _sha256(p)
+             for p in sorted(directory.rglob("*")) if p.is_file() and p.name != MANIFEST}
+    (directory / MANIFEST).write_text(
+        json.dumps({"files": files}, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def verify_payload(directory: Path) -> int:
+    required = (APP + ".exe", "VERSION", "web/index.html", "build/icon.ico",
+                "packages/contracts/providers_catalog.json", "migrations/005_asset_graph_upgrade.sql")
+    for name in required:
+        if not (directory / name).is_file():
+            raise RuntimeError("安装包缺少文件：" + name)
+    files = json.loads((directory / MANIFEST).read_text(encoding="utf-8"))["files"]
+    if not files or not all(name in files for name in required):
+        raise RuntimeError("安装包文件清单不完整")
+    for name, expected in files.items():
+        path = directory / name
+        if not path.resolve().is_relative_to(directory.resolve()):
+            raise RuntimeError("安装包包含无效路径：" + name)
+        if not path.is_file() or _sha256(path) != expected:
+            raise RuntimeError("安装包文件校验失败：" + name)
+    return len(files)
+
+
+def _copy_missing(src: Path, dst: Path) -> None:
+    if src.is_dir():
+        dst.mkdir(parents=True, exist_ok=True)
+        for child in src.iterdir():
+            _copy_missing(child, dst / child.name)
+    elif src.is_file() and not dst.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
 
 
-def _migrate_legacy_data(root):
-    local = os.environ["LOCALAPPDATA"]
-    old_roots = [os.path.join(local, name) for name in LEGACY_APPS]
-    old_roots += [os.path.join(local, "Programs", name) for name in LEGACY_APPS]
-    copied = []
-    for old_root in old_roots:
-        for sub in ("data", "user", "executors"):
-            src = os.path.join(old_root, sub)
-            if not os.path.isdir(src):
-                continue
-            try:
-                _copy_missing(src, os.path.join(root, sub))
-                copied.append(sub)
-            except OSError:
-                pass
-    return sorted(set(copied))
+def _migrate_legacy_data(root: Path, local: Path) -> None:
+    for name in LEGACY_APPS:
+        for old in (local / name, local / "Programs" / name):
+            for sub in ("data", "user", "executors"):
+                _copy_missing(old / sub, root / sub)
 
 
-def main():
-    # 用户机器的控制台默认 GBK，不设一下中文会花
-    if os.name == "nt":
-        os.system("chcp 65001 >nul")
+def _powershell(script: str, **env: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        env=dict(os.environ, **env), capture_output=True, creationflags=NO_WINDOW,
+        encoding="utf-8", errors="replace", timeout=45, check=True)
+
+
+def _stop_installed_app(exe: Path) -> None:
+    _powershell(
+        "$ErrorActionPreference='Stop';"
+        "$apps=@(Get-CimInstance Win32_Process | Where-Object {"
+        "$_.ExecutablePath -eq $env:LANJI_INSTALL_EXE});"
+        "foreach($item in $apps){"
+        "$p=Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue;"
+        "if($p){[void]$p.CloseMainWindow()}};"
+        "foreach($item in $apps){"
+        "$p=Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue;"
+        "if($p -and !$p.WaitForExit(5000)){Stop-Process -Id $p.Id -Force}}",
+        LANJI_INSTALL_EXE=str(exe))
+
+
+def install_payload(src: Path, app_dir: Path) -> int:
+    """Copy errors leave the current application intact; never copy user data."""
+    count = verify_payload(src)
+    app_dir = app_dir.absolute()
+    app_dir.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".lanji-install-", dir=app_dir.parent))
+    backup = stage / "previous"
+    incoming = stage / "incoming"
+    try:
+        shutil.copytree(src, incoming)
+        verify_payload(incoming)
+        _stop_installed_app(app_dir / (APP + ".exe"))
+        if app_dir.exists():
+            app_dir.rename(backup)
         try:
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+            incoming.rename(app_dir)
+        except OSError:
+            if backup.exists():
+                backup.rename(app_dir)
+            raise
+    finally:
+        if stage.parent == app_dir.parent and stage.name.startswith(".lanji-install-"):
+            # Keep the previous app recoverable if rollback itself failed.
+            if not backup.exists() or app_dir.exists():
+                shutil.rmtree(stage, ignore_errors=True)
+    return count
 
-    here = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    src = os.path.join(here, APP)
-    if not os.path.isfile(os.path.join(src, APP + ".exe")):
-        say("包里没有 %s.exe，安装包损坏。" % APP)
-        return 1
 
-    root = os.path.join(os.environ["LOCALAPPDATA"], APP)          # 数据根（保持中文名，老数据在这儿）
-    # 程序根单独放纯 ASCII 目录：.NET 侧（pythonnet 的 assembly 加载、WebView2 的 interop dll）
-    # 遇到中文路径会当成「网络位置」拒掉，无边框窗口就起不来（server.py 里还有 junction 兜底）
-    app_dir = os.path.join(os.environ["LOCALAPPDATA"], "LanjiZhiyan", "app")
-    exe = os.path.join(app_dir, APP + ".exe")
+def create_shortcut(exe: Path) -> Path:
+    result = _powershell(
+        "$ErrorActionPreference='Stop';"
+        "$desktop=[Environment]::GetFolderPath('Desktop');"
+        "$link=Join-Path $desktop ($env:LANJI_INSTALL_TITLE+'.lnk');"
+        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($link);"
+        "$s.TargetPath=$env:LANJI_INSTALL_EXE;"
+        "$s.WorkingDirectory=Split-Path $env:LANJI_INSTALL_EXE;"
+        "$s.IconLocation=Join-Path $s.WorkingDirectory 'build\\icon.ico';"
+        "$s.Description=$env:LANJI_INSTALL_TITLE;$s.Save();"
+        "[Console]::OutputEncoding=[Text.UTF8Encoding]::new();Write-Output $link",
+        LANJI_INSTALL_EXE=str(exe), LANJI_INSTALL_TITLE=APP)
+    link = Path(result.stdout.strip())
+    if not link.is_file():
+        raise RuntimeError("桌面快捷方式创建失败")
+    return link
 
-    say("=" * 46)
-    say("  %s 安装程序" % TITLE)
-    say("=" * 46)
-    say("程序装到：%s" % app_dir)
-    say()
 
-    # 关掉正在运行的新旧版本，否则文件被占用
-    for image in (APP, *LEGACY_APPS):
-        subprocess.run(["taskkill", "/F", "/IM", image + ".exe"], capture_output=True)
-    time.sleep(0.5)
-
-    # 建树：data / user / executors 与程序分开，升级只换 app
-    for sub in ("data", "user", os.path.join("executors", "agents"),
-                os.path.join("executors", "skills"), os.path.join("executors", "tools")):
-        os.makedirs(os.path.join(root, sub), exist_ok=True)
-    layout = os.path.join(root, "layout.json")
-    if not os.path.isfile(layout):
-        with open(layout, "w", encoding="utf-8") as fh:
-            fh.write('{\n  "layout": 2\n}\n')
-
-    migrated = _migrate_legacy_data(root)
-    if migrated:
-        say("  已补齐旧版本数据：%s" % "、".join(migrated))
-
-    # 复制：跳过 data/（用户资料）与被占用的失败项
-    os.makedirs(app_dir, exist_ok=True)
-    n = skipped = 0
-    for dirpath, dirnames, filenames in os.walk(src):
-        rel = os.path.relpath(dirpath, src)
-        if rel != "." and rel.split(os.sep)[0] == "data":
-            dirnames[:] = []
-            continue
-        target_dir = app_dir if rel == "." else os.path.join(app_dir, rel)
-        os.makedirs(target_dir, exist_ok=True)
-        for name in filenames:
-            try:
-                shutil.copy2(os.path.join(dirpath, name), os.path.join(target_dir, name))
-                n += 1
-            except Exception:
-                skipped += 1
-            if n % 25 == 0:
-                print("\r  正在复制 ... %d 个文件" % n, end="", flush=True)
-    say("\r  已复制 %d 个文件%s" % (n, "，%d 个跳过" % skipped if skipped else "  "))
-
-    # 老版把程序装在数据根下的 app/：留着白占 138MB，还容易点到旧 exe
-    stale = os.path.join(root, "app")
-    if os.path.isdir(stale) and os.path.isfile(os.path.join(stale, APP + ".exe")):
-        shutil.rmtree(stale, ignore_errors=True)
-        say("  已清掉旧版程序目录：%s" % stale)
-
-    # 桌面快捷方式：优先 pywin32；没有就退回 PowerShell（两者任一都能成）
-    lnk = os.path.join(os.path.expanduser("~"), "Desktop", TITLE + ".lnk")
-    icon = os.path.join(app_dir, "build", "icon.ico")
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=APP + " 安装程序")
+    parser.add_argument("--install-dir", type=Path)
+    parser.add_argument("--no-launch", action="store_true")
+    parser.add_argument("--no-shortcut", action="store_true")
+    parser.add_argument("--silent", action="store_true", help="完成后不等待按键")
+    args = parser.parse_args(argv)
+    if sys.stdout is not None:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    local = Path(os.environ["LOCALAPPDATA"])
+    root = local / APP
+    app_dir = args.install_dir or local / "LanjiZhiyan" / "app"
+    here = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
     try:
-        import win32com.client  # noqa: F401  pywin32
-        sh = win32com.client.Dispatch("WScript.Shell")
-        sc = sh.CreateShortcut(lnk)
-        sc.TargetPath = exe
-        sc.WorkingDirectory = app_dir
-        if os.path.isfile(icon):
-            sc.IconLocation = icon
-        sc.Description = TITLE
-        sc.Save()
-    except Exception:
-        ps = (
-            "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%s');"
-            "$s.TargetPath='%s';$s.WorkingDirectory='%s';$s.Description='%s';$s.Save()"
-            % (lnk, exe, app_dir, TITLE)
-        )
-        subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True)
-    say("  桌面快捷方式：%s" % ("已创建" if os.path.isfile(lnk) else "创建失败（可手动从安装目录启动）"))
-    say()
-
-    try:
-        subprocess.Popen([exe], cwd=app_dir)
-        say("装好了！桌面上的「%s」双击就能用。" % TITLE)
-    except Exception as e:
-        say("启动失败：%s（可从 %s 手动双击）" % (e, app_dir))
-    say()
-    say("提醒：第一次打开要去「模型」页填自己的 API key。")
-    say()
-    input("按回车关闭本窗口 ...")
-    return 0
+        print("正在安装到：%s" % app_dir, flush=True)
+        count = install_payload(here / APP, app_dir)
+        for sub in ("data", "user", "executors/agents", "executors/skills", "executors/tools"):
+            (root / sub).mkdir(parents=True, exist_ok=True)
+        if not (root / "layout.json").exists():
+            (root / "layout.json").write_text('{"layout": 2}\n', encoding="utf-8")
+        _migrate_legacy_data(root, local)
+        exe = app_dir / (APP + ".exe")
+        if not args.no_shortcut:
+            print("桌面快捷方式：%s" % create_shortcut(exe), flush=True)
+        if not args.no_launch:
+            subprocess.Popen([str(exe)], cwd=app_dir, close_fds=True)
+        print("安装完成，已校验 %d 个文件。" % count, flush=True)
+        result = 0
+    except Exception as exc:
+        print("安装失败：%s" % exc, file=sys.stderr, flush=True)
+        result = 1
+    if not args.silent and sys.stdin is not None and sys.stdin.isatty():
+        input("按回车关闭窗口 ...")
+    return result
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except Exception as exc:  # 双击出错时别闪退，让人看见原因
-        print("\n安装出错：%r" % exc)
-        input("按回车关闭 ...")
-        sys.exit(1)
+    raise SystemExit(main())

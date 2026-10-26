@@ -83,6 +83,43 @@ class StepGateTest(unittest.TestCase):
         self.assertEqual(dv["step"], "convert")
         self.assertIn("items", dv)
 
+    def test_上一轮撞工具上限判失败_产物齐了仍可交付(self) -> None:
+        """撞「工具调用上限」= 暂停，不是失败；结果都在，就不该把下游锁死。
+
+        实现方式：run_agent 撞上限时发的 error 事件带 soft=True（老记录没标记，按「工具调用上限」文案认），
+        _evidence 不再把它判成 failed —— 否则交付按钮永远点不动。
+        """
+        import workflow_layout
+        import workflow_state
+        workflow_layout.ensure_schema(self.db)
+        layout = workflow_layout.save_layout(
+            self.db, {"name": "Lit", **workflow_layout._linear(["search"])})["layout"]
+        workflow_layout.select_layout(self.db, {"task_id": self.task, "layout_id": layout["id"]})
+        self.db.cache_results(self.task, [{"title": "Cu 掺杂 NFM", "source": "crossref", "doi": "10.1/x"}])
+        self.db.add_message(self.task, "assistant", "本轮已达到工具调用上限，暂停继续执行。",
+                            [{"type": "error", "content": "工具调用上限", "soft": True}], scope="search")
+        self.assertEqual(workflow_state.states(self.db, self.task)["search"]["status"], "succeeded",
+                         "撞上限算暂停，不算失败")
+        row = workflow_state.accept(self.db, self.task, "search")     # 不该再抛 409
+        self.assertEqual(row["stage"], "search")
+        self.assertEqual(workflow_state.states(self.db, self.task)["search"]["status"], "delivered")
+
+    def test_真失败还是不许交付(self) -> None:
+        """不带 soft 的 error（真崩了）仍然拦交付 —— 别为了放开暂停把这道闸拆了。"""
+        import workflow_layout
+        import workflow_state
+        workflow_layout.ensure_schema(self.db)
+        layout = workflow_layout.save_layout(
+            self.db, {"name": "Lit", **workflow_layout._linear(["search"])})["layout"]
+        workflow_layout.select_layout(self.db, {"task_id": self.task, "layout_id": layout["id"]})
+        self.db.cache_results(self.task, [{"title": "Cu 掺杂 NFM", "source": "crossref", "doi": "10.1/x"}])
+        self.db.add_message(self.task, "assistant", "模型接口 500", [{"type": "error", "content": "provider failed"}],
+                            scope="search")
+        state = workflow_state.states(self.db, self.task)["search"]
+        self.assertEqual(state["status"], "failed")
+        with self.assertRaises(ValueError):
+            workflow_state.accept(self.db, self.task, "search")
+
 
 if __name__ == "__main__":
     unittest.main()

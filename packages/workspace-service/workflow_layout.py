@@ -231,7 +231,10 @@ def _evidence(db: Any, tid: str) -> dict[str, dict[str, Any]]:
             events = []
         if any(isinstance(ev, dict) and ev.get("type") == "plan" for ev in events):
             continue
-        failed = any(isinstance(ev, dict) and ev.get("type") == "error" for ev in events)
+        # soft 的 error = 撞工具上限这类「暂停」，产物齐了就该能交付（老记录没有 soft 标记，按文案认）
+        failed = any(isinstance(ev, dict) and ev.get("type") == "error"
+                     and not (ev.get("soft") or "工具调用上限" in str(ev.get("content") or ""))
+                     for ev in events)
         offer(stage, "failed" if failed else "done", "最近一次步骤对话" + ("失败" if failed else "已完成"),
               row["created_at"], "chat", row["id"])
     for row in db.db.execute("SELECT t.*,m.step FROM team_tasks t JOIN team_members m ON m.id=t.member_id "

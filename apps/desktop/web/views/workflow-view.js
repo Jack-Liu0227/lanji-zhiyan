@@ -42,7 +42,7 @@ const DOC_UI = {
     hint: "Enter 发送 · 说「更新框架」→ 左边立刻换成新版本（文件就地覆盖）" },
   write: { ico: "✍️", file: "正文", who: "写作",
     sub: "与项目绑定 · 按上一步敲定的框架写正文（走本机 paper-spine / paper-writer）",
-    seed: "按框架搭骨架", pull: "↧ 用这条回复更新正文", post: "/api/write", scope: "write", hl: false, cite: true, quiet: true,
+    seed: "", pull: "↧ 用这条回复更新正文",   /* 「按框架搭骨架」按钮删了：铺骨架改成在对话里确认后由 agent 自己铺（点了会卡死页面） */ post: "/api/write", scope: "write", hl: false, cite: true, quiet: true,
     empty: ["✍️", "这是项目的「论文撰写」", "先确认上一步的框架已经定了；再说清：有没有实验数据/图表、投哪里、篇幅要求。我按框架逐节写，缺数据的地方写「待补」，绝不编数字。"],
     ph: "说要求 / 让它写某一节 / 讨论怎么改…（Enter 发送）",
     hint: "Enter 发送 · 说「更新正文」→ 左边立刻换成新版本（文件就地覆盖）" },
@@ -169,10 +169,21 @@ function docShow(k, d){
   }
   const mb = docEl(k, "meta"); if(mb) mb.textContent = md.trim() ? `${d.sections || 0} 个大标题 · ${d.subs || 0} 个小标题 · ${d.chars || 0} 字` : "";
 }
+function _docStatFromMsgs(msgs){
+  /* 右栏那几个数字必须能「重进这一步还在」：从历史消息里的事件重算，别只靠本次流的累加。
+     之前只累加 st.stat，刷新一下就全归零 —— 看起来就像「token / 工具数 / 产出目录不显示了」。 */
+  const evs = (msgs || []).flatMap(m => m.events || []);
+  return { turns: (msgs || []).filter(m => m.role === "user").length,
+           calls: evs.filter(e => e.type === "tool_call").length,
+           tok: evs.filter(e => e.type === "usage").reduce((n, e) => n + (e.total || 0), 0) };
+}
 function docRestore(k, msgs, out){
   /* 把存下来的对话装回右栏：doc 三步和谱系图那步共用（这里 throw 掉的话右栏一句话不显示，像按钮没反应） */
   const st = docState(k);
   st.msgs = msgs || []; st.out = out || "";
+  const evs0 = (st.msgs || []).flatMap(m => m.events || []);
+  st.stat = _docStatFromMsgs(st.msgs);          // 历史事件重算：轮数 / 工具数 / token
+  st.events = evs0.slice();                     // 工具名与产出目录也从历史里回来
   st.events = st.msgs.flatMap(x => x.events || []);
   st.stat = { turns: st.msgs.filter(x => x.role === "user").length,
               calls: st.events.filter(e => e.type === "tool_call").length,
@@ -190,6 +201,27 @@ async function docLoad(k){
     docPaintMarks(k); docMarks(k);
   }catch(e){ docMsg(k, "读取失败：" + e.message); }
   docPaint(k); docStats(k);
+}
+let docLivePoll = null, docLiveSig = "";
+function docLiveStart(k){
+  /* 左边那份正文是后台一段一段写进去的（撰写按谱系图逐节 append，agent 也会边写边落盘）。
+     面板在前台就每 4 秒问一次；字数和「有没有」变了才重画 —— 没变不动，免得把你正在读的滚动位置冲掉。 */
+  if(docLivePoll){ clearInterval(docLivePoll); docLivePoll = null; }
+  docLiveSig = "";
+  docLivePoll = setInterval(async ()=>{
+    const panel = $("panel-" + k);
+    if(!panel || panel.style.display === "none"){
+      clearInterval(docLivePoll); docLivePoll = null; return;
+    }
+    if(!curTask) return;
+    try{
+      const d = await api(`/api/doc/state?id=${encodeURIComponent(curTask)}&step=${encodeURIComponent(k)}`);
+      const sig = (d.exists ? 1 : 0) + ":" + (d.chars || 0);
+      if(sig === docLiveSig) return;
+      docLiveSig = sig;
+      docShow(k, d);
+    }catch(_){}
+  }, 4000);
 }
 function docEdit(k, on){
   docEl(k, "body").classList.toggle("hidden", on);
@@ -397,6 +429,7 @@ function docBind(k, m){
     }
   }
   wireDrop(docEl(k, "composer")); docSetAtts(k); docGrow(k); docLoad(k);
+  docLiveStart(k);                                   // 左边那份正文跟着后台一段一段长
   docOutsTick();
 }
 let OUTS_TICK = 0;
@@ -1469,6 +1502,7 @@ async function wfFollowRun(run){
         await wfAgentPaint(document.querySelector(".wf-page")?.parentElement,run.step);
         if(wfVisible(run)){
           if(run.step === "search") wsLoadState();
+          if(run.step === "idea") iwLoad();          // 判定是这轮跑出来的笔记：左边「判定结果」得跟着重读，不然一直停在空态
           if(DOC_UI[run.step]) docLoad(run.step);
           wfPaintFoot();
         }
@@ -2224,6 +2258,8 @@ const WS_LABEL = {openalex:"OpenAlex",crossref:"Crossref",arxiv:"arXiv",pubmed:"
 let wsRes=[], wsPage=1, wsRows=20, wsNote="";
 let wsPicked = new Set();                       // 论文搜索里勾选的 result id（进「下载精读」处理）
 let dlPoll = null, dlBusy = false;
+let dlStatPoll = null;                    // 「已下载论文总数」：面板开着就每 5 秒自己刷，不等人点
+let dlTruth = 0;                          // 文献库里真实篇数（/api/task 的 papers）—— 只在进面板/精读收尾时拉，不跟 5 秒轮询走（那接口 770KB）
 let dlSt = null, dlLastQueue = null;      // 最近一次精读状态 / 最近一次队列（进度刻格的事实来源）
 const wsFiltered = ()=> (wsRes||[]).slice();   // 没有手动筛选了：检索条件都交给右栏助手
 function searchPanelHTML(active){
@@ -2287,6 +2323,9 @@ function downloadPanelHTML(active){
 function dlBind(m){
   if(!$("dlList")) return;
   if(dlPoll){ clearInterval(dlPoll); dlPoll=null; }
+  if(dlStatPoll){ clearInterval(dlStatPoll); dlStatPoll=null; }
+  dlStatPoll = setInterval(dlStatsRefresh, 5000);      // 计数自己走：5 秒一次，只刷数字
+  dlTruthRefresh();                                    // 进面板先问一次文献库真篇数
   $("dlRead").onclick = dlRead;
   const zColBtn = $("dlZoteroColBtn");
   if(zColBtn){
@@ -2345,12 +2384,41 @@ async function dlRefresh(){
   try{ const d = await api("/api/workflow/queue",{task_id:curTask}); dlPaint(d); return d; }
   catch(e){ const t=$("dlTip"); if(t) t.textContent = "读取失败：" + e.message; return null; }
 }
+async function dlStatsRefresh(){
+  /* 只刷「已勾选 / 已下载论文总数 / 手动条数 / 进度格」这几个数字 —— 不重画手动下载清单，
+     否则清单每 5 秒重建一次，鼠标位置和滚动条都会被冲掉。面板不在前台就自己停表。 */
+  const panel = $("panel-download");
+  if(!curTask || !panel || panel.style.display === "none"){
+    if(dlStatPoll){ clearInterval(dlStatPoll); dlStatPoll=null; }
+    return;
+  }
+  try{
+    const d = await api("/api/workflow/queue",{task_id:curTask});
+    dlLastQueue = d;
+    if($("dlSel")) $("dlSel").textContent = d.selected || 0;
+    if($("dlDone")) $("dlDone").textContent = dlDoneText(d.downloaded);
+    if($("dlN")) $("dlN").textContent = (d.manual||[]).length ? ` · ${(d.manual||[]).length}` : "";
+    dlProgPaint();
+  }catch(_){}
+}
+async function dlTruthRefresh(){
+  /* 文献库真篇数 = /api/task 的 papers。/api/task 有 770KB（带全部检索结果），只在这里按需拉一次，
+     绝不放进 5 秒轮询。 */
+  if(!curTask) return dlTruth;
+  try{ const t = await api(`/api/task?id=${encodeURIComponent(curTask)}`); dlTruth = t.papers || 0; }catch(_){}
+  if($("dlDone")) $("dlDone").textContent = dlDoneText(0);
+  return dlTruth;
+}
+function dlDoneText(queueDownloaded){
+  // 三个来源取最大：精读状态里的 total（就是 len(papers)）、刚拉的 papers、下载队列里已下载数
+  return Math.max((dlSt && dlSt.total) || 0, dlTruth || 0, queueDownloaded || 0);
+}
 function dlPaint(d){
   if(!d) return;
   dlLastQueue = d;
   if($("dlLoc")) $("dlLoc").textContent = d.location || "—";
   if($("dlSel")) $("dlSel").textContent = d.selected || 0;
-  if($("dlDone")) $("dlDone").textContent = d.downloaded || 0;
+  if($("dlDone")) $("dlDone").textContent = dlDoneText(d.downloaded);
   dlProgPaint();
   const man = d.manual || [];
   if($("dlN")) $("dlN").textContent = man.length ? ` · ${man.length}` : "";
@@ -2433,6 +2501,7 @@ async function dlReadPoll(){
     if(tip) tip.textContent = st.phase === "running" ? head + " · 正在读 " + (st.current || "") : head;
     if(st.phase === "running") return;
     clearInterval(dlReadTick); dlReadTick = null; dlReadBusy = false;
+    dlTruthRefresh();                                  // 精读收尾：文献库篇数定稿了，重拉一次真数
     if(b2){
       b2.classList.remove("stop");
       b2.textContent = st.phase === "done" ? "精读完了（去看笔记）" : (st.phase === "stopped" ? "已停止" : "精读失败");

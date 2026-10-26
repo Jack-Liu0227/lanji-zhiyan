@@ -8,7 +8,7 @@
 
 ## 一、安装（Windows）
 
-**直发（现在这条路）**：拿 `览籍智研-安装程序.exe`（单文件安装器）双击即可 —— 装到 `%LOCALAPPDATA%\Programs\览籍智研`，桌面建快捷方式并启动。**重装不动数据**（库/PDF/笔记都在 `data\`）。
+**直发（现在这条路）**：拿 `览籍智研.exe`（单文件安装器）双击即可，程序装到 `%LOCALAPPDATA%\LanjiZhiyan\app`，桌面建快捷方式并启动。数据保存在 `%LOCALAPPDATA%\览籍智研`，重装保留数据库、PDF、笔记与配置。安装器先校验和复制完整程序，失败时保留原来的安装。
 
 **从源码跑（开发）**：
 
@@ -20,11 +20,15 @@ python apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开
 
 源码运行需要 **Python 3.10 或更新版本**（已验证 3.13.5）。启动脚本依次检查项目 `.venv`、旧版默认安装位置的 3.10、`py -3` 和 PATH 中的 `python`，并使用同一环境的 `pythonw.exe` 开窗。第三方依赖见 `requirements.txt`（全部 BSD/MIT/PSF，无 AGPL），需安装在选中的 Python 环境中。
 
-如果启动检查失败，脚本会显示错误并暂停，详细信息保存在 `data/startup.log`；服务启动后的异常见 `apps/desktop/data/server-error.log`。按错误提示，用选中的 Python 执行 `-m pip install -r requirements.txt` 修复依赖。
+如果启动检查失败，脚本会显示错误并暂停，详细信息保存在 `data/startup.log`；服务启动后的异常见 `%LOCALAPPDATA%\览籍智研\data\cache\server-error.log`。按错误提示，用选中的 Python 执行 `-m pip install -r requirements.txt` 修复依赖。
 
-**下载安装**（GitHub Releases）：<https://github.com/Jack-Liu0227/lanji-zhiyan/releases/latest> —— 两个资产：`LanjiZhiyan-1.0-Setup.exe`（单文件安装器，双击即装、自动建桌面快捷方式）与 `LanjiZhiyan-1.0-Portable.zip`（免安装，解压双击里面的 `览籍智研.exe`）。
+**下载安装**（GitHub Releases）：<https://github.com/Jack-Liu0227/lanji-zhiyan/releases/latest>。安装包统一命名为 `览籍智研.exe`，免安装包为 `览籍智研-免安装版.zip`，文件名不带版本号。免安装包解压后双击里面的 `览籍智研.exe`。
 
-**自己打包**：双击 `tools\build-app.bat`（用 `tools\览籍智研.spec`，入口 `apps/desktop/server.py`）→ `dist\览籍智研\`；要单文件安装器再打 `tools\installer.spec`（入口 `tools/installer.py`）。**必须用 3.10 打包**，否则运行时会静默退回带黑标题栏的 Edge 窗口。
+**自己打包**：使用 Python 3.10 或更新版本，已验证 3.13.5。先在选中的环境执行 `python -m pip install -r requirements-build.txt`，再运行 `tools\build-app.bat`。脚本优先使用项目 `.venv`，随后检查 `py -3` 和 PATH 中的 Python；同一解释器完成程序、安装器和验收。自动调用时可加 `--no-pause`。
+
+构建结束后，`dist\览籍智研\` 是完整程序目录，`dist\release\` 包含 `览籍智研.exe`、`览籍智研-免安装版.zip` 和 `SHA256SUMS.txt` 校验文件。程序无需目标机器安装 Python，桌面窗口使用 Windows WebView2 运行时。
+
+构建会先在源码目录之外启动程序，再实测安装器的全新安装和重复安装，检查数据库迁移、HTTP 服务、静态资源、旧程序文件清理和数据保留。任何一步失败都会停止构建。也可单独执行 `python tools\smoke_package.py "dist\览籍智研"` 或 `python tools\smoke_package.py "dist\览籍智研.exe"`。
 
 ---
 
@@ -58,7 +62,7 @@ node apps/desktop/web/theme.test.mjs            # 主题配色（HSL 往返 / �
 node apps/desktop/web/ids.test.mjs              # 悬空 id（$("x") 引用了页面里没有的 id）
 ```
 
-> **改前端别只看「语法过没过」**：单文件前端里一句**顶层** `$("x").onclick = …` 撞上已不存在的 id 就会抛错，它后面所有初始化一行都不跑 —— 页面变成空壳，而 HTTP 状态、窗口标题、单测全绿。收尾请连 CDP 量一次侧栏（`#sidebar` 的 `innerHTML` 长度应为数千字符、`.nav-item` 应为 14 个）。
+> **改前端别只看「语法过没过」**：单文件前端里一句**顶层** `$("x").onclick = …` 撞上已不存在的 id 就会抛错，它后面所有初始化一行都不跑 —— 页面变成空壳，而 HTTP 状态、窗口标题、单测全绿。收尾请用 CDP 检查侧栏初始化、页面切换和 JavaScript 错误。当前侧栏有 12 个 `[data-nav]` 页面入口。
 
 改完 `.py` **必须关窗重开**（窗口就是服务进程，关窗即退）；只改 `apps/desktop/web/` 按 F5 即可。
 
