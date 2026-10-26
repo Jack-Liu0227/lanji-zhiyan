@@ -35,6 +35,29 @@ class AgentJobsTest(unittest.TestCase):
     def request(self, key="test"):
         return {"task_id": self.project, "message": "perform task", "idempotency_key": key}
 
+    def test_idempotent_request_keeps_snapshot_after_template_deletion(self):
+        import project_notes
+        with workflow.WorkflowDB(self.path) as db:
+            template = project_notes.write(db, self.project, "", "FROZEN_TEMPLATE_REQUIREMENT",
+                metadata={"category_id":"prompt_templates", "note_type":"prompt_template"})
+        entered, release = threading.Event(), threading.Event()
+        def model(*args, **kwargs):
+            entered.set()
+            release.wait(5)
+            return {"content":"Done"}
+        request = {**self.request('template-reconnect'), "template_ref":{"template_id":template['template_id']}}
+        with patch.object(workflow, "_chat_raw", side_effect=model):
+            run = agent_jobs.start(self.path, request)
+            try:
+                self.assertTrue(entered.wait(5))
+                with workflow.WorkflowDB(self.path) as db:
+                    project_notes.delete(db, self.project, template['path'])
+                self.assertIs(agent_jobs.start(self.path, request), run)
+            finally:
+                release.set()
+            self.wait(run)
+        self.assertEqual(run.status, 'done')
+
     def test_detached_worker_persists_events_and_same_request_runs_once(self):
         entered, release = threading.Event(), threading.Event()
 

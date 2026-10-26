@@ -165,45 +165,41 @@ class TestZoteroImport(unittest.TestCase):
 
     def test_routes_pdf_and_manual(self):
         import workflow
+        from pathlib import Path
+        from unittest.mock import patch
+        from _pdf_fixture import write_text_pdf
+        import project_library
 
-        seen = {"cache": [], "queue": [], "ingest": []}
-
-        class FakeDB:
-            def cache_result(self, task_id, it):
-                seen["cache"].append(it)
-                return "r%d" % len(seen["cache"])
-
-            def set_queue(self, task_id, rid, status, path="", error=""):
-                seen["queue"].append((rid, status, error))
-
-            def ingest_pdf(self, task_id, path):
-                seen["ingest"].append(path)
-                return {"id": "p1"}
-
-            def log_step(self, *a):
-                pass
-
-            def queue(self, task_id):
-                return []
-
-        paper = {"key": "K1", "type": "journalArticle", "title": "Cu 掺杂", "creators": ["Zuo Yuting"],
-                 "year": "2024", "doi": "10.1/x", "url": "", "abstract": "摘要"}
-        note = {"key": "K2", "type": "note", "title": "笔记", "creators": [], "year": "",
+        paper = {"key": "PAPER001", "version": 3, "type": "journalArticle", "title": "Cu 掺杂", "creators": ["Zuo Yuting"],
+                 "year": "2024", "doi": "10.1234/x", "url": "", "abstract": "摘要"}
+        manual = {**paper, "key": "NOPDF001", "title": "Without PDF", "doi": "10.1234/manual"}
+        note = {"key": "NOTE0001", "type": "note", "title": "笔记", "creators": [], "year": "",
                 "doi": "", "url": "", "abstract": ""}
-        original = (zotero.items, zotero.pdf_path)
-        zotero.items = lambda **kw: {"items": [paper, note], "returned": 2, "hasMore": False, "total": 2}
-        zotero.pdf_path = lambda key, base=None: "C:/z/K1.pdf" if key == "K1" else ""
-        try:
-            out = workflow.stage_zotero_import(FakeDB(), "t1")
-        finally:
-            zotero.items, zotero.pdf_path = original
-
-        self.assertEqual(out["total"], 1)                    # 笔记条目被排除
-        self.assertEqual(out["downloaded"], 1)
-        self.assertEqual(seen["ingest"], ["C:/z/K1.pdf"])
-        self.assertEqual(seen["queue"], [("r1", "downloaded", "")])
-        self.assertEqual(seen["cache"][0]["source"], "zotero")
-        self.assertEqual(seen["cache"][0]["url"], "https://doi.org/10.1/x")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = write_text_pdf(root / "source.pdf", ["Original Zotero paper"])
+            original = source.read_bytes()
+            with workflow.WorkflowDB(root / "app.sqlite3") as db:
+                project = db.create_task("Zotero import", base_dir=str(root / "project"))
+                with patch.object(zotero, "items", return_value={"items": [paper, manual, note], "returned": 3, "hasMore": False, "total": 3}), \
+                     patch.object(zotero, "item", return_value=paper), \
+                     patch.object(zotero, "pdf_path", side_effect=lambda key, base=None: str(source) if key == "PAPER001" else ""):
+                    out = workflow.stage_zotero_import(db, project)
+                    self.assertEqual(out["total"], 2)
+                    self.assertEqual((out["downloaded"], out["manual"]), (1, 1))
+                    papers = db.papers_of(project)
+                    self.assertEqual(len(papers), 1)
+                    copied = Path(papers[0]["source_path"])
+                    self.assertNotEqual(copied, source)
+                    self.assertTrue(copied.is_relative_to(root / "project"))
+                    self.assertEqual(copied.read_bytes(), original)
+                    self.assertEqual(source.read_bytes(), original)
+                    records = project_library.items(db, project)
+                    linked = next(r for r in records if r["zotero_key"] == "PAPER001")
+                    self.assertEqual(linked["paper_id"], papers[0]["id"])
+                    self.assertEqual(linked["url"], "https://doi.org/10.1234/x")
+                    workflow.stage_zotero_import(db, project)
+                    self.assertEqual(len(db.papers_of(project)), 1)
 
 
 if __name__ == "__main__":

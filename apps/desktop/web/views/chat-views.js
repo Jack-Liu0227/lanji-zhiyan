@@ -1,6 +1,7 @@
 /* ============================== 页面 ============================== */
 function render(){
   renderSidebar(); renderTopbar(); renderTabs(); renderStatus();
+  if(typeof GlobalTodos !== 'undefined') GlobalTodos.syncProjects();
   const r = route(); const m = $("main");
   m.classList.remove("sp-fill", "tof-fill");
   if(!S.loaded) m.innerHTML = `<div class="muted">加载中…</div>`;
@@ -266,7 +267,7 @@ async function renderTeam(m){
     teamData = null; render();
   };
   if($("tcSend")) $("tcSend").onclick = say;
-  if($("tcSay")) $("tcSay").onkeydown = (e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); say(); } };
+  if($("tcSay")) $("tcSay").onkeydown = (e)=>{ if(e.key==="Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && e.keyCode!==229 && !e.repeat){ e.preventDefault(); say(); } };
   clearTimeout(teamTick);                                   // 有轮次在跑就每 2s 刷新一次群
   if(run) teamTick = setTimeout(()=>{ if(route()==="team"){ teamData=null; render(); } }, 2000);
 }
@@ -661,13 +662,15 @@ function renderAgent(m){
     await refreshState(false); render();
   };
   // 输入区（我们自己的：＋ 菜单 / 拖放 / 粘贴 / 自动长高）
+   PromptUI.mount($("ask"),`chat:${curChat}`,cur?.task_id||'');
    $("send").onclick = ()=>activeAgentRun ? cancelAgentRun() : send();
    $("send").classList.toggle("stop", !!activeAgentRun);
    $("send").textContent = activeAgentRun ? "■" : "↑";
    if(pb) pb.disabled = !!activeAgentRun;
    $("ask").onkeydown = (e)=>{
-     if(e.key==="Escape" && activeAgentRun){ e.preventDefault(); cancelAgentRun(); return; }
-     if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();return;}
+     if(e.isComposing || e.keyCode===229 || e.repeat) return;
+     if(e.key==="Escape" && activeAgentRun){ e.preventDefault(); e.stopPropagation(); cancelAgentRun(); return; }
+     if(e.key==="Enter"&&!e.shiftKey&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();send();return;}
      if((e.key==="ArrowUp" || e.key==="ArrowDown") && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.isComposing){
        const ta=e.target, atEdge=e.key==="ArrowUp" ? ta.selectionStart===0 : ta.selectionStart===ta.value.length;
        if(!atEdge && agentHistoryIndex<0) return;
@@ -748,6 +751,7 @@ function renderTrajectory(box, evs = S.chatEvents){  // 轨迹：把 tool_call /
   </div>`;
 }
 function appendOne(box,ev,who){
+  if(ev.type==='template_used'){PromptUI.event(box,ev);return;}
   if(ev.type.startsWith("reasoning_")){
     let card=[...box.querySelectorAll(".reasoning-card")].find(n=>n.dataset.reasoningId===ev.id);
     if(ev.type==="reasoning_done" && !ev.content){ if(card) card.remove(); return; }
@@ -1063,7 +1067,7 @@ async function send(){
    const btn=$("send"); activeAgentRun=crypto.randomUUID(); btn.classList.add("stop"); btn.textContent="■";
   if($("projbind")) $("projbind").disabled=true;
   await followChatRun({key:activeAgentRun,api:"/api/agent",runId:"",cursor:0,status:"running",base:activeAgentBase,
-    request:{task_id:curChat,message:msg,idempotency_key:activeAgentRun}});
+    request:{task_id:curChat,message:msg,idempotency_key:activeAgentRun,template_ref:PromptUI.ref(`chat:${curChat}`,curChatRow()?.task_id)}});
 }
 /* 展示区：对话轮数 / 调用工具数 / 消耗 token（各一行）+ 工具名称、产出目录（各三行滚动） */
 const st = { turns:0, calls:0, tokBase:0, tok:0, tools:[], outs:[] };

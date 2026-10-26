@@ -412,10 +412,13 @@ def _fuse_literal(out: dict[str, Any], literal: list[dict[str, Any]]) -> dict[st
 def _knowledge_query_literal(db: "WorkflowDB", q: str, scope: list[tuple[str, str]],
                              scoped: bool) -> dict[str, Any]:
     """老的子串扫：索引还没建、或语义层坏掉时的兜底。口径与升级前一致。"""
+    import asset_service
     q = q.lower()
     hits: list[dict[str, Any]] = []
     for pid, ptitle in scope:
         for n in db.notes(pid):
+            if asset_service.is_instruction_note(db, pid, n["id"], n["markdown"]):
+                continue
             if q in (n["title"] or "").lower() or q in (n["markdown"] or "").lower():
                 idx = (n["markdown"] or "").lower().find(q)
                 hits.append({"kind": "note", "project": ptitle, "id": n["id"], "title": n["title"],
@@ -426,6 +429,8 @@ def _knowledge_query_literal(db: "WorkflowDB", q: str, scope: list[tuple[str, st
                              "citation": f"{e['filename']} p.{e['page_no']}", "context": e["excerpt"]})
     scope_ids = dict(scope)
     for note in db.md_notes():                                  # 笔记页那批「大笔记」
+        if asset_service.is_instruction_note(db, note.get("task_id"), note["id"], note["content"]):
+            continue
         if scoped and note.get("task_id") not in scope_ids:
             continue
         body = (note.get("content") or "")
@@ -455,6 +460,9 @@ def _calendar_list(db: "WorkflowDB", args: dict[str, Any], project_id: str = "")
     items = [{"id": e["id"], "date": e["date"], "time": e.get("time") or "", "title": e["title"],
               "kind": e.get("kind") or "", "done": bool(e.get("done")),
               "project": titles.get(e.get("task_id") or "", "")} for e in rows]
+    for item, event in zip(items, rows):
+        if event.get("linked"):
+            item.update({k: event.get(k, "") for k in ("source_type", "source_id", "status", "target_type", "target_id", "run_id", "note_id")})
     return {"range": label, "count": len(items), "events": items}
 
 
@@ -534,7 +542,7 @@ _SUB_TOOLS = [t for t in TOOL_SPECS if t.get("function", {}).get("name") in _SUB
 
 TOOL_RISK = {
     # Pure reads stay available to read-only assistants.
-    "library_overview": "read_only", "knowledge_query": "read_only",
+    "library_overview": "read_only", "knowledge_query": "read_only", "workflow_context_read": "read_only",
     "outline_read": "read_only", "map_read": "read_only", "map_sources": "read_only",
     "doc_read": "read_only", "cite_read": "read_only", "read_attachment": "read_only",
     "file_list": "read_only", "file_hand": "workspace_write",
@@ -553,6 +561,7 @@ TOOL_RISK = {
     "team_board": "read_only", "mail_send": "external_write", "feishu_send": "external_write",
     "zotero_write": "external_write", "zotero_sync": "external_write",
     "project_note_list": "read_only", "project_note_read": "read_only",
+    "prompt_template_search": "read_only", "prompt_template_read": "read_only", "prompt_template_render": "read_only",
     "project_task_manage": "workspace_write", "assistant_manage": "workspace_write",
     "project_list": "read_only", "skill_read": "read_only",
     "semantic_index": "local_execution",
@@ -572,7 +581,8 @@ def tool_risk(name: str) -> str:
 def enforce_tool_policy(name: str, args: dict[str, Any], permission: str) -> None:
     """Apply policy at the execution boundary, not only by hiding tool schemas."""
     risk = tool_risk(name)
-    action_read = name in {"assistant_manage", "project_task_manage", "schedule_manage"} and args.get("action", "list") == "list"
+    action_read = name in {"assistant_manage", "project_task_manage", "schedule_manage", "team_manage", "workflow_manage"} and args.get("action", "list") == "list"
+    action_read = action_read or (name == "paper_translate" and args.get("action") == "status")
     connector_read = name in {"mail_accounts", "mail_list", "mail_read", "zotero_collections"}
     if permission == "read_only" and risk != "read_only" and not action_read and not connector_read:
         raise PermissionError(f"只读权限禁止 {risk} 工具：{name}")
@@ -644,6 +654,7 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
 
         try:
             with WorkflowDB(path) as cdb:                      # 子 agent 自己一条连接
+                cdb.template_snapshot = (getattr(db, "asset_run", {}) or {}).get("templates", [None])[0]
                 sub_events.append({"type": "sub", "phase": "start", "sub": sid, "sub_title": title})
                 if emit:
                     emit(sub_events[-1])
@@ -680,7 +691,26 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
     if name == "project_list":
         rows = db.db.execute("SELECT id,title,base_dir FROM research_tasks ORDER BY updated_at DESC")
         return {"current_project_id": scoped_project, "projects": [dict(row) for row in rows]}
-    if name in ("project_note_list", "project_note_read", "project_note_write", "project_task_manage", "team_create", "workflow_create", "skill_create"):
+    if name == "workflow_manage":
+        import workflow_layout
+        workflow_layout.ensure_schema(db)
+        action = str(args.get("action") or "list")
+        if action == "list":
+            return workflow_layout.route("GET", "/api/workflow/layouts", None, {}, db)
+        if action != "select":
+            raise ValueError("action 只支持 list/select")
+        project_id = _team_project(db, task_id, str(args.get("project") or ""))
+        return workflow_layout.select_layout(db, {"task_id": project_id, "layout_id": str(args.get("layout_id") or "")})
+    if name.startswith("prompt_template_"):
+        import prompt_templates
+        project_id = _team_project(db, task_id, str(args.get("project") or ""))
+        result = prompt_templates.route(db, "/" + name.removeprefix("prompt_template_"), {**args, "project_id": project_id})
+        context = getattr(db, "asset_run", None)
+        if name == "prompt_template_render" and result.get("ok") and context:
+            prompt_templates.usage(db, result, context["id"], context["node_id"])
+            context.setdefault("templates", []).append(result)
+        return result
+    if name in ("project_note_list", "project_note_read", "project_note_write", "project_task_manage", "team_create", "team_manage", "workflow_create", "skill_create"):
         project_id = _team_project(db, task_id, str(args.get("project") or ""))
         if name.startswith("project_note_"):
             import project_notes
@@ -688,7 +718,8 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
                 return project_notes.dashboard(db, project_id)
             if name == "project_note_read":
                 return project_notes.read(db, project_id, str(args.get("path") or ""))
-            return project_notes.write(db, project_id, str(args.get("path") or ""), str(args.get("content") or ""))
+            return project_notes.write(db, project_id, str(args.get("path") or ""), str(args.get("content") or ""),
+                                       title=args.get("title"), metadata=args.get("metadata"), expected_hash=args.get("expected_hash"))
         if name == "project_task_manage":
             import project_todos
             action = str(args.get("action") or "list")
@@ -715,18 +746,57 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
                 return project_todos.update_todo(db, todo_id, **fields)
             raise ValueError("action 只支持 list/create/update/dispatch")
         if name == "team_create":
-            ids = args.get("assistant_ids") or ["builtin-steward"]
-            if not isinstance(ids, list) or len(ids) > 12 or len(set(ids)) != len(ids):
-                raise ValueError("团队需指定 1–12 个不重复的专家 ID")
+            ids = args.get("assistant_ids", [])
+            if not isinstance(ids, list) or any(not isinstance(aid, str) for aid in ids) or len(ids) > 12 or len(set(ids)) != len(ids):
+                raise ValueError("团队最多指定 12 个不重复的专家 ID")
+            if ids and ids[0] == "builtin-steward":
+                raise ValueError("智研管家负责项目与团队配置，请选择专业负责人担任 Leader")
+            if not str(args.get("name") or "").strip():
+                raise ValueError("团队名称不能为空")
             assistants = [db.require_assistant(str(aid)) for aid in ids]
-            team_row = db.team_add(str(args.get("name") or ""), project_id=project_id,
+            team_row = db.team_add(str(args.get("name") or ""), kind="custom", project_id=project_id,
                                    purpose=str(args.get("purpose") or ""))
             members = []
             for index, assistant in enumerate(assistants):
                 members.append(db.team_member_add(team_row["id"], assistant["name"],
                                                   role="leader" if index == 0 else "member",
                                                   assistant_id=assistant["id"]))
+            if not members:
+                import team
+                members.append(team.ensure_leader(team_row["id"], db))
             return {"team": team_row, "members": members}
+        if name == "team_manage":
+            import team
+            import agent_settings
+            action = str(args.get("action") or "list")
+            if action == "list":
+                rows = [row for row in db.teams() if row.get("project_id") == project_id and row["status"] != "archived"]
+                for row in rows:
+                    team.ensure_leader(row["id"], db)
+                    row["members"] = db.team_members(row["id"])
+                return {"project_id": project_id, "teams": rows}
+            tid = str(args.get("team_id") or "")
+            row = db.team(tid)
+            if not row or row.get("project_id") != project_id:
+                raise PermissionError("团队不属于当前项目")
+            if tid in team.TEAM_RUNS:
+                raise ValueError("请先停止当前团队运行，再编辑配置")
+            fields = {k: args[k] for k in ("name", "description", "prompt", "assistant_id", "model_id", "reasoning") if k in args}
+            if "permission" in args:
+                raise PermissionError("权限模式请由用户在设置中调整")
+            if action == "update":
+                return agent_settings.route("POST", "/api/agent-settings/team-save", {
+                    "id": tid, "name": fields.get("name", row["name"]),
+                    "description": fields.get("description", row.get("description", ""))}, {}, db)
+            if action == "set_leader":
+                return {"member": agent_settings.set_leader(db, tid, str(args.get("member_id") or ""))}
+            if action in ("add_member", "update_member"):
+                mid = str(args.get("member_id") or "")
+                if action == "update_member" and not mid:
+                    raise ValueError("修改成员需要 member_id")
+                return agent_settings.route("POST", "/api/agent-settings/member-save", {
+                    **fields, "team_id": tid, "member_id": mid if action == "update_member" else ""}, {}, db)
+            raise ValueError("action 只支持 list/update/add_member/update_member/set_leader")
         if name == "workflow_create":
             import workflow_layout
             workflow_layout.ensure_schema(db)
@@ -818,6 +888,9 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
                                 source="agent", importance=2)
     if name == "library_overview":
         return _overview(db, task_id)
+    if name == "workflow_context_read":
+        import workflow_context
+        return workflow_context.read(db, task_id, args)
     if name == "knowledge_query":
         return _knowledge_query(db, task_id, args.get("query", ""), str(args.get("project") or ""))
     if name == "semantic_index":
@@ -856,6 +929,27 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         return stage_download(db, task_id, args.get("result_id", ""))
     if name == "paper_read":
         return stage_read(db, task_id, args.get("paper_id", ""))
+    if name == "paper_translate":
+        import papertran
+        pid = str(args.get("paper_id") or "")
+        if not any(p["id"] == pid for p in db.papers_of(task_id)):
+            raise ValueError("论文不属于当前项目")
+        out = db.pdir(task_id, "文献库")
+        action = str(args.get("action") or "start")
+        if action == "status":
+            return papertran.status(pid, out)
+        if action != "start":
+            raise ValueError("action 只支持 start/status")
+        result = papertran.start(db, pid, out, str(args.get("pages") or ""))
+        if getattr(db, "workflow_end_to_end", False):
+            import execution
+            while result.get("state") == "running":
+                execution.check()
+                time.sleep(0.2)
+                result = papertran.status(pid, out)
+            if result.get("state") != "done":
+                raise RuntimeError("论文翻译尚未完成：" + str(result.get("msg") or result.get("state")))
+        return result
     if name == "read":
         return stage_read(db, task_id, args.get("paper_id", ""))
     if name == "notes_compose":
@@ -978,11 +1072,7 @@ def agent_profile(db: "WorkflowDB", task_id: str) -> dict[str, Any] | None:
     return db.active_model()
 
 
-STEP_AGENT = {                       # 十步各有一个助手身份（跟前端 WF_AGENT 同名，改一处两边对齐）
-    "idea": "创新点审查助手", "search": "文献检索助手", "download": "文献入库助手", "notes": "文献精读助手",
-    "outline": "论文框架助手", "map": "证据链助手", "write": "论文写作助手", "review": "AI预审助手",
-    "entrans": "学术英译助手", "convert": "格式排版助手",
-}
+from workflow_catalog import STEP_AGENT, STAGE_PURPOSE
 
 # 检索跑完要主动收口（问用户还改不改检索式）：提示词已要求，这里再兜一层——模型偶尔只回一句「检索完了」。
 SEARCH_CLOSING = ("\n\n检索完毕。还要调整检索式吗——加点或减点关键词，"
@@ -1048,7 +1138,10 @@ def step_delivery(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
             items["入库论文"] = "%d 篇" % len(ps)
             items["最近入库"] = "；".join((p.get("title") or p.get("filename") or "")[:40] for p in ps[:3]) or "—"
         elif step == "notes":
-            items["项目笔记"] = "%d 条" % len(db.notes(task_id) or [])
+            import papertran
+            translations = papertran.deliveries(db, task_id)
+            items["已完成论文翻译"] = "%d 篇" % len(translations)
+            files += [path for item in translations for path in item["files"]]
         elif step in ("outline", "write", "review"):
             d = doc_read(db, task_id, step)
             items["文件"] = Path(d["path"]).name if d.get("path") else "—"
@@ -1139,18 +1232,13 @@ def step_plan(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
 
 
 def _system_for(who: str, system: str | None) -> str:
-    """第一段 system。十步各有助手身份时，把 AGENT_SYSTEM 开头那两句「你叫览籍智研 / 答：你是览籍智研」
-    换成本步的名字 —— 只加在后面 ctx 里没用，模型会照第一行复述。其余规则原样保留。"""
+    """Keep research step and team identities separate from the configuration steward."""
     base = system or AGENT_SYSTEM
     if not who or system:
         return base
-    return base.replace(
-        "你叫「览籍智研」，是这个软件的主 Agent，也是一位做科研的研究生的科研助手",
-        "你叫「%s」，是这个软件里负责这一步的副手，服务对象是做科研的研究生" % who, 1,
-    ).replace(
-        "用户怎么问「你是谁」就怎么答：你是览籍智研，他的科研助手。",
-        "用户怎么问「你是谁」就怎么答：你是%s。" % who, 1,
-    )
+    return (f"你叫「{who}」，负责当前科研任务。用中文工作，只通过工具动手。"
+            "只依据可核查的原文、页码与真实产物，不编造数据、引用或执行状态。"
+            "先读取与目标有关的资料，按当前步骤职责执行，完成后简要报告产出和缺项。")
 
 
 HISTORY_CHARS = 40_000      # 默认历史预算；设置页「权限 → 上下文预算」存了就按存的来
@@ -1195,7 +1283,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
               system: str | None = None, tools: list[dict[str, Any]] | None = None,
               extra_context: str = "", scope: str = "", publish: bool = True,
               profile: dict[str, Any] | None = None, assistant_id: str = "",
-              member: dict[str, Any] | None = None, step: str = "", cancel_check: Any = None) -> dict[str, Any]:
+              member: dict[str, Any] | None = None, step: str = "", cancel_check: Any = None,
+              template_ref: dict | None = None, tool_allowlist: list[str] | None = None) -> dict[str, Any]:
     """工具调用循环。emit(event) 每产生一条事件调用一次（SSE 用）。
     system/tools 不传就是通用 Agent（AGENT_SYSTEM + 全量工具）；创新点审查/确认大纲那两步会传受限工具 + 记忆块。
     scope 决定这轮对话和哪一步共用历史（'' = 创新点审查/通用，'outline' = 确认大纲）。
@@ -1251,7 +1340,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     import asset_service
     handoff, _, input_assets = workflow_state.handoff(db, bound, scope) if bound and scope in STAGES else ("", "", [])
     if bound and not input_assets:
-        input_assets = [a["id"] for a in asset_service.list_assets(db, bound, limit=200)]
+        input_assets = [a["id"] for a in asset_service.research_assets(db, bound, limit=200)]
+    input_assets = [key for key in input_assets if (asset_service.get(db, key) and not asset_service.is_instruction_asset(asset_service.get(db, key)))]
     restored_node = db.db.execute("SELECT * FROM workflow_nodes WHERE id=? AND run_id=?",
                                  (resume.get("node_id", ""), tracked_run["id"])).fetchone()
     tracked_node = dict(restored_node) if restored_node else run_service.node_start(db, tracked_run["id"], scope or "agent", inputs=input_assets)
@@ -1261,6 +1351,27 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         db.db.commit()
     db.asset_run = {"id": tracked_run["id"], "node_id": tracked_node["id"], "inputs": input_assets,
                     "outputs": list(resume.get("output_assets") or [])}
+    import prompt_templates
+    snapshot = resume.get("template_snapshot") or getattr(db, "template_snapshot", None)
+    reference = template_ref if template_ref is not None else getattr(db, "template_request", None)
+    if snapshot and snapshot.get("project_id") != bound:
+        raise ValueError("模板快照不属于当前项目")
+    if reference is not None and not bound:
+        raise ValueError("引用模板前请先绑定项目")
+    if not snapshot and bound and not getattr(db, "template_resolved", False):
+        snapshot = prompt_templates.resolve(db, bound, reference, step=step or scope, member_id=(member or {}).get("id", ""),
+                                            assistant_id=aid, schedule_id=getattr(db, "template_schedule_id", ""))
+    template_event = None
+    if snapshot:
+        input_assets = list(dict.fromkeys([*input_assets, *(a["asset_id"] for a in snapshot.get("input_assets", []))]))
+        db.asset_run["inputs"] = input_assets
+        db.db.execute("UPDATE workflow_nodes SET input_assets=? WHERE id=?", (json.dumps(input_assets), tracked_node["id"]))
+        prompt_templates.usage(db, snapshot, tracked_run["id"], tracked_node["id"])
+        db.asset_run["templates"] = [snapshot]
+        template_event = {"type": "template_used", "template_id": snapshot["template_id"], "title": snapshot["title"],
+                          "revision": snapshot["revision"], "revision_id": snapshot["revision_id"], "project_id": bound}
+        say(template_event)
+        save_checkpoint(template_snapshot=snapshot)
     if chat_row and bound:                        # 绑了项目 → Partner Agent（对话历史独立，视野与产出跟项目走）
         pt = db.summary(bound)["task"]
         ctx = (f"你是《{pt['title']}》项目的 **Partner Agent**：这个对话绑在该项目上 —— 对话历史自己一份，"
@@ -1300,6 +1411,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     if who:      # 工作流里的每一步都是一个独立助手，别让它自称「览籍智研 / 智研管家 / Partner Agent」
         ctx += (f"\n\n【你的身份】这一步你是「{who}」，只负责这一步的事；上面提到的「览籍智研 / 智研管家 / Partner Agent」是"
                 f"整台机器和首页的称呼，不是你的自称。有人问「你是谁」，就答「我是{who}」，再用一句话说这一步负责什么。")
+        ctx += f"\n本步「{STAGE_LABEL[step or scope]}」职责：{STAGE_PURPOSE[step or scope]}。"
     if step == "search":     # 检索完必须向用户收口 —— 只甩一串结果，用户不知道还能不能改检索式
         ctx += ("\n\n【本步收口】检索（paper_search）跑完或改关键词重跑完，最后一段必须收口："
                 "这次命中多少条、其中多少条有开放获取全文、入库多少条，然后问一句"
@@ -1335,32 +1447,38 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
              for t in capabilities.capability_tool_specs(db, aid, project_dir)):
         tool_specs += [t for t in capabilities.capability_tool_specs(db, aid, project_dir)
                        if t.get("function", {}).get("name") in ("skill_read", "skill_write")]
+    tool_specs += [t for t in TOOL_SPECS if t["function"]["name"].startswith("prompt_template_")]
     tool_specs = capabilities.filter_tools(db, aid, tool_specs, project_dir)
     if bound and permission != "full_access":
         tool_specs = [t for t in tool_specs if t.get("function", {}).get("name") == "mcp_register"
                       or not t.get("function", {}).get("name", "").startswith("mcp_")]
     if permission == "read_only":
         tool_specs = [t for t in tool_specs if t.get("function", {}).get("name") in agent_settings.READ_TOOLS
-                      or t.get("function", {}).get("name") in {"project_list", "zotero_search", "zotero_item", "assistant_manage", "project_task_manage", "schedule_manage"}]
+                      or t.get("function", {}).get("name") in {"project_list", "zotero_search", "zotero_item", "assistant_manage", "project_task_manage", "schedule_manage", "team_manage", "workflow_manage", "paper_translate"}]
     tool_specs = list({t["function"]["name"]: t for t in tool_specs}.values())
+    if tool_allowlist is not None:
+        tool_specs = [t for t in tool_specs if t["function"]["name"] in tool_allowlist]
     allowed_names = {t.get("function", {}).get("name") for t in tool_specs}
     integration_names = {t.get("function", {}).get("name") for t in agent_integrations.tool_specs()}
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _system_for(who, system)},
+        {"role": "system", "content": _system_for(who or (member or {}).get("name", ""), system)},
         {"role": "system", "content": ctx},
-        *history, {"role": "user", "content": text},
+        *history, {"role": "user", "content": text + ("\n\n【本次使用的提示词模板：" + snapshot["title"] + "】\n" + snapshot["rendered"] if snapshot else "")},
     ]
     if resume.get("messages"):
         messages = resume["messages"]
     events: list[dict[str, Any]] = resume.get("events", [])
+    if template_event and not any(e.get("type") == "template_used" for e in events):
+        events.append(template_event)
     final = ""
     tokens = {"prompt": 0, "completion": 0, "total": 0, "exact": True}
     first_turn = int(resume.get("turn", 0)) if resume.get("messages") else 0
     # 同一轮 run 内模型重复发「同名同参数」的调用，直接复用上次结果（实测有轮次把同一份 map_write 发了 4 次）
-    _done_calls: dict[str, Any] = {}
+    _done_calls: dict[str, Any] = dict(resume.get("done_tools") or {})
+    pending_calls = resume.get("pending_calls") or []
 
-    save_checkpoint(phase="model", messages=messages, turn=first_turn, workflow_run_id=tracked_run["id"], node_id=tracked_node["id"])
-    for turn in range(first_turn, max_steps):
+    save_checkpoint(phase="tools_ready" if pending_calls else "model", messages=messages, turn=first_turn, workflow_run_id=tracked_run["id"], node_id=tracked_node["id"])
+    for turn in range(first_turn, first_turn + max_steps):
         if cancel_check and cancel_check():
             run_service.finish_node(db, tracked_node["id"], "failed", error="运行已中断")
             run_service.finish(db, tracked_run["id"], "failed", error="运行已中断")
@@ -1377,13 +1495,22 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             partial.append(piece)
             say({"type": "assistant_delta", "content": piece})
         try:
-            msg = chat_raw(profile, messages, tools=tool_specs,
+            resuming_tools = bool(pending_calls)
+            if getattr(db, 'workflow_end_to_end', False):
+                import workflow_context
+                model_messages = workflow_context.bounded_messages(messages)
+                if model_messages is not messages and 'workflow_context_read' not in allowed_names:
+                    raise ValueError('长上下文需要分页读取，请在节点允许的工具中加入 workflow_context_read')
+            else:
+                model_messages = messages
+            msg = {"content": "", "tool_calls": pending_calls} if resuming_tools else chat_raw(profile, model_messages, tools=tool_specs,
                            # 写作那步的产出（整份正文）就是一个大参数：4096 预算下推理模型的思维链把额度吃光，
                            # doc_write / skill_write / project_note_write 的 markdown 直接被截断 → 工具调用变成「空参数」或半截。
                            # 所以每一步都跟写作共用同一档预算（deepseek 这档上限 8192，取 8000 留余地）。
                            max_tokens=WRITE_MAX_TOKENS,
                            on_delta=forward_delta if emit else None, cancel_check=cancel_check,
                            on_reasoning=forward_reasoning if emit else None)
+            pending_calls = []
         except Exception as exc:
             say({"type": "reasoning_done", "id": reasoning_id, "content": "".join(reasoning_parts),
                  "duration_ms": int((time.monotonic() - model_started) * 1000)})
@@ -1435,8 +1562,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         assistant_message = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
         if msg.get("_protocol"):
             assistant_message["_protocol"] = msg["_protocol"]
-        messages.append(assistant_message)
-        for call in calls:
+        if not resuming_tools:
+            messages.append(assistant_message)
+        for call_index, call in enumerate(calls):
             if cancel_check and cancel_check():
                 run_service.finish_node(db, tracked_node["id"], "failed", error="运行已中断")
                 run_service.finish(db, tracked_run["id"], "failed", error="运行已中断")
@@ -1451,7 +1579,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             say(ev); events.append(ev)
             cache_key = name + "\x00" + json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
             t_tool_start = time.monotonic()
-            save_checkpoint(phase="tool", messages=messages, events=events, turn=turn)
+            save_checkpoint(phase="tool", messages=messages, events=events, turn=turn, inflight=call)
             try:
                 if name not in allowed_names:
                     raise PermissionError("当前助手未获准使用此工具：" + name)
@@ -1468,6 +1596,11 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 if isinstance(result, dict) and result.get("sub_events"):
                     events.extend(result["sub_events"])      # 子 agent 的事件并进本轮 → 回放可还原
                 ok, brief = True, _brief(name, result)
+                if name == "prompt_template_render" and isinstance(result, dict) and result.get("ok"):
+                    event = {"type": "template_used", **{k: result[k] for k in
+                             ("template_id", "title", "revision", "revision_id", "project_id")}}
+                    say(event)
+                    events.append(event)
                 if name != "delegate" and not (isinstance(result, dict) and result.get("sub_events")):
                     _done_calls[cache_key] = result      # 带 sub_events 的结果不缓存：复用会重复回放子事件
 
@@ -1489,8 +1622,12 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             messages.append({"role": "tool", "tool_call_id": call.get("id") or name, "name": name,
                              # 工具结果回喂给模型的字符数上限：读一份 3 万字的正文，4000 字只够看到标题
                              "content": json.dumps(result, ensure_ascii=False, default=str)[:TOOL_RESULT_MAX]})
+            remaining = calls[call_index + 1:]
+            save_checkpoint(phase="tools_ready" if remaining else "model", messages=messages, events=events,
+                            turn=turn if remaining else turn + 1, pending_calls=remaining, inflight=None,
+                            done_tools=_done_calls, output_assets=db.asset_run["outputs"])
         save_checkpoint(phase="model", messages=messages, events=events, turn=turn + 1,
-                        output_assets=db.asset_run["outputs"])
+                        output_assets=db.asset_run["outputs"], pending_calls=[], done_tools=_done_calls)
     else:
         outcomes = [event for event in events if event.get("type") == "tool_result"]
         lines = []
@@ -1520,7 +1657,12 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     execution.check()
     run_service.finish_node(db, tracked_node["id"], "succeeded", outputs=db.asset_run["outputs"])
     run_service.finish(db, tracked_run["id"], "succeeded")
-    return {"reply": final, "events": events, "run_id": tracked_run["id"], "output_assets": db.asset_run["outputs"]}
+    for used in db.asset_run.get("templates", []):
+        for output_id in db.asset_run["outputs"]:
+            if output_id != used["asset_id"]:
+                asset_service.link(db, output_id, "used_template", used["asset_id"], {"revision_id": used["revision_id"]})
+    return {"reply": final, "events": events, "run_id": tracked_run["id"], "output_assets": db.asset_run["outputs"],
+            "template_snapshot": snapshot}
 
 
 def _brief(name: str, result: Any) -> str:

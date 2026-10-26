@@ -67,7 +67,7 @@ class MiscRoutes:
                 return self._json({"notes": db.md_notes()})
         if path == "/api/project/notes":
             with WorkflowDB(DB_PATH) as db:
-                return self._json(project_notes.dashboard(db, (q.get("project_id") or [""])[0]))
+                return self._json(project_notes.dashboard(db, (q.get("project_id") or [""])[0], (q.get("query") or [""])[0]))
         if path == "/api/project/note":
             with WorkflowDB(DB_PATH) as db:
                 return self._json(project_notes.read(db, (q.get("project_id") or [""])[0],
@@ -149,7 +149,13 @@ class MiscRoutes:
             with WorkflowDB(DB_PATH) as db:
                 return self._json(papertran.paper_meta(db, (q.get("id") or [""])[0]))
         if path == "/api/trans/status":
-            return self._json(papertran.status((q.get("id") or [""])[0]))
+            pid = (q.get("id") or [""])[0]
+            with WorkflowDB(DB_PATH) as db:
+                try:
+                    out = papertran.output_dir(db, pid, (q.get("task") or [""])[0])
+                except ValueError as exc:
+                    return self._json({"error": str(exc)}, 400)
+            return self._json(papertran.status(pid, out))
         if path == "/api/rss/sources":
             with WorkflowDB(DB_PATH) as db:
                 return self._json({"sources": db.rss_sources(), "defaults": rss.DEFAULT_SOURCES})

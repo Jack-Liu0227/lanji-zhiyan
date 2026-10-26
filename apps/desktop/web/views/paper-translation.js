@@ -356,7 +356,7 @@ function trStartPoll(){
   const lbl = (t, off)=>{ const zb = $("trBtnZh"); if(zb){ zb.textContent = t || "中文"; zb.disabled = !!off; } };
   TR.poll = setInterval(async ()=>{
     try{
-      const s = await api(`/api/trans/status?id=${encodeURIComponent(TR.pid)}`);
+      const s = await api(`/api/trans/status?id=${encodeURIComponent(TR.pid)}&task=${encodeURIComponent(curTask || "")}`);
       TR.job = s;
       if(s.state === "running" || s.state === "partial"){
         const el = Math.round((Date.now() - (TR.t0 || (TR.t0 = Date.now()))) / 1000);

@@ -1,3 +1,49 @@
+let zenModeActive = false;
+let statusCollapsed = localStorage.getItem("rw-status-collapsed") === "true";
+
+function toggleZenMode(force){
+  zenModeActive = typeof force === "boolean" ? force : !zenModeActive;
+  document.body.classList.toggle("zen-mode", zenModeActive);
+  let exitBtn = document.getElementById("zenExitPill");
+  if(zenModeActive){
+    if(!exitBtn){
+      exitBtn = document.createElement("button");
+      exitBtn.id = "zenExitPill";
+      exitBtn.className = "zen-exit-pill";
+      exitBtn.textContent = "⛶ 退出专注 (Esc)";
+      exitBtn.title = "退出专注工作区模式";
+      exitBtn.onclick = () => toggleZenMode(false);
+      document.body.appendChild(exitBtn);
+    }
+  } else {
+    if(exitBtn) exitBtn.remove();
+  }
+}
+
+function toggleSidebarCollapse(){
+  sidebarCollapsed = !sidebarCollapsed;
+  localStorage.setItem("rw-sidebar", sidebarCollapsed);
+  renderSidebar();
+}
+
+document.addEventListener("keydown", (e) => {
+  if((e.ctrlKey || e.metaKey) && (e.key === "b" || e.key === "B") && !e.shiftKey && !e.altKey){
+    const tag = (document.activeElement?.tagName || "").toLowerCase();
+    if(tag !== "textarea" && tag !== "input"){
+      e.preventDefault();
+      toggleSidebarCollapse();
+    }
+  }
+  if(e.key === "F10"){
+    e.preventDefault();
+    toggleZenMode();
+  }
+  if(e.key === "Escape" && zenModeActive){
+    e.preventDefault();
+    toggleZenMode(false);
+  }
+});
+
 /* ============================== 状态 ============================== */
 const S = { tasks:[], chats:[], models:[], active:null, events:[], stages:[], tools:[], chat:[], chatEvents:[], loaded:false };
 let tabs = [{id:"agent",route:"agent",title:"智研管家"}];
@@ -71,10 +117,9 @@ function openProfileModal(){
   $("profAvatar").value = profile.avatar || "🎓";
   $("profField").value = profile.field || "";
   paintProfilePreview();
-  $("profileModal").classList.remove("hidden");
-  setTimeout(()=>$("profName").focus(), 50);
+  uiOpenModal($("profileModal"), $("profName"));
 }
-function closeProfileModal(){ $("profileModal").classList.add("hidden"); }
+function closeProfileModal(){ uiCloseModal($("profileModal")); }
 function saveProfileModal(){
   profile.name = ($("profName").value || "").trim() || "研究生";
   profile.avatar = ($("profAvatar").value || "").trim() || "🎓";
@@ -132,7 +177,9 @@ async function api(path, opts){
   else if(opts) init = {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(opts)};
   const r = await fetch(path, init);
   const j = await r.json().catch(()=>({error:"响应不是 JSON"}));
-  if(j && j.error) throw new Error(j.error);
+  if(!r.ok || (j && j.error)) throw new Error(j?.error || `请求失败（${r.status}）`);
+  if(init.method && init.method !== 'GET' && (/^\/api\/todos\//.test(path) || path === '/api/step/done'))
+    window.dispatchEvent(new CustomEvent('todos-changed'));
   return j;
 }
 
@@ -156,6 +203,13 @@ const NAV = [
 ];
 const TITLES = {assistants:"专家",team:"团队",agent:"智研管家",calendar:"日历",tasks:"项目管理",workflow:"科研平台",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
+
+async function uiNavigate(action){
+  if(typeof mdProj !== "undefined" && mdProj && document.getElementById("mdSource")?.getClientRects().length){
+    if(!await pnSaveCurrent()){ uiNotify("笔记保存失败，请重试保存后再切换页面。"); return; }
+  }
+  return action();
+}
 
 function openTab(r, title){
   if(r === "notes"){
@@ -189,17 +243,20 @@ function renderSidebar(){
     <div class="brand"><img class="mark" src="/mark.png" alt="">
       <div class="lbl" style="min-width:0"><b>览籍智研</b><small>科研工作台</small></div>
       <button class="collapse" title="${sidebarCollapsed?"展开侧栏":"折叠侧栏"}">${sidebarCollapsed?"›":"‹"}</button></div>
-    <div class="profile-card" id="profileCard" title="点击编辑个人资料">
+    <button type="button" class="profile-card" id="profileCard" title="点击编辑个人资料">
       <span class="profile-avatar" id="profileAvatar">🎓</span>
       <div class="profile-info"><b id="profileName">研究生</b></div>
-      <span class="profile-edit">✎</span></div>
+      <span class="profile-edit">✎</span></button>
     <nav class="nav">${NAV[0].items.map(i=>item(i)).join("")}
       ${NAV[1].items.map(i=>item(i)).join("")}${NAV[2].items.map(i=>item(i)).join("")}</nav>
     <div class="sidebar-foot">${item(NAV[NAV.length-1].items[0])}
       <div class="swatches" id="side-presets">${themeSwatches(true)}</div>
       <button class="nav-item" id="theme-toggle"><span class="nav-ico">${document.documentElement.dataset.theme==="dark"?"☀️":"🌙"}</span><span class="lbl">${document.documentElement.dataset.theme==="dark"?"浅色主题":"深色主题"}</span></button>
       <div class="online"><span class="dot"></span><span class="lbl">本地服务 已连接</span></div></div>`;
-  $("sidebar").querySelectorAll("[data-nav]").forEach(b=>b.onclick=()=>openTab(b.dataset.nav));
+  $("sidebar").querySelectorAll("[data-nav]").forEach(b=>{
+    b.setAttribute("aria-current", b.dataset.nav === v ? "page" : "false");
+    b.onclick=()=>uiNavigate(()=>openTab(b.dataset.nav));
+  });
   bindSwatches($("sidebar").querySelector("#side-presets"));
   $("sidebar").querySelector(".collapse").onclick=()=>{sidebarCollapsed=!sidebarCollapsed;localStorage.setItem("rw-sidebar",sidebarCollapsed);renderSidebar();};
   $("theme-toggle").onclick=()=>setTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
@@ -223,26 +280,40 @@ const FRAMELESS = new URLSearchParams(location.search).has("pw");
 let winZoom = true;                    // 窗口现在是不是铺满工作区 → 决定右上那个键画「最大化」还是「还原」
 let winStateAsked = false;
 function winCommand(action){
-  // 所有窗口命令都优先走 pywebview js_api（=宿主进程）。HTTP 服务跑在 Low IL 沙箱里，
+  // 关闭时页面会消失，JS 桥接无法再回传结果；通过宿主 HTTP 通道关闭。
+  if(action === "close") return api("/api/win/close", {});
+  // 其余窗口命令优先走 pywebview js_api（=宿主进程）。HTTP 服务跑在 Low IL 沙箱里，
   // UIPI 会静默拦掉它对中完整性窗口的 ShowWindow / SetWindowPos / WM_CLOSE（全是「点了没反应」）。
   const py = window.pywebview && window.pywebview.api;
   return Promise.resolve(py && py.win ? py.win(action) : api("/api/win/" + action, {}));
 }
 function renderTopbar(){
   $("topbar").innerHTML = `
+    <button type="button" class="topbar-icon-btn" id="btnTopToggleSidebar" title="折叠/展开主导航 (Ctrl+B)">☰</button>
     <span class="date">${clock()}</span>
     <span class="pill" title="当前模型">${S.active?("模型 "+esc(S.active.name)):"未配置模型"}</span>
+    <div class="topbar-actions">
+      <button type="button" class="btn ghost btn-sm btn-zen" id="btnZenMode" title="全屏专注工作区 (F10)">⛶ 专注</button>
+      <button type="button" class="btn ghost" data-command="palette" title="搜索命令与页面（Ctrl+K）">搜索命令 <kbd>Ctrl+K</kbd></button>
+      <button type="button" class="btn ghost" data-command="help" title="快捷键与操作帮助（F1）" aria-label="快捷键与操作帮助">快捷键</button>
+    </div>
     ${FRAMELESS?`<span class="wctl">
       <button title="最小化" data-w="minimize">\uE921</button>
       <button title="${winZoom?"还原":"最大化"}" data-w="maximize">${winZoom?"\uE923":"\uE922"}</button>
       <button class="close" title="关闭" data-w="close">\uE8BB</button>
     </span>`:""}`;
   $("topbar").querySelectorAll("[data-w]").forEach(b=>{
+    b.setAttribute("aria-label", b.title);
     b.onmousedown = e => e.stopPropagation();          // 别让标题栏拖动吃掉按钮
     b.onclick = () => winCommand(b.dataset.w)
       .then(r=>{ if(r && typeof r.zoomed === "boolean") winSet(r.zoomed); })
       .catch(()=>{});
   });
+  $("topbar").querySelectorAll(".topbar-actions button").forEach(b=>b.onmousedown=e=>e.stopPropagation());
+  const btnTopSide = $("btnTopToggleSidebar");
+  if(btnTopSide) btnTopSide.onclick = toggleSidebarCollapse;
+  const btnZen = $("btnZenMode");
+  if(btnZen) btnZen.onclick = () => toggleZenMode();
   if(FRAMELESS && !winStateAsked){                     // 起来先问一次真实状态（还原回来可能不是铺满）
     winStateAsked = true;
     winRefresh();
@@ -262,23 +333,38 @@ function winSet(zoom){
 
 function renderTabs(){
   localStorage.setItem("rw-route", route());
-  $("tabsbar").innerHTML = tabs.map(t=>`<button class="tab ${t.id===activeTab?"active":""}" data-t="${t.id}">${esc(t.title)}${tabs.length>1?`<span class="x" data-x="${t.id}">✕</span>`:""}</button>`).join("")
-    + `<button class="tab" id="newtab">＋</button>`;
-  $("tabsbar").querySelectorAll("[data-t]").forEach(b=>b.onclick=(e)=>{
-    if(e.target.dataset.x){ closeTab(e.target.dataset.x); } else { activeTab=b.dataset.t; }
-    render();
-  });
-  $("newtab").onclick=()=>openTab("agent");
+  $("tabsbar").innerHTML = `<div class="app-tablist" role="tablist" aria-label="已打开的页面">` + tabs.map(t=>`<div class="tab-wrap ${t.id===activeTab?"active":""}" data-tab-id="${t.id}">
+    <button class="tab" role="tab" aria-selected="${t.id===activeTab}" tabindex="${t.id===activeTab?0:-1}" aria-controls="main" data-t="${t.id}">${esc(t.title)}</button>
+    ${tabs.length>1?`<button type="button" class="tab-close" data-x="${t.id}" aria-label="关闭${esc(t.title)}" title="关闭标签页">✕</button>`:""}</div>`).join("")
+    + `</div><button class="tab" id="newtab" title="打开智研管家" aria-label="打开智研管家">＋</button><button class="tab" id="tabActions" title="标签页操作" aria-label="标签页操作" aria-haspopup="menu">⋯</button>`;
+  $("tabsbar").querySelectorAll("[data-t]").forEach(b=>b.onclick=()=>uiNavigate(()=>{
+    activeTab=b.dataset.t; render(); document.querySelector(`[data-t="${activeTab}"]`)?.focus();
+  }));
+  $("tabsbar").querySelectorAll("[data-x]").forEach(b=>b.onclick=()=>uiNavigate(()=>{
+    closeTab(b.dataset.x); document.querySelector(`[data-t="${activeTab}"]`)?.focus();
+  }));
+  $("newtab").onclick=()=>uiNavigate(()=>openTab("agent"));
 }
 
 function renderStatus(){
   const t = S.tasks.find(x=>x.id===curTask);
+  $("statusbar").className = "statusbar" + (statusCollapsed ? " collapsed" : "");
   $("statusbar").innerHTML = `
     <span><span class="led"></span>本地服务 正常</span>
     <span><span class="led"></span>SQLite 正常</span>
     <span>模型 ${S.active?esc(S.active.name):"未配置"}</span>
     <span>工具 ${S.tools.length}</span>
-    <span>当前项目 ${t?esc(t.title):"—"}</span>`;
+    <span>当前项目 ${t?esc(t.title):"—"}</span>
+    <span style="flex:1"></span>
+    <button type="button" class="statusbar-toggle" id="btnToggleStatus" title="折叠/展开状态栏">${statusCollapsed ? "▲" : "▼"}</button>`;
+  const btnSt = $("btnToggleStatus");
+  if(btnSt){
+    btnSt.onclick = () => {
+      statusCollapsed = !statusCollapsed;
+      localStorage.setItem("rw-status-collapsed", statusCollapsed);
+      renderStatus();
+    };
+  }
 }
 
 /* ---------------- 弹出卡片：确认 / 提示 / 输入 ----------------
@@ -291,6 +377,8 @@ function uiNotify(text, ms = 3400) {
   if (!box) {
     box = document.createElement("div");
     box.id = "uiToast";
+    box.setAttribute("role", "status");
+    box.setAttribute("aria-live", "polite");
     box.onclick = () => box.remove();
     document.body.appendChild(box);
   }
@@ -301,10 +389,31 @@ function uiNotify(text, ms = 3400) {
 }
                      // 全站 uiNotify(...) 一次性接到居中卡片（同步，不打断流程）
 
+const uiModalOrigins = new WeakMap();
+function uiOpenModal(modal, initial){
+  if(!modal) return;
+  if(modal.classList.contains("hidden")) uiModalOrigins.set(modal, document.activeElement);
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  if(!modal.hasAttribute("aria-label") && !modal.hasAttribute("aria-labelledby"))
+    modal.setAttribute("aria-label", modal.querySelector("h3")?.textContent || "操作面板");
+  modal.classList.remove("hidden");
+  (initial || modal.querySelector("button, input, [tabindex]"))?.focus();
+}
+function uiCloseModal(modal){
+  if(!modal) return;
+  modal.classList.add("hidden");
+  const origin = uiModalOrigins.get(modal);
+  uiModalOrigins.delete(modal);
+  if(origin?.isConnected) origin.focus();
+  else document.querySelector('#tabsbar [aria-selected="true"]')?.focus();
+}
+
 function uiConfirm(text, opts = {}) {
   return new Promise(resolve => {
     const wrap = document.createElement("dialog");
     wrap.className = "modal";
+    wrap.setAttribute("aria-label", opts.title || "确认操作");
     wrap.innerHTML = `
       <div class="modal-mask"></div>
       <div class="modal-dialog" style="width:${opts.width || 400}px">
@@ -315,18 +424,20 @@ function uiConfirm(text, opts = {}) {
           <button class="btn ${opts.danger === false ? "" : "danger"}" data-ok>${esc(opts.ok || "确定")}</button>
         </div>
       </div>`;
-    const done = v => { wrap.close(); wrap.remove(); document.removeEventListener("keydown", key, true); resolve(v); };
+    const origin = document.activeElement;
+    const done = v => { wrap.close(); wrap.remove(); if(origin?.isConnected) origin.focus(); resolve(v); };
     const key = e => {
-      if (e.key === "Escape") { e.preventDefault(); done(false); }
-      if (e.key === "Enter") { e.preventDefault(); done(true); }
+      if(e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); }
     };
     wrap.querySelector("[data-ok]").onclick = () => done(true);
     wrap.querySelector("[data-no]").onclick = () => done(false);
     wrap.querySelector(".modal-mask").onclick = () => done(false);
-    document.addEventListener("keydown", key, true);
+    wrap.addEventListener("keydown", key);
+    wrap.addEventListener("cancel", e=>{ e.preventDefault(); done(false); });
     document.body.appendChild(wrap);
     wrap.showModal();
-    wrap.querySelector("[data-ok]").focus();
+    wrap.querySelector(opts.danger === false ? "[data-ok]" : "[data-no]").focus();
   });
 }
 
@@ -334,26 +445,30 @@ function uiPrompt(text, def = "") {
   return new Promise(resolve => {
     const wrap = document.createElement("dialog");
     wrap.className = "modal";
+    wrap.setAttribute("aria-label", text);
     wrap.innerHTML = `
       <div class="modal-mask"></div>
       <div class="modal-dialog" style="width:440px">
         <div class="modal-head"><h3>${esc(text)}</h3></div>
-        <div class="modal-body"><input class="ui-input" id="uiPromptIn" value="${esc(def)}"></div>
+        <div class="modal-body"><input class="ui-input" id="uiPromptIn" aria-label="${esc(text)}" value="${esc(def)}"></div>
         <div class="modal-foot">
           <button class="btn ghost" data-no>取消</button>
           <button class="btn" data-ok>确定</button>
         </div>
       </div>`;
-    const done = v => { wrap.close(); wrap.remove(); document.removeEventListener("keydown", key, true); resolve(v); };
+    const origin = document.activeElement;
+    const done = v => { wrap.close(); wrap.remove(); if(origin?.isConnected) origin.focus(); resolve(v); };
     const inp = wrap.querySelector("#uiPromptIn");
     const key = e => {
-      if (e.key === "Escape") { e.preventDefault(); done(null); }
-      if (e.key === "Enter") { e.preventDefault(); done(inp.value); }
+      if(e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(null); }
+      if (e.key === "Enter" && e.target === inp) { e.preventDefault(); done(inp.value); }
     };
     wrap.querySelector("[data-ok]").onclick = () => done(inp.value);
     wrap.querySelector("[data-no]").onclick = () => done(null);
     wrap.querySelector(".modal-mask").onclick = () => done(null);
-    document.addEventListener("keydown", key, true);
+    wrap.addEventListener("keydown", key);
+    wrap.addEventListener("cancel", e=>{ e.preventDefault(); done(null); });
     document.body.appendChild(wrap);
     wrap.showModal();
     inp.focus(); inp.select();
@@ -396,56 +511,3 @@ async function requireModelKey() {
   if (go) openTab("settings");
   return false;
 }
-
-/* 原生 select 的弹出层由浏览器画，只认系统配色，深色主题下就是白底 + 白色高亮行。
-   这里把它换成自己画的一层(.sel-pop)，原生 select 仍留着当数据源：选中后回写
-   selectedIndex 再派发 change，所以所有调用点一行不用改；键盘/无障碍仍走原生弹层。 */
-function skinSelects() {
-  let pop = null, owner = null;
-  const close = () => { if (pop) { pop.remove(); pop = null; owner = null; } };
-  // 点的是 select 本体，或包着它的那个胶囊 label，都算要打开
-  const selOf = (node) => {
-    const s = node.closest && (node.closest("select") || node.closest("label")?.querySelector("select"));
-    return s && !s.disabled && !s.multiple && !s.size ? s : null;
-  };
-  const open = (sel) => {
-    close();
-    const r = sel.getBoundingClientRect();
-    pop = document.createElement("div");
-    pop.className = "att-menu sel-pop";
-    pop.setAttribute("role", "listbox");
-    pop.style.minWidth = Math.min(Math.round(r.width), 280) + "px";   // 跟触发器一样宽，但别让整行 select 撑出满屏菜单
-    pop.innerHTML = [...sel.options].map((o, i) =>
-      i === sel.selectedIndex
-        ? `<button type="button" role="option" data-i="${i}" class="sel">${esc(o.textContent)}<span class="tick">✓</span></button>`
-        : `<button type="button" role="option" data-i="${i}">${esc(o.textContent)}</button>`).join("");
-    document.body.appendChild(pop);
-    owner = sel;
-    const below = r.bottom + 4, above = r.top - 4 - pop.offsetHeight;   // 下面放不下就翻到上面
-    pop.style.left = Math.round(r.left) + "px";
-    pop.style.top = Math.round(below + pop.offsetHeight > innerHeight && above > 4 ? above : below) + "px";
-    const cur = pop.querySelector("button.sel");
-    if (cur) pop.scrollTop = Math.max(0, cur.offsetTop - pop.clientHeight / 2);   // 长列表先滚到当前项
-  };
-  document.addEventListener("mousedown", (e) => {
-    if (pop && pop.contains(e.target)) return;
-    const sel = selOf(e.target);
-    if (sel) { e.preventDefault(); open(sel); return; }   // 挡掉浏览器自己弹那层
-    close();
-  }, true);
-  document.addEventListener("click", (e) => {
-    if (pop && pop.contains(e.target)) {                  // 选中：回写原生 select 再关
-      const b = e.target.closest("button[data-i]");
-      if (b && owner && owner.selectedIndex !== +b.dataset.i) {
-        owner.selectedIndex = +b.dataset.i;
-        owner.dispatchEvent(new Event("change", { bubbles: true }));
-      }
-      close(); return;
-    }
-    if (selOf(e.target)) e.preventDefault();              // 挡掉 label 转发给 select 的第二次打开
-  }, true);
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); }, true);
-  document.addEventListener("scroll", (e) => { if (!pop || !pop.contains(e.target)) close(); }, true);
-  addEventListener("resize", close);
-}
-skinSelects();

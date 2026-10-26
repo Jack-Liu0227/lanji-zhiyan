@@ -8,7 +8,9 @@
 | 新建项目 | 未绑定对话中 `project_create(title, question, material_system, base_dir)`；没有目录偏好时省略 base_dir | 返回 project_id 和实际 base_dir；不冒充已切换当前对话 |
 | 查专家 | `assistant_manage(action="list")` | 从结果取得真实 ID |
 | 新建/修改专家 | `assistant_manage(action="create", name, description, rules, model_id)`；修改用 action="update", id | 返回 assistant；不修改权限或凭据 |
-| 创建团队 | `team_create(name, purpose, assistant_ids)` | 首个专家为负责人；返回 team 和 members；未指定专家时用已有管家 |
+| 创建团队 | `team_create(name, purpose, assistant_ids)` | 首个专家为负责人；返回 team 和 members；未指定专家时用独立团队协调员，智研管家不担任 Leader |
+| 调整已有团队 | `team_manage(action="list"/"update"/"add_member"/"update_member"/"set_leader", team_id, member_id, assistant_id, prompt, model_id)` | 返回真实配置；团队与成员必须属于当前项目 |
+| 选择已有工作流 | `workflow_manage(action="list"/"select", layout_id)` | list 返回与科研平台一致的步骤名称；select 绑定项目 |
 | 团队执行 | `team_board(project)` 查团队列表；用创建/列表返回的 team_id 调用 `team_board(team_id)`，再用 `team_assign(team_id, member, prompt)` | member 使用该团队返回的成员 ID；检查排队/运行状态，勿把派发当完成 |
 | 创建工作流 | `workflow_create(name, description, steps)` | 创建模板并选为当前项目工作流；不等于步骤已执行 |
 | 创建技能 | `skill_create(name, description, instructions)` | 返回项目 `.agents/skills` 内路径；name 用小写字母、数字、横线 |
@@ -19,9 +21,10 @@
 | 日程 | `calendar_list` / `calendar_add(title, date, time, kind)` | 日期 YYYY-MM-DD，时间 HH:MM；不把时间塞到标题里 |
 | 定时任务 | `schedule_manage` | 根据实际 schema 选择 action；绑定项目和已启用专家，核对下次运行时间与输出目录 |
 | 邮件读取 | `mail_accounts()` → `mail_list(account_id, folder, page)` → `mail_read(account_id, folder, uid)` | 账户来自实际结果；保留 UID，不虚构邮件正文 |
-| 文献研究 | `paper_search` → `paper_download` → `paper_read` → `notes_compose` | 只使用当前项目返回的 result_id / paper_id / note_id |
+| 文献研究 | `paper_search` → `paper_download` → `paper_read` → `notes_compose` | 只使用当前项目返回的 result_id / paper_id / note_id；精读属于下载精读步骤 |
+| 论文翻译 | `paper_translate(paper_id, action="start"/"status")` | 启动后查询真实进度；只有完成的译文 PDF 可交付，精读笔记不算译文 |
 | 写作与导出 | `draft_write` / `draft_review` / `format_convert` | 工具成功后报告真实产物路径 |
 
-工作流步骤：`idea`、`search`、`download`、`notes`、`outline`、`map`、`write`、`review`、`entrans`、`convert`。按需求组合，避免重复步骤。
+工作流步骤：`idea` 创新点审查、`search` 论文搜索、`download` 下载精读、`notes` 论文翻译、`outline` 确认大纲、`map` 梳理精读、`write` 文章撰写、`review` 稿件审查、`entrans` 中译英、`convert` 格式转换。按需求组合，避免重复步骤。
 
 批量创建时先确认所需对象与项目，再依次使用返回的 ID：创建专家 → 创建团队 → 创建工作流 → 创建待办 → 写计划笔记。已有对象应先查询和复用。涉及全局配置的变更在结果中明确说明。

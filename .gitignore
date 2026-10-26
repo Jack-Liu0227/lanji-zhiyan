@@ -2,6 +2,13 @@
 data/
 # 旧布局迁移后留下的现场（保 7 天再删）
 data.old-*/
+output/recovery/
+output/
+doc/test-reports/
+doc/screenshots/
+提交文件/
+.pytest_cache/
+.ruff_cache/
 *.db
 *.sqlite3
 

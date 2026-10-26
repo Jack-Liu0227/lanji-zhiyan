@@ -390,9 +390,12 @@ def map_sources(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
         return out[:120]
     titles = {n["id"]: (n["title"] or "") for n in db.notes(task_id)}
     note_files = ls(base / "笔记") if base else ls(NOTES, ("*.md",))
+    import note_catalog
+    note_root = base / "笔记" if base else NOTES
     notes = [{"id": Path(f).stem, "name": f, "title": titles.get(Path(f).stem) or Path(f).name}
              for f in note_files
-             if Path(f).suffix.lower() == ".md" and Path(f).name.lower() != "readme.md"]
+             if Path(f).suffix.lower() == ".md" and Path(f).name.lower() != "readme.md"
+             and not note_catalog.is_template((note_root / f).read_text(encoding="utf-8", errors="replace"))]
     papers = [p["filename"] for p in db.papers_of(task_id)]
     data = (ls(base / "其余" / "数据") if base else []) + ls(DATA / "uploads")
     return {"sections": [x.strip() for x in secs][:60], "notes": notes, "papers": papers[:60],
@@ -420,8 +423,10 @@ def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str, mode: st
     p.parent.mkdir(parents=True, exist_ok=True)
     fileguard.before_write(p, f"{kind}正文覆盖")
     import verify                                     # 落盘前机械核一遍：素材（证据+笔记）里找不到的带单位数值，标出来
+    import note_catalog
     corpus = "\n".join([str(r["excerpt"] or "") for r in db.evidence(task_id)]
-                       + [n["markdown"][:20000] or "" for n in db.notes(task_id)[:80]])
+                       + [n["markdown"][:20000] or "" for n in db.notes(task_id)[:80]
+                          if not note_catalog.is_template(n["markdown"] or "")])
     content = verify.stamp(body, verify.audit(seg, corpus=corpus, label=kind)).rstrip() + "\n"
     import asset_service
     asset_service.atomic_write_text(p, content)

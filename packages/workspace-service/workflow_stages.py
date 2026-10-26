@@ -119,6 +119,8 @@ def stage_download(db: WorkflowDB, task_id: str, result_id: str) -> dict[str, An
     import execution
     execution.check()
     paper = db.ingest_pdf(task_id, path)
+    import project_library
+    project_library.link_pdf(db, task_id, result_id, paper["id"])
     db.log_step(task_id, "download", "done", f"已入库 {paper['filename']}（{len(paper['pages'])} 页）")
     return {"paper": paper, "pdf_path": str(path)}
 
@@ -138,7 +140,9 @@ def stage_download_selected(db: WorkflowDB, task_id: str, result_ids: list[str])
             continue
         try:
             path = download_pdf(item, target_dir=db.pdir(task_id, "文献库"))
-            db.ingest_pdf(task_id, path)
+            paper = db.ingest_pdf(task_id, path)
+            import project_library
+            project_library.link_pdf(db, task_id, r["id"], paper["id"])
             db.set_queue(task_id, r["id"], "downloaded", str(path), "")
             done += 1
         except Exception as exc:                       # 403 / 落地页不是 PDF / 超时 → 交给人工
@@ -183,19 +187,28 @@ def stage_zotero_import(db: WorkflowDB, task_id: str, collection: str = "",
                     break
     done = manual = 0
     for it in rows:
-        rid = db.cache_result(task_id, {
-            "source": "zotero", "title": it["title"], "authors": ", ".join(it["creators"]),
+        import zotero_sync
+        zotero_sync.ensure(db)
+        rid = zotero_sync.import_record(db, task_id, it['key'], {
+            "source": "zotero", "title": it["title"], "authors": "; ".join(it["creators"]),
             "year": it["year"], "doi": it["doi"],
             "url": it["url"] or (f"https://doi.org/{it['doi']}" if it["doi"] else ""),
             "pdf_url": "", "abstract": it["abstract"],
         })
+        db.db.execute("INSERT OR REPLACE INTO zotero_item_links VALUES (?,?,?,?,?)",
+                      (task_id, rid, it["key"], it.get("version", 0), zotero_sync._hash(db.result(rid))))
+        db.db.commit()
         path = zotero.pdf_path(it["key"])
         if not path:
             db.set_queue(task_id, rid, "manual", "", "Zotero 里这条没有 PDF 附件")
             manual += 1
             continue
         try:
-            db.ingest_pdf(task_id, path)
+            import project_sources
+            import project_library
+            copied = project_sources.import_zotero_pdf(db, task_id, it["key"])
+            path = copied["path"]
+            project_library.link_pdf(db, task_id, rid, copied["paper_id"])
         except Exception as exc:                      # 加密/损坏/不是真 PDF → 交给人工
             db.set_queue(task_id, rid, "manual", "", f"Zotero 附件读不了：{exc}")
             manual += 1
@@ -319,7 +332,8 @@ def _deepread_worker(db_path: str, task_id: str) -> None:
                     st["failed"] += 1
                     st["errors"].append("%s: %s" % (p["filename"][:30], exc))
                 st["done"] += 1
-            db.log_step(task_id, "notes", "done", "精读 %d 篇（失败 %d，跳过非论文 %d）" % (st["done"], st["failed"], len(skipped)))
+            db.log_step(task_id, "download", "done" if not st["failed"] else "failed",
+                        "精读 %d 篇（失败 %d，跳过非论文 %d）" % (st["done"], st["failed"], len(skipped)))
             st["phase"] = "done"
     except Exception as exc:
         st["phase"] = "failed"
@@ -418,7 +432,7 @@ def stage_notes(db: WorkflowDB, task_id: str, note_id: str, vault: str | None = 
         result["preview"] = {k: preview[k] for k in ("target", "exists", "confirm_token")}
         if apply:
             result["written"] = apply_obsidian_preview(preview, preview["confirm_token"])
-    db.log_step(task_id, "notes", "done", f"知识库笔记已生成（证据 {len(rows)} 条）")
+    db.log_step(task_id, "download", "done", f"知识库笔记已生成（证据 {len(rows)} 条）")
     return result
 
 

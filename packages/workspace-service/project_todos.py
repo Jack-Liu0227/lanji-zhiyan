@@ -89,7 +89,7 @@ def add_todo(
     assigned_assistant: str = "",
     due_date: str = "",
     stage: str = "",
-    *, todo_id: str = "",
+    *, todo_id: str = "", status: str = "TODO",
 ) -> dict[str, Any]:
     ensure_table(db)
     title = (title or "").strip()
@@ -97,15 +97,21 @@ def add_todo(
         raise ValueError("任务标题不能为空")
     if priority not in PRIORITIES:
         priority = "P1"
+    if status not in STATUSES:
+        raise ValueError("未知的任务状态")
+    if stage and status == "DONE" and hasattr(db, "steps"):
+        import workflow_state
+        if workflow_state.states(db, task_id).get(stage, {}).get("status") != "delivered":
+            raise ValueError("请在工作流中验收本步产物并确认交付")
     todo_id = todo_id or f"td_{uuid.uuid4().hex[:12]}"
     now = _now()
     conn = _conn(db)
     conn.execute(
         """
         INSERT OR IGNORE INTO project_todos (id, task_id, title, description, status, priority, assigned_assistant, due_date, stage, created_at, updated_at)
-        VALUES (?, ?, ?, ?, 'TODO', ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (todo_id, task_id or "", title, description or "", priority, assigned_assistant or "", due_date or "", stage or "", now, now),
+        (todo_id, task_id or "", title, description or "", status, priority, assigned_assistant or "", due_date or "", stage or "", now, now),
     )
     conn.commit()
     return {
@@ -113,7 +119,7 @@ def add_todo(
         "task_id": task_id or "",
         "title": title,
         "description": description or "",
-        "status": "TODO",
+        "status": status,
         "priority": priority,
         "assigned_assistant": assigned_assistant or "",
         "due_date": due_date or "",
@@ -192,6 +198,7 @@ def import_workflow_stages_as_todos(db: Any, task_id: str) -> list[dict[str, Any
         ("10. 格式转换与编译预览", "多格式编译并生成最终投稿预览稿"),
     ]
     from workflow_db import STAGES, STAGE_LABEL
+    from workflow_catalog import STAGE_PURPOSE
     order = STAGES
     if hasattr(db, "steps"):
         import workflow_state
@@ -202,14 +209,14 @@ def import_workflow_stages_as_todos(db: Any, task_id: str) -> list[dict[str, Any
     conn = _conn(db)
     created = []
     for step in order:
-        title, desc = stages[STAGES.index(step)]
+        title, _ = stages[STAGES.index(step)]
         old = conn.execute("SELECT * FROM project_todos WHERE task_id=? AND (stage=? OR (stage='' AND title=?)) "
                            "ORDER BY created_at,id LIMIT 1", (task_id, step, title)).fetchone()
         if old:
             created.append(update_todo(db, old["id"], stage=step))
         else:
             stable_id = "wf_" + uuid.uuid5(uuid.NAMESPACE_URL, task_id + ":" + step).hex
-            created.append(add_todo(db, task_id, title=STAGE_LABEL[step], description=desc, priority="P1",
+            created.append(add_todo(db, task_id, title=STAGE_LABEL[step], description=STAGE_PURPOSE[step], priority="P1",
                                     stage=step, todo_id=stable_id))
     return created
 

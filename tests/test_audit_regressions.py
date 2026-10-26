@@ -87,12 +87,13 @@ class AuditRegressionTest(unittest.TestCase):
         zotero_sync.ensure(self.db)
         item = self.db.cache_results(self.pid, [{"source": "zotero", "title": "Editorial", "doi": doi, "authors": "First author"}])[0]
         self.db.db.execute("INSERT INTO zotero_bindings (task_id,library,collection) VALUES (?,?,?)", (self.pid, "users/123", "ABCDEFGH"))
+        self.db.db.execute("INSERT INTO zotero_project_sources VALUES (?,?,?,'all')", (self.pid, 'users/123', 'ABCDEFGH'))
         self.db.db.commit()
         return item
 
     @staticmethod
     def remote(doi, key="REMOTE01"):
-        return {"key": key, "version": 1, "data": {"itemType": "journalArticle", "title": "Editorial", "DOI": doi}}
+        return {"key": key, "version": 1, "data": {"itemType": "journalArticle", "title": "Editorial", "DOI": doi, "collections": ["ABCDEFGH"]}}
 
     def sync_preview(self, remote, mode="pull", apply=False):
         with patch.object(zotero_sync, "config", return_value={"library_type": "users", "library_id": "123"}), \
@@ -161,7 +162,10 @@ class AuditRegressionTest(unittest.TestCase):
                 project_notes.write(self.db, self.pid, relative, "UPDATED_NOTE_CONTENT")
                 self.assertEqual(space_service.search_project_space(self.db, self.pid, "OLD_NOTE_CONTENT")["total"], 0)
                 self.assertEqual(space_service.search_project_space(self.db, self.pid, "UPDATED_NOTE_CONTENT")["total"], 1)
-                self.assertEqual(self.db.db.execute(f"SELECT {field} FROM {table} WHERE id=?", (note["id"],)).fetchone()[0], "UPDATED_NOTE_CONTENT")
+                import note_catalog
+                stored = self.db.db.execute(f"SELECT {field} FROM {table} WHERE id=?", (note["id"],)).fetchone()[0]
+                self.assertEqual(note_catalog.split(stored)[1], "UPDATED_NOTE_CONTENT")
+                self.assertEqual(stored, (self.db.base_dir(self.pid) / relative).read_text(encoding="utf-8"))
                 project_notes.delete(self.db, self.pid, relative)
                 self.assertEqual(space_service.search_project_space(self.db, self.pid, "UPDATED_NOTE_CONTENT")["total"], 0)
                 self.assertIsNone(self.db.db.execute(f"SELECT id FROM {table} WHERE id=?", (note["id"],)).fetchone())

@@ -15,6 +15,7 @@ import queue
 import re
 import securestore              # DPAPI 凭据保护（见 workspace-core/securestore.py）
 import paths
+import skill_registry
 import shutil
 import subprocess
 import threading
@@ -290,7 +291,7 @@ def default_mcp_config() -> dict:
                 "cwd": ".",
                 "transport": "stdio",
                 "enabled": True,
-                "description": "Zotero 本地题录检索、PDF直读与Web API写入"
+                "description": "Zotero 本机题录检索、PDF直读、文献更新与笔记写入"
             }
         }
     }
@@ -307,7 +308,7 @@ def ensure_zotero_mcp(db) -> dict:
         "cwd": ".",
         "transport": "stdio",
         "enabled": True,
-        "description": "Zotero 本地题录检索、PDF直读与Web API写入"
+        "description": "Zotero 本机题录检索、PDF直读、文献更新与笔记写入"
     }
     save_mcp(db, cfg)
     return {"ok": True, "server": servers["zotero"]}
@@ -747,6 +748,9 @@ def invoke_tool(db, assistant_id: str, name: str, args: dict, project_dir: str =
 def settings_meta(db, project_dir: str = "") -> dict:
     conn = _ensure(db)
     skills = list_skills(project_dir)
+    installed = skill_registry.installations(db)
+    for skill in skills:
+        skill["installation"] = installed.get(skill["path"])
     config = _redact(_config(db))
     discovered: dict[str, list] = {}
     for server, tool in _cached_tools(db):
@@ -769,6 +773,9 @@ def route(method: str, path: str, body: dict, query: dict, db) -> dict | None:
     body = body or {}
     query = query or {}
     project_dir = _project_dir(db, body, query)
+    registry_response = skill_registry.route(method, path, body, query, db, project_dir)
+    if registry_response is not None:
+        return registry_response
     if method == "GET" and path == "/api/capabilities":
         return settings_meta(db, project_dir)
     if path == "/api/capabilities/skill" and method in ("GET", "POST"):

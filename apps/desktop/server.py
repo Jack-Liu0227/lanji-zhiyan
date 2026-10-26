@@ -634,7 +634,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
             "/api/agent-settings", "/api/capabilities", "/api/workflow/layouts", "/api/feishu/", "/api/zotero/web/",
             "/api/projects", "/api/papers/", "/api/chats", "/api/assistants", "/api/teams/", "/api/runs/",
             "/api/mcp/", "/api/audit/", "/api/easyscholar/", "/api/zotero/mcp/", "/api/todos", "/api/kanban", "/api/space/",
-            "/api/assets", "/api/workflow/run", "/api/workflow/runs", "/api/workflow/recover",
+            "/api/assets", "/api/workflow/run", "/api/workflow/runs", "/api/workflow/recover", "/api/workflow/execution", "/api/workflow/reviews", "/api/handoff/", "/api/library/", "/api/calendar/linked",
         )
         if not path.startswith(prefixes):
             return False
@@ -1040,6 +1040,9 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
             except vault.VaultError as exc:
                 return self._json({"error": str(exc)}, 400)
         if path.startswith("/api/win/"):
+            if path == "/api/win/close" and paths.GRANT:
+                ok = paths._grant_post("/close", {})
+                return self._json({"ok": "close"} if ok else {"error": "关闭窗口失败"})
             return self._json(_win(path.rsplit("/", 1)[-1]))
         if path == "/api/idea/input":                # 创新点审查：存上区那段原文（助手每轮读它）
             try:
@@ -1201,7 +1204,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                         enabled = bool(data.get("enabled", True))
                         with WorkflowDB(DB_PATH) as wdb:
                             assistant_id = str(data.get("assistant_id") or "")
-                            if enabled and (not assistant_id or not wdb.assistant(assistant_id)):
+                            if enabled and not data.get("workflow_id") and (not assistant_id or not wdb.assistant(assistant_id)):
                                 return self._json({"error": "请选择一个已启用的执行专家"}, 400)
                             if enabled and not wdb.base_dir(str(data.get("project_id") or "")):
                                 return self._json({"error": "请选择一个有文件夹的项目"}, 400)
@@ -1210,6 +1213,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                                                      "prompt": str(data.get("prompt") or "").strip(),
                                                      "project_id": str(data.get("project_id") or ""),
                                                      "assistant_id": str(data.get("assistant_id") or ""),
+                                                      "workflow_id": str(data.get("workflow_id") or ""),
                                                      "frequency": str(data.get("frequency") or "daily"),
                                                      "cron": str(data.get("cron") or "0 9 * * *"),
                                                      "output_dir": folder, "enabled": enabled,
@@ -1254,7 +1258,19 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                                                               str(data.get("path") or ""), str(data.get("content") or ""),
                                                               title=str(data["title"]) if "title" in data else None,
                                                               create=data.get("create") is True,
-                                                              expected_hash=str(data["expected_hash"]) if "expected_hash" in data else None))
+                                                              expected_hash=str(data["expected_hash"]) if "expected_hash" in data else None,
+                                                              metadata=data.get("metadata")))
+                if path == "/api/project/note/batch":
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(project_notes.batch_update(note_db, str(data.get("project_id") or ""), data))
+                if path.startswith("/api/prompt-templates/"):
+                    import prompt_templates
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(prompt_templates.route(note_db, path, data))
+                if path == "/api/project/note-categories":
+                    import note_catalog
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(note_catalog.mutate(note_db, str(data.get("project_id") or ""), data))
                 if path == "/api/project/folder/create":
                     with WorkflowDB(DB_PATH) as note_db:
                         return self._json(project_notes.create_folder(note_db, str(data.get("project_id") or ""),
@@ -1263,11 +1279,44 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     with WorkflowDB(DB_PATH) as note_db:
                         return self._json(project_notes.delete(note_db, str(data.get("project_id") or ""),
                                                                str(data.get("path") or "")))
+                if path == "/api/project/note/rename":
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(project_notes.rename(note_db, str(data.get("project_id") or ""),
+                                                               str(data.get("path") or ""),
+                                                               str(data.get("new_name") or "")))
+                if path == "/api/conv/rename":
+                    p = _safe_path(data.get("path", ""))
+                    clean_name = str(data.get("new_name") or "").strip().replace("\\", "/").split("/")[-1].strip()
+                    if not clean_name:
+                        return self._json({"error": "新名称不能为空"}, 400)
+                    target = p.parent / clean_name
+                    if target.exists() and target != p:
+                        return self._json({"error": f"已存在同名目标: {clean_name}"}, 400)
+                    fileguard.before_write(target, "重命名")
+                    p.rename(target)
+                    fileguard.audit("rename", target, note=f"{p.name} -> {target.name}")
+                    return self._json({"ok": True, "old_path": str(p), "new_path": str(target), "name": target.name})
+                if path == "/api/conv/delete":
+                    p = _safe_path(data.get("path", ""))
+                    if not p.exists():
+                        return self._json({"error": "文件或目录不存在"}, 404)
+                    if p.is_file():
+                        fileguard.before_write(p, "删除文件")
+                        p.unlink()
+                        fileguard.audit("delete", p)
+                    elif p.is_dir():
+                        import shutil
+                        shutil.rmtree(p)
+                        fileguard.audit("delete_tree", p)
+                    return self._json({"ok": True, "deleted": str(p)})
                 if path == "/api/trans/start":
                     tid = (data.get("task_id") or "").strip()
                     pid = (data.get("id") or "").strip()
                     with WorkflowDB(DB_PATH) as db:
-                        out = db.pdir(tid, "文献库") if tid else (paths.OUT)
+                        try:
+                            out = papertran.output_dir(db, pid, tid)
+                        except ValueError as exc:
+                            return self._json({"error": str(exc)}, 400)
                         return self._json(papertran.start(db, pid, out, str(data.get("pages") or ""),
                                                           bool(data.get("force"))))
                 if path == "/api/en/run":                   # 一键翻译（中文 markdown → 英文 markdown）
@@ -1279,6 +1328,10 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     return self._json(conv_compile(data.get("path", "")))
                 if path == "/api/conv/open":                 # 用系统默认程序打开
                     return self._json(conv_open(data.get("path", "")))
+                if path == "/api/file/location":
+                    import file_location
+                    with WorkflowDB(DB_PATH) as file_db:
+                        return self._json(file_location.locate(file_db, data))
                 if path == "/api/conv/save":                # 手改文件（代码区保存）
                     p = _safe_path(data.get("path", ""))
                     p.parent.mkdir(parents=True, exist_ok=True)
@@ -1348,11 +1401,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     with WorkflowDB(DB_PATH) as db:
                         existing = db.messages(tid, step)
                         if existing and any(m.get("role") != "system" for m in existing):
-                            stage_map = {
-                                "idea": "创新点审查", "search": "文献检索", "download": "文献入库",
-                                "notes": "文献精读", "outline": "拟定框架", "map": "证据链谱系",
-                                "write": "论文撰写", "review": "AI预审查", "entrans": "学术英译", "convert": "格式排版"
-                            }
+                            stage_map = workflow.STAGE_LABEL
                             title = f"[{stage_map.get(step, step)}] 探讨 {time.strftime('%m-%d %H:%M')}"
                             cid = db.create_chat(title)
                             db.db.execute("UPDATE chats SET task_id=?, assistant_id=? WHERE id=?", (tid, f"step-{step}", cid))
@@ -1373,37 +1422,6 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                                           (tid, step, step))
                             db.db.commit()
                         return self._json({"ok": True, "task_id": tid, "step": step})
-                if path == "/api/zotero/collection/create": # 新建 Zotero 分类
-                    with WorkflowDB(DB_PATH) as db:
-                        name = str(data.get("name") or "").strip()
-                        parent = str(data.get("parent") or "").strip()
-                        return self._json(zotero.create_collection(db, name, parent))
-                if path == "/api/zotero/import_project_papers": # 导入项目下载文献至 Zotero
-                    tid = str(data.get("task_id") or "").strip()
-                    col_key = str(data.get("collection_key") or "").strip()
-                    with WorkflowDB(DB_PATH) as db:
-                        task = db.summary(tid)["task"]
-                        papers = db.papers(tid)
-                        imported = []
-                        for p in papers:
-                            title = p.get("title") or Path(p.get("filename", "")).stem
-                            item = {
-                                "itemType": "journalArticle",
-                                "title": title,
-                                "DOI": p.get("doi") or "",
-                                "tags": [{"tag": f"项目:{task['title']}"}, {"tag": "览籍智研"}],
-                            }
-                            if col_key:
-                                item["collections"] = [col_key]
-                            try:
-                                created = zotero.add_item(db, item)
-                                pdf_file = db.pdir(tid, "文献库") / p.get("filename", "")
-                                if pdf_file.is_file() and created.get("key"):
-                                    zotero.link_pdf(db, created["key"], str(pdf_file), title=f"PDF - {title[:60]}")
-                                imported.append(created)
-                            except Exception:
-                                pass
-                        return self._json({"ok": True, "count": len(imported), "total": len(papers)})
                 if path == "/api/outline/save":           # 手动改框架（左边直接编辑时用）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(outline_write(db, (data.get("task_id") or "").strip(),
@@ -1697,10 +1715,13 @@ def _start_inproc(port: int, url: str) -> None:
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     _boot_mark("服务端口已监听")
     schedule.start()           # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
+    zotero_sync.start_auto(DB_PATH)
     feishu.start_bridge(DB_PATH)
     team.start_worker()        # 团队派活队列（串行：一次跑一个成员）
     import agent_jobs
     agent_jobs.recover(DB_PATH)
+    import workflow_execution
+    workflow_execution.recover(DB_PATH)
     _semantic_boot()           # 语义索引后台预热（内容没变就全跳过，幂等）
     print(f"览籍智研已启动：{url}")
 
@@ -1814,6 +1835,13 @@ def _start_grant_helper():
                     elif self.path == "/open":          # 文档/目录只有 Medium 开得动
                         target = str(data.get("target") or "")
                         ok = bool(target) and _host_open(target)
+                    elif self.path == "/account":
+                        import account_providers
+                        result = account_providers.host_request(data)
+                        ok = "error" not in result
+                    elif self.path == "/close":
+                        result = _win("close")
+                        ok = "error" not in result
                     elif self.path == "/app":           # 外部 GUI 程序：名字白名单，路径宿主自己解
                         if data.get("name") == "zotero":
                             import zotero
@@ -1823,7 +1851,7 @@ def _start_grant_helper():
                                 ok = True
                 except (OSError, ValueError, KeyError):
                     ok = False
-            body = json.dumps(result if self.path in ("/pick", "/tex") and 'result' in locals() else {"ok": ok}).encode()
+            body = json.dumps(result if self.path in ("/pick", "/tex", "/account") and 'result' in locals() else {"ok": ok}).encode()
             self.send_response(200 if ok else 403)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -1896,6 +1924,7 @@ def _stop_low_server() -> None:
     if _LOW_SERVER is not None:
         try:
             _LOW_SERVER.kill()
+            _LOW_SERVER.wait(timeout=5)
         except Exception:
             pass
         _LOW_SERVER = None

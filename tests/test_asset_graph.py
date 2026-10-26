@@ -29,7 +29,8 @@ class AssetGraphTest(unittest.TestCase):
     def test_note_is_atomic_file_and_asset(self):
         note = self.db.add_note(self.project, "精读", "# 结论\n\n原文 p.1")
         path = Path(note["canonical_path"])
-        self.assertEqual(path.read_text(encoding="utf-8"), "# 结论\n\n原文 p.1")
+        import note_catalog
+        self.assertEqual(note_catalog.split(path.read_text(encoding="utf-8"))[1], "# 结论\n\n原文 p.1")
         assets = asset_service.list_assets(self.db, self.project, "note")
         self.assertEqual(len(assets), 1)
         self.assertEqual(assets[0]["title"], "精读")

@@ -50,7 +50,8 @@ FREQ_LABELS = {"manual": "手动", "hourly": "每小时", "daily": "每天",
                "weekdays": "工作日", "weekly": "每周", "custom": "自定义 Cron"}
 RETRYABLE = {"failed", "blocked", "canceled", "partial"}
 RUN_STATUS = {"running": "运行中", "completed": "完成", "partial": "部分完成",
-              "failed": "失败", "blocked": "已阻断", "canceled": "已取消"}
+              "failed": "失败", "blocked": "已阻断", "canceled": "已取消",
+              "awaiting_review": "等待人工审查", "interrupted": "中断待恢复"}
 
 # ------------------------------------------------------------------ cron ----
 
@@ -219,6 +220,11 @@ def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None
         signal = threading.Event()
         _running[key] = signal
     try:
+        import schedule_workflow
+        with workflow.WorkflowDB(_db_path()) as db:
+            if schedule_workflow.pending(db, sched['id']):
+                db.schedule_mark_run(sched['id'], sched.get('last_run_at', ''), next_run_at(sched['cron']))
+                return {'id': '', 'schedule_id': sched['id'], 'status': 'skipped', 'reason': '上次工作流仍在执行或等待审查'}
         return _run_once(sched, trigger, emit, signal.is_set)
     finally:
         with _lock:
@@ -230,6 +236,30 @@ def cancel_run(schedule_id: str, db_path: str | Path) -> None:
         signal = _running.get((str(Path(db_path).resolve()), schedule_id))
         if signal:
             signal.set()
+    import schedule_workflow
+    with workflow.WorkflowDB(db_path) as db:
+        schedule_workflow.cancel(db, schedule_id)
+
+
+def archive_note(db, sched: dict, run: dict, content: str, output_asset: dict) -> dict:
+    """One editable project note per schedule attempt, linked to its source."""
+    import asset_service
+    import note_catalog
+    nid = "schedule-" + run["id"]
+    if db.db.execute("SELECT 1 FROM md_notes WHERE id=?", (nid,)).fetchone():
+        return db.md_note(nid)
+    markdown = note_catalog.combine({"source": "schedule",
+        "schedule_id": sched["id"], "schedule_run_id": run["id"],
+        "workflow_run_id": run.get("workflow_run_id", ""), "tags": ["定时任务"]}, content)
+    note = db.save_md_note(nid, sched["name"] + " · " + run["started_at"][:16].replace("T", " "),
+                           markdown, task_id=sched["project_id"])
+    row = db.db.execute("SELECT id FROM assets WHERE canonical_uri=?", (str(Path(note["canonical_path"]).resolve()),)).fetchone()
+    asset = asset_service.get(db, row["id"]) if row else None
+    if asset:
+        asset_service.link(db, asset["id"], "derived_from", output_asset["id"],
+                           {"schedule_id": sched["id"], "schedule_run_id": run["id"]})
+        note["asset_id"] = asset["id"]
+    return note
 
 
 def _run_once(sched: dict[str, Any], trigger: str, emit: Any = None, cancel_check=None) -> dict[str, Any]:
@@ -268,6 +298,13 @@ def _run_once(sched: dict[str, Any], trigger: str, emit: Any = None, cancel_chec
     folder_ok, folder_why = inspect_output_dir(sched.get("output_dir") or "")
     if not folder_ok:
         return finish("blocked", reason=f"输出目录不可用：{folder_why}")
+    if sched.get('workflow_id'):
+        try:
+            import schedule_workflow
+            with workflow.WorkflowDB(_db_path()) as db:
+                return schedule_workflow.start(db, sched, run)
+        except Exception as exc:
+            return finish('blocked', reason=str(exc))
     if not str(sched.get("assistant_id") or "").strip():
         return finish("blocked", reason="未绑定专家：请在任务中选择一个已启用的专家")
 
@@ -287,7 +324,7 @@ def _run_once(sched: dict[str, Any], trigger: str, emit: Any = None, cancel_chec
             linked = db.db.execute("SELECT p.stage FROM task_links l JOIN project_todos p ON p.id=l.todo_id "
                                    "WHERE l.schedule_id=?", (sched["id"],)).fetchone()
             stage = linked["stage"] if linked else ""
-            inputs = [a["id"] for a in asset_service.list_assets(db, sched["project_id"], limit=200)]
+            inputs = [a["id"] for a in asset_service.research_assets(db, sched["project_id"], limit=200)]
             tracked = run_service.start(db, sched["project_id"], "schedule", idempotency_key="schedule:" + run["id"])
             tracked_id = tracked["id"]
             node = run_service.node_start(db, tracked_id, "schedule", inputs=inputs)
@@ -301,6 +338,7 @@ def _run_once(sched: dict[str, Any], trigger: str, emit: Any = None, cancel_chec
                 current = db.schedule(sched["id"])
                 return not current or current.get("project_id") != sched.get("project_id") or not db.db.execute(
                     "SELECT 1 FROM research_tasks WHERE id=?", (sched["project_id"],)).fetchone()
+            db.template_schedule_id = sched["id"]
             out = workflow.run_agent(db, sched["project_id"], prompt, emit=emit,
                                      publish=False, assistant_id=sched["assistant_id"], scope=stage, cancel_check=cancel_check)
             if removed():
@@ -318,7 +356,12 @@ def _run_once(sched: dict[str, Any], trigger: str, emit: Any = None, cancel_chec
             asset = asset_service.register_file(db, path, project_id=sched["project_id"], kind="schedule_output",
                                                 source="schedule", run_id=tracked_id, body=header + text,
                                                 metadata={"schedule_id": sched["id"], "schedule_run_id": run["id"]})
-            run["output_assets"] = list(dict.fromkeys([*(out.get("output_assets") or []), asset["id"]]))
+            note = archive_note(db, sched, run, header + text + "\n", asset)
+            run.update(note_id=note["id"], note_path=note["canonical_path"])
+            if out.get("template_snapshot"):
+                used = out["template_snapshot"]
+                asset_service.link(db, asset["id"], "used_template", used["asset_id"], {"revision_id": used["revision_id"]})
+            run["output_assets"] = list(dict.fromkeys([*(out.get("output_assets") or []), asset["id"], *([note["asset_id"]] if note.get("asset_id") else [])]))
             run_service.finish_node(db, node["id"], "succeeded", outputs=run["output_assets"])
             if stage:
                 db.log_step(sched["project_id"], stage, "succeeded", "定时任务产物已生成，等待交付验收")
@@ -388,6 +431,9 @@ def catch_up() -> int:
 def tick(now: datetime | None = None) -> int:
     """到点了就按顺序跑（同一规则不重入）。返回本次跑了几条。"""
     ran = 0
+    import schedule_workflow
+    with workflow.WorkflowDB(_db_path()) as db:
+        schedule_workflow.reconcile(db)
     for sched in due_list(now):
         if run_once(sched, trigger="scheduler")["status"] != "skipped":
             ran += 1
@@ -412,6 +458,8 @@ def recover_runs() -> int:
         rows = db.db.execute("SELECT * FROM schedule_runs WHERE status='running'").fetchall()
         for record in rows:
             row = dict(record)
+            if db.db.execute('SELECT 1 FROM schedule_workflow_runs WHERE schedule_run_id=?', (row['id'],)).fetchone():
+                continue
             if (str(Path(_db_path()).resolve()), row["schedule_id"]) in _running:
                 continue
             row.update(status="failed", ended_at=datetime.now().isoformat(timespec="seconds"),

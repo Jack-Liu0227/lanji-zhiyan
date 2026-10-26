@@ -30,8 +30,9 @@ RUNNING: set[str] = set()    # 正在跑的任务行 id（防重入）
 _lock = threading.Lock()
 
 STEPS = list(workflow.STAGES)
-LEADER_NAME = "智研管家"
-LEADER_BRIEF = "你好，我是智研管家，负责理解你的目标并协调团队。描述你想做的事，我来安排。"
+LEADER_NAME = "团队协调员"
+LEADER_BRIEF = "负责当前团队的目标拆解、专业分工、进度跟进和交付验收。项目及团队配置由智研管家管理。"
+from team_configuration import PROFILES as FIXED_LEADERS
 
 
 def _db_path():
@@ -46,17 +47,30 @@ def _now() -> str:
 
 
 # ---------------- 成员 ----------------
-def ensure_leader(task_id: str) -> dict[str, Any]:
+def ensure_leader(task_id: str, db: Any = None) -> dict[str, Any]:
     """确保团队里有 leader 行（幂等）。Leader 恒为列表第一个、不可移除。"""
     if not (task_id or "").strip():
         raise ValueError("团队要挂在一个项目或对话上（scope 不能是空）")
-    with workflow.WorkflowDB(_db_path()) as db:
+    with (nullcontext(db) if db is not None else workflow.WorkflowDB(_db_path())) as db:
+        team_row = db.team(task_id) or {}
+        aid = FIXED_LEADERS.get(team_row.get("name", ""), "") if team_row.get("kind") == "fixed" else ""
+        if not aid and team_row.get("kind") == "fixed":
+            # A renamed preset keeps its specialization across application restarts.
+            fixed = [t for t in db.teams() if t["kind"] == "fixed" and t.get("project_id") == team_row.get("project_id")]
+            index = next((i for i, t in enumerate(fixed) if t["id"] == task_id), 0)
+            aid = list(FIXED_LEADERS.values())[index % len(FIXED_LEADERS)]
+        assistant = db.assistant(aid) if aid else None
+        defaults = {"name": assistant["name"] if assistant else (team_row.get("name", "") + "负责人" if team_row else LEADER_NAME),
+                    "prompt": assistant["rules"] if assistant else LEADER_BRIEF, "assistant_id": aid}
         rows = [m for m in db.team_members(task_id) if m["role"] == "leader"]
         if rows:
-            if rows[0]["name"] == "全局 Leader":      # 旧库名「全局 Leader」→ 迁移成新称呼
-                return db.team_member_update(rows[0]["id"], name=LEADER_NAME)
+            leader = rows[0]
+            legacy = leader.get("assistant_id") == "builtin-steward" or (
+                not leader.get("assistant_id") and leader["name"] in ("全局 Leader", "智研管家"))
+            if legacy:
+                return db.team_member_update(leader["id"], **defaults)
             return rows[0]
-        return db.team_member_add(task_id, LEADER_NAME, "leader", "", LEADER_BRIEF)
+        return db.team_member_add(task_id, defaults["name"], "leader", prompt=defaults["prompt"], assistant_id=aid)
 
 
 def members(task_id: str) -> list[dict[str, Any]]:
@@ -146,8 +160,7 @@ def assign(task_id: str, member: str, prompt: str, title: str = "", trigger: str
     if not prompt:
         raise ValueError("要派的事不能为空")
     with (nullcontext(db) if db is not None else workflow.WorkflowDB(_db_path())) as db:
-        if not any(m["role"] == "leader" for m in db.team_members(task_id)):
-            db.team_member_add(task_id, LEADER_NAME, "leader", "", LEADER_BRIEF)
+        ensure_leader(task_id, db)
         rows = db.team_members(task_id)
         key = (member or "").strip().lower()
         hit = next((m for m in rows if m["id"] == member or m["name"].lower() == key), None)
@@ -160,10 +173,16 @@ def assign(task_id: str, member: str, prompt: str, title: str = "", trigger: str
         reviewer = (reviewer_id or "").strip()
         if reviewer and not any(item["id"] == reviewer for item in rows):
             raise ValueError("Reviewer 必须是当前项目团队成员")
+        import prompt_templates
+        project_id = (db.team(task_id) or {}).get("project_id") or task_id
+        snapshot = prompt_templates.resolve(db, project_id, step=hit.get("step", ""),
+                                            member_id=hit["id"], assistant_id=hit.get("assistant_id", "")) if db.base_dir(project_id) else None
         with db.transaction():
             db.db.execute("BEGIN IMMEDIATE")
             row = db.team_task_add(task_id, hit["id"], hit["name"], title or prompt[:40], prompt,
                                    trigger, origin, deps, contract, reviewer, commit=False)
+            db.db.execute("UPDATE team_tasks SET checkpoint=? WHERE id=?",
+                          (json.dumps({"queued_template_snapshot": snapshot}, ensure_ascii=False), row["id"]))
             if todo_id:
                 import project_todos
                 project_todos.bind_execution(db, todo_id, task_id, team_task_id=row["id"], commit=False)
@@ -188,7 +207,7 @@ def board(task_id: str, limit: int = 40) -> dict[str, Any]:
     for t in tasks:
         counts[t["status"]] = counts.get(t["status"], 0) + 1
     return {"members": mem, "tasks": tasks, "counts": counts,
-            "leader_brief": LEADER_BRIEF, "steps": STEPS,
+            "leader_brief": next((m["prompt"] for m in mem if m["role"] == "leader"), LEADER_BRIEF), "steps": STEPS,
             "serial_note": "单进程串行队列：一次只跑一个成员（真并行要独立 agent 进程）",
             "running": sorted(RUNNING)}
 
@@ -198,6 +217,8 @@ def cancel(task_id_row: str) -> dict[str, Any]:
         row = db.team_task(task_id_row)
         if not row:
             raise ValueError("任务不存在")
+        if str(row.get("origin") or "").startswith("workflow:"):
+            raise ValueError("此任务由工作流管理，请在工作流中审查并继续后续节点")
         _pending_retries.discard(task_id_row)
         if row["status"] in ("done", "failed", "canceled"):
             return {"status": row["status"], "id": task_id_row}
@@ -208,17 +229,30 @@ def cancel(task_id_row: str) -> dict[str, Any]:
         return {"canceled": task_id_row}
 
 
+def _template_checkpoint(row):
+    checkpoint = row.get("checkpoint") or {}
+    if isinstance(checkpoint, str):
+        checkpoint = json.loads(checkpoint)
+    if "queued_template_snapshot" in checkpoint:
+        return {"queued_template_snapshot": checkpoint["queued_template_snapshot"]}
+    if "template_snapshot" in checkpoint:
+        return {"queued_template_snapshot": checkpoint["template_snapshot"]}
+    return {}
+
+
 def retry(task_id_row: str) -> dict[str, Any]:
     with _lock, workflow.WorkflowDB(_db_path()) as db:
         row = db.team_task(task_id_row)
         if not row:
             raise ValueError("任务不存在")
+        if str(row.get("origin") or "").startswith("workflow:"):
+            raise ValueError("此任务由工作流管理，请在工作流中重试当前节点")
         signal = _cancel_signals.get(task_id_row)
         if row["status"] == "running" or (signal and not signal.is_set()):
             raise ValueError("还在跑")
         if task_id_row in _cancel_signals:
             _pending_retries.add(task_id_row)
-        db.team_task_mark(task_id_row, "queued", started_at="", ended_at="", reason="", result="", checkpoint={})
+        db.team_task_mark(task_id_row, "queued", started_at="", ended_at="", reason="", result="", checkpoint=_template_checkpoint(row))
         db.team_event_add(task_id_row, row["task_id"], "note", "重新排队")
         return {"queued": task_id_row}
 
@@ -229,6 +263,8 @@ def review(task_id_row: str, approved: bool, reviewer_id: str = "", feedback: st
         row = db.team_task(task_id_row)
         if not row:
             raise ValueError("任务不存在")
+        if str(row.get("origin") or "").startswith("workflow:"):
+            raise ValueError("此任务由工作流管理，请在工作流中审查并继续后续节点")
         expected = (row.get("reviewer_id") or "").strip()
         if not expected:
             raise ValueError("任务未配置 Reviewer")
@@ -243,14 +279,14 @@ def review(task_id_row: str, approved: bool, reviewer_id: str = "", feedback: st
                 import workflow_state
                 workflow_state.accept(db, row["task_id"], linked["stage"])
             db.team_task_mark(task_id_row, "done", review_status="approved", approved_at=_now(),
-                              review_feedback=feedback[:2000], checkpoint={"phase": "approved"})
+                              review_feedback=feedback[:2000], checkpoint={**_template_checkpoint(row), "phase": "approved"})
             db.team_member_update(row["member_id"], status="done")
             db.team_event_add(task_id_row, row["task_id"], "review", "Reviewer 已通过产物")
         else:
             count = int(row.get("review_attempt") or 0) + 1
             db.team_task_mark(task_id_row, "queued", review_status="rejected", review_attempt=count,
                               approved_at="", review_feedback=feedback[:2000], reason=feedback[:500],
-                              checkpoint={"phase": "returned", "review_attempt": count}, retry_at="")
+                              checkpoint={**_template_checkpoint(row), "phase": "returned", "review_attempt": count}, retry_at="")
             db.team_member_update(row["member_id"], status="queued")
             db.team_event_add(task_id_row, row["task_id"], "review", "Reviewer 退回产物：" + feedback[:300])
         return db.team_task(task_id_row) or {}
@@ -292,7 +328,7 @@ def _run_one(row: dict[str, Any]) -> None:
                 with workflow.WorkflowDB(_db_path()) as db:
                     if db.team_task(row["id"]):
                         db.team_task_mark(row["id"], "queued", started_at="", ended_at="", reason="",
-                                          result="", checkpoint={}, retry_at="")
+                                          result="", checkpoint=_template_checkpoint(db.team_task(row["id"])), retry_at="")
                         db.team_member_update(row["member_id"], status="queued")
 
 
@@ -309,11 +345,12 @@ def _execute_one(row: dict[str, Any], signal: threading.Event) -> None:
         tracked = run_service.start(db, t_id, "team_task",
                                     idempotency_key=f"team-task:{row['id']}:{attempt}")
         team_run_id = tracked["id"]
-        input_assets = [item["id"] for item in asset_service.list_assets(db, t_id, limit=40)]
+        input_assets = [item["id"] for item in asset_service.research_assets(db, t_id, limit=40)]
         for dependency in _task_ids(row.get("depends_on")):
             upstream = db.team_task(dependency) or {}
             input_assets.extend(json.loads(upstream.get("output_assets") or "[]"))
         input_assets = list(dict.fromkeys(input_assets))
+        input_assets = [key for key in input_assets if (asset_service.get(db, key) and not asset_service.is_instruction_asset(asset_service.get(db, key)))]
         checkpoint = json.loads(row.get("checkpoint") or "{}")
         db.team_task_mark(row["id"], "running", started_at=_now(), attempt=attempt,
                           checkpoint=checkpoint or {"phase": "started", "attempt": attempt}, run_id=team_run_id,
@@ -339,7 +376,7 @@ def _execute_one(row: dict[str, Any], signal: threading.Event) -> None:
             extra += json.dumps(contract, ensure_ascii=False, indent=2) + "\n"
         for aid in input_assets:
             asset = asset_service.get(db, aid)
-            if asset and asset["project_id"] == t_id:
+            if asset and asset["project_id"] == t_id and not asset_service.is_instruction_asset(asset):
                 path = Path(asset["canonical_uri"])
                 if path.suffix.lower() in (".md", ".txt") and path.is_file():
                     extra += f"\n【输入产物 {aid}：{asset['title']}】\n" + path.read_text(encoding="utf-8")[:6000]
@@ -364,6 +401,9 @@ def _execute_one(row: dict[str, Any], signal: threading.Event) -> None:
         with workflow.WorkflowDB(_db_path()) as db:
             active_db.append(db)
             db.job_checkpoint = checkpoint
+            if "queued_template_snapshot" in checkpoint:
+                db.template_snapshot = checkpoint["queued_template_snapshot"]
+                db.template_resolved = True
             db.resuming = bool(checkpoint.get("messages") or checkpoint.get("completed_calls"))
             def save_checkpoint(**values):
                 checkpoint.update(values)
@@ -398,6 +438,9 @@ def _execute_one(row: dict[str, Any], signal: threading.Event) -> None:
                 db, path, project_id=t_id, kind="team_output", title=row["title"],
                 source="team_worker", run_id=team_run_id, body=content,
                 metadata={"team_task_id": row["id"], "member_id": row["member_id"]})
+            if out.get("template_snapshot"):
+                used = out["template_snapshot"]
+                asset_service.link(db, output["id"], "used_template", used["asset_id"], {"revision_id": used["revision_id"]})
             input_ids = input_assets
             for input_id in input_ids:
                 try:
@@ -413,7 +456,7 @@ def _execute_one(row: dict[str, Any], signal: threading.Event) -> None:
             execution.check()
             db.team_task_mark(row["id"], "review" if needs_review else "done", ended_at=_now(),
                               output_path=str(path), result=text[:500],
-                              checkpoint={"phase": "review" if needs_review else "done", "attempt": attempt},
+                              checkpoint={**_template_checkpoint({"checkpoint": checkpoint}), "phase": "review" if needs_review else "done", "attempt": attempt},
                               output_assets=list(dict.fromkeys([*(out.get("output_assets") or []), output["id"]])),
                               review_status="pending" if needs_review else "not_required")
             run_service.finish(db, team_run_id, "succeeded")
@@ -433,7 +476,7 @@ def _execute_one(row: dict[str, Any], signal: threading.Event) -> None:
                 run_service.finish(db, team_run_id, "cancelled" if cancelled else "failed", error=str(exc))
             db.team_task_mark(row["id"], "canceled" if cancelled else "failed", ended_at=_now(),
                               reason="%s: %s" % (type(exc).__name__, exc),
-                              checkpoint={"phase": "failed", "attempt": attempt},
+                              checkpoint={**checkpoint, "phase": "failed", "attempt": attempt},
                               retry_at="")
             if step:
                 db.log_step(t_id, step, "cancelled" if cancelled else "failed", str(exc))
@@ -735,12 +778,12 @@ def chat_state(scope: str) -> dict[str, Any]:
 
 MAX_TEAMS, MAX_FIXED, MAX_TEMP = 5, 2, 3
 
-# 每个项目都有一套常驻办公室（常驻=项目在它就在）。成员按「助手名字」找，找不到就跳过。
+# 预置成员使用稳定的专家 ID，用户改名后仍能识别。
 #   文献抽取：检索 → 分块 → 读图表 → 抽数
 #   文件撰写：定大纲 → 写作 → 成篇 → 润色
 FIXED_TEAMS = [
-    ("文献抽取", ["文献检索员", "分块员", "图表解读员", "数据抽取员"]),
-    ("文件撰写", ["结构规划员", "写作搭档", "论文写作", "语言润色"]),
+    ("文献抽取", ["builtin-searcher", "builtin-chunker", "builtin-chartread", "builtin-extractor"]),
+    ("文件撰写", ["builtin-outline", "builtin-writer", "builtin-paperwriting", "builtin-polish"]),
 ]
 _PLACEHOLDER = re.compile(r"^团队\s*\d+$")      # 早期播的空占位团队
 
@@ -751,16 +794,26 @@ def _team_row(tid: str) -> dict[str, Any]:
 
 
 def _seed_roster(tid: str) -> int:
-    """给固定团队拉预置成员：只在它一个正式成员都没有时做一次 —— 之后用户自己改的算数。"""
-    name = (_team_row(tid) or {}).get("name") or ""
-    want = dict(FIXED_TEAMS).get(name, [])
-    if not want or picks(tid):
+    """Initialize a preset roster once, preserving later removals and renames."""
+    row = _team_row(tid)
+    if row.get("roster_initialized"):
         return 0
+    name = row.get("name") or ""
+    want = dict(FIXED_TEAMS).get(name, [])
+    current = members(tid)
+    if not want:
+        leader_id = next((m.get("assistant_id") for m in current if m["role"] == "leader"), "")
+        name = next((name for name, aid in FIXED_LEADERS.items() if aid == leader_id), "")
+        want = dict(FIXED_TEAMS).get(name, [])
     with workflow.WorkflowDB(_db_path()) as db:
-        by_name = {a["name"]: a for a in db.assistants()}
+        db.db.execute("UPDATE teams SET roster_initialized=1 WHERE id=?", (tid,))
+        db.db.commit()
+        by_id = {a["id"]: a for a in db.assistants()}
+    if not want or any(m["role"] == "member" for m in current):
+        return 0
     n = 0
-    for nm in want:
-        a = by_name.get(nm)
+    for aid in want:
+        a = by_id.get(aid)
         if not a:
             continue
         try:
@@ -784,6 +837,8 @@ def ensure_defaults(project_id: str = "") -> list[dict[str, Any]]:
         own = [x for x in ts if (x.get("project_id") or "") == pid]
         orphans = [x for x in ts if not (x.get("project_id") or "") and x["kind"] == "fixed"]
         for name, _roster in FIXED_TEAMS:
+            if len([x for x in own if x["kind"] == "fixed"]) >= MAX_FIXED:
+                break
             if any(x["name"] == name and x["kind"] == "fixed" for x in own):
                 continue
             if orphans:
@@ -791,7 +846,9 @@ def ensure_defaults(project_id: str = "") -> list[dict[str, Any]]:
                 db.team_update(o["id"], project_id=pid, name=name)
                 own.append({**o, "project_id": pid, "name": name})
             else:
-                made.append(db.team_add(name, "fixed", project_id=pid)["id"])
+                created = db.team_add(name, "fixed", project_id=pid)
+                own.append(created)
+                made.append(created["id"])
         for x in db.teams():                    # 剩下没人接手的空占位 → 转成已收工的加急，把常驻位还回来
             if not (x.get("project_id") or "") and x["kind"] == "fixed" and _PLACEHOLDER.match(x["name"] or "") \
                and not [m for m in db.team_members(x["id"]) if m["role"] == "member"]:
@@ -799,6 +856,7 @@ def ensure_defaults(project_id: str = "") -> list[dict[str, Any]]:
         fixed_ids = [x["id"] for x in db.teams()
                      if (x.get("project_id") or "") == pid and x["kind"] == "fixed"]
     for tid in fixed_ids:                       # 播种放在 DB 关掉之后（add_assistant 自己开会话）
+        ensure_leader(tid)
         _seed_roster(tid)
     with workflow.WorkflowDB(_db_path()) as db:
         return [x for x in db.teams() if (x.get("project_id") or "") == pid]
@@ -816,6 +874,7 @@ def teams(project_id: str | None = None) -> dict[str, Any]:
         avatars = {a["id"]: (a.get("avatar") or "") for a in db.assistants()}   # 成员专属 emoji
         out = []
         for x in ts:
+            ensure_leader(x["id"], db)
             rows = db.team_members(x["id"])
             for m in rows:
                 m["avatar"] = avatars.get(m.get("assistant_id") or "", "")

@@ -145,6 +145,32 @@ def _state_path(out_dir: Path, paper_id: str) -> Path:
     return out_dir / f"trans_{paper_id[:8]}.json"
 
 
+def output_dir(db: Any, paper_id: str, project_id: str = "") -> Path:
+    row = db.db.execute("SELECT task_id FROM papers WHERE id=?", (paper_id,)).fetchone()
+    if not row:
+        raise ValueError("找不到这篇论文")
+    owner = row["task_id"] or ""
+    if project_id and project_id != owner:
+        raise ValueError("论文不属于当前项目")
+    return db.pdir(owner, "文献库") if owner else paths.OUT
+
+
+def deliveries(db: Any, project_id: str) -> list[dict[str, Any]]:
+    """Only completed translations with project-local PDF output can be delivered."""
+    out_dir = db.pdir(project_id, "文献库")
+    completed = []
+    for paper in sorted(db.papers_of(project_id), key=lambda row: row["id"]):
+        source = pdf_path(db, paper["id"])
+        if not source or status(paper["id"], out_dir).get("state") != "done":
+            continue
+        dual, mono = out_paths(source, out_dir)
+        if not mono.is_file() or not mono.stat().st_size:
+            continue
+        files = [str(path) for path in (mono, dual) if path.is_file() and path.stat().st_size]
+        completed.append({"id": paper["id"], "files": files})
+    return completed
+
+
 def _save_state(out_dir: Path, paper_id: str, pages_done: int, total: int, done: bool) -> None:
     """译文是边翻边落盘的，所以「文件在不在」不等于「翻完了」—— 单独记一份状态，靠它判断缓存/续翻。"""
     try:

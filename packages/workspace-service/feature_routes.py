@@ -12,6 +12,26 @@ import run_service
 
 
 def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[str]], db: Any) -> Any | None:
+    import review_inbox
+    review_response = review_inbox.route(method, path, body, query, db)
+    if review_response is not None:
+        return review_response
+    if method == "GET" and path == "/api/calendar/linked":
+        events = db.events((query.get("month") or [None])[0])
+        project = (query.get("task_id") or [""])[0]
+        return {"events": [e for e in events if not project or e.get("task_id") == project]}
+    import file_handoff
+    handoff_response = file_handoff.route(method, path, body, query, db)
+    if handoff_response is not None:
+        return handoff_response
+    import workflow_execution
+    execution_response = workflow_execution.route(method, path, body, query, db)
+    if execution_response is not None:
+        return execution_response
+    import project_library
+    library_response = project_library.route(method, path, body, query, db)
+    if library_response is not None:
+        return library_response
     # ---------------- 0. Canonical assets and resumable workflow runs ----------------
     if path == "/api/assets" and method == "GET":
         project_id = (query.get("project_id") or [""])[0]
@@ -110,6 +130,7 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[st
             assigned_assistant=str(body.get("assigned_assistant", "")),
             due_date=str(body.get("due_date", "")),
             stage=str(body.get("stage", "")),
+            status=str(body.get("status", "TODO")),
         )
 
     if path == "/api/todos/update" and method == "POST":

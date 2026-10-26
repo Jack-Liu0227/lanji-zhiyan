@@ -39,6 +39,24 @@ def start(db_path, request: dict, step: str = "", *, resume_id: str = ""):
                 raise ValueError("原项目或会话已删除")
             tid = db.create_chat("")
         request["task_id"] = tid
+        if not resume_id:
+            existing = db.get_async_task_by_idempotency(str(request.get("idempotency_key") or ""))
+            saved_request = (existing or {}).get("checkpoint", {}).get("request")
+            if saved_request:
+                if existing["owner_id"] != tid:
+                    raise ValueError("该任务标识已用于其他会话或项目")
+                request = dict(saved_request)
+            else:
+                request.pop("_template_snapshot", None)
+                chat = db.db.execute("SELECT task_id FROM chats WHERE id=?", (tid,)).fetchone()
+                project = chat["task_id"] if chat else (tid if db.base_dir(tid) else "")
+                if request.get("template_ref") is not None and not project:
+                    raise ValueError("引用提示词模板前请先绑定项目")
+                if project:
+                    import prompt_templates
+                    import agent_settings
+                    cfg = agent_settings.runtime_config(db, tid)
+                    request["_template_snapshot"] = prompt_templates.resolve(db, project, request.get("template_ref"), step=step, assistant_id=cfg["assistant_id"])
         request["idempotency_key"] = str(request.get("idempotency_key") or uuid.uuid4().hex)
         run = manager.create_run(tid, request["idempotency_key"], db)
         if resume_id:
@@ -72,6 +90,9 @@ def _execute(db_path, run, request, step):
         tid = request["task_id"]
         checkpoint = (db.get_async_task(run.run_id) or {}).get("checkpoint") or {}
         db.job_checkpoint = checkpoint
+        db.template_request = request.get("template_ref")
+        db.template_snapshot = request.get("_template_snapshot")
+        db.template_resolved = "_template_snapshot" in request
         db.resuming = bool(checkpoint.get("messages") or checkpoint.get("completed_calls"))
 
         def save(**values):

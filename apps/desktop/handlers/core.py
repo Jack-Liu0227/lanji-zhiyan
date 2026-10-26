@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import workflow_layout
+from workflow_catalog import STAGE_CATALOG
 
 import service_settings as kv_store      # 轻量 KV：权限模式这类开关
 from workflow import STAGES, STAGE_LABEL, WorkflowDB, litgraph
@@ -58,6 +59,7 @@ class CoreRoutes:
                     "events": db.events(q.get("month", [None])[0]),
                     "notes": [{k: n[k] for k in ("id", "task_id", "title", "created_at")} for n in db.notes()],
                     "stages": [{"key": s, "label": STAGE_LABEL[s]} for s in STAGES],
+                    "workflow_stages": STAGE_CATALOG,
                 })
         if path == "/api/task":
             tid = q["id"][0]
@@ -65,6 +67,8 @@ class CoreRoutes:
                 try:
                     with WorkflowDB(DB_PATH) as db:
                         s = db.summary(tid)
+                        import project_library
+                        library_items = project_library.items(db, tid)
                         task = dict(s["task"] or {})
                         task["stage_now"] = db.stage_now(tid, task.get("stage") or "")
                         return self._json({
@@ -74,6 +78,7 @@ class CoreRoutes:
                             "notes": [{k: n[k] for k in ("id", "title", "created_at")} for n in db.notes(tid)],
                             "papers": s["papers"], "evidence": s["evidence"],
                             "paper_list": db.papers_of(tid),
+                            "library_items": library_items,
                             "paper_graph": db.paper_graph(tid),
                             "evidence_list": [dict(r) for r in db.evidence(tid)],
                         })

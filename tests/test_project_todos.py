@@ -47,6 +47,16 @@ class ProjectTodosTest(unittest.TestCase):
         todos_after = project_todos.list_todos(self.conn, "task_1")
         self.assertEqual(len(todos_after), 10)
 
+    def test_creation_keeps_the_selected_column_and_supports_personal_todos(self):
+        for status in project_todos.STATUSES:
+            task = project_todos.add_todo(self.conn, "", "随手记录 " + status, status=status)
+            stored = next(t for t in project_todos.list_todos(self.conn) if t["id"] == task["id"])
+            self.assertEqual(stored["status"], status)
+            self.assertEqual(stored["task_id"], "")
+        with self.assertRaises(ValueError):
+            project_todos.add_todo(self.conn, "", "invalid", status="unknown")
+        self.assertEqual(len(project_todos.list_todos(self.conn)), 4)
+
 
 class CurrentStageTest(unittest.TestCase):
     """当前阶段口径：十步里「按顺序最靠后的已完成步」，不是「第一处缺口」。

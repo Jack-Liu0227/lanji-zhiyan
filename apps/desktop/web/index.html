@@ -12,14 +12,18 @@ document.documentElement.dataset.theme = localStorage.getItem("rw-theme") || "da
 </script>
 <link rel="stylesheet" href="/css/app.css">
 <link rel="stylesheet" href="/css/kanban.css">
+<link rel="stylesheet" href="/css/interactions.css">
+<link rel="stylesheet" href="/css/notebook.css">
 </head>
 <body>
+<a class="skip-link" href="#main">跳到主要内容</a>
 <div class="app-shell">
   <aside class="sidebar" id="sidebar"></aside>
   <div class="content">
     <header class="topbar pywebview-drag-region" id="topbar"></header>
+    <section id="globalTodo" class="global-todo" aria-label="To do 随手记"></section>
     <div class="tabsbar" id="tabsbar"></div>
-    <div class="body"><main class="main" id="main"></main></div>
+    <div class="body"><main class="main" id="main" tabindex="-1" aria-label="主要内容"></main></div>
     <footer class="statusbar" id="statusbar"></footer>
   </div>
 </div>
@@ -71,20 +75,20 @@ document.documentElement.dataset.theme = localStorage.getItem("rw-theme") || "da
 </div>
 
 <!-- 全局命令面板 (Command Palette - Ctrl+K) -->
-<div id="cmdPaletteModal" class="modal hidden">
+<div id="cmdPaletteModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="搜索命令与页面">
   <div class="modal-mask" id="cmdPaletteMask"></div>
   <div class="modal-dialog cmd-palette-dialog">
     <div class="cmd-palette-head">
       <span class="cmd-palette-ico">⚡</span>
-      <input id="cmdPaletteInput" class="cmd-palette-input" placeholder="输入命令、跳转步骤、搜索模块或项目… (Esc 退出)" autocomplete="off">
-      <span class="cmd-palette-badge">Ctrl+K</span>
+      <input id="cmdPaletteInput" class="cmd-palette-input" role="combobox" aria-label="搜索命令与页面" aria-autocomplete="list" aria-controls="cmdPaletteResults" aria-expanded="false" placeholder="搜索操作、页面或项目…" autocomplete="off">
+      <button type="button" class="modal-close" id="cmdPaletteClose" aria-label="关闭命令面板">✕</button>
     </div>
     <div class="cmd-palette-body" id="cmdPaletteResults" role="listbox"></div>
     <div class="cmd-palette-foot">
       <span><kbd>↑</kbd><kbd>↓</kbd> 导航</span>
       <span><kbd>Enter</kbd> 执行</span>
       <span><kbd>Esc</kbd> 关闭</span>
-      <span><kbd>Alt+1..0</kbd> 工作流直达</span>
+      <button type="button" class="command-help-link" data-command="help">查看所有快捷键</button>
     </div>
   </div>
 </div>
@@ -124,14 +128,21 @@ document.documentElement.dataset.theme = localStorage.getItem("rw-theme") || "da
 <script src="/views/mail-view.js"></script>
 <script src="/views/starmap-view.js"></script>
 <script src="/views/notes-and-settings.js"></script>
+<script src="/views/notebook.js"></script>
+<script src="/views/prompt-templates.js"></script>
 <script src="/views/paper-translation.js"></script>
 <script src="/views/diff-viewer.js"></script>
 <script src="/views/agent-settings.js"></script>
+<script src="/views/skill-installer.js"></script>
 <script src="/views/capabilities.js"></script>
 <script src="/views/workflow-layout.js"></script>
 <script src="/views/integrations-settings.js"></script>
 <script src="/views/platform-nav.js"></script>
 <script src="/views/project-space.js"></script>
 <script src="/views/kanban-view.js"></script>
+<script src="/views/global-todo.js"></script>
+<script src="/views/file-handoff.js"></script>
+<script src="/views/interactions.js"></script>
+<script src="/views/connected-research.js"></script>
 </body>
 </html>

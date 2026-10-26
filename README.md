@@ -1,8 +1,21 @@
-# 览籍智研
+<p align="center">
+  <img src="apps/desktop/web/mark.png" width="72" alt="览籍智研图标">
+</p>
 
-面向科研人员/课题组的**证据优先**科研工作台：选题 → 检索 → 精读 → 梳理 → 写作 → 投稿一条链，AI 只出草稿，每一步都留证据、都能人工复核。
+<h1 align="center">览籍智研</h1>
+
+<p align="center"><strong>为课题定制研究流程，用专家团队协作管理科研全过程</strong></p>
+
+面向科研人员和课题组的**本机科研工作台**。以项目为中心，自由设计适合课题的工作流，组织专业 Agent 团队，集中管理文献、证据、笔记、任务与论文产物。AI 提供候选与草稿，研究者保留编辑、审查和交付的决定权。
 
 形态：**本机 Python + 本地网页界面**（无边框桌面窗，WebView2）。全部数据在自己机器上的 `data/research.sqlite3`，不内置任何人的 API key。
+
+## 研究流程由你定义
+
+- **个性化工作流**：从预设流程开始，也可新建或复制布局，按研究目标增删阶段、调整顺序和依赖；每个节点可独立配置任务说明、专家、团队成员、Tool、Skill 与人工审查。
+- **专家团队协作**：创建和编辑不同研究方向的助手，按项目把专家组成团队，由 Leader 分配检索、证据整理、结构梳理、写作与审查任务。节点之间传递实际产物和人工反馈，支持验收、退回和重试。
+- **项目化全流程管理**：研究问题、文献、PDF、引用证据、笔记、待办、日历、定时任务和论文产物关联到项目，来源和修改记录可追溯。
+- **界面与内容可个性化**：自定义主题色和字体；编辑提示词模板、笔记分类与标签；大纲和正文支持直接修改、双栏校对与差异比较。
 
 ---
 
@@ -22,7 +35,7 @@ python apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开
 
 如果启动检查失败，脚本会显示错误并暂停，详细信息保存在 `data/startup.log`；服务启动后的异常见 `%LOCALAPPDATA%\览籍智研\data\cache\server-error.log`。按错误提示，用选中的 Python 执行 `-m pip install -r requirements.txt` 修复依赖。
 
-**下载安装**（GitHub Releases）：<https://github.com/Jack-Liu0227/lanji-zhiyan/releases/latest>。安装包统一命名为 `览籍智研.exe`，免安装包为 `览籍智研-免安装版.zip`，文件名不带版本号。免安装包解压后双击里面的 `览籍智研.exe`。
+**下载安装 0.3.0**（[GitHub Release](https://github.com/Jack-Liu0227/lanji-zhiyan/releases/tag/v0.3.0)）：[Windows 安装包](https://github.com/Jack-Liu0227/lanji-zhiyan/releases/download/v0.3.0/LanjiZhiyan-0.3.0-Setup.exe)；[免安装版](https://github.com/Jack-Liu0227/lanji-zhiyan/releases/download/v0.3.0/LanjiZhiyan-0.3.0-Portable.zip)。免安装包解压后双击里面的 `览籍智研.exe`。
 
 **自己打包**：使用 Python 3.10 或更新版本，已验证 3.13.5。先在选中的环境执行 `python -m pip install -r requirements-build.txt`，再运行 `tools\build-app.bat`。脚本优先使用项目 `.venv`，随后检查 `py -3` 和 PATH 中的 Python；同一解释器完成程序、安装器和验收。自动调用时可加 `--no-pause`。
 
@@ -32,22 +45,15 @@ python apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开
 
 ---
 
-## 二、十步工作流（每一步一个独立功能区）
+## 二、个性化科研工作流
 
-| # | 步骤 | 做什么 | 左边 | 右边 |
-|---|---|---|---|---|
-| 1 | 🔍 创新点审查 | 受限对话，注入本机博导 skill 做 F1-F10 审计 + 五维评分 | — | 对话 + 轨迹 |
-| 2 | 📚 论文搜索 | OpenAlex / Crossref / arXiv 三源检索，去重、排序、年份区间筛选 | 结果表（可勾选） | — |
-| 3 | ⬇️ 下载精读 | 只下 OA 全文 → 入库；下不到的进「待手动下载清单」；一键精读（后台任务、可停） | 清单 + 计数 | — |
-| 4 | 🌐 论文翻译 | PDF 文字层 + 缩放/页码/荧光笔；中英互译、笔记模式（全屏 2/3 中文 + 1/3 笔记） | PDF / 双语 / 笔记 | — |
-| 5 | 🗂 确认大纲 | 框架 markdown（大标题 + 小标题 + 一句说明）就地改 | 框架 | 框架 agent |
-| 6 | 🧩 梳理精读 | **谱系图**：每个小标题 → 精读结论 / 笔记 / 实验数据（脑图，实时） | 谱系图（可拖文件上传数据） | 结构 agent |
-| 7 | ✍️ 文章撰写 | 按框架写正文，缺数据写「待补」；注入本机 paper-spine / paper-writer | 正文 | 写作 agent |
-| 8 | 🧐 稿件审查 | 审稿人视角；左边可荧光笔标细节，标完一键发给 agent | 正文（可标注） | 审查 agent |
-| 9 | 🌍 中译英 | md→md 分片并发 | 英文（可改可存） | 中文 |
-| 10 | 🔄 格式转换 | Word / LaTeX(.tex→PDF，本机 MiKTeX) / Markdown / HTML | 文件区 | 代码区 + PDF 预览 |
+工作台覆盖研究问题梳理、文献检索与精读、PDF 翻译、证据关系整理、提纲和正文编辑、稿件审查、英文翻译及格式转换。它们是可组合的研究能力：根据课题选择需要的环节，编辑前后依赖与执行角色，不必照固定顺序完成。
 
-其余页面：**Agent**（智研管家，不绑项目）、**助手**（我的/公开，规则进 system）、**团队**（2 固定 + 3 机动，成员从助手里选，一轮一个自动接力）、**日历**、**项目**、**项目空间**（概览/团队/文献/笔记/日程）、**定时任务**、**知识星图**（知识库 → 项目 → 五簇分支 = 论文 / 关键词 / 笔记 / 检索 / 工作流；点项目进分支、点簇扇出到条目、滚轮翻页、关键词可出 AI 简介，只在深色模式显示）、**知识库**（接 Obsidian，只改 frontmatter）、**笔记**（Markdown 编辑器 + 专注/窄栏）、**情报日报**（RSS）、**邮箱**、**设置**（主题色 / 模型列表 / Tool / Skill / MCP）。
+在“设置 → 工作流”中可以新建或复制工作流，调整节点名称、顺序、依赖关系和任务说明，并为每个节点选择助手、团队或成员、Tool、Skill 与审查方式。运行时，前序交付和人工意见会进入后续节点；可按节点验收、退回修改或重试。
+
+主导航有 **12 个页面入口**：**智研管家**（跨项目对话）、**专家**（创建与管理助手）、**团队**（Leader 组织成员按任务协作）、**日历**、**项目管理**、**项目空间**（概览/进度计划/文献/论文星图/笔记）、**知识库**（知识星图与授权知识源）、**科研平台**、**定时任务**、**情报日报**（RSS）、**邮箱**和**设置**（主题色/模型/权限/Tool/Skill/MCP/工作流等）。
+
+项目笔记默认五大类，支持自定义两级分类、可搜索的多选标签、批量整理和 Agent 提示词模板引用。操作说明见 [项目笔记与提示词模板](doc/notebook-templates.md)。
 
 **引用方式**：正文里**不写** `[1]` 标号；引用位置 + 文献信息记在后台的 `<项目>/论文正文/引用台账.md`（工具 `cite_add` 登记，随正文改动同步状态）。
 
@@ -72,11 +78,13 @@ node apps/desktop/web/ids.test.mjs              # 悬空 id（$("x") 引用了�
 
 ## 四、模型与 Agent
 
-- **40 家 Provider 目录**（`packages/contracts/providers_catalog.json`）：卡片制，填 Key → 发现模型/手填 → 采用 → 点 chip 设为默认。Key 不回显（服务端只回 `key_present`）。
-- 本机只实现 **`openai-completions`** 这一条协议；另 20 家能配置、能测、卡片标「协议未接」，设默认会被拦住。
-- **助手 = 一个接进来的模型**：绑了助手就用它接的模型（Agent 页 / 十步 / 团队接力全认）。
+- **Provider 目录**（`packages/contracts/providers_catalog.json` 与账号 Provider）：支持 API Key，以及 Codex、Claude Code、Antigravity 官方本机账号登录。配置后采用模型，可供助手、团队成员和工作流使用。
+- 已实现 OpenAI Chat Completions、Responses、Anthropic Messages、Google Gemini，以及官方账号 CLI 适配；其余协议会明确标注尚不支持运行。
+- **助手 = 一个接进来的模型**：绑定助手后，智研管家、科研平台和团队成员都使用其配置的模型。
 - **Agent 工具**：`library_overview` `knowledge_query` `calendar_add` `idea_review` `paper_search` `paper_download` `paper_read` `notes_compose` `draft_write` `draft_review` `format_convert` + 团队 `team_board` `team_assign`；另有按步限定的作用域工具（大纲/撰写/审查的 `doc_write`/`doc_read`/`cite_add`，梳理精读的 `map_write`/`map_read`/`map_sources`）。
-- 「OAuth / 订阅登录」只做**打开厂商控制台 + 回贴凭据**，不做自动设备码流（各家要自己的 client_id）。
+- 账号登录复用官方客户端会话，不复制账号令牌；提供登录与状态检测入口。
+
+工作流按依赖顺序传递上游交付、项目记忆与人工反馈，支持保存工具进度后续跑；节点默认需要人工审查，可按节点关闭。定时任务可启动完整工作流，全部交付后归档项目笔记。本机 Zotero 同步与 MCP 共用本机授权，无需云端 Key；项目标签支持批量解除和恢复关联。顶栏集中处理待审节点，日历联动截止日期、定时运行、结果笔记与审查提醒。配置说明见 [账号认证与项目工作流联动](doc/connected-research.md)。
 
 ---
 
@@ -96,7 +104,7 @@ node apps/desktop/web/ids.test.mjs              # 悬空 id（$("x") 引用了�
 | 文件 | 干什么 |
 |---|---|
 | `apps/desktop/server.py` | 纯标准库 HTTP 服务（ThreadingHTTPServer）：静态页 + JSON API + `/api/agent` 等 SSE；启动即开无边框窗。**桌面快捷方式直接指这个文件** |
-| `packages/workspace-service/workflow.py` | 十步工作流、三源检索、OA 下载、精读、翻译、大纲/撰写/审查/谱系、引用台账、中译英、格式转换、日历、模型档案、Agent 工具循环（含子 agent 委派）、项目记忆与六子目录 |
+| `packages/workspace-service/workflow.py` | 可配置科研工作流、三源检索、OA 下载、精读、翻译、大纲/撰写/审查/谱系、引用台账、中译英、格式转换、日历、模型档案、Agent 工具循环（含子 agent 委派）、项目记忆与六子目录 |
 | `packages/database/research_core.py` | 核心库：SQLite、任务、PDF 入库（SHA256 去重/逐页文本）、证据闸门、导出 |
 | `packages/workspace-service/` | 工作流、团队、定时任务、论文翻译、项目待办、扩展路由（`feature_routes.py`） |
 | `packages/connectors/` | Zotero、Obsidian、邮箱、RSS、easyScholar、飞书等外部连接器 |

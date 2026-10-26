@@ -127,7 +127,12 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, Any], d
     if method == "POST" and m:
         tid = m.group(1)
         leader_id = str(body.get("leader_id") or body.get("member_id") or "")
-        return {"ok": True, "team_id": tid, "leader_id": leader_id}
+        import agent_settings
+        import team
+        if tid in team.TEAM_RUNS:
+            raise ValueError("请先停止当前团队运行，再编辑配置")
+        leader = agent_settings.set_leader(db, tid, leader_id)
+        return {"ok": True, "team_id": tid, "leader_id": leader["id"], "member": leader}
 
     m = re.match(r"^/api/teams/([^/]+)/tasks$", path)
     if method == "POST" and m:

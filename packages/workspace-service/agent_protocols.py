@@ -116,6 +116,10 @@ def _gemini_stream(url, payload, headers, timeout, on_delta, cancel_check, on_re
 def discover(profile, timeout=25):
     import workflow
     api = profile.get("api", "openai-completions")
+    import account_providers
+    if api in account_providers.WIRES:
+        return [{"id": m, "name": "跟随官方客户端默认模型" if m == "auto" else m}
+                for m in account_providers.entry(api)["models"]]
     base, key = profile["base_url"].rstrip("/"), profile.get("api_key", "")
     if api == "google-generative-ai":
         raw = _request(base + "/models", None, {"x-goog-api-key": key}, timeout)
@@ -130,6 +134,10 @@ def discover(profile, timeout=25):
 def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_tokens=4096,
              on_delta: Callable[[str], None] | None = None, cancel_check=None, on_reasoning=None):
     api = profile.get("api", "openai-completions")
+    import account_providers
+    if api in account_providers.WIRES:
+        return account_providers.complete(profile, messages, tools, timeout=timeout,
+                                          on_delta=on_delta, cancel_check=cancel_check)
     base, key, model = profile["base_url"].rstrip("/"), profile.get("api_key", ""), profile["model"]
     effort = profile.get("reasoning", "auto")
     reasoning = []

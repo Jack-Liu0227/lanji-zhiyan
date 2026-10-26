@@ -56,6 +56,7 @@
 
   async function providerEditor(provider = null) {
     const p = provider || {id:"",name:"",base_url:"",api:"openai-completions",models:[]};
+    if (["codex-cli","claude-code-cli","antigravity-cli"].includes(p.api)) return accountProviderEditor(p);
     let selected = new Set(p.models || []), candidates = [...selected].map(id => ({id,name:id})), pid = p.id;
     const d = modal(pid ? "配置 Provider" : "添加 Provider", `<div class="ag-form">
       <label><span>名称</span><input class="control" id="ag-p-name" value="${h(p.name)}"></label>
@@ -122,16 +123,39 @@
     el("ag-p-auto").onclick = () => apply(true);
   }
 
+  async function accountProviderEditor(p) {
+    p = {...registry.catalog.find(c=>c.api===p.api),...p};
+    const d = modal(p.name, `<p>复用官方客户端的本机账号。先登录，再选择用于助手、团队和工作流的模型。</p>
+      <div class="ag-row"><button class="btn btn-primary" data-account-login>打开官方账号登录</button><button class="btn" data-account-check>重新检测</button></div>
+      <p class="ag-meta" data-account-state>正在检测 CLI…</p>
+      <p class="ag-meta">默认模型跟随官方客户端；也可以输入该账号可用的模型 ID。</p>
+      <label class="ag-stack">模型 ID<input class="control" data-account-model value="${h((p.models || [])[0] || "auto")}"></label>
+      <div class="ag-row" style="margin-top:14px"><button class="btn btn-primary" data-account-save>采用模型</button>${p.docs ? `<a class="btn ghost" href="${h(p.docs)}" target="_blank" rel="noopener">官方安装与登录文档</a>` : ""}</div>`);
+    const status = d.querySelector("[role=status]"), state = d.querySelector("[data-account-state]");
+    const check = async () => { try { const r = await request("provider-account-status",{id:p.id}); if (d.isConnected) state.textContent = r.message + (r.login_command ? ` 终端命令：${r.login_command}` : ""); } catch(e) { error(status,e); } };
+    d.querySelector("[data-account-check]").onclick = check;
+    d.querySelector("[data-account-login]").onclick = async () => { try { const r = await request("provider-account-login",{id:p.id}); status.textContent = r.message; } catch(e) { error(status,e); } };
+    d.querySelector("[data-account-save]").onclick = async () => {
+      try {
+        const model = d.querySelector("[data-account-model]").value.trim() || "auto";
+        await request("provider-save",{id:p.id,name:p.name,api:p.api,base_url:p.base_url});
+        await request("provider-models",{id:p.id,models:[...new Set([...(p.models || []),model])]});
+        await saved(); d.close(); render();
+      } catch(e) { error(status,e); }
+    };
+    await check();
+  }
+
   renderModels = async function(container) {
     if (!S.loaded || !container) return;
     const expectedRoute = route(), epoch = ++viewEpoch;
     try {
-      if (!registry) await load();
+      await load();
       if (!container.isConnected || route() !== expectedRoute || epoch !== viewEpoch) return;
       container.innerHTML = `<div class="ag-head"><div><h3>模型与 Provider</h3><p class="hint">先选择 Provider 配置，再拉取或手动添加模型。已配置的模型可在助手和团队中选择。</p></div></div>
         <div class="card ag-row"><label style="flex:1">支持的 Provider <select class="control" id="ag-provider-select"><option value="">选择 Provider…</option>${registry.catalog.map(p => `<option value="${h(p.id)}">${h(p.name)}${p.supported ? "" : "（请改选兼容协议）"}</option>`).join("")}<option value="custom">自定义兼容接口</option></select></label><button class="btn btn-primary" id="ag-provider-add">配置</button></div>
         <h4 style="margin-top:20px">可选模型 · ${S.models.length}</h4><div class="ag-model-grid">${S.models.map(mm => `<div class="card"><b>${h(mm.name)}</b><p class="ag-meta">${h(mm.api || "openai-completions")}</p><button class="btn ghost" data-ag-active="${h(mm.id)}">${S.active?.id === mm.id ? "当前默认" : "设为默认"}</button></div>`).join("") || `<p class="hint">还没有配置模型。请先添加 Provider。</p>`}</div>
-        <h4 style="margin-top:24px">已配置的 Provider · ${registry.providers.length}</h4><div class="ag-grid">${registry.providers.map(p => `<article class="card"><div class="ag-head"><b>${h(p.name)}</b><span class="pill">${p.models.length} 模型</span></div><p class="ag-meta">${h(p.base_url)}<br>${h(p.api)} · Key ${p.key_invalid ? `<span style="color:var(--err,#bd3f34);font-weight:600">⚠️ 解密失败（请重填）</span>` : (p.key_present ? "已保存" : "未设置")}</p><div class="ag-row"><button class="btn" data-ag-provider="${h(p.id)}">查看 / 编辑</button><button class="btn ghost" data-ag-provider-del="${h(p.id)}">移除</button></div></article>`).join("")}</div>`;
+        <h4 style="margin-top:24px">已配置的 Provider · ${registry.providers.length}</h4><div class="ag-grid">${registry.providers.map(p => `<article class="card"><div class="ag-head"><b>${h(p.name)}</b><span class="pill">${p.models.length} 模型</span></div><p class="ag-meta">${h(p.base_url)}<br>${h(p.api)} · ${["codex-cli","claude-code-cli","antigravity-cli"].includes(p.api) ? "账号会话由官方客户端管理" : `Key ${p.key_invalid ? '<span style="color:var(--err,#bd3f34);font-weight:600">解密失败，请重填</span>' : (p.key_present ? "已保存" : "未设置")}`}</p><div class="ag-row"><button class="btn" data-ag-provider="${h(p.id)}">查看 / 编辑</button><button class="btn ghost" data-ag-provider-del="${h(p.id)}">移除</button></div></article>`).join("")}</div>`;
       el("ag-provider-add").onclick = () => {
         const id = el("ag-provider-select").value;
         if (!id) return uiNotify("请先选择 Provider。");
@@ -246,7 +270,7 @@
   };
 
   async function memberEditor(tid, member = {}) {
-    const pool = registry.selectable || [];
+    const pool = (registry.selectable || []).filter(a=>a.id!=="builtin-steward");
     const d = modal(member.id ? "编辑团队角色" : "添加团队成员", `<div class="ag-form"><label><span>专家</span><select class="control" id="ag-m-assistant"><option value="">使用自定义角色</option>${pool.map(a => `<option value="${h(a.id)}" ${a.id === member.assistant_id ? "selected" : ""}>${h(a.name)}</option>`).join("")}</select></label><label><span>角色名称</span><input class="control" id="ag-m-name" value="${h(member.name)}"></label>${policyFields(member,"ag-m")}<label class="ag-wide"><span>团队内职责（叠加专家规则）</span><textarea class="control" id="ag-m-prompt" rows="5">${h(member.prompt)}</textarea></label><button class="btn btn-primary" id="ag-m-save">保存角色</button>${member.id && member.role !== "leader" ? `<button class="btn" id="ag-m-leader">设为 Leader</button><button class="btn ghost" id="ag-m-remove">移出团队</button>` : ""}</div>`);
     el("ag-m-assistant").onchange = () => { const a = pool.find(x => x.id === el("ag-m-assistant").value); if (a) { el("ag-m-name").value = a.name; el("ag-m-prompt").value = a.rules || ""; } };
     el("ag-m-save").onclick = async () => {

@@ -92,7 +92,7 @@ def finish_node(db, node_id: str, status: str, *, outputs: list[str] | None = No
         raise KeyError(node_id)
     ended = _now()
     conn.execute("""UPDATE workflow_nodes SET status=?, output_assets=?, checkpoint=?, ended_at=?, error=?
-        WHERE id=?""", (status, json.dumps(outputs or []), json.dumps(checkpoint or {}, ensure_ascii=False),
+        WHERE id=?""", (status, json.dumps(outputs or []), json.dumps(checkpoint if checkpoint is not None else json.loads(node["checkpoint"] or "{}"), ensure_ascii=False),
                           ended, error[:2000], node_id))
     if status in ("failed", "cancelled"):
         conn.execute("UPDATE workflow_runs SET status=?, ended_at=?, error=? WHERE id=?",

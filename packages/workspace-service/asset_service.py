@@ -114,6 +114,34 @@ def list_assets(db, project_id: str = "", kind: str = "", limit: int = 200) -> l
     ).fetchall()]
 
 
+def is_instruction_asset(asset):
+    import note_catalog
+    if _metadata(asset.get("metadata")).get("note_type") == "prompt_template":
+        return True
+    path = Path(asset.get("canonical_uri") or "")
+    if asset.get("storage") == "file" and path.suffix.lower() == ".md" and path.is_file():
+        try:
+            with path.open(encoding="utf-8") as stream:
+                return note_catalog.is_template(stream.read(65536))
+        except (OSError, UnicodeError):
+            return False
+    return False
+
+
+def research_assets(db, project_id, limit=200):
+    return [a for a in list_assets(db, project_id, limit=1000)
+            if a["project_id"] == project_id and a["status"] == "active" and not is_instruction_asset(a)][:limit]
+
+
+def is_instruction_note(db, project_id, note_id, content):
+    import note_catalog
+    if note_catalog.is_template(content or ""):
+        return True
+    rows = _conn(db).execute("SELECT * FROM assets WHERE project_id=? AND kind='note' AND status='active' "
+                             "AND json_extract(metadata,'$.legacy_id')=?", (project_id or "", note_id)).fetchall()
+    return any(is_instruction_asset(dict(row)) for row in rows)
+
+
 def register(db, *, project_id: str = "", kind: str, title: str = "", canonical_uri: str,
              storage: str = "file", mime: str = "", content_hash: str = "",
              source: str = "local", metadata: dict[str, Any] | None = None,
@@ -148,7 +176,14 @@ def register_file(db, path: str | Path, *, project_id: str = "", kind: str = "do
     target = Path(path).resolve()
     if not target.is_file():
         raise FileNotFoundError(target)
-    existing = _conn(db).execute("SELECT content_hash FROM assets WHERE canonical_uri=?", (str(target),)).fetchone()
+    existing = _conn(db).execute("SELECT content_hash,metadata FROM assets WHERE canonical_uri=?", (str(target),)).fetchone()
+    metadata = {**(_metadata(existing["metadata"]) if existing else {}), **(metadata or {})}
+    if kind == "note":
+        import note_catalog
+        raw = target.read_text(encoding="utf-8")
+        root = db.base_dir(project_id) if hasattr(db, "base_dir") and project_id else None
+        relative = target.relative_to(root.resolve()).as_posix() if root and target.is_relative_to(root.resolve()) else ""
+        metadata.update(note_catalog.attributes(raw, relative, note_catalog.load(db, project_id) if root else None))
     current_hash = sha256_file(target)
     asset = register(db, project_id=project_id, kind=kind, title=title or target.stem,
                      canonical_uri=str(target), storage="file", content_hash=current_hash,

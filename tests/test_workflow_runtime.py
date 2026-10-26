@@ -62,7 +62,7 @@ class WorkflowRuntimeTest(unittest.TestCase):
         cls.addClassCleanup(http.shutdown)
         playwright = runtime.sync_playwright().start()
         cls.addClassCleanup(playwright.stop)
-        cls.browser = playwright.chromium.launch(executable_path=str(runtime.EDGE), headless=False)
+        cls.browser = playwright.chromium.launch(executable_path=str(runtime.EDGE), headless=True)
         cls.addClassCleanup(cls.browser.close)
 
     def setUp(self):
@@ -116,6 +116,7 @@ class WorkflowRuntimeTest(unittest.TestCase):
         self.open_workflow()
         self.page.locator("#wv-ask").fill("[stall] cancel")
         self.page.locator("#wv-send").click()
+        self.page.wait_for_function("!!wfActiveRun()?.runId")
         self.assertTrue(self.entered.wait(5))
         run_id = self.page.evaluate("wfActiveRun().runId")
         self.page.locator("#wv-ask").press("Escape")

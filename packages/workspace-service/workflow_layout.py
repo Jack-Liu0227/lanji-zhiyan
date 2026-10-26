@@ -7,7 +7,9 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from workflow import STAGES, STAGE_LABEL, now
+import service_settings
+from workflow import STAGE_LABEL, STAGES, now
+from workflow_catalog import LEGACY_STAGE_LABEL, STAGE_CATALOG
 
 
 SCHEMA = """
@@ -32,6 +34,8 @@ _FAILED = {"failed", "error", "manual"}
 
 
 def _linear(stages: list[str]) -> dict[str, Any]:
+    if not stages or any(step not in STAGES for step in stages):
+        raise ValueError("工作流需包含有效的科研平台步骤")
     return {"nodes": [{"id": s, "step": s, "label": STAGE_LABEL[s]} for s in stages],
             "edges": [{"source": a, "target": b} for a, b in zip(stages, stages[1:])],
             "order": stages}
@@ -56,6 +60,19 @@ def ensure_schema(db: Any) -> None:
             stamp = (base + timedelta(microseconds=index)).isoformat()
             db.db.execute("INSERT INTO workflow_layouts VALUES (?,?,?,?,?,?)",
                           (wid, name, description, json.dumps(_linear(stages), ensure_ascii=False), stamp, stamp))
+    if not service_settings.read(db, "workflow_catalog").get("labels_migrated"):
+        for row in db.db.execute("SELECT id,definition FROM workflow_layouts").fetchall():
+            definition = json.loads(row["definition"])
+            changed = False
+            for node in definition.get("nodes", []):
+                step = node.get("step")
+                if node.get("label") == LEGACY_STAGE_LABEL.get(step) and node["label"] != STAGE_LABEL.get(step):
+                    node["label"] = STAGE_LABEL[step]
+                    changed = True
+            if changed:
+                db.db.execute("UPDATE workflow_layouts SET definition=? WHERE id=?",
+                              (json.dumps(definition, ensure_ascii=False), row["id"]))
+        service_settings.write(db, "workflow_catalog", {"labels_migrated": True})
     db.db.commit()
     db._workflow_layout_initialized = True
 
@@ -83,7 +100,26 @@ def validate_definition(data: dict[str, Any]) -> dict[str, Any]:
         label = str(raw.get("label") or STAGE_LABEL[step]).strip()
         if not label or len(label) > 120:
             raise ValueError("节点名称须为 1 至 120 字符")
-        clean.append({"id": nid, "step": step, "label": label})
+        review = raw.get("review_required", True)
+        if not isinstance(review, bool):
+            raise ValueError("review_required 必须是布尔值，默认需要人工审查")
+        config = {"review_required": review}
+        mode = raw.get("execution_mode", "")
+        if mode not in ("", "assistant", "team"):
+            raise ValueError("节点执行方式必须是助手或团队")
+        if mode:
+            config["execution_mode"] = mode
+        for key in ("assistant_id", "team_id", "member_id", "prompt"):
+            value = raw.get(key, "")
+            if not isinstance(value, str) or len(value) > (20000 if key == "prompt" else 120):
+                raise ValueError("节点执行配置无效：" + key)
+            config[key] = value.strip()
+        for key in ("tools", "skills"):
+            value = raw.get(key)
+            if value is not None and (not isinstance(value, list) or len(value) > 300 or any(not isinstance(x, str) or not x or len(x) > 200 for x in value)):
+                raise ValueError("节点工具与技能必须是 ID 数组")
+            config[key] = list(dict.fromkeys(value)) if value is not None else None
+        clean.append({"id": nid, "step": step, "label": label, **config})
         ids.add(nid)
         steps.add(step)
     links, seen = [], set()
@@ -140,6 +176,36 @@ def _layout(db: Any, wid: str) -> dict[str, Any]:
 def _project(db: Any, task_id: str) -> None:
     if not task_id or not db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone():
         raise ValueError("请先选择有效项目")
+
+
+def resolve_node(db: Any, project_id: str, layout_id: str, node: dict) -> dict:
+    """Read the effective binding of a node, including legacy built-in offices."""
+    from workflow_catalog import LEGACY_TEAM_WORKFLOWS, LEGACY_TEAM_STAGES, LEGACY_MEMBER_STAGES
+    if any(node.get(k) for k in ("execution_mode", "assistant_id", "team_id", "member_id")):
+        return node
+    if layout_id not in LEGACY_TEAM_WORKFLOWS:
+        return node
+    matches = []
+    for row in db.db.execute("SELECT * FROM teams WHERE project_id=? AND kind='fixed'", (project_id,)):
+        roster = db.team_members(row["id"])
+        leaders = [m for m in roster if m["role"] == "leader"]
+        if not any(node["step"] in LEGACY_TEAM_STAGES.get(m["assistant_id"], ()) for m in leaders):
+            continue
+        eligible = []
+        for member in roster:
+            if member.get("step"):
+                stages = (member["step"],)
+            elif member["role"] == "leader":
+                stages = LEGACY_TEAM_STAGES.get(member["assistant_id"], ())
+            else:
+                stages = LEGACY_MEMBER_STAGES.get(member["assistant_id"], ())
+            if node["step"] in stages:
+                eligible.append(member["id"])
+        matches.append({**node, "team_id": row["id"], "execution_mode": "team",
+                        "eligible_member_ids": eligible, "binding_source": "project_team"})
+    if len(matches) > 1:
+        raise ValueError("多个常驻团队匹配此节点，请在工作流中明确指定执行团队")
+    return matches[0] if matches else node
 
 
 def save_layout(db: Any, body: dict[str, Any]) -> dict[str, Any]:
@@ -278,6 +344,7 @@ def state(db: Any, task_id: str) -> dict[str, Any]:
         if node["status"] == "pending":
             node["status"] = "ready" if all(nodes[parent]["status"] == "delivered" for parent in parents) else "waiting"
     return {"task_id": task_id, "layouts": layouts, "layout": layout, "selected_node": selected,
+            "stages": STAGE_CATALOG,
             "nodes": [nodes[nid] for nid in layout["order"]], "edges": layout["edges"],
             "observed_at": now(), "status_note": "节点状态来自真实步骤、对话、团队任务和下载队列；依赖展示不会自动执行步骤。"}
 
@@ -291,8 +358,12 @@ def route(method: str, path: str, body: dict[str, Any] | None, query: dict[str, 
     ensure_schema(db)
     body = body or {}
     if path == "/api/workflow/layouts":
+        import capabilities
         return {"layouts": [_public(row) for row in db.db.execute("SELECT * FROM workflow_layouts ORDER BY created_at,id")],
-                "stages": [{"id": step, "name": STAGE_LABEL[step]} for step in STAGES]}
+                "stages": STAGE_CATALOG,
+                "execution_options": {"assistants": db.selectable_assistants(),
+                    "teams": [{**t, "members": db.team_members(t["id"])} for t in db.teams() if t.get("status") != "archived"],
+                    "tools": capabilities.list_tools(db), "skills": capabilities.list_skills()}}
     if path.endswith("/state"):
         raw = query.get("task_id", query.get("id", ""))
         return state(db, str(raw[0] if isinstance(raw, list) and raw else raw))

@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import hashlib
-import shutil
 import sqlite3
 import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -45,11 +45,18 @@ def get_applied_migrations(conn: sqlite3.Connection) -> dict[str, dict[str, str]
 def backup_database(db_path: Path) -> Path | None:
     if not db_path.is_file() or str(db_path) == ":memory:":
         return None
-    backup_path = db_path.with_name(f"{db_path.name}.bak-{int(time.time())}")
+    backup_path = db_path.with_name(f"{db_path.name}.bak-{time.time_ns()}")
     try:
-        shutil.copy2(db_path, backup_path)
+        source_uri = db_path.resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(source_uri, uri=True)) as source:
+            with closing(sqlite3.connect(backup_path)) as target:
+                source.backup(target)
         return backup_path
-    except OSError:
+    except (OSError, sqlite3.Error):
+        try:
+            backup_path.unlink(missing_ok=True)
+        except OSError:
+            pass
         return None
 
 
@@ -75,17 +82,15 @@ def run_migrations(conn: sqlite3.Connection, migrations_dir: Path | None = None,
         return []
 
     if create_backup and db_path:
-        try:
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        except sqlite3.Error:
-            pass
-        backup_database(db_path)
+        if backup_database(db_path) is None:
+            raise RuntimeError(f"Database backup failed before migration: {db_path}")
 
     applied_now = []
     for version, fpath, checksum in pending:
         sql = fpath.read_text(encoding="utf-8")
         try:
-            conn.executescript(sql)
+            # executescript commits a pending transaction before running its SQL.
+            conn.executescript("BEGIN IMMEDIATE;\n" + sql)
             now_iso = datetime.now(timezone.utc).isoformat()
             conn.execute(
                 "INSERT INTO schema_migrations (version, checksum, applied_at) VALUES (?, ?, ?)",

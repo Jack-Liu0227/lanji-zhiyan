@@ -43,14 +43,10 @@ def capture(db, project_id: str, step: str) -> dict:
                          key=lambda r: r["id"])
         valid = bool(payload)
     elif step == "notes":
-        payload = sorted([{"id": n["id"], "title": n.get("title"), "markdown": n.get("markdown")}
-                          for n in db.notes(project_id) if n.get("paper_id") and n.get("markdown", "").strip()],
-                         key=lambda r: r["id"])
+        import papertran
+        payload = papertran.deliveries(db, project_id)
         valid = bool(payload)
-        folder = db.pdir(project_id, "笔记") / workflow.NOTE_CATEGORY
-        note_files = sorted(p for p in folder.rglob("*.md") if p.name.lower() != "readme.md" and p.stat().st_size)
-        result["files"] = [str(p) for p in note_files]
-        valid = valid or bool(note_files)
+        result["files"] = [path for item in payload for path in item["files"]]
     elif step in ("outline", "write", "review"):
         doc = workflow.doc_read(db, project_id, step)
         payload = doc.get("markdown", "") if doc.get("exists") else ""

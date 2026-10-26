@@ -81,15 +81,22 @@ function docPanelHTML(k, active){
           ${c.seed ? `<button class="btn ghost" id="${k}-seed" title="${c.seed}">${c.seed}</button>` : ""}
           <button class="btn hidden" id="${k}-pull" title="模型不支持工具调用时会把内容写在回复里 —— 点这里把那一段写进文件">${c.pull}</button>
           <button class="btn ghost" id="${k}-diff" title="对比正文变更并双向合并">⇄ 差异对比</button>
-          <button class="btn ghost" id="${k}-edit" title="直接在左边改 markdown">✎ 手改</button>
-          <button class="btn ghost hidden" id="${k}-edit-save">保存</button>
+          <div class="seg-tabs doc-mode-tabs" id="${k}-mode-tabs" role="group" aria-label="文档模式" style="margin-left:6px">
+            <button type="button" class="seg-tab active" data-doc-mode="preview" id="${k}-mode-prev" title="纯预览">👁 预览</button>
+            <button type="button" class="seg-tab" data-doc-mode="edit" id="${k}-mode-edit" title="直接编辑正文（Ctrl+S 保存）">✎ 编辑</button>
+            <button type="button" class="seg-tab" data-doc-mode="split" id="${k}-mode-split" title="双栏实时对照">◫ 双栏</button>
+          </div>
+          <button class="btn ghost hidden" id="${k}-edit" style="display:none"></button>
+          <button class="btn btn-sm hidden" id="${k}-edit-save" title="保存修改 (Ctrl+S)">💾 保存</button>
           <button class="btn ghost hidden" id="${k}-restore" title="恢复自动保存的本地草稿快照">↻ 恢复快照</button>
           ${k === "review" ? `<button class="btn ghost" id="review-rollback" title="回退到上一个审稿意见版本">↩ 回退意见</button>` : ""}
           ${c.cite ? `<button class="btn ghost" id="${k}-cite" title="后台的引用台账：每一处引用的位置 + 文献信息（题名/作者/出处/DOI/页数）">📑 引用台账</button>` : ""}
           <button class="btn ghost" id="${k}-reload" title="从磁盘重新读">↻</button>
         </div>
-        <div class="ol-body md-render" id="${k}-body"></div>
-        <textarea class="ol-src hidden" id="${k}-src" spellcheck="false"></textarea>
+        <div class="ol-body-wrap" id="${k}-body-wrap">
+          <div class="ol-body md-render" id="${k}-body"></div>
+          <textarea class="ol-src hidden" id="${k}-src" spellcheck="false" placeholder="在此编辑文档内容…"></textarea>
+        </div>
         ${c.hl ? `<div class="ol-marks">
           <div class="ol-marks-h"><span id="${k}-marks-n">标注 0 处</span><span class="ol-spacer"></span>
             <button class="btn ghost" id="${k}-marks-send" title="把我的标注作为一条消息发给 agent，让它逐条回应">把标注发给 agent</button>
@@ -223,17 +230,45 @@ function docLiveStart(k){
     }catch(_){}
   }, 4000);
 }
-function docEdit(k, on){
-  docEl(k, "body").classList.toggle("hidden", on);
-  docEl(k, "src").classList.toggle("hidden", !on);
-  docEl(k, "edit").classList.toggle("hidden", on);
-  docEl(k, "edit-save").classList.toggle("hidden", !on);
-  if(on) docEl(k, "src").focus();
+function docApplyMode(k, mode){
+  const body = docEl(k, "body"), src = docEl(k, "src"), saveBtn = docEl(k, "edit-save");
+  const wrap = docEl(k, "body-wrap") || body?.parentElement;
+  if(!body || !src) return;
+  document.querySelectorAll(`#${k}-mode-tabs [data-doc-mode]`).forEach(b => {
+    b.classList.toggle("active", b.dataset.docMode === mode);
+  });
+  if(mode === "preview"){
+    body.classList.remove("hidden");
+    src.classList.add("hidden");
+    if(wrap) wrap.classList.remove("doc-split-wrap");
+    if(saveBtn) saveBtn.classList.add("hidden");
+  } else if(mode === "edit"){
+    body.classList.add("hidden");
+    src.classList.remove("hidden");
+    if(wrap) wrap.classList.remove("doc-split-wrap");
+    if(saveBtn) saveBtn.classList.remove("hidden");
+    src.focus();
+  } else { // split
+    body.classList.remove("hidden");
+    src.classList.remove("hidden");
+    if(wrap) wrap.classList.add("doc-split-wrap");
+    if(saveBtn) saveBtn.classList.remove("hidden");
+    body.innerHTML = renderMarkdown(src.value || "");
+    src.focus();
+  }
 }
+
+function docEdit(k, on){
+  docApplyMode(k, on ? 'edit' : 'preview');
+}
+
 async function docSaveEdit(k){
-  try{ docEdit(k, false); docShow(k, await api("/api/doc/save", { task_id: curTask, step: k, markdown: docEl(k, "src").value }));
-       docMsg(k, "已保存到 " + docState(k).path); }
-  catch(e){ docMsg(k, "保存失败：" + e.message); }
+  try{
+    const d = await api("/api/doc/save", { task_id: curTask, step: k, markdown: docEl(k, "src").value });
+    docShow(k, d);
+    docMsg(k, "已保存到 " + docState(k).path);
+    uiNotify("文档已保存");
+  }catch(e){ docMsg(k, "保存失败：" + e.message); uiNotify("保存失败: " + e.message); }
 }
 function docCandidate(text){
   /* 从一条回复里抠出「像成稿」的那段：优先 ``` 代码块，否则从第一个标题行截到结尾（至少 2 个标题）。 */
@@ -333,10 +368,11 @@ function docPenUp(k){
 /* ---------- 右边对话 ---------- */
 function docBind(k, m){
   if(!docEl(k, "msgs")) return;
+  PromptUI.mount(docEl(k,'ask'),`doc:${curTask}:${k}`,curTask);
   m.querySelectorAll("[data-dv]").forEach(b => b.onclick = ()=>{
     const [kk, v] = b.dataset.dv.split("|"); docState(kk).view = v; docPaint(kk); });
   docEl(k, "send").onclick = () => docSend(k);
-  docEl(k, "ask").onkeydown = (e)=>{ if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); docSend(k); } };
+  docEl(k, "ask").onkeydown = (e)=>{ if(e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && e.keyCode!==229 && !e.repeat){ e.preventDefault(); docSend(k); } };
   docEl(k, "ask").oninput = () => docGrow(k);
   docEl(k, "plus").onclick = () => docEl(k, "filepick").click();
   docEl(k, "filepick").onchange = (e)=>{ const fs = [...e.target.files]; e.target.value = ""; docAddFiles(k, fs); };
@@ -385,6 +421,17 @@ function docBind(k, m){
         localStorage.setItem(draftKey, curSrcEl.value);
         if(restoreBtn) restoreBtn.classList.remove("hidden");
       }, 800);
+      const b = docEl(k, "body");
+      if(b && !b.classList.contains("hidden")){
+        b.innerHTML = renderMarkdown(curSrcEl.value || "");
+      }
+    });
+    curSrcEl.addEventListener("keydown", (e) => {
+      if((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")){
+        e.preventDefault();
+        e.stopPropagation();
+        docSaveEdit(k);
+      }
     });
   }
   if(DOC_UI[k].cite) docEl(k, "cite").onclick = ()=>{
@@ -407,6 +454,9 @@ function docBind(k, m){
   if(docEl(k, "reload")) docEl(k, "reload").onclick = ()=>docLoad(k);
   if(docEl(k, "edit")) docEl(k, "edit").onclick = ()=>docEdit(k, true);
   if(docEl(k, "edit-save")) docEl(k, "edit-save").onclick = ()=>docSaveEdit(k);
+  document.querySelectorAll(`#${k}-mode-tabs [data-doc-mode]`).forEach(btn => {
+    btn.onclick = () => docApplyMode(k, btn.dataset.docMode);
+  });
   if(DOC_UI[k].hl){
     docEl(k, "pen").onclick = ()=>docPen(k);
     docEl(k, "penpanel").querySelector(".dw-x").onclick = ()=>docPen(k, false);
@@ -524,7 +574,7 @@ async function docSend(k){
   let errMsg = "", final = "", evs = [];
   try{
     const res = await fetch(DOC_UI[k].post, { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task_id: curTask, message: msg }) });
+      body: JSON.stringify({ task_id: curTask, message: msg, template_ref:PromptUI.ref(`doc:${curTask}:${k}`,curTask) }) });
     if(!res.ok || !res.body) throw new Error("HTTP " + res.status);
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
     for(;;){
@@ -580,9 +630,21 @@ let cvCur = { path: "", ext: "" };      // 展示区当前文件
 const FL_TEXT = new Set(["md","markdown","txt","tex","bib","json","py","csv","yaml","yml","log","sh","js","css"]);
 let flRel = "", flSel = "", flRows = [];
 let flTreeCache = {};         // rel -> array of {name, rel, path, dir, ext, size, count, at}
-let flExpanded = new Set();   // set of expanded rel strings
+let flExpanded = (() => {
+  try {
+    const raw = localStorage.getItem("rw-fl-tree-expanded");
+    if(raw) return new Set(JSON.parse(raw));
+  } catch(_) {}
+  return new Set();
+})();
+function flSaveExpanded() {
+  try {
+    localStorage.setItem("rw-fl-tree-expanded", JSON.stringify([...flExpanded]));
+  } catch(_) {}
+}
 let flTreeLoading = new Set();// set of currently loading rel strings
 let flTreeRoot = "";
+let flTreeProject = "", flTreeGeneration = 0;
 
 function flGetIcon(ext){
   ext = String(ext || "").toLowerCase().trim();
@@ -631,38 +693,54 @@ function filesPanelHTML(active){
         <div class="fl-list" id="flList"><p class="fl-empty">读目录…</p></div>
       </aside>
       <div class="fl-col">
-        <div class="fl-h"><b id="flName">选一个文件</b><span class="fl-sub" id="flMeta"></span><span class="fl-sp"></span>
-          <button class="fl-ib" id="flHand" title="交给某一步的助手（先写进右边对话框）">⇢</button>
+        <div class="fl-h">
+          <b id="flName">选一个文件</b>
+          <span class="fl-sub" id="flMeta"></span>
+          <div class="seg-tabs fl-mode-tabs" id="flModeTabs" role="group" aria-label="文件工作区模式" style="margin-left:10px;display:none">
+            <button type="button" class="seg-tab active" data-fl-mode="preview" title="纯预览模式">👁 预览</button>
+            <button type="button" class="seg-tab" data-fl-mode="edit" title="直接编辑正文（Ctrl+S 保存）">✎ 编辑</button>
+            <button type="button" class="seg-tab" data-fl-mode="split" title="双栏实时对照">◫ 双栏</button>
+          </div>
+          <span class="fl-sp"></span>
+          <button class="btn btn-sm" id="flSaveBtn" style="display:none;margin-right:6px" title="保存文件修改 (Ctrl+S)">💾 保存</button>
+          <span class="handoff-row" id="flHandoffPins"></span>
+          <button class="btn btn-sm" id="flHand" disabled title="先选择文件；交接快捷键 Alt+Shift+H">交给…</button>
+          <button class="btn btn-sm" id="flHandoffHistory" disabled title="查看这个文件的交接与回执">交接记录</button>
           <button class="fl-ib" id="flOpen" title="用系统程序打开">↗</button></div>
-        <div class="fl-stage" id="flStage"><div class="fl-empty">左边点一个文件，这里出预览<br>
-          <span>md / txt / tex / json 显示正文，pdf 内嵌，docx 先转 PDF</span></div></div>
+        <div class="fl-stage" id="flStage"><div class="fl-empty">左边点一个文件，这里出预览与编辑<br>
+          <span>md / txt / tex / json 等支持直接在线编辑与实时保存</span></div></div>
       </div>
     </div></section>`;
 }
 
 async function flLoadNode(rel){
   rel = rel || "";
-  if(flTreeLoading.has(rel)) return;
-  flTreeLoading.add(rel);
+  const project=flTreeProject || curTask, generation=flTreeGeneration, loading=flTreeLoading;
+  if(loading.has(rel)) return;
+  loading.add(rel);
   try{
-    const d = await api(`/api/tree?id=${encodeURIComponent(curTask)}&rel=${encodeURIComponent(rel)}`);
+    const d = await api(`/api/tree?id=${encodeURIComponent(project)}&rel=${encodeURIComponent(rel)}`);
+    if(generation!==flTreeGeneration || project!==curTask) return;
     if(d.root) flTreeRoot = d.root;
-    if(d.rows) flTreeCache[rel] = d.rows;
+    if(d.rows) flTreeCache[rel] = d.rows.map(row=>({...row,project_id:project}));
   }catch(e){
     console.error("加载文件夹内容失败", rel, e);
   }finally{
-    flTreeLoading.delete(rel);
-    flFlattenRows();
+    loading.delete(rel);
+    if(generation===flTreeGeneration && project===curTask) flFlattenRows();
   }
 }
 
 async function flInitTree(){
   const list = $("flList"); if(!list) return;
   if(!curTask){ list.innerHTML = `<p class="fl-empty">先选一个项目</p>`; return; }
+  const generation=++flTreeGeneration, project=curTask;
+  if(flTreeProject!==project){flSel="";flTreeRoot="";}
+  flTreeProject=project;flTreeLoading=new Set();
   list.innerHTML = `<p class="fl-empty">读目录…</p>`;
   flTreeCache = {};
-  flExpanded = new Set();
   await flLoadNode("");
+  if(generation!==flTreeGeneration || project!==curTask || !list.isConnected) return;
   const tag = $("flRoot");
   if(tag && flTreeRoot){
     const parts = flTreeRoot.split(/[\\/]/).filter(Boolean);
@@ -691,7 +769,7 @@ function flRenderTree(){
       if(isDir){
         const isLoading = flTreeLoading.has(r.rel);
         html += `
-          <div class="fl-tree-row dir ${isOpen ? 'open' : ''} ${isSel ? 'on' : ''}" data-rel="${esc(r.rel)}" data-dir="1" style="padding-left:${padLeft}px" title="${esc(r.name)}">
+          <div class="fl-tree-row dir ${isOpen ? 'open' : ''} ${isSel ? 'on' : ''}" data-project-id="${esc(r.project_id)}" data-rel="${esc(r.rel)}" data-dir="1" style="padding-left:${padLeft}px" title="${esc(r.name)}">
             <span class="fl-chevron">${isLoading ? '⌛' : (isOpen ? '▾' : '▸')}</span>
             <span class="fl-folder-ico">${isOpen ? '📂' : '📁'}</span>
             <span class="fl-name">${esc(r.name)}</span>
@@ -706,7 +784,7 @@ function flRenderTree(){
         }
       } else {
         html += `
-          <div class="fl-tree-row file ${isSel ? 'on' : ''}" data-rel="${esc(r.rel)}" data-dir="0" style="padding-left:${padLeft}px" title="${esc(r.name)}">
+          <div class="fl-tree-row file ${isSel ? 'on' : ''}" data-project-id="${esc(r.project_id)}" data-rel="${esc(r.rel)}" data-dir="0" style="padding-left:${padLeft}px" title="${esc(r.name)}">
             <span class="fl-indent-spacer"></span>
             <span class="fl-file-ico">${flGetIcon(r.ext)}</span>
             <span class="fl-name">${esc(r.name)}</span>
@@ -732,9 +810,11 @@ function flBind(){
     if(isDir){
       if(flExpanded.has(rel)){
         flExpanded.delete(rel);
+        flSaveExpanded();
         flRenderTree();
       } else {
         flExpanded.add(rel);
+        flSaveExpanded();
         flRenderTree();
         if(!flTreeCache[rel]){
           await flLoadNode(rel);
@@ -748,34 +828,76 @@ function flBind(){
   };
   const rl = $("flReload"); if(rl) rl.onclick = ()=> flInitTree();
   const hand = $("flHand"); if(hand) hand.onclick = ()=>{
-    const ta = $("wv-ask");
     if(!flSel){ flMsg("先在左边点一个文件"); return; }
-    if(ta){ ta.value = `把 ${flSel} 交给写作助手`; ta.focus(); }
+    FileHandoff.open({project_id:curTask,relative:flSel});
   };
+  const history = $("flHandoffHistory"); if(history) history.onclick=()=>flSel && FileHandoff.history({project_id:curTask,relative:flSel});
   const op = $("flOpen"); if(op) op.onclick = ()=>{
     const r = flFindRow(flSel);
     if(!r){ flMsg("先在左边点一个文件"); return; }
     api("/api/conv/open", { path: r.path }).catch(e => flMsg("打不开：" + e.message));
   };
+  const modeTabs = document.querySelectorAll("#flModeTabs [data-fl-mode]");
+  modeTabs.forEach(btn => {
+    btn.onclick = () => {
+      const ta = $("flEditText");
+      if(ta && flCurrentFile) flCurrentFile.text = ta.value;
+      flCurrentMode = btn.dataset.flMode;
+      localStorage.setItem('rw-fl-mode', flCurrentMode);
+      modeTabs.forEach(b => b.classList.toggle('active', b === btn));
+      flRenderContent();
+    };
+  });
+  const saveBtn = $("flSaveBtn");
+  if(saveBtn) saveBtn.onclick = () => flSaveCurrent();
   flInitTree();
 }
 
+let flCurrentFile = null;
+let flCurrentMode = localStorage.getItem('rw-fl-mode') || 'split';
+
 async function flShow(row){
+  if(row.project_id && row.project_id!==curTask) return;
+  const project = curTask;
   flSel = row.rel;
+  $("flHand").disabled=false;
+  $("flHand").title="交给当前工作流中的节点、团队或助手（Alt+Shift+H）";
+  $("flHandoffHistory").disabled=false;
+  FileHandoff.preview({project_id:project,relative:row.rel});
   document.querySelectorAll("#flList .fl-tree-row").forEach(x => x.classList.toggle("on", x.dataset.rel === flSel));
   if($("flName")) $("flName").textContent = row.name;
   flMsg([flFmtSize(row.size), row.at, row.rel.split("/").slice(0,-1).join("/")].filter(Boolean).join(" · "));
   const stage = $("flStage"); if(!stage) return;
+  const modeTabs = $("flModeTabs");
+  const saveBtn = $("flSaveBtn");
   stage.innerHTML = `<p class="fl-empty">打开中…</p>`;
   const ext = String(row.ext || "").toLowerCase();
+
   if(FL_TEXT.has(ext) || !ext){
     try{
       const d = await api(`/api/conv/read?path=${encodeURIComponent(row.path)}`);
       if(d.error) throw new Error(d.error);
-      stage.innerHTML = `<pre class="fl-doc">${esc((d.text || "") + (d.truncated ? "\n\n…（太长，只预览前一段；完整内容用 ↗ 打开）" : ""))}</pre>`;
-    }catch(e){ stage.innerHTML = `<p class="fl-empty">读不了：${esc(e.message)}</p>`; }
+      if(curTask!==project || flSel!==row.rel || !stage.isConnected) return;
+      flCurrentFile = { row, projectId:project, text: d.text || "", originalText: d.text || "" };
+      if(modeTabs) modeTabs.style.display = "inline-flex";
+      if(saveBtn){
+        saveBtn.style.display = "";
+        saveBtn.textContent = "💾 保存";
+      }
+      flUpdateModeTabs();
+      flRenderContent();
+    }catch(e){
+      if(modeTabs) modeTabs.style.display = "none";
+      if(saveBtn) saveBtn.style.display = "none";
+      stage.innerHTML = `<p class="fl-empty">读不了：${esc(e.message)}</p>`;
+    }
     return;
   }
+
+  // 非文本类文件（图片/PDF等）
+  flCurrentFile = null;
+  if(modeTabs) modeTabs.style.display = "none";
+  if(saveBtn) saveBtn.style.display = "none";
   try{
     const d = await api(`/api/conv/preview?path=${encodeURIComponent(row.path)}`);
     if(d.error) throw new Error(d.error);
@@ -784,6 +906,101 @@ async function flShow(row){
     else stage.innerHTML = `<p class="fl-empty">这类文件这里不预览 —— 点右上角 ↗ 用系统程序打开</p>`;
   }catch(e){ stage.innerHTML = `<p class="fl-empty">打不开：${esc(e.message)}</p>`; }
 }
+
+function flUpdateModeTabs(){
+  document.querySelectorAll("#flModeTabs [data-fl-mode]").forEach(b => {
+    b.classList.toggle("active", b.dataset.flMode === flCurrentMode);
+  });
+}
+
+function flRenderContent(){
+  const stage = $("flStage");
+  if(!stage || !flCurrentFile) return;
+  const ext = String(flCurrentFile.row.ext || "").toLowerCase();
+  const isMd = ext === "md" || ext === "markdown";
+
+  if(flCurrentMode === "preview"){
+    if(isMd){
+      stage.innerHTML = `<div class="fl-editor-preview md-render">${renderMarkdown(flCurrentFile.text)}</div>`;
+    } else {
+      stage.innerHTML = `<pre class="fl-doc"><code>${esc(flCurrentFile.text)}</code></pre>`;
+    }
+  } else if(flCurrentMode === "edit"){
+    stage.innerHTML = `<textarea class="fl-editor-textarea" id="flEditText" spellcheck="false" placeholder="在此编辑文件内容…">${esc(flCurrentFile.text)}</textarea>`;
+    const ta = $("flEditText");
+    if(ta){
+      ta.oninput = () => {
+        flCurrentFile.text = ta.value;
+        const btn = $("flSaveBtn");
+        if(btn) btn.textContent = flCurrentFile.text !== flCurrentFile.originalText ? "💾 保存 *" : "💾 保存";
+      };
+      ta.onkeydown = flEditorKeydown;
+    }
+  } else { // split
+    stage.innerHTML = `
+      <div class="fl-editor-split">
+        <div class="fl-split-pane">
+          <textarea class="fl-editor-textarea" id="flEditText" spellcheck="false" placeholder="在此编辑文件内容…">${esc(flCurrentFile.text)}</textarea>
+        </div>
+        <div class="fl-split-divider"></div>
+        <div class="fl-split-pane fl-split-preview md-render" id="flSplitPreview">
+          ${isMd ? renderMarkdown(flCurrentFile.text) : `<pre class="fl-doc"><code>${esc(flCurrentFile.text)}</code></pre>`}
+        </div>
+      </div>`;
+    const ta = $("flEditText"), prev = $("flSplitPreview");
+    if(ta){
+      ta.oninput = () => {
+        flCurrentFile.text = ta.value;
+        if(prev) prev.innerHTML = isMd ? renderMarkdown(ta.value) : `<pre class="fl-doc"><code>${esc(ta.value)}</code></pre>`;
+        const btn = $("flSaveBtn");
+        if(btn) btn.textContent = flCurrentFile.text !== flCurrentFile.originalText ? "💾 保存 *" : "💾 保存";
+      };
+      ta.onkeydown = flEditorKeydown;
+    }
+  }
+}
+
+function flEditorKeydown(e){
+  if((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")){
+    e.preventDefault();
+    e.stopPropagation();
+    flSaveCurrent();
+    return;
+  }
+  if(e.key === "Tab"){
+    e.preventDefault();
+    const start = this.selectionStart, end = this.selectionEnd;
+    this.value = this.value.substring(0, start) + "  " + this.value.substring(end);
+    this.selectionStart = this.selectionEnd = start + 2;
+    this.dispatchEvent(new Event("input"));
+  }
+}
+
+async function flSaveCurrent(){
+  if(!flCurrentFile || !flCurrentFile.row) return false;
+  const file = flCurrentFile;
+  const ta = $("flEditText");
+  if(ta) file.text = ta.value;
+  const savedText = file.text;
+  const btn = $("flSaveBtn");
+  if(btn) btn.textContent = "保存中…";
+  try{
+    const res = await api("/api/conv/save", {
+      path: file.row.path,
+      text: savedText
+    });
+    if(res.error) throw new Error(res.error);
+    file.originalText = savedText;
+    if(btn && flCurrentFile===file) btn.textContent = file.text===savedText ? "💾 保存" : "💾 保存 *";
+    uiNotify(`已保存 ${file.row.name} (${flFmtSize(res.bytes || savedText.length)})`);
+    return file.text===savedText;
+  }catch(e){
+    if(btn) btn.textContent = "💾 保存 *";
+    uiNotify("保存失败: " + e.message);
+    return false;
+  }
+}
+window.flSaveCurrent = flSaveCurrent;
 
 function convPanelHTML(active){
   return `<section class="cv" id="panel-convert"${active ? "" : ' style="display:none"'}>
@@ -1056,9 +1273,19 @@ function enBind(){
 }
 
 /* ---------------- 工作流 ---------------- */
-const STAGE={idea:"🔍 创新点审查",search:"📚 论文搜索",download:"⬇️ 下载精读",notes:"🌐 论文翻译",outline:"🗂 确认大纲",map:"🧩 梳理精读",write:"✍️ 文章撰写",review:"🧐 稿件审查",entrans:"🌍 中译英",convert:"🔄 格式转换"};
-let WF_ORDER=["idea","search","download","notes","outline","map","write","review","entrans","convert"];
+const STAGE={};
+let WF_ORDER=[];
 let wfNodes = {};
+let wfProjectId = "";
+let wfLayoutId = "", wfSelectedNode = "";
+let wfSelectionSave = Promise.resolve();
+function wfApplyCatalog(stages){
+  for(const stage of stages || []){
+    STAGE[stage.id] = `${stage.icon} ${stage.name}`;
+    if(WF_AGENT[stage.id]) Object.assign(WF_AGENT[stage.id],{emoji:stage.icon,name:stage.agent,sub:stage.purpose});
+  }
+  if(!WF_ORDER.length) WF_ORDER=(stages || []).map(stage=>stage.id);
+}
 const PANELS = {
   idea: (a) => typeof ideaPanelHTML === "function" ? ideaPanelHTML(a) : "",
   search: (a) => typeof searchPanelHTML === "function" ? searchPanelHTML(a) : "",
@@ -1142,7 +1369,7 @@ function wfAgentHTML(step){
         <button class="btn ghost" id="wv-history-btn" title="查看对话历史与工作流切换" style="padding:3px 8px;font-size:11.5px">⏱ 历史</button>
         <button class="btn ghost" id="wv-newchat-btn" title="新建这一步的对话" style="padding:3px 8px;font-size:11.5px">＋ 新建</button>
         <span class="wf-mdl" title="这一步用的模型">${esc(mdl)}</span>
-        <button class="btn ghost wf-agent-collapse-btn" id="wv-agent-collapse" title="折叠助手（扩大工作区）" style="padding:3px 7px;font-size:11.5px">▶</button>
+        <button class="btn ghost wf-agent-collapse-btn" id="wv-agent-collapse" title="折叠助手（扩大工作区）" style="padding:3px 8px;font-size:11.5px;display:flex;align-items:center;gap:3px">▶ 折叠</button>
       </div>
     </div>
   </header>
@@ -1173,9 +1400,10 @@ async function wfAgentPaint(m, step){
   const a = WF_AGENT[step] || WF_AGENT.idea;
   if(wfAgentCollapsed){
     host.className = "wf-agent collapsed";
-    host.innerHTML = `<button class="wf-agent-expand-btn" id="wv-agent-expand" title="展开${esc(a.name || "智研助手")}">
-      <span>◀</span>
-      <span class="wf-agent-expand-txt">${esc(a.name || "智研助手")}</span>
+    host.innerHTML = `<button class="wf-agent-dock-btn" id="wv-agent-expand" title="展开 ${esc(a.name || "智研助手")}">
+      <span class="wf-dock-chevron">◀</span>
+      <span class="wf-dock-avatar" title="${esc(a.name || "智研助手")}">${a.emoji || "🤖"}</span>
+      <span class="wf-dock-label">助手</span>
     </button>`;
     const exp = host.querySelector("#wv-agent-expand");
     if(exp) exp.onclick = ()=>{
@@ -1237,11 +1465,13 @@ async function wfAgentPaint(m, step){
   const tabs = host.querySelectorAll("[data-wv]");
   tabs.forEach(b => b.onclick = ()=>{ wfView = b.dataset.wv; tabs.forEach(x=>x.classList.toggle("on", x===b)); wfPaintMsgs(step); });
   const ta = $("wv-ask"), send = $("wv-send");
+  PromptUI.mount(ta,`step:${curTask}:${step}`,curTask);
   send.onclick = ()=> wfSend(m, step);
   let historyIndex = -1, historyDraft = "";
   ta.onkeydown = e=>{
+    if(e.isComposing || e.keyCode===229 || e.repeat) return;
     if(e.key === "Escape" && wfActiveRun(step)){ e.preventDefault(); wfStop(step); return; }
-    if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); wfSend(m, step); return; }
+    if(e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey){ e.preventDefault(); wfSend(m, step); return; }
     if(["ArrowUp","ArrowDown"].includes(e.key) && !e.shiftKey && !ta.value.includes("\n")){
       const history = wfMsgs.filter(x=>x.role === "user").map(x=>x.content);
       if(!history.length) return;
@@ -1321,7 +1551,7 @@ let wfPlanSeq = 0;
 /* 硬限制：上一步台账里没有 done，这一步就不是流程步 —— 只当独立功能块用，
    不写「已同步进度 + 计划」、不落库、不能点「确认交付」推进流程。 */
 let wfStageMap = {};
-const wfStepName = s => { const t = STAGE[s] || s; return t.slice(t.indexOf(" ") + 1); };
+const wfStepName = s => { const t = STAGE[s] || s; return wfNodes[s]?.label || t.slice(t.indexOf(" ") + 1); };
 function wfPrevBlocked(step){
   return (wfNodes[step]?.blocked_by || [])[0] || "";
 }
@@ -1523,7 +1753,7 @@ async function wfSend(m, step){
   const project = curTask, key = crypto.randomUUID();
   const historyKey = wfRunKey(project,step);
   const run = {project,step,key,status:"running",runId:"",cursor:0,events:[],api:WF_AGENT[step].api,
-    request:{task_id:project,message:text,step,idempotency_key:key,
+    request:{task_id:project,message:text,step,idempotency_key:key,template_ref:PromptUI.ref(`step:${project}:${step}`,project),
       sel:step === "files" ? ((flRows.find(r=>r.rel===flSel)||{}).path||"") : ""}};
   wfRuns.set(historyKey,run); wfRemember(run);
   ta.value = ""; ta.style.height = "auto";
@@ -1532,20 +1762,51 @@ async function wfSend(m, step){
   wfPaintStats(); wfRunButton(); wfFollowRun(run);
 }
 
+async function uiGoWorkflowStep(step){
+  return uiNavigate(async()=>{
+    const projectId=curTask;
+    if(!projectId) return uiNotify('请先选择项目。');
+    const button=route()==='workflow' && wfProjectId===projectId
+      ? [...document.querySelectorAll('.wf-step[data-step]')].find(b=>b.dataset.step===step) : null;
+    if(button){ button.click(); await wfSelectionSave; return; }
+    await wfSelectionSave;
+    const state=await api(`/api/workflow/layouts/state?task_id=${encodeURIComponent(projectId)}`);
+    const node=state.nodes.find(n=>n.step===step);
+    if(!node) throw new Error('当前项目的流程不包含此阶段');
+    if(curTask!==projectId) return;
+    await api('/api/workflow/layouts/select',{task_id:projectId,layout_id:state.layout.id,node_id:node.id});
+    if(curTask!==projectId) return;
+    openTab('workflow');
+  });
+}
+
+let wfRenderSequence=0;
 async function renderWorkflow(m){
+  const renderSequence=++wfRenderSequence;
   const projectId = curTask;
+  let layoutState = null;
   if(projectId){
     try{
+      await wfSelectionSave;
       const state = await api(`/api/workflow/layouts/state?task_id=${encodeURIComponent(projectId)}`);
-      if(curTask !== projectId || route() !== "workflow" || !m.isConnected) return;
+      if(renderSequence !== wfRenderSequence || curTask !== projectId || route() !== "workflow" || !m.isConnected) return;
       wfNodes = Object.fromEntries(state.nodes.map(n=>[n.step,n]));
       WF_ORDER = state.nodes.map(n=>n.step);
+      wfApplyCatalog(state.stages);
+      layoutState = state;
+      if(wfProjectId !== projectId || wfLayoutId !== state.layout.id || wfSelectedNode !== state.selected_node){
+        wfStep = state.nodes.find(n=>n.id===state.selected_node)?.step || WF_ORDER[0];
+        wfProjectId = projectId;
+        wfLayoutId = state.layout.id;
+        wfSelectedNode = state.selected_node;
+      }
     }catch(e){ m.innerHTML = `<div class="none">工作流读取失败：${esc(e.message)}</div>`; return; }
   }
   m.style.padding = "";        // 清掉别的页面留下的内边距
   const proj = (S.tasks||[]).find(t => t.id === curTask);
   const fPath = (proj && (proj.base_dir || proj.root_dir)) || "";
   const fName = fPath ? (fPath.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || fPath) : "未设置项目目录";
+  const displayFolderName = (proj && (proj.title || proj.name)) ? `${proj.title || proj.name} 工作区` : (fName || "项目文件");
   if(wfStep !== "files" && !WF_ORDER.includes(wfStep)) wfStep = WF_ORDER[0];   // 老 localStorage 存了个不认识的步
   localStorage.setItem("rw-wf-step", wfStep);
   m.innerHTML = needTask() || `
@@ -1553,8 +1814,8 @@ async function renderWorkflow(m){
       <aside class="wf-rail" id="wfRail">
         <div class="wf-proj" id="wfProjCard" title="点击切换项目">
           <div class="wf-proj-head">
-            <small>当前项目</small>
-            <span class="wf-proj-switch-badge">⇄ 切换项目</span>
+            <small>📁 当前研究工程</small>
+            <span class="wf-proj-switch-badge">⇄ 切换</span>
           </div>
           <div class="wf-proj-body">
             <b class="wf-proj-title" title="${esc(proj?proj.title:'未命名项目')}">${esc(proj?proj.title:"未命名项目")}</b>
@@ -1572,17 +1833,69 @@ async function renderWorkflow(m){
             <option value="__new__">＋ 新建/管理项目…</option>
           </select>
         </button>
-        <button class="wf-fold" id="wf-collapse" title="${wfMin?"展开步骤导航":"折叠步骤导航"}">${wfMin ? "›" : "‹ 折叠"}</button>
-        ${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}" title="${STAGE[s]}">
-            <span class="wf-ico">${STAGE[s].split(" ")[0]}</span><span class="wf-lbl">${STAGE[s].slice(STAGE[s].indexOf(" ")+1)}</span>
-            <span class="wf-dot"></span></button>`).join("")}
+
+        <div class="wf-control-card"${wfMin?' style="display:none"':""}>
+          <div class="wf-control-header">
+            <span class="wf-control-tag">⚡ 流程编排</span>
+            <select class="control wf-layout-select" id="wfLayoutSelect" aria-label="项目工作流" title="选择当前工作流架构">
+              ${(layoutState?.layouts || []).map(layout=>`<option value="${esc(layout.id)}" ${layout.id===layoutState.layout.id?"selected":""}>${esc(layout.name)}</option>`).join("")}
+            </select>
+          </div>
+          <button type="button" class="wf-seq-btn" id="wfSequenceOpen" title="按顺序自动执行当前项目的完整流程">
+            <span class="wf-seq-icon">▶</span>
+            <span class="wf-seq-text">顺序执行整个工作流</span>
+          </button>
+          <div class="wf-control-actions">
+            <button type="button" class="wf-ctrl-btn" id="wfLayoutSettings" title="自定义工作流节点与流转编排">
+              <span class="wf-ctrl-icon">⚙</span>
+              <span>配置流程</span>
+            </button>
+            <button type="button" class="wf-ctrl-btn" id="wfSyncSettings" title="配置 Zotero 文献库与文献同步">
+              <span class="wf-ctrl-icon">🔄</span>
+              <span>文献同步</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="wf-stepper-header"${wfMin?' style="display:none"':""}>
+          <div class="wf-stepper-label-wrap">
+            <span class="wf-stepper-title">研究阶段</span>
+            <span class="wf-stepper-badge" id="wfStepBadge">${Math.max(1, WF_ORDER.indexOf(wfStep) + 1)} / ${WF_ORDER.length}</span>
+          </div>
+          <button type="button" class="wf-rail-fold-btn" id="wf-collapse" title="折叠导航栏，留出更多工作空间">
+            <span class="wf-fold-arrow">◀</span>
+            <span class="wf-fold-text">折叠</span>
+          </button>
+        </div>
+
+        <button type="button" class="wf-rail-expand-btn" id="wf-expand" title="展开步骤导航栏" ${wfMin?'style="display:flex"':'style="display:none"'}>
+          <span>▶</span>
+        </button>
+
+        <div class="wf-steps-track">
+          ${WF_ORDER.map((s, idx)=>{
+            const isCur = s === wfStep;
+            const isDone = (wfStageMap && wfStageMap[s] === "delivered");
+            const isLock = wfPrevBlocked(s);
+            const stepNum = String(idx + 1).padStart(2, '0');
+            const icon = STAGE[s].split(" ")[0];
+            const name = wfStepName(s);
+            return `<button type="button" class="wf-step ${isCur?'on':''} ${isDone?'done':''} ${isLock?'lock':''}" data-step="${s}" title="${STAGE[s]}">
+              <span class="wf-step-idx">${stepNum}</span>
+              <span class="wf-ico">${icon}</span>
+              <span class="wf-lbl">${esc(name)}</span>
+              ${isLock ? `<span class="wf-step-status lock-ico" title="前置阶段未交付">🔒</span>` : (isDone ? `<span class="wf-step-status done-ico" title="已确认交付">✓</span>` : `<span class="wf-dot"></span>`)}
+            </button>`;
+          }).join("")}
+        </div>
+
         <div class="wf-vsep"></div>
         <div class="wf-file-loc-card${wfStep==="files"?" on":""}" id="wfFileLocCard" title="${esc(fPath ? `项目位置：${fPath}\n点击在右侧查看文件树与即时预览` : '尚未选择项目目录')}">
           <div class="wfl-card-header">
             <div class="wfl-card-icon">📁</div>
             <div class="wfl-card-titles">
-              <span class="wfl-card-tag">项目文件</span>
-              <b class="wfl-card-name">${esc(fName)}</b>
+              <span class="wfl-card-tag">工程工作区</span>
+              <b class="wfl-card-name" title="${esc(displayFolderName)}">${esc(displayFolderName)}</b>
             </div>
             <span class="wfl-card-arrow">➔</span>
           </div>
@@ -1602,6 +1915,21 @@ async function renderWorkflow(m){
       <aside class="wf-agent" id="wfAgent"></aside>
     </div>`;
   if(!curTask) return;
+  const layoutBtn = m.querySelector("#wfLayoutSettings");
+  if(layoutBtn) layoutBtn.onclick=()=>{ setSec="workflows"; openTab("settings"); render(); };
+  const syncBtn = m.querySelector("#wfSyncSettings");
+  if(syncBtn) syncBtn.onclick=()=>IntegrationSettings.openZotero(curTask);
+  const layoutSelect = m.querySelector("#wfLayoutSelect");
+  if(layoutSelect) layoutSelect.onchange=async event=>{
+    const select=event.target; select.disabled=true;
+    try{
+      await wfSelectionSave;
+      const state=await api("/api/workflow/layouts/select",{task_id:projectId,layout_id:select.value});
+      if(curTask!==projectId || route()!=="workflow" || !m.isConnected) return;
+      wfStep=state.nodes.find(node=>node.id===state.selected_node)?.step || state.nodes[0].step;
+      await renderWorkflow(m);
+    }catch(error){ select.disabled=false; select.value=layoutState.layout.id; uiNotify("工作流切换失败："+error.message); }
+  };
   const bindProjSelect = (selEl) => {
     if(!selEl) return;
     selEl.onchange = (e) => {
@@ -1622,7 +1950,9 @@ async function renderWorkflow(m){
   bindProjSelect(m.querySelector("#wfProjSelect"));
   bindProjSelect(m.querySelector("#wfProjSelectMin"));
   const wfc = m.querySelector("#wf-collapse");
-  if(wfc) wfc.onclick = ()=>{ wfMin=!wfMin; localStorage.setItem("rw-wf-min",wfMin?"1":"0"); renderWorkflow(m); };
+  if(wfc) wfc.onclick = ()=>{ wfMin=true; localStorage.setItem("rw-wf-min","1"); renderWorkflow(m); };
+  const wfe = m.querySelector("#wf-expand");
+  if(wfe) wfe.onclick = ()=>{ wfMin=false; localStorage.setItem("rw-wf-min","0"); renderWorkflow(m); };
   const bindStep = ()=>{
     if(wfStep==="idea") iwBind(m);
     if(wfStep==="search") wsBind(m);
@@ -1636,6 +1966,10 @@ async function renderWorkflow(m){
   };
   m.querySelectorAll(".wf-step").forEach(b=>b.onclick=()=>{
     wfStep = b.dataset.step; localStorage.setItem("rw-wf-step", wfStep);
+    wfSelectedNode = wfNodes[wfStep].id;
+    const selection={task_id:projectId,layout_id:layoutState.layout.id,node_id:wfSelectedNode};
+    wfSelectionSave = wfSelectionSave.then(()=>api("/api/workflow/layouts/select",selection))
+      .catch(error=>uiNotify("步骤位置保存失败："+error.message));
     m.querySelectorAll(".wf-step").forEach(x=>x.classList.toggle("on", x.dataset.step===wfStep));
     const locCard = m.querySelector("#wfFileLocCard"); if(locCard) locCard.classList.remove("on");
     WF_ORDER.forEach(s=>{ const p=$("panel-"+s); if(p) { const on = s===wfStep; p.style.display = on ? "" : "none"; } });
@@ -2311,8 +2645,7 @@ function downloadPanelHTML(active){
       <div class="h">
         <span>待手动下载清单<span class="hint" id="dlN"></span></span>
         <span style="flex:1"></span>
-        <button class="btn ghost" id="dlZoteroColBtn" title="在 Zotero 中新建分类">📁 新建 Zotero 分类</button>
-        <button class="btn" id="dlZoteroImportBtn" title="将已下载文献以项目标签导入 Zotero 并关联 PDF">📥 导入到 Zotero</button>
+        <button class="btn" id="dlZoteroSyncBtn" title="绑定项目分类，统一同步题录和项目标签">Zotero 项目同步</button>
       </div>
       <p class="hint" id="dlTip" style="padding:0 14px 8px">无 OA 直链、或自动下载被挡（403/落地页）的论文都在这里；点击可复制 DOI 去机构库下载。</p>
       <div class="ws-list" id="dlList"></div>
@@ -2327,33 +2660,8 @@ function dlBind(m){
   dlStatPoll = setInterval(dlStatsRefresh, 5000);      // 计数自己走：5 秒一次，只刷数字
   dlTruthRefresh();                                    // 进面板先问一次文献库真篇数
   $("dlRead").onclick = dlRead;
-  const zColBtn = $("dlZoteroColBtn");
-  if(zColBtn){
-    zColBtn.onclick = async ()=>{
-      const name = prompt("请输入新建 Zotero 分类名称：", "项目文献-" + (curTask||""));
-      if(!name || !name.trim()) return;
-      try{
-        await api("/api/zotero/collection/create", { name: name.trim() });
-        uiNotify(`Zotero 分类「${name}」创建成功`);
-      }catch(e){ uiNotify("创建分类失败：" + e.message); }
-    };
-  }
-  const zImportBtn = $("dlZoteroImportBtn");
-  if(zImportBtn){
-    zImportBtn.onclick = async ()=>{
-      if(!confirm("确定要将本项目已下载文献导入 Zotero 并自动打上项目标签吗？")) return;
-      zImportBtn.disabled = true;
-      zImportBtn.textContent = "正在导入…";
-      try{
-        const r = await api("/api/zotero/import_project_papers", { task_id: curTask });
-        uiNotify(`已成功导入 ${r.count || 0} 篇文献至 Zotero！`);
-      }catch(e){ uiNotify("导入 Zotero 失败：" + e.message); }
-      finally{
-        zImportBtn.disabled = false;
-        zImportBtn.textContent = "📥 导入到 Zotero";
-      }
-    };
-  }
+  const zSyncBtn = $("dlZoteroSyncBtn");
+  if(zSyncBtn) zSyncBtn.onclick=()=>IntegrationSettings.openZotero(curTask);
   if($("dlList")){
     $("dlList").onclick = (e)=>{
       const c = e.target.closest("[data-copy]"); if(!c) return;
@@ -2575,7 +2883,7 @@ async function wsPaint(){
 async function wsLoadState(){
   if(!curTask) return;
   try{ const d = await api(`/api/task?id=${encodeURIComponent(curTask)}`);
-       wsRes = d.results || []; }catch(e){}
+       wsRes = d.library_items ? d.library_items.filter(item=>item.result_id) : d.results || []; }catch(e){}
   wsPaint();
 }
 function wsBind(m){
@@ -2666,6 +2974,22 @@ async function loadTaskState(){
       b.classList.toggle("done", st === "delivered");
       b.classList.toggle("todo", ["ready","waiting"].includes(st) && s!==wfStep);
       b.classList.toggle("lock", !!gate);
+      const statusEl = b.querySelector(".wf-step-status, .wf-dot");
+      if(statusEl){
+        if(gate){
+          statusEl.className = "wf-step-status lock-ico";
+          statusEl.textContent = "🔒";
+          statusEl.title = `上一步「${wfStepName(gate)}」尚未交付`;
+        } else if(st === "delivered"){
+          statusEl.className = "wf-step-status done-ico";
+          statusEl.textContent = "✓";
+          statusEl.title = "已确认交付";
+        } else {
+          statusEl.className = "wf-dot";
+          statusEl.textContent = "";
+          statusEl.title = "";
+        }
+      }
       b.title = gate ? `${STAGE[s]}（上一步「${wfStepName(gate)}」还没交付，先当独立功能块用）`
               : st === "stale" ? `${STAGE[s]} · 产物或上游已变更，请重新确认交付`
               : st === "succeeded" ? `${STAGE[s]} · 执行完成，等待确认交付`
@@ -2771,6 +3095,13 @@ function calEventsByDate(){
   for(const e of S.events) (map[e.date] = map[e.date] || []).push({type:"mine",label:e.title,id:e.id,done:e.done});
   return map;
 }
+function calendarEntryHTML(e){
+  const project=(S.tasks || []).find(t=>t.id===e.task_id);
+  const status={TODO:"待办",IN_PROGRESS:"执行中",REVIEW:"待验收",DONE:"已完成",scheduled:"已排期",running:"执行中",completed:"已完成",failed:"失败",blocked:"已阻断",canceled:"已取消",cancelled:"已停止",awaiting_review:"待人工审查",delivered:"已审查",rejected:"已退回",succeeded:"已完成"}[e.status] || e.status || "";
+  return `<div class="check-item ${e.done?"done":""}"><input type="checkbox" data-chk="${esc(e.id)}" ${e.done?"checked":""} ${e.linked && !e.can_toggle?'disabled title="请打开来源处理执行或审查"':""}>${e.time?`<span class="check-time">${esc(e.time)}</span>`:""}
+    <span class="check-title">${esc(e.title)}${e.linked?`<small style="display:block;color:var(--muted)">${esc(project?.title || "")} · ${esc(e.source_label)} · ${esc(status)}</small>`:""}</span>
+    ${e.linked?`<button class="btn ghost" data-cal-open="${esc(e.id)}">${e.target_type==="note"?"打开笔记":e.source_type==="workflow_review" && e.is_pending?"审查节点":"打开来源"}</button>`:`<button class="check-del" data-del="${esc(e.id)}" title="删除">✕</button>`}</div>`;
+}
 function renderCalendar(m){
   const y = calY, mo = calM, t0 = today();
   const lead = (new Date(y,mo,1).getDay()+6)%7;                       // 周一=0
@@ -2798,7 +3129,7 @@ function renderCalendar(m){
   const yearOpts = Array.from({length:11},(_,i)=>now.getFullYear()-5+i).map(v=>`<option value="${v}" ${v===y?"selected":""}>${v}</option>`).join("");
   const monthOpts = Array.from({length:12},(_,i)=>`<option value="${i}" ${i===mo?"selected":""}>${i+1}月</option>`).join("");
   const doneEvs = S.events.filter(e=>e.done).sort((a,b)=>String(b.created_at||"").localeCompare(String(a.created_at||""))).slice(0,30);
-  const soon = S.events.filter(e=>!e.done && e.date>=t0).sort((a,b)=>a.date.localeCompare(b.date));
+  const soon = S.events.filter(e=>!e.done && e.is_pending!==false && e.date>=t0).sort((a,b)=>a.date.localeCompare(b.date));
   const DAY = 86400000, base = new Date(t0+"T00:00:00").getTime();
 
   m.innerHTML = `<div class="cal-page">
@@ -2824,6 +3155,7 @@ function renderCalendar(m){
           </div>
         </div>
         <div class="cal-week"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span class="cal-we">六</span><span class="cal-we">日</span></div>
+        <p class="hint" style="padding:0 14px">项目截止日期、下次定时运行、产出笔记和工作流人工审查会自动关联到日历。</p>
         <div class="cal-grid">${grid}</div>
         <div class="cal-day-events"><div class="cal-day-head">📆 ${calSel===t0?"今天 · ":""}${calSel}<span class="side-count">${selEvs.length} 项</span></div></div>
       </div>
@@ -2831,7 +3163,7 @@ function renderCalendar(m){
 
       <div class="card">
         <div class="card-head"><b>☀ 当日工作计划</b><span class="side-count">${calSel}</span></div>
-        <div class="check-list">${dayItems.length ? dayItems.map(e=>`<div class="check-item ${e.done?"done":""}"><input type="checkbox" data-chk="${e.id}" ${e.done?"checked":""}>${e.time?`<span class="check-time">${esc(e.time)}</span>`:""}<span class="check-title">${esc(e.title)}</span><button class="check-del" data-del="${e.id}" title="删除">✕</button></div>`).join("")
+        <div class="check-list">${dayItems.length ? dayItems.map(calendarEntryHTML).join("")
           : `<div class="hint">这一天还没有安排 🎉🎉🎉</div>`}</div>
         <div class="quick-add"><input id="todayInput" class="tb-input" placeholder="＋ 添加任务，回车确认…"><input id="todayTime" class="tb-input quick-time" type="time" title="可选：这条安排的具体时间"><button class="btn" id="btnTodayAdd">添加</button></div>
       </div>
@@ -2840,7 +3172,7 @@ function renderCalendar(m){
     <div class="cal-bottom">
       <div class="card">
         <div class="card-head"><b>📡 任务完成情况</b><span class="side-count">自动生成</span></div>
-        <div class="feed-list">${doneEvs.length ? doneEvs.map(e=>`<div class="feed-item"><span class="feed-ico">✅</span><span class="feed-text">完成任务 [${esc(e.title)}]</span><span class="feed-time">${hhmm(e.created_at)}</span></div>`).join("")
+        <div class="feed-list">${doneEvs.length ? doneEvs.map(e=>`<div class="feed-item"><span class="feed-ico">✅</span><span class="feed-text">完成任务 [${esc(e.title)}]</span>${e.linked?`<button class="btn ghost" data-cal-open="${esc(e.id)}">${e.target_type==="note"?"打开笔记":"打开来源"}</button>`:""}<span class="feed-time">${hhmm(e.created_at)}</span></div>`).join("")
           : `<div class="hint">还没有完成的任务</div>`}</div>
       </div>
       <div class="card">

@@ -50,12 +50,12 @@ function showDiffModal(oldText, newText, onAccept, onReject) {
       return `<div class="diff-line ${l.type}"><span style="user-select:none;color:var(--muted);width:32px;text-align:right">${idx + 1}</span><span>${sym}${esc(l.text)}</span></div>`;
     }).join("");
   }
-  modal.classList.remove("hidden");
+  uiOpenModal(modal, $("btnDiffCancel"));
 }
 
 function closeDiffModal() {
   const modal = $("diffModal");
-  if (modal) modal.classList.add("hidden");
+  if (modal) uiCloseModal(modal);
   diffAcceptCallback = null;
   diffRejectCallback = null;
 }
@@ -78,7 +78,7 @@ let cmdActiveIndex = 0;
 let cmdItems = [];
 
 function buildCommandList() {
-  const items = [];
+  const items = typeof AppInteractions === "undefined" ? [] : AppInteractions.commandItems();
 
   const NAV_ITEMS = [
     { id: "agent", title: "Agent 全局对话", ico: "💬", cat: "导航" },
@@ -101,7 +101,7 @@ function buildCommandList() {
       sub: `跳转至 ${n.title}`,
       ico: n.ico,
       cat: "主模块",
-      run: () => openTab(n.id)
+      run: () => uiNavigate(()=>openTab(n.id))
     });
   });
 
@@ -114,12 +114,7 @@ function buildCommandList() {
       sub: `直达工作流第 ${idx + 1} 步`,
       ico: ico,
       cat: "工作流步骤",
-      run: () => {
-        openTab("workflow");
-        wfStep = s;
-        localStorage.setItem("rw-wf-step", wfStep);
-        renderWorkflow($("main"));
-      }
+      run: () => uiGoWorkflowStep(s)
     });
   });
 
@@ -129,11 +124,12 @@ function buildCommandList() {
       sub: t.question || "切换当前科研课题",
       ico: "📂",
       cat: "项目",
-      run: () => {
+      run: () => uiNavigate(()=>{
         curTask = t.id;
+        spId = t.id;
         localStorage.setItem("rw-task", curTask);
-        render();
-      }
+        openTab("space");
+      })
     });
   });
 
@@ -142,29 +138,21 @@ function buildCommandList() {
     sub: "Dark Obsidian 纯黑极简学术模式",
     ico: "🌙",
     cat: "主题",
-    run: () => {
-      document.documentElement.dataset.theme = "dark";
-      localStorage.setItem("rw-theme", "dark");
-      applyTheme(currentPrimary());
-    }
+    run: () => uiNavigate(()=>setTheme("dark"))
   });
   items.push({
     text: "切换浅色主题 (Light Theme)",
     sub: "Paper White 高清高对比度纸质模式",
     ico: "☀️",
     cat: "主题",
-    run: () => {
-      document.documentElement.dataset.theme = "light";
-      localStorage.setItem("rw-theme", "light");
-      applyTheme(currentPrimary());
-    }
+    run: () => uiNavigate(()=>setTheme("light"))
   });
   items.push({
     text: "从 Zotero 导入文献",
     sub: "检索本地 Zotero 条目并导入",
     ico: "📖",
     cat: "工具",
-    run: () => openZotero()
+    run: () => zotOpen()
   });
 
   return items;
@@ -173,19 +161,20 @@ function buildCommandList() {
 function openCommandPalette() {
   const modal = $("cmdPaletteModal");
   if (!modal) return;
-  modal.classList.remove("hidden");
   const input = $("cmdPaletteInput");
   if (input) {
     input.value = "";
-    input.focus();
   }
   cmdActiveIndex = 0;
   renderCommandResults("");
+  uiOpenModal(modal, input);
+  input?.setAttribute("aria-expanded", "true");
 }
 
 function closeCommandPalette() {
   const modal = $("cmdPaletteModal");
-  if (modal) modal.classList.add("hidden");
+  if (modal) uiCloseModal(modal);
+  $("cmdPaletteInput")?.setAttribute("aria-expanded", "false");
 }
 
 function renderCommandResults(query) {
@@ -202,29 +191,33 @@ function renderCommandResults(query) {
   if (cmdActiveIndex >= cmdItems.length) cmdActiveIndex = Math.max(0, cmdItems.length - 1);
 
   if (!cmdItems.length) {
+    $("cmdPaletteInput")?.removeAttribute("aria-activedescendant");
     listEl.innerHTML = `<div style="text-align:center;padding:24px 0;color:var(--muted);font-size:13px">未找到匹配的命令或模块</div>`;
     return;
   }
 
   listEl.innerHTML = cmdItems.map((item, idx) => `
-    <div class="cmd-item ${idx === cmdActiveIndex ? "active" : ""}" data-cmd-idx="${idx}">
+    <div class="cmd-item ${idx === cmdActiveIndex ? "active" : ""}" id="cmd-option-${idx}" role="option" aria-selected="${idx === cmdActiveIndex}" data-cmd-idx="${idx}">
       <span class="cmd-ico">${item.ico}</span>
       <span class="cmd-text">${esc(item.text)}<span class="cmd-sub">${esc(item.sub)}</span></span>
-      <span class="cmd-tag">${esc(item.cat)}</span>
+      ${item.shortcut?`<kbd>${esc(item.shortcut)}</kbd>`:""}<span class="cmd-tag">${esc(item.cat)}</span>
     </div>
   `).join("");
 
   listEl.querySelectorAll(".cmd-item").forEach(el => {
     el.onmouseenter = () => {
       cmdActiveIndex = Number(el.dataset.cmdIdx);
-      listEl.querySelectorAll(".cmd-item").forEach((x, i) => x.classList.toggle("active", i === cmdActiveIndex));
+      listEl.querySelectorAll(".cmd-item").forEach((x, i) => { x.classList.toggle("active", i === cmdActiveIndex); x.setAttribute("aria-selected",i===cmdActiveIndex); });
+      $("cmdPaletteInput").setAttribute("aria-activedescendant",el.id);
     };
     el.onclick = () => {
+      cmdActiveIndex = Number(el.dataset.cmdIdx);
       executeActiveCommand();
     };
   });
 
   const activeEl = listEl.querySelector(".cmd-item.active");
+  if(activeEl) $("cmdPaletteInput").setAttribute("aria-activedescendant",activeEl.id);
   if (activeEl) activeEl.scrollIntoView({ block: "nearest" });
 }
 
@@ -232,91 +225,29 @@ function executeActiveCommand() {
   if (cmdItems[cmdActiveIndex] && typeof cmdItems[cmdActiveIndex].run === "function") {
     const act = cmdItems[cmdActiveIndex].run;
     closeCommandPalette();
-    try { act(); } catch(e) { console.error(e); }
+    Promise.resolve().then(act).catch(e=>uiNotify("操作失败："+e.message));
   }
 }
 
-window.addEventListener("keydown", (e) => {
-  if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
-    e.preventDefault();
-    const modal = $("cmdPaletteModal");
-    if (modal && !modal.classList.contains("hidden")) {
-      closeCommandPalette();
-    } else {
-      openCommandPalette();
-    }
-    return;
+function handleCommandPaletteKey(e) {
+  if(e.isComposing || e.keyCode === 229) return false;
+  if(e.key === "Escape" || ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k")) {
+    closeCommandPalette(); return true;
   }
-
-  const pModal = $("cmdPaletteModal");
-  if (pModal && !pModal.classList.contains("hidden")) {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      closeCommandPalette();
-      return;
+  if(e.target !== $("cmdPaletteInput")) return false;
+  if(["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+    if(cmdItems.length){
+      cmdActiveIndex = e.key === "Home" ? 0 : e.key === "End" ? cmdItems.length - 1
+        : (cmdActiveIndex + (e.key === "ArrowDown" ? 1 : -1) + cmdItems.length) % cmdItems.length;
+      renderCommandResults($("cmdPaletteInput").value);
     }
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      if (cmdItems.length) {
-        cmdActiveIndex = (cmdActiveIndex + 1) % cmdItems.length;
-        renderCommandResults($("cmdPaletteInput")?.value || "");
-      }
-      return;
-    }
-    if (e.key === "ArrowUp") {
-      e.preventDefault();
-      if (cmdItems.length) {
-        cmdActiveIndex = (cmdActiveIndex - 1 + cmdItems.length) % cmdItems.length;
-        renderCommandResults($("cmdPaletteInput")?.value || "");
-      }
-      return;
-    }
-    if (e.key === "Enter") {
-      e.preventDefault();
-      executeActiveCommand();
-      return;
-    }
+    return true;
   }
+  if(e.key === "Enter") { if(!e.repeat) executeActiveCommand(); return true; }
+  return false;
+}
 
-  if (e.key === "Escape") {
-    closeDiffModal();
-    const prof = $("profileModal");
-    if (prof && !prof.classList.contains("hidden")) prof.classList.add("hidden");
-    const zot = $("zoteroModal");
-    if (zot && !zot.classList.contains("hidden")) zot.classList.add("hidden");
-  }
-
-  if (e.altKey && !e.ctrlKey && !e.metaKey) {
-    const code = e.key;
-    let stepIndex = -1;
-    if (code >= "1" && code <= "9") stepIndex = parseInt(code, 10) - 1;
-    else if (code === "0") stepIndex = 9;
-
-    if (stepIndex >= 0 && stepIndex < WF_ORDER.length) {
-      e.preventDefault();
-      openTab("workflow");
-      wfStep = WF_ORDER[stepIndex];
-      localStorage.setItem("rw-wf-step", wfStep);
-      renderWorkflow($("main"));
-      return;
-    }
-  }
-
-  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-    const act = document.activeElement;
-    if (act && (act.tagName === "TEXTAREA" || act.tagName === "INPUT")) {
-      const parentAt = act.closest(".composer, .at-dock, .ol-grid");
-      if (parentAt) {
-        const sendBtn = parentAt.querySelector(".send-btn, #send, button[id$='-send']");
-        if (sendBtn && !sendBtn.disabled) {
-          e.preventDefault();
-          sendBtn.click();
-        }
-      }
-    }
-  }
-});
-
+$("cmdPaletteClose")?.addEventListener("click", closeCommandPalette);
 $("cmdPaletteMask")?.addEventListener("click", closeCommandPalette);
 $("cmdPaletteInput")?.addEventListener("input", (e) => {
   cmdActiveIndex = 0;

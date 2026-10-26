@@ -4,11 +4,13 @@ from __future__ import annotations
 import json
 import securestore              # 凭据加密（DPAPI），model_profiles 里也只存密文
 import uuid
+import account_providers
 from urllib.parse import urlsplit
 
 REASONING = ("auto", "none", "minimal", "low", "medium", "high", "xhigh")
 PERMISSIONS = ("auto", "read_only", "workspace_write", "full_access")
 READ_TOOLS = frozenset(("library_overview", "knowledge_query", "calendar_list", "outline_read", "map_read", "map_sources", "doc_read", "cite_read", "read_attachment", "skill_read", "mail_accounts", "mail_list", "mail_read", "zotero_collections", "project_note_list", "project_note_read"))
+READ_TOOLS = READ_TOOLS | {"prompt_template_search", "prompt_template_read", "prompt_template_render", "workflow_context_read"}
 
 
 def migrate(db):
@@ -16,18 +18,26 @@ def migrate(db):
         "assistants": {"reasoning": "TEXT NOT NULL DEFAULT 'auto'", "permission": "TEXT NOT NULL DEFAULT 'auto'"},
         "team_members": {"model_id": "TEXT NOT NULL DEFAULT ''", "reasoning": "TEXT NOT NULL DEFAULT 'auto'", "permission": "TEXT NOT NULL DEFAULT 'auto'"},
         "model_profiles": {"api": "TEXT NOT NULL DEFAULT 'openai-completions'", "provider_id": "TEXT NOT NULL DEFAULT ''"},
-        "teams": {"description": "TEXT NOT NULL DEFAULT ''"},
+        "teams": {"description": "TEXT NOT NULL DEFAULT ''", "roster_initialized": "INTEGER NOT NULL DEFAULT 0"},
         "chats": {"model_id": "TEXT NOT NULL DEFAULT ''", "reasoning": "TEXT NOT NULL DEFAULT 'auto'", "permission": "TEXT NOT NULL DEFAULT 'auto'"},
     }.items():
         cols = {r["name"] for r in db.db.execute("PRAGMA table_info(%s)" % table)}
         for name, declaration in fields.items():
             if name not in cols:
                 db.db.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, declaration))
+                if table == "teams" and name == "roster_initialized":
+                    db.db.execute("UPDATE teams SET roster_initialized=1")
     db.db.execute("""CREATE TABLE IF NOT EXISTS team_sessions (
       id TEXT PRIMARY KEY, team_id TEXT NOT NULL, title TEXT NOT NULL,
       active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
     # 别加 teams → chats 的迁移：每次开库都跑，会把固定团队反复塞回对话列表；团队走独立的 team_sessions。
     for p in db.providers():
+        account = account_providers.CATALOG.get(p["id"])
+        if account and p["source"] == "builtin" and p["api"] not in account_providers.WIRES:
+            db.db.execute("UPDATE providers SET api=?,base_url=?,api_key='',key_host='' WHERE id=?",
+                          (account["wire"], "account://" + p["id"], p["id"]))
+            db.db.commit()
+            sync_provider_models(db, p["id"])
         adopted = {r["model"] for r in db.db.execute("SELECT model FROM model_profiles WHERE provider_id=?", (p["id"],))}
         if adopted != set(p["models"]):
             sync_provider_models(db, p["id"])
@@ -99,6 +109,8 @@ def set_leader(db, team_id, member_id):
     m = db.team_member(member_id)
     if not m or m["task_id"] != team_id:
         raise ValueError("Leader 必须属于当前团队")
+    if m.get("assistant_id") == "builtin-steward":
+        raise ValueError("智研管家负责项目与团队配置，请选择专业负责人担任 Leader")
     if m.get("assistant_id"):
         db.require_assistant(m["assistant_id"])
     with db.db:
@@ -140,16 +152,27 @@ def route(method, path, body, query, db):
     action = path.rsplit("/", 1)[-1]
     if method == "GET" and action == "state":
         return {"providers": [public(p) for p in db.providers()], "models": [public(m) for m in db.models()],
-                "catalog": [{"id": k, "name": c["name"], "base_url": c.get("base_url", ""), "api": c.get("wire", "openai-completions"), "supported": c.get("wire") in workflow.USABLE_WIRES} for k, c in workflow.PROVIDER_CATALOG.items()],
+                "catalog": [{"id": k, "name": c["name"], "base_url": c.get("base_url", ""), "api": c.get("wire", "openai-completions"), "supported": c.get("wire") in workflow.USABLE_WIRES,
+                             "auth": c.get("auth", ["apiKey"]), "docs": c.get("docs", "")} for k, c in workflow.PROVIDER_CATALOG.items()],
                 "wires": [{"id": w, "label": workflow.WIRE_LABEL.get(w, w)} for w in workflow.CUSTOM_WIRES],
                 "assistants": db.assistants(), "selectable": db.selectable_assistants(), "reasoning": REASONING, "permissions": PERMISSIONS}
     if method == "GET" and action == "provider-secret":
         return {"api_key": db.provider(q("id"))["api_key"]}
+    if method == "POST" and action in ("provider-account-status", "provider-account-login"):
+        p = db.provider(str(b.get("id") or ""))
+        return account_providers.status(p["api"]) if action.endswith("status") else account_providers.login(p["api"])
     if method == "POST" and action == "provider-save":
         pid = str(b.get("id") or "")
         name, url = str(b.get("name") or "").strip(), str(b.get("base_url") or "").strip().rstrip("/")
         wire = b.get("api", "openai-completions")
-        if not name or urlsplit(url).scheme not in ("http", "https") or not urlsplit(url).netloc:
+        if wire in account_providers.WIRES:
+            account = account_providers.entry(wire)
+            if pid and pid != account["id"]:
+                raise ValueError("账号 Provider 需使用对应的官方入口")
+            pid, url = account["id"], "account://" + account["id"]
+            if b.get("api_key"):
+                raise ValueError("账号认证由官方客户端管理，无需填写 API Key")
+        if not name or (wire not in account_providers.WIRES and (urlsplit(url).scheme not in ("http", "https") or not urlsplit(url).netloc)):
             raise ValueError("请输入名称与有效的 HTTP(S) 接口地址")
         if wire not in workflow.CUSTOM_WIRES:
             raise ValueError("请选择已支持的协议")
@@ -158,6 +181,8 @@ def route(method, path, body, query, db):
             fields = {"name": name, "base_url": url, "api": wire, "enabled": int(bool(b.get("enabled", True)))}
             if b.get("api_key") is not None:
                 fields["api_key"] = str(b["api_key"]).strip()
+            if wire in account_providers.WIRES:
+                fields.update(api_key="", key_host="")
             db.db.execute("UPDATE providers SET %s WHERE id=?" % ",".join(k + "=?" for k in fields), (*fields.values(), pid))
             db.db.commit()
         else:
@@ -200,7 +225,7 @@ def route(method, path, body, query, db):
         tid = q("id")
         if not db.team(tid):
             raise ValueError("团队不存在")
-        team.ensure_leader(tid)
+        team.ensure_leader(tid, db)
         sid = q("session_id")
         selected = session(db, tid, sid)
         return {"team": db.team(tid), "members": db.team_members(tid), "session": selected,
@@ -215,7 +240,7 @@ def route(method, path, body, query, db):
             raise ValueError("团队不存在")
         db.db.execute("UPDATE teams SET description=? WHERE id=?", (str(b.get("description") or ""), t["id"]))
         db.db.commit()
-        team.ensure_leader(t["id"])
+        team.ensure_leader(t["id"], db)
         return {"team": db.team(t["id"])}
     if method == "POST" and action == "team-delete":
         tid = b["id"]
@@ -237,11 +262,18 @@ def route(method, path, body, query, db):
             return {"member": set_leader(db, tid, b["member_id"])}
         if action == "member-save":
             fields = {k: v for k, v in b.items() if k in ("name", "prompt", "assistant_id", "model_id", "reasoning", "permission")}
+            validate_runtime_fields(db, fields)
+            if "name" in fields:
+                fields["name"] = str(fields["name"] or "").strip()
+                if not fields["name"]:
+                    raise ValueError("角色名称不能为空")
             mid = b.get("member_id")
             if mid:
                 m = db.team_member(mid)
                 if not m or m["task_id"] != tid:
                     raise ValueError("成员不属于此团队")
+                if m["role"] == "leader" and fields.get("assistant_id") == "builtin-steward":
+                    raise ValueError("智研管家负责项目与团队配置，请选择专业负责人担任 Leader")
                 return {"member": db.team_member_update(mid, **fields)}
             aid = fields.get("assistant_id", "")
             a = db.require_assistant(aid) if aid else {}
@@ -249,8 +281,11 @@ def route(method, path, body, query, db):
                 raise ValueError("自定义角色需要填写名称")
             if aid and any(m["assistant_id"] == aid for m in db.team_members(tid)):
                 raise ValueError("这个助手已在当前团队中")
-            m = db.team_member_add(tid, fields.get("name") or a.get("name", "成员"), "member", prompt=fields.get("prompt") or a.get("rules", ""), assistant_id=aid, color=len(db.team_members(tid)))
-            return {"member": db.team_member_update(m["id"], **fields)}
+            m = db.team_member_add(tid, fields.get("name") or a.get("name", "成员"), "member",
+                                   prompt=fields.get("prompt", a.get("rules", "")), assistant_id=aid,
+                                   color=len(db.team_members(tid)),
+                                   **{k: fields[k] for k in ("model_id", "reasoning", "permission") if k in fields})
+            return {"member": m}
         if action == "team-session":
             selected = session(db, tid, b.get("session_id", ""), create=bool(b.get("create")), title=str(b.get("title") or ""))
             db.db.execute("UPDATE team_sessions SET active=(id=?) WHERE team_id=?", (selected["id"], tid))

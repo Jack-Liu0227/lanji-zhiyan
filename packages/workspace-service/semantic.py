@@ -222,6 +222,7 @@ def chunk_text(text: str, size: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP)
 
 def _sources(conn: sqlite3.Connection) -> Iterable[dict[str, Any]]:
     """所有值得进索引的东西。一篇论文 = 一页一块，页码原样保留。"""
+    import asset_service
     papers = conn.execute("""
         SELECT p.id, p.task_id, p.filename, COALESCE(m.title,'') AS meta_title
         FROM papers p LEFT JOIN paper_meta m ON m.paper_id = p.id
@@ -235,11 +236,15 @@ def _sources(conn: sqlite3.Connection) -> Iterable[dict[str, Any]]:
                "parts": [(int(r["page_no"]), r["text"] or "") for r in pages]}
 
     for n in conn.execute("SELECT id, task_id, title, markdown FROM notes").fetchall():
+        if asset_service.is_instruction_note(conn, n["task_id"], n["id"], n["markdown"]):
+            continue
         yield {"kind": "note", "id": n["id"], "project_id": n["task_id"] or "",
                "title": (n["title"] or "").strip(), "label": (n["title"] or "").strip(),
                "parts": [(0, "# %s\n%s" % (n["title"] or "", n["markdown"] or ""))]}
 
     for n in conn.execute("SELECT id, task_id, title, content FROM md_notes").fetchall():
+        if asset_service.is_instruction_note(conn, n["task_id"], n["id"], n["content"]):
+            continue
         yield {"kind": "md_note", "id": n["id"], "project_id": n["task_id"] or "",
                "title": (n["title"] or "").strip(), "label": (n["title"] or "").strip(),
                "parts": [(0, "# %s\n%s" % (n["title"] or "", n["content"] or ""))]}
@@ -378,6 +383,11 @@ def _source_exists(conn: sqlite3.Connection, kind: str, sid: str, project_id: st
         return bool(conn.execute("SELECT 1 FROM evidence e JOIN papers p ON p.id=e.paper_id "
                                  "WHERE e.id=? AND COALESCE(p.task_id,'')=?", (sid, project_id)).fetchone())
     table = {"paper": "papers", "note": "notes", "md_note": "md_notes"}.get(kind)
+    if kind in ("note", "md_note"):
+        import asset_service
+        field = "markdown" if kind == "note" else "content"
+        row = conn.execute(f"SELECT {field} FROM {table} WHERE id=? AND COALESCE(task_id,'')=?", (sid, project_id)).fetchone()
+        return bool(row and not asset_service.is_instruction_note(conn, project_id, sid, row[0]))
     return bool(table and conn.execute(f"SELECT 1 FROM {table} WHERE id=? AND COALESCE(task_id,'')=?",
                                        (sid, project_id)).fetchone())
 
@@ -478,6 +488,8 @@ def search_vector(db: Any, query: str, project_ids: list[str] | None = None, k: 
     scope = set(project_ids) if project_ids is not None else None
     for idx in order:
         row = keep[int(idx)]
+        if not _source_exists(conn, row["source_kind"], row["source_id"], row["project_id"] or ""):
+            continue
         if scope is not None and (row["project_id"] or "") not in scope:
             continue
         out.append(_hit(row, float(scores[int(idx)]), names))
@@ -528,6 +540,8 @@ def lexical(db: Any, query: str, project_ids: list[str] | None = None, k: int = 
                             ["%" + q + "%", *params, k]).fetchall()
     out: list[dict[str, Any]] = []
     for rank, row in enumerate(rows):
+        if not _source_exists(conn, row["source_kind"], row["source_id"], row["project_id"] or ""):
+            continue
         hit = _hit(row, 1.0 / (rank + 1), names)
         hit["lexical"] = True
         out.append(hit)

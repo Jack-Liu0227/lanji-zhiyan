@@ -61,6 +61,9 @@ function mdPaint(){
   $("mdEmpty").classList.toggle("hidden", !!note);
   $("mdEditorShell").classList.toggle("hidden", !note);
   if(!note) return;
+  $("mdNoteTitle").readOnly = false;
+  $("mdSource").readOnly = false;
+  $("mdToolbar").querySelectorAll("[data-md-command]").forEach(el => { el.disabled = false; });
   $("mdNoteTitle").value = note.title || "未命名笔记";
   $("mdSource").value = note.content || "";
   mdPaintTaskSel(note);                              // 「绑定项目」下拉（空=不绑）
@@ -142,6 +145,7 @@ async function mdSave(){
   }catch(e){ $("mdSaveState").textContent = "保存失败"; $("mdSaveState").title = e.message; console.error("笔记自动保存失败:", e); }
 }
 function mdScheduleSave(){
+  if(mdProj?.read_only) return;
   if(mdProj){                                        // 项目笔记：同样 650ms 防抖，只是落到项目里的 .md
     mdProj.title = $("mdNoteTitle").value.trim();
     mdProj.content = $("mdSource").value;
@@ -176,7 +180,7 @@ function mdPrefixLines(prefix, ordered=false){
   ta.focus(); mdScheduleSave();
 }
 function mdCmd(command, value=""){
-  if(!$("mdSource")) return;
+  if(!$("mdSource") || $("mdSource").readOnly) return;
   if(command==="heading") return mdPrefixLines(value?"#".repeat(Number(value))+" ":"");
   if(command==="bold") return mdInsert("**","**","加粗文字");
   if(command==="italic") return mdInsert("*","*","斜体文字");
@@ -193,6 +197,7 @@ function mdCmd(command, value=""){
   if(command==="table") return mdInsert("","","| 列 1 | 列 2 | 列 3 |\n| --- | --- | --- |\n| 内容 | 内容 | 内容 |");
 }
 async function mdImport(files){
+  if(mdDashReadOnly && (route()==="space" || route()==="notes")) return;
   const input=[...(files||[])], list=input.filter(f=>/\.(?:md|markdown)$/i.test(f.name));
   if(!list.length) return uiNotify("请选择 .md 或 .markdown 文件（笔记仅读取 Markdown）");
   if(mdProj || spTab === "notes"){
@@ -205,7 +210,8 @@ async function mdImport(files){
         const title = f.name.replace(/\.(?:md|markdown)$/i,"") || "导入笔记";
         const safe = title.replace(/[\\/:*?"<>|]/g,"_").slice(0,100);
         const rel = `${targetFolder}/${safe}.md`;
-        await api("/api/project/note/save", {project_id: mdDashProject, path: rel, content});
+        await api("/api/project/note/save", {project_id: mdDashProject, path: rel, title, content, create:true,
+          ...(!/^---\s*\r?\n/.test(content)&&window.Notebook&&!Notebook.fileMode?{metadata:Notebook.metadataForNew(targetFolder)}:{})});
         n++;
       }catch(e){ uiNotify(`无法导入「${f.name}」：${e.message}`); }
     }
@@ -230,6 +236,7 @@ async function mdExport(fmt){
                       : mdActive();
   if(!note) return;
   await mdSave();
+  if(mdProj && fmt!=="pdf" && mdProj.saved_content) note.content=mdProj.saved_content;
   if(fmt==="pdf"){                                   // 走浏览器打印 → 另存为 PDF
     const w = window.open("", "_blank");
     if(!w) return uiNotify("浏览器拦了打印窗口");
@@ -331,10 +338,10 @@ function zotRowHTML(it){
       </div>
   </div>`;
 }
-function zotClose(){ $("zoteroModal")?.classList.add("hidden"); }
+function zotClose(){ uiCloseModal($("zoteroModal")); }
 async function zotOpen(){
   const box = $("zoteroModal"); if(!box) return;
-  box.classList.remove("hidden");
+  uiOpenModal(box, $("zotQuery"));
   $("zotStatus").textContent = "正在连接 Zotero 本地库…";
   $("zotList").innerHTML = ""; $("zotCount").textContent = ""; $("zotCollection").innerHTML = "";
   zotSelectedKeys.clear();
@@ -459,7 +466,7 @@ function schStatusPill(s){ return `<span class="pill ${s==="completed"?"ok":(s==
 function schWhen(iso){ return iso ? fmtDate(iso) : "—"; }
 function schEditSeed(row){
   return { id: row?.id||"", name: row?.name||"每日科研摘要", prompt: row?.prompt||"请根据项目中的最新文献与笔记，生成一份可核验的研究摘要。",
-    project_id: row?.project_id||curTask||"", assistant_id: row?.assistant_id||"", frequency: row?.frequency||"daily", cron: row?.cron||"0 9 * * *",
+    project_id: row?.project_id||curTask||"", assistant_id: row?.assistant_id||"", workflow_id: row?.workflow_id||"", frequency: row?.frequency||"daily", cron: row?.cron||"0 9 * * *",
     output_dir: row?.output_dir||"定时任务", todo_id:row?.todo_id||"", enabled: row ? !!row.enabled : true };
 }
 function schEditorHTML(){
@@ -481,10 +488,11 @@ function schEditorHTML(){
       <label><span>Cron（分 时 日 月 周）</span><input id="schCron" value="${esc(e.cron)}" style="font-family:ui-monospace,Consolas,monospace"></label>
       <label><span>项目</span><select id="schProj">${projOpts}</select></label>
        <label><span>执行专家</span><select id="schAssistant">${assistantOpts}</select></label>
+       <label><span>执行完整工作流（可选）</span><select id="schWorkflow"><option value="">只运行所选专家</option></select></label>
        <label><span>关联项目待办（可选）</span><select id="schTodo"><option value="">正在读取…</option></select></label>
       <label><span>输出目录（项目目录内的相对路径）</span><input id="schOut" value="${esc(e.output_dir)}"></label>
       <label><span>启用</span><select id="schOn"><option value="1" ${e.enabled?"selected":""}>已启用</option><option value="0" ${e.enabled?"":"selected"}>已暂停</option></select></label>
-      <label class="full"><span>Prompt（到点了让 Agent 做什么）</span><textarea id="schPrompt">${esc(e.prompt)}</textarea></label>
+      <label class="full"><span>任务目标（工作流按节点配置选择团队、助手、工具和技能）</span><textarea id="schPrompt">${esc(e.prompt)}</textarea></label>
     </div>
     <div class="hint" style="margin-top:10px">输出目录为项目目录内的相对目录，保存与运行前都会再校验一次：绝对路径、盘符、<code>..</code>、隐藏目录（如 <code>.obsidian</code>）会被拒绝。</div>
     <div class="pf-actions" style="margin-top:12px"><button class="btn ghost" id="schCancel2">取消</button><button class="btn" id="schSave">${e.id?"更新任务":"保存任务"}</button></div></div>`;
@@ -496,7 +504,7 @@ function schCardHTML(r){
     <div class="main"><div class="nmrow"><span class="nm">${esc(r.name)}</span>
       <span class="pill ${r.enabled?"ok":"warn"}">${r.enabled?"已启用":"已暂停"}</span>
       <span class="pill">${esc(schFreqLabel(r.frequency))} · ${esc(r.cron)}</span></div>
-       <div class="ln">${r.project_id?esc(schTaskName(r.project_id)||"已绑定项目"):"未绑定项目"} · ${esc((S.assistants||[]).find(a=>a.id===r.assistant_id)?.name||"未绑定专家")} · 输出 ${esc(r.output_dir)}</div>
+       <div class="ln">${r.project_id?esc(schTaskName(r.project_id)||"已绑定项目"):"未绑定项目"} · ${r.workflow_id?'完整工作流':esc((S.assistants||[]).find(a=>a.id===r.assistant_id)?.name||"未绑定专家")} · 输出 ${esc(r.output_dir)}</div>
       <div class="ln">${esc((r.prompt||"").replace(/\s+/g," ").slice(0,110))}</div>
       <div class="ln">下次 ${esc(next)} · 最近 ${esc(r.last_run_at?fmtDate(r.last_run_at):"尚未运行")}</div></div>
     <div class="acts">
@@ -513,6 +521,8 @@ function schRunHTML(e){
     <span class="tm">${esc(schWhen(e.started_at))}${e.ended_at?` → ${esc(fmtDate(e.ended_at).slice(-5))}`:""}</span>
     <div class="acts">
       ${retry?`<button class="btn ghost" data-run-retry="${e.schedule_id}">重试</button>`:""}
+      ${e.workflow_run_id?`<button class="btn ghost" data-run-workflow="${esc(e.workflow_run_id)}" data-run-project="${esc(schRows.find(s=>s.id===e.schedule_id)?.project_id||'')}">查看工作流 / 审查</button>`:''}
+      ${e.note_id && e.note_path?`<button class="btn ghost" data-run-note="${esc(e.note_id)}" data-note-project="${esc(e.note_project_id)}" data-note-path="${esc(e.note_path)}">打开笔记</button>`:""}
       <button class="btn ghost" data-run-del="${e.id}">删除</button></div>
     ${e.reason?`<div class="det">阻断/失败原因：${esc(e.reason)}</div>`:""}
     ${e.summary?`<div class="det">摘要：${esc(e.summary)}</div>`:""}
@@ -553,6 +563,12 @@ async function renderSchedules(m){
   const nm = () => esc($("schName").value.trim() || "未命名任务");
   const bindEditor = ()=>{
     if(!schEdit) return;
+    api('/api/workflow/layouts').then(data=>{
+      const select=$('schWorkflow'); if(!select) return;
+      select.innerHTML='<option value="">只运行所选专家</option>'+(data.layouts||[]).map(l=>`<option value="${esc(l.id)}" ${l.id===schEdit?.workflow_id?'selected':''}>${esc(l.name)}</option>`).join('');
+      select.onchange=()=>{ $('schAssistant').disabled=!!select.value; };
+      select.onchange();
+    }).catch(error=>uiNotify(error.message));
     const selected = schEdit.todo_id;
     const loadTodos = async ()=>{
       const project = $("schProj").value, select = $("schTodo");
@@ -573,7 +589,7 @@ async function renderSchedules(m){
       schEdit.frequency=k; if(c) schEdit.cron=c; };
     $("schSave").onclick = async ()=>{
       const body = { id: schEdit.id, name: nm(), prompt: $("schPrompt").value.trim(),
-         project_id: $("schProj").value, assistant_id: $("schAssistant").value, todo_id:$("schTodo").value, frequency: $("schFreq").value, cron: $("schCron").value.trim(),
+         project_id: $("schProj").value, assistant_id: $("schAssistant").value, workflow_id:$("schWorkflow").value, todo_id:$("schTodo").value, frequency: $("schFreq").value, cron: $("schCron").value.trim(),
         output_dir: $("schOut").value.trim() || "定时任务", enabled: $("schOn").value === "1" };
       if(!body.prompt) return uiNotify("Prompt 必填");
       try{ await api("/api/schedule/save", body); schEdit=null; await schLoad();
@@ -606,6 +622,10 @@ async function renderSchedules(m){
   m.querySelectorAll("[data-run-del]").forEach(b=>b.onclick=async ()=>{
     try{ await api("/api/schedule/run/delete", { ids:[b.dataset.runDel] }); await schLoad(); render(); }
     catch(e){ uiNotify("删除运行记录失败：" + e.message); } });
+  m.querySelectorAll("[data-run-note]").forEach(b=>b.onclick=async()=>{
+    await ConnectedResearch.openNote(b.dataset.noteProject,b.dataset.notePath);
+  });
+  m.querySelectorAll('[data-run-workflow]').forEach(b=>b.onclick=()=>ConnectedResearch.openRun(b.dataset.runProject,b.dataset.runWorkflow));
   $("schRunsClear") && ($("schRunsClear").onclick = async ()=>{
     if(!await uiConfirm(`删除全部 ${schRuns.length} 条运行记录？定时规则与产物文件都不会被改动。`)) return;
     try{ await api("/api/schedule/run/delete", { ids: schRuns.map(x=>x.id) }); await schLoad(); render(); }
@@ -634,11 +654,11 @@ function spBodyHTML(d){
 
   // ---------- 2. 文献与 easyScholar 期刊分区 ----------
   if(spTab === "papers"){
-    const rows = d.paper_list||[];
+    const rows = d.library_items || d.paper_list || [];
     return `<div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">PAPERS / PROJECT</p><h3>${esc(t.title||"")} 的文献</h3></div>
       <span class="pill">${rows.length} 条</span><button class="btn btn-primary" id="spZoteroBtn" style="margin-left:auto">从 Zotero 导入</button><button class="btn ghost" id="spToLib">去知识库 →</button></div>
       ${rows.length ? rows.map((r, idx)=>`<div class="sp-row"><span class="sp-ic">📄</span><div class="sp-main">
-        <div class="sp-nm">${esc(r.title||r.filename||"未命名")}</div>
+        <div class="sp-nm">${esc(r.title||r.filename||"未命名")} <span class="pill">${r.has_pdf || r.source_path ? "有 PDF" : "题录"}</span>${r.zotero_key ? '<span class="pill">Zotero 已关联</span>' : ""}</div>
         <div class="sp-meta">${esc(r.authors||"作者未识别")}${r.doi?` · <span class="sp-doi">DOI ${esc(r.doi)}</span>`:" · DOI 未识别"}${r.year?` · ${esc(r.year)}`:""}${r.pages?` · ${String(r.pages).split(",").length} 页`:""}</div>
         <div class="es-badges" id="es-paper-${idx}" data-journal="${esc(r.journal || r.title || '')}" style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap"></div>
       </div></div>`).join("")
@@ -857,8 +877,9 @@ async function renderSpace(m){
   if(!d || lastErr){ m.innerHTML = `<div class="msg error">读取项目失败：${esc(lastErr ? lastErr.message : "未知错误")}</div>`; return; }
   const t = d.task||{};
   const opts = (S.tasks||[]).map(x=>`<option value="${x.id}" ${x.id===curTask?"selected":""}>${esc(x.title)}</option>`).join("");
+  const isSpHeadCollapsed = localStorage.getItem("rw-sp-header-collapsed") === "true";
   m.innerHTML = `
-    <div class="card">
+    <div class="card sp-header-card ${isSpHeadCollapsed ? 'collapsed' : ''}" id="spHeaderCard">
       <div class="sp-hd1">
         <h3>${esc(t.title||"项目空间")} <span class="pill ok" title="绑定该项目的专用 agent">Partner Agent</span></h3>
         <span class="sp-step">阶段<b>${esc(t.stage_now||"未开始")}</b></span>
@@ -866,14 +887,15 @@ async function renderSpace(m){
         <span class="sp-gap"></span>
         <button class="btn" id="spFlow">进入科研台 →</button>
         <button class="btn ghost" id="spLeader">问智研管家 →</button>
-        <button class="btn ghost" id="spRebuild" title="把旧笔记、文献和产物登记到统一资产索引">整理资产</button>
+        <button class="btn ghost btn-sm" id="spRebuild" title="把旧笔记、文献和产物登记到统一资产索引">资产</button>
+        <button type="button" class="btn ghost btn-sm sp-collapse-btn" id="spToggleHeader" title="收起项目概况卡片，留出工作空间">▲ 收起概况</button>
         <span class="hint" id="spAssetStatus" aria-live="polite"></span>
       </div>
       <div class="sp-hd2">
         <p class="hint">项目级聚合只读取已关联的本地数据；写操作回到各领域的 Command 和安全通道。归档可恢复，外部文件不会被删除。</p>
         <select id="spPick" class="control" style="max-width:200px" title="选择项目空间">${opts}</select>
       </div>
-      <div class="sp-search-bar" style="margin-top:12px;position:relative">
+      <div class="sp-search-bar" style="margin-top:12px;position:relative;">
         <div style="position:relative;display:flex;gap:8px;align-items:center">
           <input id="spSearchInput" class="control" placeholder="全局搜索当前项目的文献、笔记、证据、待办任务…" style="flex:1;padding-left:32px">
           <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:1;pointer-events:none">🔍</span>
@@ -882,13 +904,27 @@ async function renderSpace(m){
         <div id="spSearchResults" class="card" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 6px);z-index:90;max-height:460px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,0.18);border:1px solid var(--accent);background:var(--panel)"></div>
       </div>
     </div>
-    <div class="sp-tabs" id="spTabs">${SP_TABS.map(([k,l])=>`<button class="sp-tab ${k===spTab?"on":""}" data-sp-tab="${k}">${l}</button>`).join("")}</div>
+    <div class="sp-tabs" id="spTabs">
+      ${SP_TABS.map(([k,l])=>`<button class="sp-tab ${k===spTab?"on":""}" data-sp-tab="${k}">${l}</button>`).join("")}
+      <button type="button" class="sp-tab-header-toggle" id="spTabToggleHeader" title="${isSpHeadCollapsed ? '展开项目概况信息' : '收起项目概况信息'}">
+        ${isSpHeadCollapsed ? `▼ 展开项目信息 · ${esc(t.title||"项目概况")}` : '▲ 收起概况'}
+      </button>
+    </div>
     <div id="spBody"></div>`;
 
   $("spPick").onchange = (e)=>{ curTask = e.target.value; localStorage.setItem("rw-task", curTask); spId = null; render(); };
   $("spFlow").onclick = ()=>openTab("workflow");
   const sl = $("spLeader"); if(sl) sl.onclick = ()=>openTab("agent");
   m.querySelectorAll("[data-sp-tab]").forEach(b=>b.onclick=()=>{ spTab = b.dataset.spTab; render(); });
+  const toggleSpHeader = () => {
+    const cur = localStorage.getItem("rw-sp-header-collapsed") === "true";
+    localStorage.setItem("rw-sp-header-collapsed", (!cur).toString());
+    render();
+  };
+  const btnToggleSpHead = $("spToggleHeader");
+  if(btnToggleSpHead) btnToggleSpHead.onclick = toggleSpHeader;
+  const btnTabToggle = $("spTabToggleHeader");
+  if(btnTabToggle) btnTabToggle.onclick = toggleSpHeader;
   $("spBody").innerHTML = spBodyHTML(d);
   if(spTab === "notes") m.classList.add("sp-fill");
   spBind(d);
@@ -1003,6 +1039,7 @@ let mdDashProject = "", mdDashSelectedFolder = "笔记/文献精读笔记", mdDa
 let mdProj = null, mdDraft = false;      // 项目笔记编辑状态：{pid, path, folder, title, content}
 let mdDashLoadId = 0;
 let mdDashTree = null;
+let mdDashReadOnly = false;
 let pnSideCollapsed = localStorage.getItem("rw-pn-side-collapsed") === "true";
 const pnExpandedFolders = new Set(["笔记", "笔记/文献精读笔记"]);
 
@@ -1245,7 +1282,7 @@ function pnBindSideEvents(host){
   const btnNewFolder = side.querySelector("#pnBtnSideNewFolder");
   if(btnNewFolder) btnNewFolder.onclick = async () => {
     const parentFolder = mdDashSelectedFolder || "笔记";
-    const name = prompt(`在 ${parentFolder} 下新建子文件夹，请输入名称：`);
+    const name = await uiPrompt(`在 ${parentFolder} 下新建子文件夹，请输入名称：`);
     if(!name || !name.trim()) return;
     const safe = name.trim().replace(/[\\/:*?"<>|]/g,"_");
     const targetPath = `${parentFolder}/${safe}`;
@@ -1309,7 +1346,7 @@ function pnBindSideEvents(host){
       if(act === "new-file"){
         await pnNewNote(targetPath);
       }else if(act === "new-folder"){
-        const name = prompt(`在 ${targetPath} 下新建子文件夹，请输入名称：`);
+        const name = await uiPrompt(`在 ${targetPath} 下新建子文件夹，请输入名称：`);
         if(!name || !name.trim()) return;
         const safe = name.trim().replace(/[\\/:*?"<>|]/g,"_");
         const newFolder = `${targetPath}/${safe}`;
@@ -1322,7 +1359,7 @@ function pnBindSideEvents(host){
         }catch(err){ uiNotify("创建文件夹失败：" + err.message); }
       }else if(act === "del-folder"){
         if(targetPath === "笔记") return uiNotify("不能删除笔记根目录");
-        if(!confirm(`确定删除文件夹「${targetPath}」及其全部内容吗？`)) return;
+        if(!await uiConfirm(`确定删除文件夹「${targetPath}」及其全部内容吗？`, {ok:"删除文件夹"})) return;
         try{
           await api("/api/project/note/delete", {project_id: mdDashProject, path: targetPath});
           pnExpandedFolders.delete(targetPath);
@@ -1332,7 +1369,7 @@ function pnBindSideEvents(host){
           mdDashLoad();
         }catch(err){ uiNotify("删除文件夹失败：" + err.message); }
       }else if(act === "del-file"){
-        if(!confirm(`确定删除笔记「${targetPath}」吗？`)) return;
+        if(!await uiConfirm(`确定删除笔记「${targetPath}」吗？`, {ok:"删除笔记"})) return;
         try{
           await api("/api/project/note/delete", {project_id: mdDashProject, path: targetPath});
           if(mdDashPath === targetPath){
@@ -1358,12 +1395,14 @@ async function pnSaveCurrent(){
   return false;
 }
 
-async function pnNewNote(folder = mdDashSelectedFolder || "笔记/文献精读笔记"){
+async function pnNewNote(folder = mdDashSelectedFolder || "笔记"){
+  if(mdDashReadOnly) return;
   const pid = mdDashProject;
   if(!await pnSaveCurrent() || mdDashProject !== pid) return;
+  if(!folder || !folder.startsWith("笔记")) folder = "笔记";
   mdDashSelectedFolder = folder;
   pnExpandedFolders.add(folder);
-  mdProj = {pid, path: "", folder, title: "", content: ""};
+  mdProj = {pid, path: "", folder, title: "", content: "", metadata:window.Notebook&&!Notebook.fileMode?Notebook.metadataForNew(folder):undefined};
   mdDraft = true; mdDashPath = "";
   await mdDashLoad();
 }
@@ -1381,6 +1420,7 @@ async function mdSaveProj(){
   clearTimeout(mdSaveTimer);
   const note = mdProj, titleInput = $("mdNoteTitle"), source = $("mdSource");
   if(!note) return true;
+  if(note.read_only) return true;
   if(!titleInput || !source) return false;
   const rawTitle = titleInput.value.trim();
   if(!note.path && !rawTitle && !source.value.trim()) return true;
@@ -1391,7 +1431,7 @@ async function mdSaveProj(){
     note.path = `${folder}/${crypto.randomUUID().replace(/-/g, "")}.md`;
     note.newFile = true;
     note.content_hash = "";
-    if(!/^#\s/.test(content)) content = `# ${title}\n\n` + content;
+    if(!/^#\s/.test(content) && !/^---\s*\r?\n/.test(content) && note.metadata?.note_type!=="prompt_template") content = `# ${title}\n\n` + content;
   }else if(/^#\s/.test(content)){
     content = content.replace(/^#\s.*$/m, `# ${title}`);
   }
@@ -1399,12 +1439,15 @@ async function mdSaveProj(){
   note.title = title; note.content = content;
   $("mdSaveState").textContent = "保存中…";
   const version = note.editVersion || 0;
+  const metadata = note.metadata ? JSON.parse(JSON.stringify(note.metadata)) : undefined;
   const pending = (note.savePromise || Promise.resolve(true)).then(async ok => {
     if(!ok) return false;
     try{
       const data = await api("/api/project/note/save", {project_id: note.pid, path: note.path, title, content,
-        create: !!note.newFile, ...(note.content_hash !== undefined ? {expected_hash: note.content_hash} : {})});
+        metadata, create: !!note.newFile, ...(note.content_hash !== undefined ? {expected_hash: note.content_hash} : {})});
       note.content_hash = data.content_hash;
+      note.saved_content = data.content;
+      if(note.metadata && data.template_id) note.metadata.template_id = data.template_id;
       note.newFile = false;
       if(mdProj === note && mdDashProject === note.pid){
         mdDashPath = note.path;
@@ -1436,15 +1479,18 @@ function mdPaintProj(){
   sh.classList.remove("hidden");
   $("mdNoteTitle").value = mdProj.title || "";
   $("mdSource").value = mdProj.content || "";
+  $("mdNoteTitle").readOnly = !!mdProj.read_only;
+  $("mdSource").readOnly = !!mdProj.read_only;
+  $("mdToolbar").querySelectorAll("[data-md-command]").forEach(el => { el.disabled = !!mdProj.read_only; });
   mdPaintPreview();
   $("mdSaveState").textContent = "";
   [$("mdTask"), $("btnMdFocus"), $("btnMdNarrow"), $("btnMdFocusOut")]
     .forEach(el => { if(el) el.style.display = "none"; });
   const del = $("btnMdDelete");
   if(del){
-    del.style.display = "";
+    del.style.display = mdProj.read_only ? "none" : "";
     del.onclick = async () => {
-      if(!confirm(`确定删除笔记「${mdProj.title || mdProj.path}」吗？此操作无法撤销。`)) return;
+      if(!await uiConfirm(`确定删除笔记「${mdProj.title || mdProj.path}」吗？此操作无法撤销。`, {ok:"删除笔记"})) return;
       try{
         if(mdProj.path){
           await api("/api/project/note/delete", {project_id: mdProj.pid, path: mdProj.path});
@@ -1458,7 +1504,20 @@ function mdPaintProj(){
   }
 }
 
+function pnApplyReadOnly(host){
+  if(!mdDashReadOnly) return;
+  host.querySelectorAll('[data-act], #pnBtnSideNewFile, #pnBtnSideNewFolder, #pnBtnSideImport, #mdDashNew, #mdDashNewFolder, #mdDashDelFolder, #pnEmptyNewNote, #pnEmptyNewFolder, #mdDashSave')
+    .forEach(el => { el.disabled = true; });
+  const notice = document.createElement("div");
+  notice.className = "hint pn-readonly-hint";
+  notice.style.padding = "8px 12px";
+  notice.textContent = "只读项目：可阅读和导出笔记；请在独立项目目录中编辑。";
+  host.prepend(notice);
+}
+
 async function mdDashLoad(){
+  if(window.Notebook && !Notebook.fileMode) return Notebook.render();
+    document.querySelector('.nb-note-properties')?.remove();
   const host = $("mdDashboardBody"); if(!host) return;
   const loadId = ++mdDashLoadId, pid = mdDashProject;
   const current = () => loadId === mdDashLoadId && mdDashProject === pid && host.isConnected;
@@ -1466,6 +1525,7 @@ async function mdDashLoad(){
   try{
     const data = await api(`/api/project/notes?project_id=${encodeURIComponent(pid)}`);
     if(!current()) return;
+    mdDashReadOnly = !!data.read_only;
     mdDashTree = data.tree || {type: "dir", name: "笔记", path: "笔记", children: []};
 
     if(!mdDashMap || mdDashMap.pid !== mdDashProject){
@@ -1490,7 +1550,7 @@ async function mdDashLoad(){
           ? await api(`/api/project/note?project_id=${encodeURIComponent(mdDashProject)}&path=${encodeURIComponent(mdDashPath)}`)
           : {title: "", content: ""};
         if(!current()) return;
-        mdProj = {pid, path: mdDashPath, folder: mdDashSelectedFolder, title: file.title || "", content: file.content || "", content_hash: file.content_hash};
+        mdProj = {pid, path: mdDashPath, folder: mdDashSelectedFolder, title: file.title || "", content: file.content || "", content_hash: file.content_hash, read_only: !!file.read_only};
         mdDraft = !mdDashPath;
       }
       const hit = mdProj.path ? pnMapHit({path: mdProj.path, title: mdProj.title}) : null;
@@ -1517,6 +1577,7 @@ async function mdDashLoad(){
       $("mdDashSave").onclick = () => mdSaveProj();
       mdMountEditor($("pnEditorSlot"));
       mdPaintProj();
+      pnApplyReadOnly(host);
       if(!mdProj.path) setTimeout(()=> $("mdNoteTitle")?.focus(), 40);
       return;
     }
@@ -1583,7 +1644,7 @@ async function mdDashLoad(){
     if(nb) nb.onclick = () => pnNewNote();
     const nf = $("mdDashNewFolder");
     if(nf) nf.onclick = async () => {
-      const name = prompt(`在 ${curFolderNode.path} 下新建子文件夹，请输入名称：`);
+      const name = await uiPrompt(`在 ${curFolderNode.path} 下新建子文件夹，请输入名称：`);
       if(!name || !name.trim()) return;
       const safe = name.trim().replace(/[\\/:*?"<>|]/g,"_");
       const newFolder = `${curFolderNode.path}/${safe}`;
@@ -1597,7 +1658,7 @@ async function mdDashLoad(){
     };
     const df = $("mdDashDelFolder");
     if(df) df.onclick = async () => {
-      if(!confirm(`确定删除文件夹「${curFolderNode.path}」及其全部内容吗？`)) return;
+      if(!await uiConfirm(`确定删除文件夹「${curFolderNode.path}」及其全部内容吗？`, {ok:"删除文件夹"})) return;
       try{
         await api("/api/project/note/delete", {project_id: mdDashProject, path: curFolderNode.path});
         pnExpandedFolders.delete(curFolderNode.path);
@@ -1609,6 +1670,7 @@ async function mdDashLoad(){
     if(empNew) empNew.onclick = () => pnNewNote();
     const empFold = $("pnEmptyNewFolder");
     if(empFold) empFold.onclick = nf.onclick;
+    pnApplyReadOnly(host);
 
   }catch(e){
     if(!current()) return;
@@ -1927,6 +1989,7 @@ async function refreshState(rerender=true){
   const st = await api("/api/state");
   const seen = S.loaded ? new Set((S.events||[]).map(e=>e.id)) : null;          // 首屏不算「新增」，免得一进来就跳走
   S.tasks=st.tasks; S.chats=st.chats||[]; S.assistants=st.assistants||[]; S.models=st.models; S.active=st.active; S.events=st.events; S.stages=st.stages||[];
+  wfApplyCatalog(st.workflow_stages || []);
   const fresh = seen ? (st.events||[]).filter(e=>!seen.has(e.id)) : [];
   if(fresh.length){                                                            // 刚加的日程（agent 或别的窗口）：日历停到那一天
     const d = fresh[fresh.length-1].date || "";

@@ -364,12 +364,18 @@ def make_project_tree(base: str | Path, task: dict[str, Any] | None = None) -> l
         if not readme.exists() and not readme.is_symlink():
             readme.write_text(f"# {name}\n\n{desc}\n", encoding="utf-8")
         made.append(name)
-    from project_notes import CATEGORIES
-    for name, _ in CATEGORIES:
-        category = root / "笔记" / name
+    import note_catalog
+    config = root / "笔记" / "分类配置.json"
+    if config.is_file():
+        import json
+        categories = note_catalog.validate(json.loads(config.read_text(encoding="utf-8")))["categories"]
+    else:
+        categories = note_catalog.defaults()["categories"]
+    for entry in categories:
+        category = root / entry["folder"]
         if not category.resolve().is_relative_to(root.resolve()):
             raise ValueError("笔记目录越过项目文件夹")
-        category.mkdir(exist_ok=True)
+        category.mkdir(parents=True, exist_ok=True)
     import capabilities
     capabilities.install_steward_skill(root)
     (root / "对话" / datetime.now().strftime("%Y-%m-%d")).mkdir(parents=True, exist_ok=True)

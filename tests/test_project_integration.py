@@ -34,6 +34,7 @@ class ProjectIntegrationTest(unittest.TestCase):
 
     def test_existing_markdown_is_browsable_and_paths_stay_inside_project(self):
         path = self.root / "笔记" / "文献矩阵" / "已有.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("# 已有\n\n证据", encoding="utf-8")
         custom = self.root / "笔记" / "旧分类"
         custom.mkdir()
@@ -69,20 +70,22 @@ class ProjectIntegrationTest(unittest.TestCase):
     def test_empty_notebook_exposes_a_usable_category_path(self):
         with workflow.WorkflowDB(self.db_path) as db:
             board = project_notes.dashboard(db, self.project_id)
-            category = next(g for g in board["groups"] if g["name"] == "研究计划")
+            category = next(g for g in board["groups"] if g["name"] == "研究规划")
             self.assertEqual(category["count"], 0)
             relative = category["path"] + "/first.md"
             project_notes.write(db, self.project_id, relative, "created from empty dashboard")
             self.assertEqual(project_notes.read(db, self.project_id, relative)["content"],
                              "created from empty dashboard")
-            with self.assertRaisesRegex(ValueError, "笔记/"):
-                project_notes.write(db, self.project_id, "研究计划/second.md", "invalid prefix")
+            project_notes.write(db, self.project_id, "笔记/研究计划/second.md", "project-relative note")
+            self.assertEqual(project_notes.read(db, self.project_id, "笔记/研究计划/second.md")["content"], "project-relative note")
+            with self.assertRaises(ValueError):
+                project_notes.write(db, self.project_id, "../second.md", "outside project")
 
     def test_tool_limit_reply_preserves_actual_successes_and_failures(self):
         relative = "笔记/研究计划/last-step.md"
         calls = [{"id": str(i), "type": "function", "function": {
             "name": "project_note_write", "arguments": json.dumps({"path": path, "content": "test"})}}
-            for i, path in enumerate(("研究计划/rejected.md", relative))]
+            for i, path in enumerate(("../rejected.md", relative))]
         with workflow.WorkflowDB(self.db_path) as db, patch.object(workflow, "chat_raw", return_value={
                 "content": "", "tool_calls": calls}):
             with self.assertRaises(RuntimeError) as failure:

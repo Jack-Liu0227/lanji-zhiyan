@@ -112,7 +112,9 @@ OUTLINE_TEMPLATE = """# <题目：一句话说清做什么>
 - 说明：诚实地写清楚边界条件与下一步。
 """
 
-AGENT_SYSTEM = """你叫「览籍智研」，是这个软件的主 Agent，也是一位做科研的研究生的科研助手（查文献、读论文、记笔记、写稿、跑数据都归你管）。
+AGENT_SYSTEM = """你叫「览籍智研」，首页身份是「智研管家」，负责项目管理和科研配置自动化。
+主要职责是把用户目标落成可执行配置：查找或创建项目，选择工作流，配置专家与团队负责人、成员职责、模型，建立待办、日程、技能与 MCP。
+智研管家管理团队配置，不担任团队 Leader。文献抽取由「文献研究负责人」负责，文件撰写由「学术写作负责人」负责；具体研究任务交给对应负责人和专家执行。
 用户怎么问「你是谁」就怎么答：你是览籍智研，他的科研助手。用中文工作，只通过工具动手，不编造数据。
 可用工具覆盖：新建项目、创新点审查、论文搜索、OA 下载、逐页精读、知识库笔记、文章撰写、稿件审查、格式转换、日历（看/加）、定时任务（列出/新建/暂停/删除）、库内检索（可跨项目）、团队派活。
 规则：
@@ -122,7 +124,9 @@ AGENT_SYSTEM = """你叫「览籍智研」，是这个软件的主 Agent，也�
 4. 每一步做完用一两句中文说明你做了什么、拿到什么、下一步建议。审查/撰写产出是草稿，不是结论。
 5. 一个目标尽量用最少的工具调用完成；任务完成后直接给结论。**互不依赖的调用必须在同一次回复里一起发**（一轮就是一次往返，串着发最费时间）：探现状就 `library_overview` + `file_list` + `project_note_list` 一起发；读多篇就一次发多个 `paper_read`；下多篇就一次发多个 `paper_download`；写多条笔记就一次发多个 `project_note_write`；查多项就一次发多个 `knowledge_query`。只有「下一步要依赖上一步的结果」时才分轮。
 6. **用户说「新建项目 / 新建课题」就直接调 project_create**：标题、研究问题、材料体系能按他的话拟出来就先拟，别反问一串再等；建完把项目名和 project_id 告诉他，后面所有工具都用这个 id。
-7. **问日程先 calendar_list**（今天/这周/这个月），别凭印象报；**要定时任务就先 schedule_manage(list) 看现状**再新建/暂停/删除。跨项目查笔记给 knowledge_query 带上 project。"""
+7. **问日程先 calendar_list**（今天/这周/这个月），别凭印象报；**要定时任务就先 schedule_manage(list) 看现状**再新建/暂停/删除。跨项目查笔记给 knowledge_query 带上 project。
+8. 配置前用 assistant_manage、team_manage、workflow_manage 的 list 读取现有配置，优先复用；调整已有团队使用 team_manage，选择已有工作流使用 workflow_manage(select)，确需新模板再 workflow_create。用户已经说清的配置直接执行，完成后核对保存结果。模型可继承当前可用模型；不得编造模型、专家或工作流 ID。
+9. 配置完成与任务执行分开报告。创建或修改团队不等于完成研究，team_assign 返回 queued 只表示排队。"""
 
 _DELEGATE_SYSTEM = ("你是被派活的子 agent：只看得到这条任务本身，看不到父对话的历史。只做这一件事，"
                     "做完给一份不超过 300 字的摘要：结论 + 关键事实/数字 + 产物路径。不要复述任务、不要寒暄。")
@@ -131,9 +135,23 @@ PONY_RULES = '你是「懒但靠谱的资深工程师」（Ponytail ultra）。�
 
 BUILTIN_ASSISTANTS: list[dict[str, Any]] = [
     {"id": "builtin-steward", "name": "智研管家", "avatar": "🤖", "sort_order": -1,
-     "description": "系统主管家：跨项目协调、自动创建与推进工作流、统筹日程文献与工具调用。",
+     "description": "项目与配置管家：自动配置工作流、专业团队、专家、模型、待办和日程，由团队负责人组织研究执行。",
      "rules": AGENT_SYSTEM,
-     "prompts": ["帮我规划这个课题的研究路线", "查一下我目前所有项目的进展与待办", "根据我的研究方向推荐合适的工作流组合"]},
+     "prompts": ["按我的研究目标配置项目、工作流和团队", "查一下我目前所有项目的进展与待办", "调整当前项目的团队分工和工作流"]},
+    {"id": "builtin-literature-lead", "name": "文献研究负责人", "avatar": "📚", "sort_order": 30,
+     "description": "文献抽取团队负责人：规划检索与筛选、组织精读和数据抽取、核验来源并验收证据表。",
+     "rules": "你是文献研究负责人，负责当前项目的文献抽取团队。先明确研究问题、纳排标准与证据表字段，"
+              "把检索、分块、图表解读、数据抽取分配给团队成员，写清输入、输出和依赖。"
+              "逐项核验论文来源、页码、表图、数值、单位和适用条件，标出矛盾和缺项。"
+              "交付可追溯的文献矩阵与证据表，验收通过才宣布完成。你不自称智研管家；项目和团队配置交给智研管家。",
+     "prompts": ["组织本项目的文献检索和证据抽取", "检查文献矩阵的来源和数据缺口"]},
+    {"id": "builtin-writing-lead", "name": "学术写作负责人", "avatar": "📝", "sort_order": 31,
+     "description": "文件撰写团队负责人：确定文章结构、分配章节、统筹证据与引用、组织审改和稿件验收。",
+     "rules": "你是学术写作负责人，负责当前项目的文件撰写团队。先确认文稿类型、目标读者、期刊要求和现有证据，"
+              "组织结构规划员确定大纲，将章节写作、成篇和语言润色分配给对应成员，写清依赖和交付要求。"
+              "核对论证、数字、术语、引用和图表的一致性，缺数据明确写待补，不编造结果或参考文献。"
+              "组织审查和修订，交付稿件、引用与待补清单，验收通过才宣布完成。你不自称智研管家；项目和团队配置交给智研管家。",
+     "prompts": ["组织团队按证据和大纲起草论文", "检查稿件结构、引用和待补内容"]},
     {"id": "builtin-pony", "name": "Pony 模式", "avatar": "🐴", "sort_order": 0,
      "description": "懒但靠谱的资深工程师：先读透再动手，能删不加，只写最小可用实现。",
      "rules": PONY_RULES,
@@ -315,12 +333,16 @@ TOOL_SPECS = [
     DELEGATE_TOOL,
     _schema("project_list", "列出已经添加的项目、项目 ID 和文件夹，返回当前绑定项目 ID。", {}),
     _schema("library_overview", "查看当前任务的文献/检索结果/笔记/证据数量和最近条目，先调它了解现状。", {}),
+    _schema("workflow_context_read", "分页读取当前项目工作流的完整输入、前序交付、产物或执行记录。输入被节选时使用。",
+            {"run_id": {"type": "string"}, "node_id": {"type": "string"}, "section": {"type": "string", "enum": ["input", "history", "output", "agent"]},
+             "offset": {"type": "integer"}, "limit": {"type": "integer"}}),
     _schema("idea_review", "审查一个创新点：给新颖性/可行性/证据充分度评分、风险与待答问题。", {"idea": {"type": "string", "description": "待审查的创新点"}}, ["idea"]),
     _schema("paper_search", "在 OpenAlex/Crossref/arXiv 检索论文并入库；结果按「相关度×引用量」排序，一次最多留 100 条。", {
         "query": {"type": "string"}, "sources": {"type": "array", "items": {"type": "string", "enum": ["openalex", "crossref", "arxiv"]}},
         "rows": {"type": "integer", "description": "每源条数(1-50)，默认 30"}}, ["query"]),
     _schema("paper_download", "下载一条检索结果的开放获取(OA) PDF 并入库；没有 OA 链接会失败。", {"result_id": {"type": "string"}}, ["result_id"]),
     _schema("paper_read", "把一篇已入库 PDF 逐页精读成中文要点（带 p.页码）。", {"paper_id": {"type": "string"}}, ["paper_id"]),
+    _schema("paper_translate", "启动已入库论文的中文翻译或查询进度。返回 running 仅表示已启动，done 且有译文文件才可交付。", {"paper_id": {"type": "string"}, "action": {"type": "string", "enum": ["start", "status"]}, "pages": {"type": "string"}}, ["paper_id"]),
     _schema("notes_compose", "把一条精读笔记整理成带证据表的知识库笔记，可选写入 Obsidian。", {"note_id": {"type": "string"}, "vault": {"type": "string"}}, ["note_id"]),
     _schema("draft_write", "用当前任务的笔记与证据起草一个章节。", {"section": {"type": "string"}, "title": {"type": "string"}}),
     _schema("draft_review", "以审稿人视角审查稿件，给出结论/评分/问题清单/证据缺口。", {"draft": {"type": "string"}}),
@@ -342,10 +364,15 @@ TOOL_SPECS = [
             ["title"]),
     _schema("project_note_list", "列出项目笔记 dashboard 的分类和已有 Markdown 文件。", {"project": {"type": "string", "description": "项目名或 id；绑定项目的对话可留空"}}),
     _schema("project_note_read", "读取项目笔记目录内指定 Markdown 文件。", {"project": {"type": "string"}, "path": {"type": "string", "description": "project_note_list 返回的相对路径"}}, ["path"]),
-    _schema("project_note_write", "在项目笔记分类中创建或更新 Markdown 文件。", {"project": {"type": "string"}, "path": {"type": "string", "description": "例如 笔记/文献矩阵/主题.md"}, "content": {"type": "string"}}, ["path", "content"]),
+    _schema("project_note_write", "创建或更新项目笔记。可传分类ID、标签或模板元数据；新建时path可空，由服务选定目录。", {"project": {"type": "string"}, "path": {"type": "string"}, "content": {"type": "string"}, "title": {"type": "string"}, "metadata": {"type": "object", "description": "category_id、tags；模板另含note_type=prompt_template、variables"}, "expected_hash": {"type": "string"}}, ["content"]),
+    _schema("prompt_template_search", "按用户任务查找项目内可用提示词模板；搜索结果仅供选择，不自动应用。", {"project": {"type": "string"}, "query": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}}}),
+    _schema("prompt_template_read", "读取指定提示词模板及变量定义。", {"project": {"type": "string"}, "template_id": {"type": "string"}, "revision_id": {"type": "string"}}, ["template_id"]),
+    _schema("prompt_template_render", "用户要求使用模板时，填写变量生成任务要求；缺信息先补齐，遵循原有工具和权限。", {"project": {"type": "string"}, "template_id": {"type": "string"}, "revision_id": {"type": "string"}, "variables": {"type": "object"}}, ["template_id"]),
     _schema("project_task_manage", "列出、创建、更新待办，或通过 dispatch 派给绑定专家执行。", {"action": {"type": "string", "enum": ["list", "create", "update", "dispatch"]}, "project": {"type": "string"}, "id": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"}, "status": {"type": "string"}, "priority": {"type": "string"}, "assistant_id": {"type": "string"}, "due_date": {"type": "string"}, "stage": {"type": "string"}, "reviewer_id": {"type": "string"}}, ["action"]),
     _schema("assistant_manage", "列出专家或创建、更新专家档案。", {"action": {"type": "string", "enum": ["list", "create", "update"]}, "id": {"type": "string"}, "name": {"type": "string"}, "rules": {"type": "string"}, "description": {"type": "string"}, "model_id": {"type": "string"}}, ["action"]),
-    _schema("team_create", "为项目创建团队并添加已有专家。", {"project": {"type": "string"}, "name": {"type": "string"}, "purpose": {"type": "string"}, "assistant_ids": {"type": "array", "items": {"type": "string"}}}, ["name"]),
+    _schema("team_create", "为项目创建持久团队并添加已有专家，首位专家担任负责人；智研管家不能担任团队负责人。", {"project": {"type": "string"}, "name": {"type": "string"}, "purpose": {"type": "string"}, "assistant_ids": {"type": "array", "items": {"type": "string"}}}, ["name"]),
+    _schema("team_manage", "读取或配置项目已有团队，复用 team_id 和 member_id。支持改名与职责、添加或修改成员、指定专业负责人。", {"project": {"type": "string"}, "action": {"type": "string", "enum": ["list", "update", "add_member", "update_member", "set_leader"]}, "team_id": {"type": "string"}, "member_id": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}, "prompt": {"type": "string"}, "assistant_id": {"type": "string"}, "model_id": {"type": "string"}, "reasoning": {"type": "string"}}, ["action"]),
+    _schema("workflow_manage", "列出真实工作流模板与步骤，或把已有模板选择为项目工作流。", {"project": {"type": "string"}, "action": {"type": "string", "enum": ["list", "select"]}, "layout_id": {"type": "string"}}, ["action"]),
     _schema("workflow_create", "从现有科研步骤组合并绑定项目工作流。", {"project": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}, "steps": {"type": "array", "items": {"type": "string", "enum": ["idea", "search", "download", "notes", "outline", "map", "write", "review", "entrans", "convert"]}}}, ["name", "steps"]),
     _schema("skill_create", "在项目内创建可编辑的 SKILL.md，供该项目专家读取。", {"project": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}, "instructions": {"type": "string"}}, ["name", "instructions"]),
     _schema("mcp_register", "登记一个停用状态的 MCP 服务器配置；用户之后在设置中启用并发现工具。", {"name": {"type": "string"}, "url": {"type": "string"}, "command": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}}, ["name"]),

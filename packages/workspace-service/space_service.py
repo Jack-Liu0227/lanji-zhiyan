@@ -40,6 +40,8 @@ def search_project_space(db: Any, task_id: str, query: str) -> dict[str, Any]:
     matched_evidence: list[dict[str, Any]] = []
     for item in asset_hits:
         meta = metadata(item)
+        if asset_service.is_instruction_asset(item):
+            continue
         if item.get("kind") == "paper":
             matched_papers.append({
                 "id": meta.get("paper_id") or meta.get("legacy_id") or item["id"],
@@ -83,6 +85,8 @@ def search_project_space(db: Any, task_id: str, query: str) -> dict[str, Any]:
             (task_id,),
         ).fetchall()
         for nid, title, content, updated_at in rows:
+            if asset_service.is_instruction_note(db, task_id, nid, content):
+                continue
             full = f"{title or ''} {content or ''}".lower()
             if q not in full or str(nid) in note_ids:
                 continue
@@ -97,6 +101,8 @@ def search_project_space(db: Any, task_id: str, query: str) -> dict[str, Any]:
     try:
         for n in (db.notes(task_id) if hasattr(db, "notes") else []):
             title, content = str(n.get("title") or ""), str(n.get("content") or n.get("markdown") or "")
+            if asset_service.is_instruction_note(db, task_id, n.get("id"), content):
+                continue
             if q not in f"{title} {content}".lower() or str(n.get("id")) in note_ids:
                 continue
             idx = f"{title} {content}".lower().find(q)
