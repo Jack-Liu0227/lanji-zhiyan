@@ -5,7 +5,6 @@ data.old-*/
 output/recovery/
 output/
 doc/test-reports/
-doc/screenshots/
 提交文件/
 .pytest_cache/
 .ruff_cache/

@@ -17,6 +17,14 @@
 - **项目化全流程管理**：研究问题、文献、PDF、引用证据、笔记、待办、日历、定时任务和论文产物关联到项目，来源和修改记录可追溯。
 - **界面与内容可个性化**：自定义主题色和字体；编辑提示词模板、笔记分类与标签；大纲和正文支持直接修改、双栏校对与差异比较。
 
+<table>
+  <tr>
+    <td align="center" width="33%"><img src="doc/screenshots/settings-workflows.png" width="100%" alt="个性化工作流编辑器"><br><strong>按课题设计流程</strong><br>编辑阶段、依赖、执行角色和审查规则。</td>
+    <td align="center" width="33%"><img src="doc/screenshots/team.png" width="100%" alt="专家团队协作界面"><br><strong>组织专家团队</strong><br>由 Leader 协调不同专长的助手分工。</td>
+    <td align="center" width="33%"><img src="doc/screenshots/project-space.png" width="100%" alt="项目空间全流程管理"><br><strong>项目化管理研究</strong><br>在项目空间汇总进度、文献、星图和笔记。</td>
+  </tr>
+</table>
+
 ---
 
 ## 一、安装（Windows）
@@ -51,11 +59,60 @@ python apps\desktop\server.py --port 8765 --no-open   # 只起服务，自己开
 
 在“设置 → 工作流”中可以新建或复制工作流，调整节点名称、顺序、依赖关系和任务说明，并为每个节点选择助手、团队或成员、Tool、Skill 与审查方式。运行时，前序交付和人工意见会进入后续节点；可按节点验收、退回修改或重试。
 
-主导航有 **12 个页面入口**：**智研管家**（跨项目对话）、**专家**（创建与管理助手）、**团队**（Leader 组织成员按任务协作）、**日历**、**项目管理**、**项目空间**（概览/进度计划/文献/论文星图/笔记）、**知识库**（知识星图与授权知识源）、**科研平台**、**定时任务**、**情报日报**（RSS）、**邮箱**和**设置**（主题色/模型/权限/Tool/Skill/MCP/工作流等）。
+主导航有 **12 个页面入口**：**智研管家**（跨项目对话）、**专家**（创建与管理助手）、**团队**（Leader 组织成员按任务协作）、**日历**、**项目管理**、**项目空间**（概览/进度计划/文献/论文星图/笔记）、**知识库**（知识星图与授权知识源）、**科研平台**、**定时任务**、**情报日报**（RSS）、**邮箱**和**设置**（主题色/模型/权限/Tool/Skill/MCP/工作流等）。下面的页面图鉴包含主导航、项目空间子页、设置面板和科研平台各功能页面的截图与说明。
 
 项目笔记默认五大类，支持自定义两级分类、可搜索的多选标签、批量整理和 Agent 提示词模板引用。操作说明见 [项目笔记与提示词模板](doc/notebook-templates.md)。
 
 **引用方式**：正文里**不写** `[1]` 标号；引用位置 + 文献信息记在后台的 `<项目>/论文正文/引用台账.md`（工具 `cite_add` 登记，随正文改动同步状态）。
+
+---
+
+### 页面图鉴与截图
+
+截图由浏览器自动打开当前源码版软件后采集，使用隔离的演示工作区。图中课题与任务为示例数据，不含个人研究数据库、邮箱内容或模型密钥。
+
+#### 主导航页面（12 页）
+
+| 页面与说明 | 页面与说明 |
+|---|---|
+| **智研管家**<br>围绕课题进行对话，查看工具轨迹、研究记忆和输出产物。<br><img src="doc/screenshots/agent.png" width="100%" alt="智研管家对话页面"> | **专家**<br>创建、编辑、启停领域助手，并配置模型与能力。<br><img src="doc/screenshots/experts.png" width="100%" alt="专家管理页面"> |
+| **团队**<br>查看 Leader 与专业成员编组，为文献研究、写作等任务分工。<br><img src="doc/screenshots/team.png" width="100%" alt="多 Agent 团队协作页面"> | **日历**<br>集中查看日程、项目截止、定时运行和待审工作流。<br><img src="doc/screenshots/calendar.png" width="100%" alt="科研日历页面"> |
+| **项目管理**<br>按课题登记研究问题、关键词和项目工作区。<br><img src="doc/screenshots/projects.png" width="100%" alt="项目管理页面"> | **项目空间**<br>汇总项目概览、流程、文献、论文星图和笔记入口。<br><img src="doc/screenshots/project-space.png" width="100%" alt="项目空间概览页面"> |
+| **知识库**<br>通过知识星图浏览项目及相关论文、关键词、笔记和检索条目。<br><img src="doc/screenshots/knowledge-base.png" width="100%" alt="知识星图页面"> | **科研平台**<br>进入可配置流程，查看阶段、项目资料和 Agent 协作面板。<br><img src="doc/screenshots/research-workflow.png" width="100%" alt="科研平台工作流页面"> |
+| **定时任务**<br>配置周期研究任务，查看运行记录与归档结果。<br><img src="doc/screenshots/scheduled-tasks.png" width="100%" alt="定时任务管理页面"> | **情报日报**<br>聚合 RSS 研究资讯，按来源、年份和关键词筛选。<br><img src="doc/screenshots/research-briefing.png" width="100%" alt="情报日报页面"> |
+| **邮箱**<br>可选连接多个科研邮箱，集中阅读和处理邮件。<br><img src="doc/screenshots/mail.png" width="100%" alt="邮箱管理页面"> | **设置**<br>集中管理主题、模型、权限、工具、技能、MCP 与外部连接。<br><img src="doc/screenshots/settings.png" width="100%" alt="应用设置页面"> |
+
+#### 项目空间子页面
+
+| 页面与说明 | 页面与说明 |
+|---|---|
+| **进度与计划**<br>跟踪阶段交付、待办、审核状态和 Agent 协作进展。<br><img src="doc/screenshots/project-space-plan.png" width="100%" alt="项目进度与计划页面"> | **项目文献**<br>查看当前项目的题录，并从 Zotero 导入文献。<br><img src="doc/screenshots/project-space-literature.png" width="100%" alt="项目文献页面"> |
+| **论文星图**<br>从项目文献生成关系视图，探索论文之间的关联。<br><img src="doc/screenshots/project-space-papergraph.png" width="100%" alt="项目论文星图页面"> | **项目笔记**<br>编辑 Markdown 笔记，管理分类、标签和提示词模板。<br><img src="doc/screenshots/project-space-notes.png" width="100%" alt="项目笔记页面"> |
+
+#### 设置面板
+
+| 页面与说明 | 页面与说明 |
+|---|---|
+| **主题与字体**<br>切换明暗主题、预设或自定义颜色，并调整字体大小。<br><img src="doc/screenshots/settings-theme.png" width="100%" alt="主题和字体设置"> | **权限**<br>设置文件操作确认方式与模型上下文预算。<br><img src="doc/screenshots/settings-perm.png" width="100%" alt="权限设置页面"> |
+| **模型列表**<br>配置 Provider、模型与登录方式，供助手和工作流选择。<br><img src="doc/screenshots/settings-models.png" width="100%" alt="模型列表设置"> | **Tool**<br>查看 Agent 工具目录与专家启用矩阵。<br><img src="doc/screenshots/settings-tools.png" width="100%" alt="Agent 工具设置"> |
+| **Skill**<br>浏览全局及项目技能，为不同专家配置可用能力。<br><img src="doc/screenshots/settings-skills.png" width="100%" alt="Skill 设置页面"> | **MCP**<br>管理本机 MCP 服务与 Agent 的访问范围。<br><img src="doc/screenshots/settings-mcp.png" width="100%" alt="MCP 设置页面"> |
+| **工作流定义**<br>创建或复制流程，编辑节点、前置依赖、顺序、执行角色与人工审查。<br><img src="doc/screenshots/settings-workflows.png" width="100%" alt="可编辑的工作流定义页面"> | **easyScholar 分区**<br>配置期刊等级与分区查询服务。<br><img src="doc/screenshots/settings-easyscholar.png" width="100%" alt="easyScholar 设置页面"> |
+| **Zotero**<br>配置题录导入与项目 Collection 同步。<br><img src="doc/screenshots/settings-zotero.png" width="100%" alt="Zotero 设置页面"> | **飞书机器人**<br>按助手配置飞书连接与消息通知。<br><img src="doc/screenshots/settings-feishu.png" width="100%" alt="飞书机器人设置页面"> |
+
+<details>
+<summary>可组合的研究阶段界面示例</summary>
+
+以下截图展示工作台内可按项目组合的研究功能。可通过工作流编辑器选择所需能力并设置顺序、负责人和审查方式。
+
+| 功能页面与说明 | 功能页面与说明 |
+|---|---|
+| **创新点审查**<br>整理研究问题、约束与创新性判断，结论可人工修改。<br><img src="doc/screenshots/workflow-01-idea.png" width="100%" alt="创新点审查页面"> | **论文搜索**<br>检索开放学术来源，筛选并整理候选文献。<br><img src="doc/screenshots/workflow-02-search.png" width="100%" alt="论文搜索页面"> |
+| **下载精读**<br>管理开放获取全文和精读任务。<br><img src="doc/screenshots/workflow-03-download.png" width="100%" alt="下载精读页面"> | **论文翻译**<br>阅读 PDF 双语文本并记录翻译笔记。<br><img src="doc/screenshots/workflow-04-notes.png" width="100%" alt="论文翻译页面"> |
+| **确认大纲**<br>编辑章节结构与每节说明，确认后进入写作。<br><img src="doc/screenshots/workflow-05-outline.png" width="100%" alt="确认大纲页面"> | **梳理精读**<br>将文献结论、实验数据与大纲建立可追溯关联。<br><img src="doc/screenshots/workflow-06-map.png" width="100%" alt="梳理精读页面"> |
+| **文章撰写**<br>按已确认框架写作，缺少证据的位置保留待补标记。<br><img src="doc/screenshots/workflow-07-write.png" width="100%" alt="文章撰写页面"> | **稿件审查**<br>标注问题并提交审稿意见，可退回修改。<br><img src="doc/screenshots/workflow-08-review.png" width="100%" alt="稿件审查页面"> |
+| **中译英**<br>分段翻译 Markdown，保留可编辑的中英文内容。<br><img src="doc/screenshots/workflow-09-entrans.png" width="100%" alt="中译英页面"> | **格式转换**<br>将论文转换为 Word、LaTeX、Markdown 或 HTML。<br><img src="doc/screenshots/workflow-10-convert.png" width="100%" alt="格式转换页面"> |
+
+</details>
 
 ---
 
