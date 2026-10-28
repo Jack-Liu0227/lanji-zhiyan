@@ -265,8 +265,9 @@ class AuditRegressionTest(unittest.TestCase):
             release.wait(8)
             return {"reply": "Task output"}
         with patch.object(team, "DB_PATH", self.db.path), patch.object(workflow, "run_agent", side_effect=model):
-            member = team.add_member(self.pid, "Audit worker")
-            row = team.assign(self.pid, member["id"], "Do work")
+            chat_team = self.db.team_add("Chat queue", "custom")["id"]
+            member = team.add_member(chat_team, "Audit worker")
+            row = team.assign(chat_team, member["id"], "Do work")
             worker = threading.Thread(target=team.tick)
             worker.start()
             try:
@@ -288,8 +289,9 @@ class AuditRegressionTest(unittest.TestCase):
             release.wait(8)
             return {"reply": "Task output"}
         with patch.object(team, "DB_PATH", self.db.path), patch.object(workflow, "run_agent", side_effect=model):
-            member = team.add_member(self.pid, "Audit worker")
-            row = team.assign(self.pid, member["id"], "Do work")
+            chat_team = self.db.team_add("Chat queue", "custom")["id"]
+            member = team.add_member(chat_team, "Audit worker")
+            row = team.assign(chat_team, member["id"], "Do work")
             worker = threading.Thread(target=team.tick)
             worker.start()
             try:

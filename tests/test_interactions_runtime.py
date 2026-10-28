@@ -1,6 +1,7 @@
 """Keyboard and menu regressions exercised against the real app and an isolated DB."""
 from pathlib import Path
 import unittest
+from tests.test_web_runtime import workspace_section
 
 from tests import test_web_runtime as runtime
 
@@ -34,9 +35,10 @@ class InteractionsRuntimeTest(unittest.TestCase):
     def test_palette_search_runs_navigation_and_zotero_command(self):
         self.load_page()
         self.page.locator('[data-command="palette"]').click()
-        self.page.locator('#cmdPaletteInput').fill('项目管理')
+        self.page.locator('#cmdPaletteInput').fill('新建项目')
         self.page.keyboard.press('Enter')
         self.page.locator('#t-title').wait_for()
+        self.page.keyboard.press('Escape')
         self.page.locator('[data-command="palette"]').click()
         self.page.locator('#cmdPaletteInput').fill('Zotero')
         self.page.keyboard.press('Enter')
@@ -87,30 +89,22 @@ class InteractionsRuntimeTest(unittest.TestCase):
         self.assertEqual(self.page.locator('[role="menu"]').count(), 0)
         self.assertEqual(self.page.locator('#shortcutHelp').count(), 0)
 
-    def test_project_context_menu_keyboard_bounds_and_cancel(self):
+    def test_project_manager_keyboard_cancel_preserves_project(self):
         self.load_page()
-        self.page.locator('[data-nav="tasks"]').click()
-        row=self.page.locator('.proj-row').first
-        row.locator('[data-context-trigger]').wait_for()
-        before=self.page.evaluate('curTask')
-        row.click(button='right', position={'x':30,'y':25})
-        self.page.locator('[role="menu"]').wait_for()
-        self.assertEqual(self.page.evaluate('curTask'), before)
-        self.page.keyboard.press('End')
-        self.assertIn('删除', self.page.evaluate('document.activeElement.textContent'))
-        self.page.keyboard.press('Escape')
-        self.assertTrue(row.evaluate('el=>el===document.activeElement'))
-        self.page.keyboard.press('Shift+F10')
-        self.page.keyboard.press('End')
+        self.page.locator('[data-nav="workspace"]').click()
+        self.page.locator('#pwProjectSettings > summary').click()
+        self.page.locator('#pwProjectEdit').click()
+        self.page.locator('dialog.project-manager').wait_for()
+        before=self.page.evaluate('S.tasks.length')
+        self.page.locator('[data-pm-delete]').click()
         self.page.keyboard.press('Enter')
-        self.page.locator('dialog[open]').wait_for()
-        self.page.keyboard.press('Enter')  # Cancel is the safe default.
-        self.assertEqual(self.page.locator('.proj-row').count(), 1)
-        self.page.evaluate("document.querySelector('.proj-row').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:innerWidth-1,clientY:innerHeight-1}))")
-        rect=self.page.locator('[role="menu"]').bounding_box()
-        viewport=self.page.viewport_size
-        self.assertLessEqual(rect['x']+rect['width'],viewport['width'])
-        self.assertLessEqual(rect['y']+rect['height'],viewport['height'])
+        self.assertEqual(self.page.evaluate('S.tasks.length'),before)
+        self.assertTrue(self.page.locator('dialog.project-manager').is_visible())
+        self.page.keyboard.press('Escape')
+        self.page.locator('dialog.project-manager').wait_for(state='detached')
+        self.assertEqual(self.page.evaluate('S.tasks.length'),before)
+        self.assertEqual(self.errors,[])
+
 
     def test_help_traps_focus_and_preferences_persist(self):
         self.load_page()
@@ -144,14 +138,14 @@ class InteractionsRuntimeTest(unittest.TestCase):
         self.assertIn('**Evidence**',self.read_project_note(path)['content'])
         self.page.route('**/api/project/note/save', lambda route: route.fulfill(status=500,content_type='application/json',body='{"error":"save unavailable"}'))
         self.page.locator('#mdSource').fill('Keep this unsaved draft')
-        self.page.locator('[data-nav="tasks"]').click()
+        self.page.locator('[data-nav="calendar"]').click()
         self.page.wait_for_function("document.querySelector('#mdSaveState')?.textContent==='保存失败'")
-        self.assertEqual(self.page.evaluate('route()'), 'space')
+        self.assertEqual(self.page.evaluate('route()'), 'workspace')
         self.assertEqual(self.page.locator('#mdSource').input_value(),'Keep this unsaved draft')
 
     def test_tabs_keyboard_and_context_close_others(self):
         self.load_page()
-        self.page.locator('[data-nav="tasks"]').click()
+        self.page.locator('[data-nav="calendar"]').click()
         self.page.locator('[data-nav="calendar"]').click()
         self.page.locator('#tabsbar [aria-selected="true"]').focus()
         self.page.keyboard.press('Home')
@@ -162,17 +156,20 @@ class InteractionsRuntimeTest(unittest.TestCase):
         self.page.wait_for_function('tabs.length===1')
         self.assertEqual(self.page.locator('#tabsbar [data-t]').count(),1)
 
-    def test_workflow_shortcuts_respect_input_scope_and_find_search(self):
+    def test_retired_stage_shortcuts_do_not_open_research_forms(self):
         self.load_page()
-        self.page.locator('[data-nav="workflow"]').click()
+        self.page.locator('[data-nav="workspace"]').click()
+        workspace_section(self.page,'workflow')
+        self.page.locator('[data-pwg-label]').wait_for()
         self.page.locator('#main').focus()
         self.page.keyboard.press('Alt+2')
-        self.page.locator('#wsInputQuery').wait_for(state='visible')
+        self.assertEqual(self.page.locator('#pwToolChoice, #wsInputQuery').count(),0)
+        workspace_section(self.page,'files')
         self.page.locator('#main').focus()
         self.page.keyboard.press('/')
-        self.assertEqual(self.page.evaluate('document.activeElement.id'),'wsInputQuery')
-        self.page.keyboard.press('Alt+1')
-        self.assertEqual(self.page.evaluate('wfStep'),'search')
+        self.assertEqual(self.page.evaluate('document.activeElement.id'),'pwSearchInput')
+        self.assertEqual(self.errors,[])
+
 
     def test_readonly_note_menu_uses_disabled_actions(self):
         self.load_page()
@@ -190,7 +187,8 @@ class InteractionsRuntimeTest(unittest.TestCase):
         self.page.wait_for_function('mdDashReadOnly===true')
         row=self.page.locator('[data-tree-type="dir"]').first
         row.locator('[data-context-trigger]').click()
-        self.assertGreater(self.page.locator('[role="menuitem"]:disabled').count(),0)
+        self.assertGreater(self.page.locator('[role="menuitem"]:disabled').count(),0,
+            self.page.locator('[role="menuitem"]').evaluate_all("rows=>({readOnly:mdDashReadOnly,actions:rows.map(e=>({text:e.textContent,disabled:e.disabled}))})"))
         self.page.keyboard.press('End')
         self.assertTrue(self.page.evaluate("document.activeElement === [...document.querySelectorAll('[role=menuitem]:not(:disabled)')].at(-1)"))
         self.assertFalse(self.page.evaluate('document.activeElement.disabled'))
@@ -205,8 +203,9 @@ class InteractionsRuntimeTest(unittest.TestCase):
             self.page.screenshot(path=str(destination/f'shortcuts-{theme}.png'))
             self.page.keyboard.press('Escape')
         self.page.set_viewport_size({'width':900,'height':640})
-        self.page.locator('[data-nav="tasks"]').click()
-        self.page.locator('.proj-row [data-context-trigger]').first.click()
+        self.page.locator('[data-nav="calendar"]').click()
+        self.page.evaluate('ProjectManager.open()')
+        self.page.locator('dialog.project-manager').wait_for()
         self.page.screenshot(path=str(destination/'project-context-menu.png'))
         self.assertEqual(self.page.evaluate('document.documentElement.scrollWidth <= innerWidth'),True)
 

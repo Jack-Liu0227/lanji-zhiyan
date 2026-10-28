@@ -50,7 +50,6 @@ class WorkflowLayoutTest(unittest.TestCase):
         invalid = []
         data = self.definition(); data["nodes"][0]["step"] = "shell"; invalid.append(data)
         data = self.definition(); data["nodes"][1]["id"] = "a"; invalid.append(data)
-        data = self.definition(); data["nodes"][1]["step"] = "search"; invalid.append(data)
         data = self.definition(); data["edges"].append({"source": "missing", "target": "a"}); invalid.append(data)
         data = self.definition(); data["edges"].append({"source": "c", "target": "a"}); invalid.append(data)
         data = self.definition(); data["order"] = ["c", "a", "b"]; invalid.append(data)
@@ -60,6 +59,14 @@ class WorkflowLayoutTest(unittest.TestCase):
         for data in invalid:
             with self.subTest(data=data), self.assertRaises(ValueError):
                 self.call("POST", "/save", data)
+
+    def test_repeated_stages_and_generic_tasks_have_distinct_node_ids(self):
+        data = self.definition()
+        data["nodes"][1]["step"] = "search"
+        data["nodes"][2]["step"] = "task"
+        saved = self.call("POST", "/save", data)["layout"]
+        self.assertEqual([n["step"] for n in saved["nodes"]], ["search", "search", "task"])
+        self.assertEqual(len({n["id"] for n in saved["nodes"]}), 3)
 
     def test_graph_state_maps_steps_latest_status_and_dependencies(self):
         saved = self.call("POST", "/save", self.definition())["layout"]

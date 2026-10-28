@@ -76,7 +76,7 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, Any], d
             out_file = db.export_evidence(pid, dest)
         return {"ok": True, "path": str(out_file)}
 
-    # 5.2 Agent、助手和团队
+    # 5.2 Agent、专家和团队
     if method == "GET" and path == "/api/chats":
         return {"chats": db.chats()}
 

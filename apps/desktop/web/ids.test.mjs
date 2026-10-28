@@ -2,6 +2,7 @@
 // 前端已拆成多个 JS 文件，因此把 web/ 下的 .html/.js 当同一份源码扫描。
 // 用法：node apps/desktop/web/ids.test.mjs
 import { readdirSync, readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 
 const root = new URL(".", import.meta.url);
 // 视图 JS 在 views/ 里：递归收，别只扫根目录（只扫根 = 一条也扫不到，还照样打印 OK）
@@ -19,6 +20,19 @@ const sources = [];
 
 const defined = new Set();
 const refs = new Map();
+
+// Render the pure shared controls with the prefixes used by their callers.
+const runtimeSource = sources.find(source => source.name === "views/agent-runtime.js");
+if (runtimeSource) {
+  const runtime = runInNewContext(runtimeSource.text + "\nAgentRuntime;", { S: { models: [] }, esc: String });
+  for (const source of sources) {
+    for (const call of source.text.matchAll(/AgentRuntime\.markup\(['"]\w+['"][^\n]*?\)/g)) {
+      const values = [...call[0].matchAll(/['"]([A-Za-z0-9_-]+)['"]/g)].map(match => match[1]);
+      const html = runtime.markup(values[0], {}, values[1]);
+      for (const match of html.matchAll(/\bid="([A-Za-z0-9_-]+)"/g)) defined.add(match[1]);
+    }
+  }
+}
 
 for (const { name, text } of sources) {
   for (const match of text.matchAll(/(?<![-\w])id\s*=\s*["']([A-Za-z0-9_-]+)["']/g)) {

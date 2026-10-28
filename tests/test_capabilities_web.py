@@ -39,6 +39,8 @@ class CapabilityWebTests(unittest.TestCase):
         log = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
         cls.addClassCleanup(log.close)
         env = dict(os.environ, RESEARCH_WORKBENCH_DB=str(Path(temporary.name) / "test.sqlite3"),
+                   LANJI_ZHIYAN_DB=str(Path(temporary.name) / "test.sqlite3"),
+                   LANJI_ZHIYAN_HOME=str(Path(temporary.name) / "app-home"), RW_HOME=str(Path(temporary.name) / "app-home"),
                    USERPROFILE=str(home), HOME=str(home), PYTHONIOENCODING="utf-8")
         server = subprocess.Popen([sys.executable, str(ROOT / "apps/desktop/server.py"), "--port", str(port), "--no-open"],
                                   cwd=ROOT, env=env, stdout=log, stderr=log)

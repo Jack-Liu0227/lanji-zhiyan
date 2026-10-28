@@ -192,17 +192,20 @@ class ResearchDB:
         return list(self.db.execute("SELECT * FROM research_tasks ORDER BY updated_at DESC"))
 
     # ---------- 通用 Agent 对话（独立于项目） ----------
-    def create_chat(self, title: str = "") -> str:
+    def create_chat(self, title: str = "", *, task_id: str = "") -> str:
+        tid = str(task_id or "").strip()
+        if tid and not self.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone():
+            raise ValueError("没有这个项目")
         cid = uuid.uuid4().hex
         t = now()
         # 具名列：chats 后续会补列（assistant_id），定位插入会跟着坏
-        self.db.execute("INSERT INTO chats (id,title,out_dir,created_at,updated_at) VALUES (?,?,?,?,?)",
-                        (cid, (title or "").strip() or "新对话", "", t, t))
+        self.db.execute("INSERT INTO chats (id,title,out_dir,created_at,updated_at,task_id) VALUES (?,?,?,?,?,?)",
+                        (cid, (title or "").strip() or "新对话", "", t, t, tid))
         self.db.commit()
         return cid
 
     def chats(self) -> list[dict[str, Any]]:
-        return [dict(r) for r in self.db.execute("SELECT * FROM chats ORDER BY updated_at DESC")]
+        return [dict(r) for r in self.db.execute("SELECT * FROM chats WHERE deleted_at='' AND archived_at='' AND channel='conversation' ORDER BY pinned_at DESC,updated_at DESC")]
 
     def chat(self, cid: str) -> dict[str, Any]:
         row = self.db.execute("SELECT * FROM chats WHERE id=?", (cid,)).fetchone()

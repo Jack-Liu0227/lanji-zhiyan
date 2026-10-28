@@ -121,7 +121,7 @@ def write_skill(name: str, description: str, content: str, scope: str = "project
     下次同类任务靠 description 被索引到、按需读全文。
 
     边界（别松）：名字只能是 [a-z0-9._-]，只能写 skill 根下自己的目录，正文 1 MiB 上限，
-    frontmatter 的 name 必须等于目录名 —— 否则已有的助手绑定会找不到它。
+    frontmatter 的 name 必须等于目录名 —— 否则已有的专家绑定会找不到它。
     """
     name = str(name or "").strip().lower()
     if not SKILL_NAME.match(name):

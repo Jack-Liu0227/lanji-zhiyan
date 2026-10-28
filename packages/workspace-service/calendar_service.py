@@ -6,7 +6,7 @@ import json
 
 PREFIX = "linked:"
 LABELS = {"todo": "任务截止", "schedule": "定时任务", "schedule_run": "任务运行",
-          "workflow_review": "节点审查", "workflow_run": "工作流状态"}
+          "workflow_review": "节点审查", "workflow_run": "工作流状态", "project_task_review": "任务核查"}
 
 
 def _when(value):
@@ -44,7 +44,11 @@ def derived(db, month=None):
             if row["task_id"] not in projects:
                 continue
             status = row["status"]
-            if row.get("stage"):
+            import project_tasks
+            canonical = project_tasks.find_origin(db, "todo", row["id"]) if "project_task_origins" in tables else None
+            if canonical:
+                status = {"queued": "IN_PROGRESS", "running": "IN_PROGRESS", "awaiting_review": "REVIEW", "delivered": "DONE"}.get(canonical["status"], "TODO")
+            elif row.get("stage"):
                 import workflow_state
                 pid = row["task_id"]
                 if pid not in states:
@@ -52,8 +56,9 @@ def derived(db, month=None):
                 status = {"delivered": "DONE", "succeeded": "REVIEW", "stale": "REVIEW", "running": "IN_PROGRESS"}.get(
                     states[pid].get(row["stage"], {}).get("status"), "TODO")
             result.append(_event("todo", row["id"], row["task_id"], row["title"], row["due_date"],
-                status=status, done=status == "DONE", pending=status != "DONE", target_type="todo",
-                note=row["description"], created_at=row["created_at"], can_toggle=not bool(row.get("stage")),
+                status=status, done=status == "DONE", pending=status != "DONE", target_type="project_task" if canonical else "todo",
+                target_id=canonical["id"] if canonical else row["id"],
+                note=row["description"], created_at=row["created_at"], can_toggle=not canonical and not bool(row.get("stage")),
                 stage=row.get("stage", ""), assistant_id=row["assigned_assistant"]))
     if "schedules" in tables:
         import schedule
@@ -117,6 +122,15 @@ def derived(db, month=None):
                     created_at=node["started_at"], run_id=run["id"], node_id=node["id"], stage=node["stage"],
                     received_at=node['ended_at'] or node['started_at'], due_at=reminder.get('due_at', ''), remind_at=reminder.get('remind_at', ''),
                     assistant_id=checkpoint.get("input", {}).get("assistant_id", "")))
+    if "project_tasks" in tables:
+        import review_inbox
+        for item in review_inbox.pending(db):
+            if not item.get("canonical_task_id") or item.get("run_id"):
+                continue
+            result.append(_event("project_task_review", item["canonical_task_id"], item["project_id"], "核查 · " + item["label"],
+                item["due_at"] or datetime.now().date().isoformat(), status="awaiting_review", target_type="project_task",
+                target_id=item["canonical_task_id"], note=item["summary"], created_at=item["received_at"],
+                received_at=item["received_at"], due_at=item["due_at"], remind_at=item["remind_at"]))
     return [event for event in result if event["date"] and (not month or event["date"].startswith(month))]
 
 

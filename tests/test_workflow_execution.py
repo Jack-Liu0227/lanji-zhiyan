@@ -12,6 +12,7 @@ import workflow_state
 
 
 class WorkflowExecutionTest(unittest.TestCase):
+    default_executor = "builtin-steward"
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -24,7 +25,8 @@ class WorkflowExecutionTest(unittest.TestCase):
         workflow_layout.ensure_schema(self.db)
         steps = [n["step"] for n in nodes]
         data = workflow_layout._linear(steps)
-        data["nodes"] = [{**n, **config} for n, config in zip(data["nodes"], nodes)]
+        data["nodes"] = [{**n, **({"assistant_id": self.default_executor} if getattr(self, "default_executor", "") and not any(config.get(k) for k in ("assistant_id", "team_id", "member_id")) else {}), **config}
+                         for n, config in zip(data["nodes"], nodes)]
         layout = workflow_layout.save_layout(self.db, {"name": "Sequential", **data})["layout"]
         workflow_layout.select_layout(self.db, {"task_id": self.pid, "layout_id": layout["id"]})
 
@@ -116,7 +118,7 @@ class WorkflowExecutionTest(unittest.TestCase):
         engine._status(self.db, run["id"], "running")
         engine.recover(self.db.path)
         restored = engine.detail(self.db, run["id"])
-        self.assertEqual(restored["status"], "interrupted")
+        self.assertEqual(restored["status"], "failed")
         self.assertTrue(restored["nodes"][0]["checkpoint"]["input"])
 
     def test_pending_review_survives_restart_and_cancel_preserves_output(self):

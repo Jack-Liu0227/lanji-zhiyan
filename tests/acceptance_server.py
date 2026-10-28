@@ -18,7 +18,7 @@ import time
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-REPORT = ROOT / "doc/test-reports/2026-10-21"
+REPORT = ROOT / "output/acceptance/2026-10-21"
 
 
 def main():
@@ -113,6 +113,7 @@ def main():
             db.add_model("Local acceptance fixture", model_url + "/v1", "fixture", "test-only-key", activate=True)
             chat = db.create_chat("Acceptance chat")
             note = db.base_dir(a) / "笔记/文献矩阵/existing.md"
+            note.parent.mkdir(parents=True, exist_ok=True)
             note.write_text("# Existing matrix\n\nEvidence in existing Markdown.", encoding="utf-8")
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))

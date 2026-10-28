@@ -196,7 +196,7 @@ class DraftFromMapTest(unittest.TestCase):
 
 
     def test_中译英这一步的system钉死了正文(self):
-        """这一步的助手必须读「论文撰写」的正文.md、写同目录的 正文_en.md，不许另建零碎文件。"""
+        """这一步的专家必须读「论文撰写」的正文.md、写同目录的 正文_en.md，不许另建零碎文件。"""
         import workflow_documents as docs
         txt = workflow_runners.entrans_system(self.db, self.tid)
         self.assertIn(str(docs.doc_path(self.db, self.tid, "write")), txt, "源路径要写死在 system 里")

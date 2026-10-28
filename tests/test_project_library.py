@@ -72,3 +72,18 @@ class ProjectLibraryTest(unittest.TestCase):
         for settings in ({"enabled": "true"}, {"enabled": True, "interval_seconds": 1}, {"enabled": True, "mode": "delete"}):
             with self.assertRaises(ValueError):
                 zotero_sync.configure_auto(self.db, self.pid, settings)
+
+    def test_edit_requires_unchanged_metadata_and_keeps_remote_updates_on_conflict(self):
+        rid = self.result()
+        expected = {key: self.db.result(rid)[key] for key in ('title','authors','year','doi','url','abstract')}
+        body = {'task_id': self.pid, 'result_id': rid, 'fields': {'title': 'My edit'}, 'expected': expected}
+        project_library.update_record(self.db, self.pid, rid, {'title': 'Changed while editing'})
+        with self.assertRaisesRegex(ValueError, '编辑期间文献已更新'):
+            project_library.route('POST', '/api/library/project', body, {}, self.db)
+        self.assertEqual(self.db.result(rid)['title'], 'Changed while editing')
+        body['expected']['title'] = 'Changed while editing'
+        result = project_library.route('POST', '/api/library/project', body, {}, self.db)
+        self.assertEqual(result['item']['title'], 'My edit')
+        body['task_id'] = self.db.create_task('Another project')
+        with self.assertRaisesRegex(ValueError, '不属于当前项目'):
+            project_library.route('POST', '/api/library/project', body, {}, self.db)

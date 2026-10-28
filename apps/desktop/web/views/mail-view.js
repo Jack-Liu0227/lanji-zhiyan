@@ -9,6 +9,11 @@
   let mailDetail = null;
   let mailMaEditId = null;
   let mailInited = false;
+  let mailInitPromise = null;
+  let mailViewGeneration = 0, mailAccountSequence = 0, mailFolderSequence = 0, mailListSequence = 0, mailDetailSequence = 0;
+  let mailComposeSequence = 0;
+  const mailVisible = () => route() === 'mail' && !!$('mailList');
+  const mailScopeMatches = (scope) => mailCur.accountId === scope.accountId && mailCur.folder === scope.folder;
 
   const FOLDER_ICONS = { '\\Inbox': '📥', '\\Sent': '📤', '\\Drafts': '📝', '\\Trash': '🗑', '\\Junk': '🚫', '\\Archive': '📦' };
 
@@ -21,7 +26,7 @@
 
   async function ensureMailProviders() {
     if (mailProviders) return mailProviders;
-    try { mailProviders = await api('/api/mail/providers'); } catch { mailProviders = {}; }
+    mailProviders = await api('/api/mail/providers');
     return mailProviders;
   }
 
@@ -76,7 +81,7 @@
     el2.addEventListener('click', async () => {
       close();
       try {
-        openTab("mail");
+        await openTab("mail");
         await selectMailAccount(acc.id);
         if (mailCur.folder !== 'INBOX') await openMailFolder(acc.id, 'INBOX', '收件箱');
         await openMailMessage(msg.uid);
@@ -192,7 +197,10 @@
   // ---------- 三栏渲染 ----------
   function renderMailView() {
     renderMailSide();
-    if (!mailCur.accountId) {
+    if (mailCur.accountId) {
+      renderMailMessages();
+      renderMailDetail();
+    } else {
       renderMailListHead();
       $('mailList').innerHTML = mailAccounts.length
         ? '<div class="mail-empty">选择左侧邮箱账户开始收信</div>'
@@ -385,7 +393,8 @@ a { color: #176b87; }
 
     const truncated = plain.length > MAIL_TRANS_MAX;
     const text = truncated ? plain.slice(0, MAIL_TRANS_MAX) : plain;
-    mailTrans = { uid, pending: true, text: '', truncated };
+    const translation = { uid, pending: true, text: '', truncated };
+    mailTrans = translation;
     renderMailDetail();
 
     const target = $('prLangTo')?.value || 'zh';
@@ -401,24 +410,29 @@ a { color: #176b87; }
         body: JSON.stringify({ text, target, provider, profileId }),
       });
       // 期间用户可能已经切到别的邮件，避免把结果串到错的地方
-      if (!mailTrans || mailTrans.uid !== uid) return;
+      if (mailTrans !== translation) return;
       mailTrans = { uid, text: data.translation || '(未返回译文)', truncated };
       toast('邮件翻译完成', 'success');
     } catch (e) {
-      if (!mailTrans || mailTrans.uid !== uid) return;
+      if (mailTrans !== translation) return;
       mailTrans = { uid, error: e.message, truncated };
     }
-    renderMailDetail();
+    if (mailVisible()) renderMailDetail();
   }
 
   // ---------- 数据加载 ----------
   async function ensureMailFolders(accountId, force = false) {
     if (!force && mailFoldersOwner === accountId && mailFolders.length) { renderMailSide(); return; }
-    mailFoldersOwner = accountId;
+    const ticket = ++mailFolderSequence, generation = mailViewGeneration;
     try {
-      mailFolders = await api(`/api/mail/accounts/${accountId}/folders`);
+      const folders = await api(`/api/mail/accounts/${accountId}/folders`);
+      if (ticket !== mailFolderSequence || generation !== mailViewGeneration || mailCur.accountId !== accountId || !mailVisible()) return;
+      mailFolders = folders;
+      mailFoldersOwner = accountId;
     } catch (e) {
+      if (ticket !== mailFolderSequence || generation !== mailViewGeneration || mailCur.accountId !== accountId || !mailVisible()) return;
       mailFolders = [];
+      mailFoldersOwner = '';
       toast('读取文件夹失败：' + e.message, 'error');
     }
     renderMailSide();
@@ -431,6 +445,8 @@ a { color: #176b87; }
     mailCur.folderName = name || folder || '收件箱';
     mailCur.page = page;
     mailDetail = null;
+    mailTrans = null;
+    ++mailDetailSequence;
     renderMailSide();
     renderMailDetail();
     await loadMailMessages();
@@ -438,27 +454,36 @@ a { color: #176b87; }
 
   async function selectMailAccount(id) {
     if (!id || (mailCur.accountId === id && mailMessages.length)) return;
+    const ticket = ++mailAccountSequence, generation = mailViewGeneration;
     mailMessages = []; mailTotal = 0; mailDetail = null;
+    mailTrans = null;
+    ++mailListSequence; ++mailDetailSequence;
+    mailFolders = []; mailFoldersOwner = '';
     $('mailSearch').value = '';
     mailCur = { accountId: id, folder: 'INBOX', folderName: '收件箱', page: 1, pageSize: mailCur.pageSize, search: '' };
     await ensureMailFolders(id, true);
+    if (ticket !== mailAccountSequence || generation !== mailViewGeneration || mailCur.accountId !== id || !mailVisible()) return;
     // 优先定位到真正的收件箱文件夹（不同邮箱命名可能不同）
     const inbox = mailFolders.find((f) => f.specialUse === '\\Inbox') || mailFolders.find((f) => f.path === 'INBOX');
     await openMailFolder(id, inbox ? inbox.path : 'INBOX', inbox ? inbox.name : '收件箱', 1);
   }
 
-  async function loadMailMessages() {
-    if (!mailCur.accountId) return;
-    $('mailList').innerHTML = '<div class="mail-loading">正在收取邮件…</div>';
+  async function loadMailMessages(showLoading = true) {
+    if (!mailCur.accountId || !mailVisible()) return;
+    const scope = {...mailCur}, ticket = ++mailListSequence, generation = mailViewGeneration;
+    const current = () => ticket === mailListSequence && generation === mailViewGeneration && mailVisible() && mailScopeMatches(scope) && mailCur.page === scope.page && mailCur.pageSize === scope.pageSize && mailCur.search === scope.search;
+    if (showLoading) $('mailList').innerHTML = '<div class="mail-loading">正在收取邮件…</div>';
     renderMailListHead();
-    const q = new URLSearchParams({ folder: mailCur.folder, page: String(mailCur.page), pageSize: String(mailCur.pageSize) });
-    if (mailCur.search) q.set('search', mailCur.search);
+    const q = new URLSearchParams({ folder: scope.folder, page: String(scope.page), pageSize: String(scope.pageSize) });
+    if (scope.search) q.set('search', scope.search);
     try {
-      const data = await api(`/api/mail/accounts/${mailCur.accountId}/messages?${q.toString()}`);
+      const data = await api(`/api/mail/accounts/${scope.accountId}/messages?${q.toString()}`);
+      if (!current()) return;
       mailMessages = data.messages || [];
       mailTotal = data.total || 0;
       renderMailMessages();
     } catch (e) {
+      if (!current()) return;
       mailMessages = []; mailTotal = 0;
       $('mailList').innerHTML = `<div class="mail-error">收取失败：${esc(e.message)}<div><button class="btn" data-mail-retry="1">重试</button></div></div>`;
       renderMailPager();
@@ -466,10 +491,13 @@ a { color: #176b87; }
   }
 
   async function openMailMessage(uid) {
-    const id = mailCur.accountId;
+    const scope = {...mailCur}, id = scope.accountId, ticket = ++mailDetailSequence, generation = mailViewGeneration;
+    const current = () => ticket === mailDetailSequence && generation === mailViewGeneration && mailVisible() && mailScopeMatches(scope);
+    mailDetail = null; mailTrans = null;
     $('mailDetail').innerHTML = '<div class="mail-loading">正在打开邮件…</div>';
     try {
-      const d = await api(`/api/mail/accounts/${id}/messages/${uid}?folder=${encodeURIComponent(mailCur.folder)}`);
+      const d = await api(`/api/mail/accounts/${id}/messages/${uid}?folder=${encodeURIComponent(scope.folder)}`);
+      if (!current()) return;
       mailDetail = d;
       renderMailDetail();
       const item = mailMessages.find((m) => m.uid === Number(uid));
@@ -477,11 +505,12 @@ a { color: #176b87; }
         item.seen = true;
         api(`/api/mail/accounts/${id}/messages/${uid}/seen`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ seen: true, folder: mailCur.folder }),
+          body: JSON.stringify({ seen: true, folder: scope.folder }),
         }).catch(() => { /* 标记失败不影响阅读 */ });
       }
       renderMailMessages();
     } catch (e) {
+      if (!current()) return;
       mailDetail = null;
       $('mailDetail').innerHTML = `<div class="mail-error">打开失败：${esc(e.message)}</div>`;
     }
@@ -489,15 +518,17 @@ a { color: #176b87; }
 
   async function markAllMailSeen() {
     if (!mailCur.accountId) return toast('请先选择邮箱账户', 'error');
+    const target = {...mailCur};
     const scope = mailCur.search ? `当前文件夹（搜索结果不会影响批量范围）` : (mailCur.folderName || mailCur.folder);
     if (!await uiConfirm(`确认将「${scope}」中的全部未读邮件标记为已读？`)) return;
     const button = $('btnMailMarkAllRead');
     if (button) button.disabled = true;
     try {
-      const result = await api(`/api/mail/accounts/${mailCur.accountId}/messages/seen-all`, {
+      const result = await api(`/api/mail/accounts/${target.accountId}/messages/seen-all`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder: mailCur.folder }),
+        body: JSON.stringify({ folder: target.folder }),
       });
+      if (!mailVisible() || !mailScopeMatches(target)) return;
       mailMessages.forEach((item) => { item.seen = true; });
       renderMailMessages();
       toast(result.markedCount ? `已将 ${result.markedCount} 封邮件标记为已读` : '当前文件夹没有未读邮件', 'success');
@@ -509,12 +540,14 @@ a { color: #176b87; }
 
   async function markMailUnread() {
     if (!mailDetail) return;
+    const target = {...mailCur};
     const uid = mailDetail.uid;
     try {
-      await api(`/api/mail/accounts/${mailCur.accountId}/messages/${uid}/seen`, {
+      await api(`/api/mail/accounts/${target.accountId}/messages/${uid}/seen`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ seen: false, folder: mailCur.folder }),
+        body: JSON.stringify({ seen: false, folder: target.folder }),
       });
+      if (!mailVisible() || !mailScopeMatches(target)) return;
       const it = mailMessages.find((m) => m.uid === uid);
       if (it) it.seen = false;
       renderMailMessages();
@@ -524,12 +557,12 @@ a { color: #176b87; }
 
   async function removeMailMessage() {
     if (!mailDetail) return;
+    const target = {...mailCur}, uid = mailDetail.uid;
     if (!await uiConfirm('确认删除这封邮件？删除后无法恢复。')) return;
-    const uid = mailDetail.uid;
     try {
-      await api(`/api/mail/accounts/${mailCur.accountId}/messages/${uid}?folder=${encodeURIComponent(mailCur.folder)}`, { method: 'DELETE' });
-      mailDetail = null;
-      renderMailDetail();
+      await api(`/api/mail/accounts/${target.accountId}/messages/${uid}?folder=${encodeURIComponent(target.folder)}`, { method: 'DELETE' });
+      if (!mailVisible() || !mailScopeMatches(target)) return;
+      if (mailDetail?.uid === uid) { mailDetail = null; renderMailDetail(); }
       await loadMailMessages();
       toast('邮件已删除', 'success');
     } catch (e) { toast(e.message, 'error'); }
@@ -658,16 +691,22 @@ a { color: #176b87; }
     try {
       const r = await api('/api/mail/test', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(mailAccFormData()),
+        body: JSON.stringify({...mailAccFormData(), id: mailMaEditId || undefined}),
       });
-      box.classList.add('ok');
-      box.textContent = `✅ 连接成功：收件箱 ${r.inboxMessages} 封邮件，共 ${r.folderCount} 个文件夹`;
+      showMailTestResult(box, r);
     } catch (e) {
       box.classList.add('err');
       box.textContent = '❌ ' + e.message;
     } finally {
       btn.disabled = false;
     }
+  }
+
+  function showMailTestResult(box, result) {
+    const smtp = result.smtp;
+    box.classList.add(!smtp || smtp.ok ? 'ok' : 'err');
+    box.textContent = `收信成功：收件箱 ${result.inboxMessages} 封邮件，共 ${result.folderCount} 个文件夹。` +
+      (smtp ? (smtp.ok ? '发信连接成功，未发送邮件。' : '发信连接未通过：' + smtp.message) : '尚未检查发信连接。');
   }
 
   async function saveMailAccountForm() {
@@ -702,6 +741,7 @@ a { color: #176b87; }
 
   // ---------- 写邮件 ----------
   function openMailCompose(to = '', subject = '') {
+    ++mailComposeSequence;
     if (!mailAccounts.length) {
       toast('请先添加一个邮箱账户', 'error');
       openMailAccountModal(null);
@@ -715,7 +755,7 @@ a { color: #176b87; }
     $('mcSubject').value = subject || '';
     $('mcBody').value = '';
     $('mailComposeModal').classList.remove('hidden');
-    setTimeout(() => { if (!to) $('mcTo').focus(); else $('mcBody').focus(); }, 30);
+    (to ? $('mcBody') : $('mcTo')).focus();
   }
 
   async function sendMailCompose() {
@@ -723,18 +763,25 @@ a { color: #176b87; }
     const to = $('mcTo').value.trim();
     if (!to) return toast('请填写收件人', 'error');
     const btn = $('btnMcSend');
+    if (btn.disabled) return;
+    const sequence = mailComposeSequence, generation = mailViewGeneration;
+    const payload = {to, cc: $('mcCc').value.trim(), subject: $('mcSubject').value.trim(), text: $('mcBody').value};
+    const current = () => generation === mailViewGeneration && sequence === mailComposeSequence && mailVisible();
+    const sameDraft = () => current() && $('mcFrom').value === id && $('mcTo').value.trim() === payload.to && $('mcCc').value.trim() === payload.cc && $('mcSubject').value.trim() === payload.subject && $('mcBody').value === payload.text;
     btn.disabled = true;
     const old = btn.textContent;
     btn.textContent = '发送中…';
     try {
-      await api(`/api/mail/accounts/${id}/send`, {
+      const result = await api(`/api/mail/accounts/${id}/send`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to, cc: $('mcCc').value.trim(),
-          subject: $('mcSubject').value.trim(), text: $('mcBody').value,
-        }),
+        body: JSON.stringify(payload),
       });
-      $('mailComposeModal').classList.add('hidden');
+      if (result.partial) {
+        if (sameDraft()) { $('mcTo').value = result.refusedRecipients.join(', '); $('mcCc').value = ''; }
+        toast(`部分发送：${result.acceptedCount} 位收件人已接受，其余地址被拒收。草稿仅保留被拒收地址，请核对后再发送。`, 'error');
+        return;
+      }
+      if (sameDraft()) $('mailComposeModal').classList.add('hidden');
       toast('邮件已发送', 'success');
     } catch (e) {
       toast('发送失败：' + e.message, 'error');
@@ -836,8 +883,7 @@ a { color: #176b87; }
         box.textContent = '正在连接邮件服务器…';
         try {
           const r = await api(`/api/mail/accounts/${ts.dataset.maTest}/test`, { method: 'POST' });
-          box.classList.add('ok');
-          box.textContent = `✅ 连接成功：收件箱 ${r.inboxMessages} 封邮件，共 ${r.folderCount} 个文件夹`;
+          showMailTestResult(box, r);
         } catch (err) {
           box.classList.add('err');
           box.textContent = '❌ ' + err.message;
@@ -870,28 +916,32 @@ a { color: #176b87; }
   }
 
   // 进入邮箱视图（首次进入时懒加载账户，避免拖慢启动）
-  async function enterMailView() {
+  async function enterMailView(generation) {
     renderMailView();
-    if (mailInited) return;
-    mailInited = true;
     try {
-      await ensureMailProviders();
+      if (!mailInited) {
+        if (!mailInitPromise) mailInitPromise = (async () => { await ensureMailProviders(); await loadMailAccounts(); mailInited = true; })().finally(() => { mailInitPromise = null; });
+        await mailInitPromise;
+      }
+      if (generation !== mailViewGeneration || !mailVisible()) return;
       renderMaProviderOptions();
-      await loadMailAccounts();
     } catch (e) {
-      toast('读取邮箱账户失败：' + e.message, 'error');
+      if (generation === mailViewGeneration && mailVisible()) toast('读取邮箱账户失败：' + e.message, 'error');
+      return;
     }
     renderMailView();
     if (mailAccounts.length && !mailCur.accountId) await selectMailAccount(mailAccounts[0].id);
+    else if (mailCur.accountId) await loadMailMessages(false);
   }
 
 
   /* ---- 本项目的入口：渲染这一页 → 绑事件 → 拉账户 ---- */
   async function renderMail(m){
+    const generation = ++mailViewGeneration;
     m.innerHTML = MAIL_HTML;
     bindMailEvents();
-    await enterMailView();
-    startMailNotify();
+    await enterMailView(generation);
+    if (generation === mailViewGeneration && mailVisible()) startMailNotify();
   }
 
 /* ---------------- 知识星图（知识库 → 项目 → 五簇分支 → 条目） ----------------

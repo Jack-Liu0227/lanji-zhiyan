@@ -69,17 +69,21 @@ class PromptRuntimeTest(unittest.TestCase):
 
     def test_queued_team_template_and_retry_keep_original_revision(self):
         import team
+        import project_tasks
+        import project_task_execution
         saved = self.template("Original team requirement")
-        member = self.db.team_member_add(self.pid, "Reviewer", step="review")
+        office = self.db.team_add("Review team", "custom", project_id=self.pid)
+        member = self.db.team_member_add(office["id"], "Reviewer", "leader", step="review", assistant_id="builtin-steward")
         prompt_templates.save_binding(self.db, self.pid, {"scope":"member", "scope_id":member["id"],
             "template_id":saved["template_id"], "follow_latest":True})
-        with patch.object(team, "DB_PATH", self.db.path):
-            row = team.assign(self.pid, member["id"], "Review", db=self.db)
+        with patch.object(team, "DB_PATH", self.db.path), patch.object(project_task_execution, "kick"):
+            row = team.assign(office["id"], member["id"], "Review", db=self.db)
             checkpoint = json.loads(self.db.team_task(row["id"])["checkpoint"])
             snapshot = checkpoint["queued_template_snapshot"]
             self.assertEqual(snapshot["rendered"], "Original team requirement")
             project_notes.write(self.db, self.pid, saved["path"], "Changed after queue")
-            self.db.team_task_mark(row["id"], "failed", checkpoint=checkpoint)
+            canonical = project_tasks.find_origin(self.db, "team_task", row["id"])
+            project_tasks.fail(self.db, canonical["latest_run"]["id"], "Model unavailable")
             team.retry(row["id"])
             retried = json.loads(self.db.team_task(row["id"])["checkpoint"])
             self.assertEqual(retried["queued_template_snapshot"]["revision_id"], snapshot["revision_id"])

@@ -19,10 +19,12 @@ def definition(db, project_id: str) -> dict:
     binding = db.db.execute("SELECT layout_id FROM project_workflow_layouts WHERE task_id=?",
                             (project_id,)).fetchone()
     if binding:
-        return workflow_layout._layout(db, binding["layout_id"])
+        import project_workflows
+        return project_workflows.effective(db,project_id,workflow_layout._layout(db,binding['layout_id']))
     rows = list(db.db.execute("SELECT * FROM workflow_layouts ORDER BY created_at,id"))
     row = next((r for r in rows if r["id"] == workflow_layout.DEFAULT_LAYOUT_ID), rows[0])
-    return workflow_layout._public(row)
+    import project_workflows
+    return project_workflows.effective(db,project_id,workflow_layout._public(row))
 
 
 def capture(db, project_id: str, step: str) -> dict:
@@ -95,9 +97,41 @@ def _running_stages(db, project_id: str) -> set[str]:
     return stages
 
 
+def node_states(db, project_id: str, layout: dict) -> dict[str, dict]:
+    """Generic and repeated stages use concrete task/node IDs, never a shared stage row."""
+    import project_tasks
+    run_id = ""
+    for row in db.db.execute("SELECT r.id,e.layout_snapshot FROM workflow_runs r JOIN workflow_executions e ON e.run_id=r.id WHERE r.project_id=? ORDER BY r.rowid DESC", (project_id,)):
+        if json.loads(row["layout_snapshot"])["id"] == layout["id"]:
+            run_id = row["id"]
+            break
+    task_rows = {t["workflow_node_id"]: t for t in project_tasks.list_tasks(db, project_id, workflow_run_id=run_id)
+                 if run_id and not t["parent_task_id"]}
+    result = {}
+    for nid in layout["order"]:
+        task = task_rows.get(nid)
+        parents = [e["source"] for e in layout["edges"] if e["target"] == nid]
+        blocked = [p for p in parents if result[p]["status"] != "delivered"]
+        status = (task or {}).get("status", "ready" if not blocked else "waiting")
+        if status == "ready" and blocked:
+            status = "waiting"
+        result[nid] = {"status": status, "summary": ((task or {}).get("latest_run") or {}).get("error", ""),
+            "canonical_task_id": (task or {}).get("id", ""), "delivery_id": (task or {}).get("accepted_delivery_id", ""),
+            "dependencies": parents, "blocked_by": blocked, "delivery": ((task or {}).get("deliveries") or [{}])[-1],
+            "updated_at": (task or {}).get("updated_at", ""), "source": "project_task", "record_id": (task or {}).get("id", "")}
+    return result
+
+
 def states(db, project_id: str, layout: dict | None = None) -> dict[str, dict]:
     import workflow_layout
     layout = layout or definition(db, project_id)
+    steps = [n["step"] for n in layout["nodes"]]
+    if "task" in steps or len(set(steps)) != len(steps):
+        result = node_states(db, project_id, layout)
+        for node in layout["nodes"]:
+            if steps.count(node["step"]) == 1:
+                result.setdefault(node["step"], result[node["id"]])
+        return result
     evidence = workflow_layout._evidence(db, project_id)
     running = _running_stages(db, project_id)
     latest = {}
@@ -137,9 +171,9 @@ def states(db, project_id: str, layout: dict | None = None) -> dict[str, dict]:
     return result
 
 
-def gate(db, project_id: str, step: str) -> dict:
+def gate(db, project_id: str, step: str, layout=None) -> dict:
     import workflow
-    state = states(db, project_id)
+    state = states(db, project_id, layout)
     if step not in state:
         return {"blocked": True, "independent": True, "prev": "", "prev_label": "",
                 "blocked_by": [], "reason": "此功能未加入当前项目的工作流"}
@@ -185,8 +219,8 @@ def accept(db, project_id: str, step: str, summary: str = "") -> dict:
     return row
 
 
-def handoff(db, project_id: str, step: str) -> tuple[str, str, list[str]]:
-    state = states(db, project_id)
+def handoff(db, project_id: str, step: str,layout=None) -> tuple[str, str, list[str]]:
+    state = states(db, project_id,layout)
     if step not in state:
         return "", "", []
     records, ids = [], []

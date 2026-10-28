@@ -11,7 +11,7 @@ const AppInteractions = (() => {
   const sendButton = () => {
     const field = document.activeElement;
     if(!editable(field)) return null;
-    const button = field.id==='tcSay' ? document.getElementById('tcSend') : field.closest('.composer, .at-dock, .ol-grid, .wv-composer')?.querySelector('.send-btn, #send, [id$="-send"]');
+    const button = field.id==='tcSay' ? document.getElementById('tcSend') : field.closest('.composer, .at-dock, .ol-grid, .wv-composer')?.querySelector('.send-btn, #send, #pwSend, [id$="-send"]');
     if(button?.id==='wv-send' && wfActiveRun()?.status==='running') return null;
     return visible(button) && !button.disabled && !button.classList.contains("stop") ? button : null;
   };
@@ -19,7 +19,7 @@ const AppInteractions = (() => {
     {id:"palette", text:"搜索命令与页面", keys:["Mod+k"], scope:"全局", inInput:true, run:openCommandPalette},
     {id:"help", text:"快捷键与操作帮助", keys:["F1", "?"], scope:"全局", run:openHelp},
     {id:"quick-todo", text:"随手记录 To do", keys:["Mod+Shift+Enter"], scope:"全局", inInput:true, run:()=>GlobalTodos.focus()},
-    {id:"progress-new", text:"创建进度任务", keys:["Alt+Shift+n"], scope:"当前项目（输入框外）", available:()=>!!curTask, run:()=>ProgressBoard.newTask()},
+    {id:"progress-new", text:"创建研究计划", keys:["Alt+Shift+n"], scope:"当前项目（输入框外）", available:()=>!!curTask, run:()=>TaskCenter.newPlan()},
     {id:"file-location", text:"打开文件所在位置", keys:["Alt+Shift+o"], scope:"焦点所在文件或项目", available:()=>!!fileReference(document.activeElement?.closest(rowSelector)), run:()=>locationAction(document.activeElement.closest(rowSelector),true)},
     {id:"file-handoff", text:"将文件交给当前工作流…", keys:["Alt+Shift+h"], scope:"文件列表或文件编辑器", inInput:true, available:()=>!!FileHandoff.focused(), run:()=>FileHandoff.open(FileHandoff.focused())},
     {id:"search", text:"搜索当前页面", keys:["/"], scope:"有搜索框的页面", available:()=>!!searchField(), run:()=>{ searchField()?.focus(); searchField()?.select(); }},
@@ -41,9 +41,6 @@ const AppInteractions = (() => {
     {id:"italic", text:"斜体", keys:["Mod+i"], scope:"Markdown 编辑器", inInput:true, available:()=>document.activeElement?.id === "mdSource" && !document.activeElement.readOnly, run:()=>mdCmd("italic")},
     {id:"send", text:"发送当前消息", keys:["Mod+Enter"], scope:"对话输入框", inInput:true, available:()=>!!sendButton(), run:()=>sendButton()?.click()},
   ];
-  function workflowCommands(){
-    return WF_ORDER.slice(0,10).map((step,i)=>({id:`step-${step}`, text:`${i+1}. ${STAGE[step] || step}`, keys:[`Alt+${(i+1)%10}`], scope:"科研平台（输入框外）", available:()=>route()==="workflow", run:()=>uiGoWorkflowStep(step)}));
-  }
   function matches(event, key){
     if(key === "?" || key === "/") return event.key === key && !event.ctrlKey && !event.metaKey && !event.altKey;
     const parts=key.toLowerCase().split("+"), main=parts.pop();
@@ -88,7 +85,7 @@ const AppInteractions = (() => {
   }
 
   let contextMenu=null, menuOwner=null, menuOrigin=null, menuAnchor=null;
-  const rowSelector='[data-tree-path], [data-pn-file]:not(button), .nb-note-row, [data-card-folder], .proj-row, .zot-row-card, [data-tab-id], .fl-tree-row[data-rel], .cv-f[data-p], .kb-card, .kb-col, .kb-root, [data-progress-stage], [data-global-todo-id]';
+  const rowSelector='[data-schedule-id], [data-ec-task], [data-history-id], [data-plan-id], [data-ec-column], [data-tree-path], [data-pn-file]:not(button), .nb-note-row, [data-card-folder], .proj-row, .zot-row-card, [data-tab-id], .fl-tree-row[data-rel], .cv-f[data-p], [data-global-todo-id]';
   function fileReference(row){
     if(!row) return null;
     if(row.matches('.proj-row')) return {project_id:row.querySelector('[data-go]')?.dataset.go,relative:''};
@@ -126,8 +123,10 @@ const AppInteractions = (() => {
       run:()=>{ if(button.isConnected && !button.disabled) button.click(); }};
   }
   function contextActions(row){
+    if(row.matches('[data-schedule-id]'))return [...row.querySelectorAll('[data-sch-run],[data-sch-toggle],[data-sch-edit],[data-sch-del]')].map(button=>({...buttonAction(button),danger:button.hasAttribute('data-sch-del')}));
+    if(row.matches('[data-history-id]'))return ConversationHistory.actions(row);
     if(row.matches('[data-global-todo-id]')) return GlobalTodos.contextActions(row);
-    if(row.matches('.kb-card, .kb-col, .kb-root, [data-progress-stage]')) return ProgressBoard.contextActions(row);
+    if(row.matches('[data-ec-task], [data-plan-id], [data-ec-column]')) return TaskCenter.contextActions(row);
     if(row.matches('.cv-f')) return [
       {text:'预览文件',run:()=>row.click()},
       ...fileActions(row),
@@ -158,12 +157,14 @@ const AppInteractions = (() => {
     ];
 
     if(row.matches('[data-tree-path], .fl-tree-row, .nb-note-row')){
+      const isFileTree=row.matches('.fl-tree-row')&&!!row.closest('#flList');
       const isDir = row.dataset.treeType === "dir" || row.dataset.dir === "1" || row.hasAttribute('data-card-folder');
       const treePath = row.dataset.treePath || row.dataset.rel || row.dataset.pnFile || row.dataset.p || "";
       const parentDir = isDir ? treePath : (treePath.split('/').slice(0, -1).join('/') || '笔记');
       const targetName = (treePath.split('/').pop() || treePath).split(/[\\/]/).pop() || "";
       const isProjectNote = row.matches('[data-tree-path], .nb-note-row') || treePath.startsWith("笔记");
-      const projectId = mdDashProject || curTask;
+      const projectId = isFileTree ? row.dataset.projectId || curTask : mdDashProject || curTask;
+      const readOnly = isFileTree ? false : mdDashReadOnly;
 
       return [
         ...(!isDir ? [{text:"打开文件",run:()=>row.click()}, {text:"交给当前工作流…",shortcut:"Alt+Shift+H",run:()=>FileHandoff.open(fileReference(row))},
@@ -171,16 +172,18 @@ const AppInteractions = (() => {
         {
           icon: "📄",
           text: "新文件",
-          disabled: mdDashReadOnly,
+          disabled: readOnly,
           run: () => {
+            if(isFileTree)return ProjectWorkspace.createEntry(projectId,isDir?treePath:treePath.split('/').slice(0,-1).join('/'),'file');
             if(window.pnNewNote) window.pnNewNote(parentDir);
           }
         },
         {
           icon: "📁",
           text: "新建文件夹",
-          disabled: mdDashReadOnly,
+          disabled: readOnly,
           run: () => {
+            if(isFileTree)return ProjectWorkspace.createEntry(projectId,isDir?treePath:treePath.split('/').slice(0,-1).join('/'),'folder');
             if(window.promptNewFolder) window.promptNewFolder(parentDir);
             else if(window.Notebook?.promptNewFolder) window.Notebook.promptNewFolder(parentDir);
           }
@@ -237,7 +240,7 @@ const AppInteractions = (() => {
         },
         {
           icon: "💻",
-          text: "在终端中打开",
+          text: "复制终端切换目录命令",
           run: async () => {
             const loc = await api('/api/file/location', { ...fileReference(row), open: false });
             const absPath = loc?.path || treePath;
@@ -248,7 +251,7 @@ const AppInteractions = (() => {
         },
         {
           icon: "🔍",
-          text: "在文件夹中查找",
+          text: isFileTree ? "搜索同名项目资料" : "在文件夹中查找",
           shortcut: "Ctrl+Shift+F",
           run: () => {
             const s = document.getElementById('nbTreeSearch') || searchField();
@@ -256,6 +259,7 @@ const AppInteractions = (() => {
               s.value = targetName;
               s.focus();
               s.dispatchEvent(new Event('input', { bubbles: true }));
+              if(isFileTree)s.closest('form')?.requestSubmit();
             }
           }
         },
@@ -269,21 +273,22 @@ const AppInteractions = (() => {
           icon: "✏",
           text: "重命名",
           shortcut: "Enter",
-          disabled: mdDashReadOnly,
+          disabled: readOnly,
           run: async () => {
-            const curName = isDir ? targetName : (row.dataset.title || targetName.replace(/\.md$/i, ''));
+            if(isFileTree&&!await ProjectWorkspace.flush())return;
+            const curName = isDir || isFileTree&&!isProjectNote ? targetName : (row.dataset.title || targetName.replace(/\.md$/i, ''));
             const newName = window.prompt("输入新名称：", curName);
             if(!newName || newName.trim() === curName) return;
             const cleanNewName = newName.trim();
             if(isProjectNote){
               try {
-                await api('/api/project/note/rename', {
+                const renamed=await api('/api/project/note/rename', {
                   project_id: projectId,
                   path: treePath,
                   new_name: cleanNewName
                 });
                 uiNotify("重命名成功");
-                await mdDashLoad();
+                if(isFileTree)await ProjectWorkspace.refreshFiles(projectId,treePath,renamed.new_path);else await mdDashLoad();
               } catch(e) {
                 uiNotify("重命名失败：" + e.message);
               }
@@ -295,7 +300,7 @@ const AppInteractions = (() => {
                   new_name: cleanNewName
                 });
                 uiNotify("重命名成功");
-                if(window.flInitTree) window.flInitTree();
+                if(isFileTree)await ProjectWorkspace.refreshFiles(projectId,treePath,treePath.split('/').slice(0,-1).concat(cleanNewName).join('/'));else if(window.flInitTree) window.flInitTree();
               } catch(e) {
                 uiNotify("重命名失败：" + e.message);
               }
@@ -307,8 +312,9 @@ const AppInteractions = (() => {
           text: "删除",
           shortcut: "Delete",
           danger: true,
-          disabled: mdDashReadOnly,
+          disabled: readOnly,
           run: async () => {
+            if(isFileTree&&!await ProjectWorkspace.flush())return;
             const label = isDir ? `文件夹「${targetName}」及其全部内容` : `文件「${targetName}」`;
             if(!await uiConfirm(`确定要永久删除 ${label} 吗？`, { okText: "删除", danger: true })) return;
             if(isProjectNote){
@@ -318,7 +324,7 @@ const AppInteractions = (() => {
                   path: treePath
                 });
                 uiNotify("已删除");
-                await mdDashLoad();
+                if(isFileTree)await ProjectWorkspace.refreshFiles(projectId,treePath);else await mdDashLoad();
               } catch(e) {
                 uiNotify("删除失败：" + e.message);
               }
@@ -329,7 +335,7 @@ const AppInteractions = (() => {
                   path: loc?.path || treePath
                 });
                 uiNotify("已删除");
-                if(window.flInitTree) window.flInitTree();
+                if(isFileTree)await ProjectWorkspace.refreshFiles(projectId,treePath);else if(window.flInitTree) window.flInitTree();
               } catch(e) {
                 uiNotify("删除失败：" + e.message);
               }
@@ -360,6 +366,7 @@ const AppInteractions = (() => {
       else document.querySelector('#tabsbar [aria-selected="true"]')?.focus();
     }
     menuOwner=null; menuOrigin=null; menuAnchor=null;
+    window.dispatchEvent(new Event('rw:context-menu-closed'));
   }
   function openPopupItems(items, x, y, origin, owner){
     closeMenu(false);
@@ -381,10 +388,10 @@ const AppInteractions = (() => {
       actions.push(item);
       return `<button type="button" role="menuitem" tabindex="-1" data-menu-index="${idx}" ${item.disabled ? 'disabled aria-disabled="true"' : ''} class="${item.danger ? 'danger' : ''}">
         <span class="context-item-left">
-          ${item.icon ? `<span class="context-item-ico">${item.icon}</span>` : ''}
+          ${item.icon ? `<span class="context-item-ico" aria-hidden="true">${item.icon}</span>` : ''}
           <span class="context-item-text">${esc(item.text)}</span>
         </span>
-        ${item.shortcut ? `<kbd class="context-shortcut">${esc(item.shortcut)}</kbd>` : ''}
+        ${item.shortcut ? `<kbd class="context-shortcut" aria-hidden="true">${esc(item.shortcut)}</kbd>` : ''}
       </button>`;
     }).join("");
 
@@ -502,7 +509,7 @@ const AppInteractions = (() => {
       if(event.key==='Delete'){
         consume(event); const delAct=contextActions(row).find(a=>a.danger && !a.disabled); if(delAct) run(delAct); return;
       }
-      if(event.altKey && event.shiftKey && (event.key==='C' || event.key==='c')){
+      if(event.altKey && event.shiftKey && !event.ctrlKey && !event.metaKey && (event.key==='C' || event.key==='c')){
         consume(event); const cPathAct=contextActions(row).find(a=>a.text==='复制路径'); if(cPathAct) run(cPathAct); return;
       }
       if((event.ctrlKey || event.metaKey) && event.altKey && event.shiftKey && (event.key==='C' || event.key==='c')){
@@ -510,7 +517,7 @@ const AppInteractions = (() => {
       }
     }
     if(!enabled() || event.repeat) return;
-    for(const command of [...commands,...workflowCommands()]){
+    for(const command of commands){
       if(editable(target) && !command.inInput) continue;
       if(command.available && !command.available()) continue;
       if(command.keys.some(key=>(key.length!==1 || singleKeys()) && matches(event,key))){ consume(event); run(command); return; }
@@ -548,8 +555,8 @@ const AppInteractions = (() => {
     if(save){ save.title=enabled()?`保存笔记（${labelKey('Mod+S')}）`:"保存笔记"; save.setAttribute('aria-keyshortcuts',isMac?'Meta+s':'Control+s'); }
     const capture=document.getElementById('todoCaptureInput');
     if(capture) capture.title=enabled()?`随手记录 To do（${labelKey('Mod+Shift+Enter')}）`:'随手记录 To do';
-    const progress=document.getElementById('kbBtnNewTask');
-    if(progress) progress.title=enabled()?'创建进度任务（Alt+Shift+N）':'创建进度任务';
+    const progress=document.querySelector('[data-ec-new]');
+    if(progress) progress.title=enabled()?'创建研究计划（Alt+Shift+N）':'创建研究计划';
   }
   function enhance(){
     if(contextMenu && !menuOwner?.isConnected) closeMenu();
@@ -558,12 +565,12 @@ const AppInteractions = (() => {
       row.dataset.contextReady='true';
       row.tabIndex=0;
       row.setAttribute('role','group');
-      row.setAttribute('aria-label',row.dataset.treePath || row.dataset.pnFile || row.dataset.cardFolder || row.dataset.rel || row.querySelector('.nm, .kb-card-title, .kb-col-title, .kb-stage-title, strong, b')?.textContent || (row.matches('.kb-root')?'进度与计划':'文献条目'));
+      row.setAttribute('aria-label',row.dataset.treePath || row.dataset.pnFile || row.dataset.cardFolder || row.dataset.rel || row.querySelector('.nm, strong, b, h3')?.textContent || '操作条目');
       row.setAttribute('aria-description','按 Enter 执行默认操作，按 Shift+F10 查看更多操作。');
       const more=document.createElement('button'); more.type='button'; more.className='context-trigger'; more.dataset.contextTrigger='true';
       more.setAttribute('aria-label','更多操作'); more.setAttribute('aria-haspopup','menu'); more.setAttribute('aria-expanded','false'); more.title='更多操作（Shift+F10）'; more.textContent='⋯';
       more.onclick=event=>{ event.stopPropagation(); const r=more.getBoundingClientRect(); openMenu(row,r.left,r.bottom+4,more); };
-      (row.matches('.kb-col')?row.querySelector('.kb-col-head'):row).appendChild(more);
+      row.appendChild(more);
     });
     decorateCommands();
   }

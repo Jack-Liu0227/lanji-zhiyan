@@ -12,6 +12,46 @@ import run_service
 
 
 def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[str]], db: Any) -> Any | None:
+    import execution_conversations
+    response=execution_conversations.route(method,path,body,query,db)
+    if response is not None:return response
+    import usage_stats
+    response=usage_stats.route(method,path,body,query,db)
+    if response is not None:return response
+    import message_channels
+    response=message_channels.route(method,path,body,query,db)
+    if response is not None:return response
+    import literature_import
+    response = literature_import.route(method, path, body, query, db)
+    if response is not None: return response
+    import execution_board
+    response = execution_board.route(method, path, body, query, db)
+    if response is not None: return response
+    import paper_toolbox
+    response = paper_toolbox.route(method, path, body, query, db)
+    if response is not None: return response
+    import conversation_history
+    response = conversation_history.route(method, path, body, query, db)
+    if response is not None: return response
+    import research_plans
+    response = research_plans.route(method, path, body, query, db)
+    if response is not None: return response
+    if path.startswith('/api/project/resources'):
+        import project_resources
+        project_id = str(body.get('project_id') or (query.get('project_id') or [''])[0])
+        if method == 'GET' and path == '/api/project/resources':
+            return project_resources.catalog(db, project_id, (query.get('kind') or [''])[0], (query.get('q') or [''])[0])
+        if method == 'POST' and path == '/api/project/resources/index':
+            return project_resources.index(db, project_id)
+        if method == 'POST' and path == '/api/project/resources/write':
+            return project_resources.write(db, project_id, body)
+    if method == 'POST' and path == '/api/project/files/create':
+        import project_files
+        return project_files.create(db,body)
+    import project_task_routes
+    task_response = project_task_routes.route(method, path, body, query, db)
+    if task_response is not None:
+        return task_response
     import review_inbox
     review_response = review_inbox.route(method, path, body, query, db)
     if review_response is not None:
@@ -146,8 +186,13 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[st
         return {"created": project_todos.import_workflow_stages_as_todos(db, str(body.get("task_id", "")))}
 
     if path == "/api/todos/dispatch" and method == "POST":
+        import project_tasks
+        todo = db.db.execute("SELECT task_id FROM project_todos WHERE id=?", (str(body.get("id") or ""),)).fetchone()
+        if not todo:
+            raise ValueError("待办不存在")
         return {"task": project_todos.dispatch(db, str(body.get("id") or ""),
-                                               reviewer_id=str(body.get("reviewer_id") or ""))}
+                                               reviewer_id=str(body.get("reviewer_id") or ""),
+                                               authority=project_tasks.CommandContext.ui(todo["task_id"]))}
 
     # ---------------- 4. 项目空间搜索与笔记预览 ----------------
     if path == "/api/space/search" and method == "GET":

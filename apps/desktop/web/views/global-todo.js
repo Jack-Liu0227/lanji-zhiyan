@@ -1,7 +1,7 @@
 /* One persistent capture field, backed by the same tasks as the progress board. */
 const GlobalTodos = (() => {
   const host = document.getElementById('globalTodo');
-  let todos = [], busy = false, request = 0, loaded = false, projectSignature = '';
+  let todos = [], busy = false, request = 0, loaded = false, projectSignature = '', pendingPaint=false;
   const labels = {TODO:'待办', IN_PROGRESS:'进行中', REVIEW:'待审核', DONE:'已完成'};
   host.className = 'global-todo';
   host.innerHTML = `<div class="todo-capture">
@@ -47,6 +47,7 @@ const GlobalTodos = (() => {
     }
   }
   function paint(){
+    if(host.querySelector('.context-active')){pendingPaint=true;return;}pendingPaint=false;
     $('todoCount').textContent = loaded ? todos.filter(t=>t.status!=='DONE').length : '…';
     if(panel.hidden) return;
     const query = $('todoListSearch').value.trim().toLowerCase(), filter = $('todoListScope').value;
@@ -58,7 +59,7 @@ const GlobalTodos = (() => {
     const focused = previousRow ? {id:previousRow.dataset.globalTodoId, action:active.dataset.todoAction} : null;
     $('todoList').innerHTML = rows.map(t=>`<div class="global-todo-row ${t.status==='DONE'?'done':''}" data-global-todo-id="${esc(t.id)}">
       <input type="checkbox" data-todo-action="toggle" aria-label="${t.status==='DONE'?'重新打开':'完成'}：${esc(t.title)}" ${t.status==='DONE'?'checked':''} ${t.stage?'disabled title="状态由工作流交付更新"':''}>
-      <div class="global-todo-copy"><strong>${esc(t.title)}</strong><span>${esc(S.tasks.find(p=>p.id===t.task_id)?.title || (t.task_id?'项目待办':'个人待办'))} · ${labels[t.status] || t.status}${t.due_date?' · '+esc(t.due_date):''}</span></div>
+      <div class="global-todo-copy"><strong>${esc(t.title)}</strong><span>${esc(S.tasks.find(p=>p.id===t.task_id)?.title || (t.task_id?'项目待办':'个人待办'))} · ${esc(t.priority||'P1')} · ${labels[t.status] || t.status}${t.due_date?' · '+esc(t.due_date):''}</span></div>
       <button type="button" class="context-trigger" data-todo-action="edit" title="编辑待办" aria-label="编辑待办">✎</button>
       ${t.task_id?'<button type="button" class="context-trigger" data-todo-action="project" title="查看项目进度" aria-label="查看项目进度">↗</button>':''}
       <button type="button" class="context-trigger" data-todo-action="delete" title="删除待办" aria-label="删除待办">×</button>
@@ -109,6 +110,14 @@ const GlobalTodos = (() => {
         if(title===null) return;
         if(!title.trim()) throw new Error('待办标题不能为空');
         await api('/api/todos/update',{id,title:title.trim()});
+      } else if(action==='priority'||action==='due_date'){
+        const value=await uiPrompt(action==='priority'?'优先级（P0 / P1 / P2）':'截止日期（YYYY-MM-DD，留空清除）',todo[action]||'');
+        if(value===null)return;
+        if(action==='priority'&&!['P0','P1','P2'].includes(value.trim().toUpperCase()))throw new Error('请输入 P0、P1 或 P2');
+        if(action==='due_date'&&value&&!/^\d{4}-\d{2}-\d{2}$/.test(value))throw new Error('日期格式为 YYYY-MM-DD');
+        await api('/api/todos/update',{id,[action]:action==='priority'?value.trim().toUpperCase():value});
+      } else if(action==='duplicate'){
+        await api('/api/todos/add',{task_id:todo.task_id,title:todo.title+'（副本）',description:todo.description,priority:todo.priority,due_date:todo.due_date});
       } else if(action==='delete'){
         if(!await uiConfirm(`删除待办「${todo.title}」？`,{okText:'删除'})) return;
         await api('/api/todos/delete',{id});
@@ -120,8 +129,14 @@ const GlobalTodos = (() => {
     const todo=todos.find(t=>t.id===row.dataset.globalTodoId); if(!todo) return [];
     return [{text:'编辑待办…',run:()=>act(todo.id,'edit')},
       {text:todo.status==='DONE'?'重新打开待办':'标记为已完成',disabled:!!todo.stage,run:()=>act(todo.id,'toggle')},
+      {text:'优先级…',run:()=>act(todo.id,'priority')},
+      {text:'截止日期…',run:()=>act(todo.id,'due_date')},
+      {separator:true},
       ...(todo.task_id?[{text:'查看项目进度',run:()=>act(todo.id,'project')}]:[]),
       {text:'新增待办',run:()=>focus({projectId:todo.task_id})},
+      {text:'复制待办内容',run:()=>TaskActions.copy(todo.title+(todo.description?'\n'+todo.description:''))},
+      {text:'复制为新待办',run:()=>act(todo.id,'duplicate')},
+      {separator:true},
       {text:'删除待办…',danger:true,run:()=>act(todo.id,'delete')}];
   }
   $('todoCaptureForm').onsubmit=submit;
@@ -140,6 +155,7 @@ const GlobalTodos = (() => {
     if(!panel.hidden && !host.contains(event.target) && !event.target.closest('.context-menu, dialog, .modal')) close(false);
   });
   window.addEventListener('todos-changed',refresh);
+  window.addEventListener('rw:context-menu-closed',()=>setTimeout(()=>{if(pendingPaint)paint();},0));
   window.addEventListener('focus',refresh);
   syncProjects(); refresh();
   return {focus,open,close,refresh,syncProjects,contextActions,isOpen:()=>!panel.hidden};

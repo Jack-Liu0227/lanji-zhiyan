@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import unittest
+from tests.test_web_runtime import workspace_section
 from tests import test_connected_research_runtime as connected
 
 
@@ -27,8 +28,8 @@ class CollaborationCompletionRuntimeTest(unittest.TestCase):
         with connected.ModelFixture() as model:
             self.use_model(model.url)
             layout = self.page.evaluate("""async () => (await api('/api/workflow/layouts/save',{name:'Scheduled sequence',
-                nodes:[{id:'o',step:'outline',label:'REVIEW_INBOX_NODE',prompt:'BROWSER_OUTLINE'},
-                       {id:'w',step:'write',label:'Final write',prompt:'BROWSER_WRITE',review_required:false}],
+                nodes:[{id:'o',step:'outline',label:'REVIEW_INBOX_NODE',assistant_id:'builtin-steward',prompt:'BROWSER_OUTLINE'},
+                       {id:'w',step:'write',label:'Final write',assistant_id:'builtin-steward',prompt:'BROWSER_WRITE',review_required:false}],
                 edges:[{source:'o',target:'w'}],order:['o','w']})).layout.id""")
             self.page.evaluate("() => openTab('schedules')")
             self.page.locator('#schNew').click()
@@ -51,13 +52,13 @@ class CollaborationCompletionRuntimeTest(unittest.TestCase):
             self.page.locator('[data-review-snooze]').click()
             self.poll_json('/api/workflow/reviews', lambda d: d['items'] and not d['items'][0]['notify'])
             self.page.locator('[data-review-open]').click()
-            self.page.locator('[data-sequence-feedback]').fill('INBOX_FEEDBACK_PRESERVED')
-            self.page.locator('[data-sequence-approve]').click()
+            self.page.locator('[data-pt-feedback]').fill('INBOX_FEEDBACK_PRESERVED')
+            self.page.locator('[data-pt-action="approve"]').click()
             result = self.poll_json('/api/schedules', lambda d:any(r.get('workflow_run_id')==item['run_id'] and r.get('note_id') and r['status']=='completed' for r in d['runs']))
             completed=next(r for r in result['runs'] if r.get('workflow_run_id')==item['run_id'])
             self.assertEqual(completed['status'],'completed')
-            self.page.locator('[data-sequence-close]').click()
-            self.page.evaluate('() => renderSchedules(document.getElementById("main"))')
+            self.page.locator('dialog.pt-dialog [data-close]').click()
+            self.page.evaluate("() => openTab('schedules')")
             self.page.locator('[data-run-note]').first.click()
             self.page.wait_for_function("document.querySelector('#mdSource')?.value.includes('INBOX_FEEDBACK_PRESERVED')")
             self.assertIn('BROWSER_ARTIFACT_write', self.page.locator('#mdSource').input_value())
@@ -81,13 +82,14 @@ class CollaborationCompletionRuntimeTest(unittest.TestCase):
             request.fulfill(json=value)
         self.page.route('**/api/zotero/web/**',route)
         self.load_page()
-        self.project('Local Zotero controls')
-        self.page.evaluate("() => {setSec='zotero';openTab('settings');}")
+        pid=self.project('Local Zotero controls')
+        self.page.evaluate("pid => ProjectLiterature.open(pid,true)",pid)
         self.page.locator('#zs-unlink-preview').click()
         self.page.locator('[data-zs-unlink-key]').wait_for()
         self.assertIn('Project B',self.page.locator('#zs-unlink').inner_text())
         self.assertIn('笔记 1',self.page.locator('#zs-unlink').inner_text())
-        self.assertFalse(self.page.locator('#zs-key').is_visible())
+        self.assertEqual(self.page.locator('#zs-key').count(),0)
+        self.assertEqual(self.page.evaluate('route()'),'workspace')
         self.screenshot('collaboration-local-zotero.png')
         self.page.evaluate('() => {window.uiConfirm=async()=>true;}')
         self.page.locator('#zs-unlink-apply').click()
@@ -104,10 +106,11 @@ class CollaborationCompletionRuntimeTest(unittest.TestCase):
         self.page.evaluate('pid => IntegrationSettings.openZotero(pid)',first)
         self.page.wait_for_function('pid => document.querySelector("#zs-project")?.value===pid',arg=first)
         self.page.evaluate("pid => {curTask=pid;openTab('workflow');}",second)
-        self.page.locator('[data-step="download"]').click()
-        self.page.get_by_role('button',name='Zotero 项目同步',exact=True).click()
-        self.page.wait_for_function('pid => document.querySelector("#zs-project")?.value===pid',arg=second)
-        self.assertIn('rw:project:'+second,self.page.locator('#integration-settings').inner_text())
+        workspace_section(self.page, 'papers')
+        self.page.locator('#plManagement > summary').click()
+        self.page.wait_for_function('pid => document.querySelector("#pwProject")?.value===pid',arg=second)
+        self.page.locator('#zs-load').wait_for()
+        self.assertIn('rw:project:'+second,self.page.locator('#projectLiterature').inner_text())
         # These payloads cannot create a Zotero item even if a legacy route regresses.
         for path,payload in (('/api/zotero/import_project_papers',{'task_id':second}),('/api/zotero/collection/create',{})):
             response=self.page.request.post(self.url.rstrip('/')+path,data=payload)
@@ -146,7 +149,7 @@ class CollaborationCompletionRuntimeTest(unittest.TestCase):
         self.page.route('**/api/zotero/web/**', route)
         self.load_page()
         pid = self.project('Subset across Collections')
-        self.page.evaluate('pid => IntegrationSettings.openZotero(pid)', pid)
+        self.page.evaluate('pid => ProjectLiterature.open(pid,true)', pid)
         self.page.locator('#zs-load').click()
         for key in ('COLLA001', 'COLLB001'):
             self.page.locator('#zs-collection').select_option(key)
@@ -163,10 +166,11 @@ class CollaborationCompletionRuntimeTest(unittest.TestCase):
         self.page.wait_for_function('!document.querySelector("#zs-apply").disabled')
         self.page.evaluate('() => {window.uiConfirm=async()=>true;}')
         self.page.locator('#zs-apply').click()
-        self.page.wait_for_function('document.querySelector("#integration-result").textContent.includes("ok")')
+        self.page.wait_for_function('document.querySelector("#integration-result").textContent.includes("同步完成")')
         self.assertEqual(chosen, ['PAPER001', 'PAPER003'])
         self.assertEqual(writes[0], ('sources', {'task_id': pid, 'sources': [{'collection': 'COLLA001', 'mode': 'selected'}, {'collection': 'COLLB001', 'mode': 'selected'}], 'export_collection': ''}))
         self.assertEqual(writes[-1], ('sync', {'task_id': pid, 'mode': 'merge', 'dry_run': False, 'plan_token': 'browser-selection', 'confirm': True}))
+        self.assertEqual(self.page.evaluate('route()'),'workspace')
         self.assertEqual(self.errors, [])
 
 

@@ -304,7 +304,7 @@ def idea_system(db: "WorkflowDB", task_id: str) -> str:
         skill_text("research", "research-topic-selection", "SKILL.md", cap=2000, db=db, task_id=task_id),
         skill_text("idea-evaluator", "SKILL.md", cap=4500, db=db, task_id=task_id),
     ) if x) or IDEA_FALLBACK
-    return f"""你是「览籍智研」里这一步的创新点审查助手，用中文工作，站在博导（既严格又给建设性建议）的位置。
+    return f"""你是「览籍智研」里这一步的创新点审查专家，用中文工作，站在博导（既严格又给建设性建议）的位置。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做「创新点审查」这一件事；不下载文献、不精读、不撰写、不导出格式，用户要这些就说明去别的步骤。
@@ -475,6 +475,7 @@ def _schedule_manage(db: "WorkflowDB", args: dict[str, Any], project_id: str = "
     def public(row: dict[str, Any]) -> dict[str, Any]:
         return {"id": row["id"], "name": row["name"], "cron": row["cron"],
                 "enabled": bool(row["enabled"]), "project": titles.get(row.get("project_id") or "", ""),
+                "project_id": row.get('project_id', ''), "workflow_id": row.get('workflow_id', ''), "assistant_id": row.get('assistant_id', ''),
                 "next_run_at": row.get("next_run_at") or "", "prompt": (row.get("prompt") or "")[:200]}
 
     if action == "list":
@@ -510,6 +511,7 @@ def _schedule_manage(db: "WorkflowDB", args: dict[str, Any], project_id: str = "
         enabled = args.get("enabled", True) is not False
         saved = db.schedule_save({"name": name, "prompt": prompt, "project_id": pid,
                                   "assistant_id": assistant_id,
+                                  "workflow_id": str(args.get('workflow_id') or ''),
                                   "todo_id": str(args.get("todo_id") or ""),
                                   "frequency": "cron", "cron": cron, "output_dir": folder,
                                   "enabled": enabled,
@@ -541,11 +543,14 @@ _SUB_TOOLS = [t for t in TOOL_SPECS if t.get("function", {}).get("name") in _SUB
 
 
 TOOL_RISK = {
+    "task_create": "workspace_write", "task_start": "workspace_write", "task_status": "read_only", "task_cancel": "workspace_write",
+    "workflow_prepare": "workspace_write", "workflow_start": "workspace_write", "workflow_status": "read_only", "workflow_cancel": "workspace_write", "workflow_templates": "read_only",
     # Pure reads stay available to read-only assistants.
     "library_overview": "read_only", "knowledge_query": "read_only", "workflow_context_read": "read_only",
     "outline_read": "read_only", "map_read": "read_only", "map_sources": "read_only",
     "doc_read": "read_only", "cite_read": "read_only", "read_attachment": "read_only",
-    "file_list": "read_only", "file_hand": "workspace_write",
+    "file_list": "read_only", "file_hand": "workspace_write", "project_resources": "read_only", "paper_tool": "network_read",
+    "project_resource_write": "workspace_write", "project_create_from_idea": "workspace_write",
     "paper_search": "network_read", "search": "network_read",
     "mail_accounts": "network_read", "mail_list": "network_read", "mail_read": "network_read",
     "zotero_collections": "network_read",
@@ -580,7 +585,7 @@ def tool_risk(name: str) -> str:
 
 def enforce_tool_policy(name: str, args: dict[str, Any], permission: str) -> None:
     """Apply policy at the execution boundary, not only by hiding tool schemas."""
-    risk = tool_risk(name)
+    risk = 'workspace_write' if (name == 'project_resources' and args.get('action') == 'index') or (name=='paper_tool' and args.get('tool') in ('convert','caption','image_convert')) else tool_risk(name)
     action_read = name in {"assistant_manage", "project_task_manage", "schedule_manage", "team_manage", "workflow_manage"} and args.get("action", "list") == "list"
     action_read = action_read or (name == "paper_translate" and args.get("action") == "status")
     connector_read = name in {"mail_accounts", "mail_list", "mail_read", "zotero_collections"}
@@ -687,10 +692,37 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
                emit: Any = None, profile: dict[str, Any] | None = None) -> Any:
     """scope = 当前步骤（''/'idea'/'outline'/'write'/'review'）—— doc_read/doc_write 据此决定动哪个文件。"""
     enforce_project_scope(db, task_id, name, args)
+    import task_tools
+    if name == 'paper_tool':
+        import paper_toolbox
+        target = _team_project(db,task_id,str(args.get('project') or '')) if args.get('project') else task_id
+        return paper_toolbox.transform(db,target,args,emit)
+    if name == 'project_create_from_idea':
+        import research_setup
+        project_id = _team_project(db, task_id, str(args.get('project') or '')) if args.get('project') or db.db.execute('SELECT 1 FROM research_tasks WHERE id=?', (task_id,)).fetchone() else ''
+        return research_setup.configure(db, args, project_id=project_id, actor_id=(profile or {}).get('assistant_id') or 'builtin-steward', default_model_id=str((profile or {}).get('id') or ''))
+    if name in ('project_resources', 'project_resource_write'):
+        import project_resources
+        project_id = _team_project(db, task_id, str(args.get('project') or ''))
+        if name == 'project_resource_write': return project_resources.write(db, project_id, args)
+        if args.get('action') == 'index': return project_resources.index(db, project_id)
+        if args.get('action', 'list') != 'list': raise ValueError('action 只支持 list/index')
+        if args.get('asset_id'): return project_resources.read(db, project_id, str(args['asset_id']))
+        return project_resources.catalog(db, project_id, str(args.get('kind') or ''), str(args.get('query') or ''))
+    if name in task_tools.NAMES:
+        project_id = _team_project(db, task_id, str(args.get("project") or ""))
+        return task_tools.call(db, project_id, name, args)
+    if name in ("graph_workflow_run", "graph_workflow_status", "graph_workflow_review"):
+        import langgraph_workflow
+        project_id = _team_project(db, task_id, str(args.get("project_id") or args.get("project") or ""))
+        return langgraph_workflow.invoke_agent_tool(name, db, project_id, args)
     scoped_project = task_id if db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone() else ""
     if name == "project_list":
         rows = db.db.execute("SELECT id,title,base_dir FROM research_tasks ORDER BY updated_at DESC")
-        return {"current_project_id": scoped_project, "projects": [dict(row) for row in rows]}
+        counts = {}
+        for count in db.db.execute('SELECT project_id,status,COUNT(*) AS count FROM project_tasks GROUP BY project_id,status'):
+            counts.setdefault(count['project_id'], {})[count['status']] = count['count']
+        return {"current_project_id": scoped_project, "projects": [{**dict(row), 'execution_counts': counts.get(row['id'], {})} for row in rows]}
     if name == "workflow_manage":
         import workflow_layout
         workflow_layout.ensure_schema(db)
@@ -722,28 +754,28 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
                                        title=args.get("title"), metadata=args.get("metadata"), expected_hash=args.get("expected_hash"))
         if name == "project_task_manage":
             import project_todos
+            import research_plans
             action = str(args.get("action") or "list")
             if action == "list":
-                return {"tasks": project_todos.list_todos(db, project_id)}
+                return {"tasks": research_plans.route('GET','/api/plans',{}, {'project_id':[project_id]},db)['plans']}
             if action == "create":
-                return project_todos.add_todo(db, project_id, str(args.get("title") or ""),
-                                              str(args.get("description") or ""), str(args.get("priority") or "P2"),
-                                              str(args.get("assistant_id") or ""), str(args.get("due_date") or ""),
-                                              str(args.get("stage") or ""))
+                fields={k:args[k] for k in ('title','description','priority','due_date','stage','acceptance','dependencies') if k in args}
+                fields['assigned_assistant']=str(args.get('assistant_id') or '')
+                return research_plans.route('POST','/api/plans/save',{'project_id':project_id,**fields},{},db)['plan']
             if action in ("update", "dispatch"):
                 todo_id = str(args.get("id") or "")
                 if not any(row["id"] == todo_id for row in project_todos.list_todos(db, project_id)):
                     raise ValueError("这个待办不属于当前项目")
                 if action == "dispatch":
                     return project_todos.dispatch(db, todo_id, reviewer_id=str(args.get("reviewer_id") or ""))
-                fields = {k: args[k] for k in ("title", "description", "status", "priority", "due_date") if k in args}
+                fields = {k: args[k] for k in ("title", "description", "status", "priority", "due_date", "acceptance", "dependencies") if k in args}
                 if "status" in fields:
                     fields["status"] = str(fields["status"]).upper()
                     if fields["status"] not in project_todos.STATUSES:
                         raise ValueError("任务状态必须是 TODO / IN_PROGRESS / REVIEW / DONE")
                 if "assistant_id" in args:
                     fields["assigned_assistant"] = args["assistant_id"]
-                return project_todos.update_todo(db, todo_id, **fields)
+                return research_plans.route('POST','/api/plans/save',{'project_id':project_id,'id':todo_id,**fields},{},db)['plan']
             raise ValueError("action 只支持 list/create/update/dispatch")
         if name == "team_create":
             ids = args.get("assistant_ids", [])
@@ -761,19 +793,17 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
                 members.append(db.team_member_add(team_row["id"], assistant["name"],
                                                   role="leader" if index == 0 else "member",
                                                   assistant_id=assistant["id"]))
-            if not members:
-                import team
-                members.append(team.ensure_leader(team_row["id"], db))
-            return {"team": team_row, "members": members}
+            return {"team": team_row, "members": members, "configuration_required": not bool(members)}
         if name == "team_manage":
             import team
             import agent_settings
             action = str(args.get("action") or "list")
             if action == "list":
-                rows = [row for row in db.teams() if row.get("project_id") == project_id and row["status"] != "archived"]
+                import shared_executors
+                rows = shared_executors.templates(db)
                 for row in rows:
-                    team.ensure_leader(row["id"], db)
-                    row["members"] = db.team_members(row["id"])
+                    row["members"] = shared_executors.profile_members(db,row['id'],project_id)
+                    row['editable'] = row.get('project_id') == project_id
                 return {"project_id": project_id, "teams": rows}
             tid = str(args.get("team_id") or "")
             row = db.team(tid)
@@ -801,7 +831,7 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
             import workflow_layout
             workflow_layout.ensure_schema(db)
             steps = [str(s) for s in (args.get("steps") or [])]
-            definition = workflow_layout._linear(steps)
+            definition = {"nodes": args['nodes'], "edges": args.get('edges', [])} if 'nodes' in args else workflow_layout._linear(steps)
             saved = workflow_layout.save_layout(db, {"name": str(args.get("name") or ""),
                                                        "description": str(args.get("description") or ""), **definition})
             workflow_layout.select_layout(db, {"task_id": project_id, "layout_id": saved["layout"]["id"]})
@@ -862,16 +892,34 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         tid = str(args.get("team_id") or project_id)
         if args.get("team_id"):
             selected_team = db.team(tid)
-            if not selected_team or selected_team.get("project_id") != project_id:
-                raise PermissionError("团队不属于当前项目")
+            if not selected_team:
+                raise ValueError('团队不存在')
+            import shared_executors
+            if name=='team_board' and selected_team.get('project_id')!=project_id and not shared_executors.is_instance(db,tid):
+                record=db.db.execute('SELECT instance_team_id FROM team_execution_instances WHERE project_id=? AND template_team_id=?',(project_id,tid)).fetchone()
+                if not record:
+                    actor_fields=('id','name','role','assistant_id','prompt','model_id','reasoning','permission','step')
+                    return {'team_id':tid,'project_id':project_id,'members':[{**{key:m.get(key,'') for key in actor_fields},'status':'idle'} for m in db.team_members(tid)],'tasks':[],'counts':{},'teams':shared_executors.templates(db)}
+                tid=record[0]
+            if name=='team_board':
+                instance=db.team(tid)
+                if instance.get('project_id')!=project_id: raise ValueError('团队实例不属于当前项目')
+            else:
+                instance = shared_executors.team_instance(db, project_id, tid)
+            tid = instance['id']
+            args = dict(args)
+            for field in ('member', 'reviewer_id'):
+                if args.get(field): args[field] = shared_executors.member_id(db, tid, str(args[field]))
         if name == "team_board":
-            return {**_team.board(tid), "team_id": tid,
-                    "teams": [row for row in db.teams() if row.get("project_id") == project_id]}
+            import shared_executors
+            return {**_team.board(tid, db=db), "team_id": tid,
+                    "teams": shared_executors.templates(db)}
         if name == "team_form":
             return _team.form_team(project_id, args.get("purpose", ""), args.get("members") or [])
         return _team.assign(tid, args.get("member", ""), args.get("prompt", ""), trigger="leader",
                             origin="leader@" + task_id[:8], depends_on=args.get("depends_on"),
-                            output_contract=args.get("output_contract"), reviewer_id=args.get("reviewer_id", ""))
+                            output_contract=args.get("output_contract"), reviewer_id=args.get("reviewer_id", ""),
+                            db=db, authority=getattr(db, "project_task_context", None))
     if name == "memory":
         return memory_store.apply(db, task_id, args)
     if name == "recall":
@@ -1022,9 +1070,10 @@ def _team_project(db: "WorkflowDB", task_id: str, raw: str) -> str:
         if raw in tasks:
             return raw
         low = raw.lower()
-        for tid, t in tasks.items():
-            if low and low in (t["title"] or "").lower():
-                return tid
+        matches = [tid for tid, t in tasks.items() if low == (t['title'] or '').lower()]
+        if not matches: matches = [tid for tid, t in tasks.items() if low and low in (t['title'] or '').lower()]
+        if len(matches) == 1: return matches[0]
+        if len(matches) > 1: raise ValueError('项目名称有歧义，请使用 project_id')
         raise ValueError("没有叫「%s」的项目（现有：%s）" % (raw, "、".join(t["title"] for t in tasks.values()) or "空"))
     row = db.db.execute("SELECT id FROM chats WHERE id=?", (task_id,)).fetchone()
     if row:
@@ -1053,8 +1102,8 @@ def _global_brief(db: "WorkflowDB") -> str:
 
 
 def agent_profile(db: "WorkflowDB", task_id: str) -> dict[str, Any] | None:
-    """这个对话该用哪个模型：**绑了助手就用助手接的那个模型**（deepseek 助手跑 deepseek、gpt 助手跑 gpt），
-    没绑（或助手没指定）就退回当前激活模型。项目工作流仍用激活模型。"""
+    """这个对话该用哪个模型：**绑了专家就用专家接的那个模型**（deepseek 专家跑 deepseek、gpt 专家跑 gpt），
+    没绑（或专家没指定）就退回当前激活模型。项目工作流仍用激活模型。"""
     try:
         row = db.db.execute("SELECT assistant_id FROM chats WHERE id=?", (task_id,)).fetchone()
     except Exception:
@@ -1066,7 +1115,7 @@ def agent_profile(db: "WorkflowDB", task_id: str) -> dict[str, Any] | None:
             try:
                 m = db.model(a["model_id"])
             except KeyError:
-                raise ValueError("助手绑定的模型已移除，请重新选择模型") from None
+                raise ValueError("专家绑定的模型已移除，请重新选择模型") from None
             if m and m.get("base_url") and m.get("model"):
                 return m
     return db.active_model()
@@ -1083,7 +1132,7 @@ def _plan_context(db: "WorkflowDB", tid: str, step: str) -> str:
     """写「本步计划」时给模型的料：项目底子 + 上一步的交付 + 库里已有啥。
 
     顺序就是发言顺序：**上一步的交付排在最前**（它才是这一步要同步的对象），
-    项目最初的创新点降到最后当背景 —— 以前把它排前面，每个助手都开口就复述创新点审查。
+    项目最初的创新点降到最后当背景 —— 以前把它排前面，每个专家都开口就复述创新点审查。
     """
     import workflow_state
     handoff, _, _ = workflow_state.handoff(db, tid, step)
@@ -1187,7 +1236,7 @@ def step_delivery(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
 
 
 def step_plan(db: "WorkflowDB", task_id: str, step: str) -> dict[str, Any]:
-    """每一步的「进度同步 + 本步计划」：让这一步的助手看着上一步的交付**现写**一条，
+    """每一步的「进度同步 + 本步计划」：让这一步的专家看着上一步的交付**现写**一条，
     落成该步对话的第一条 assistant 消息（events=[{type:plan}]）。已有就复用，不重复烧模型。
 
     硬限制：上一步没交付（台账里没有 done）→ 这一步此刻不是流程步，只是独立功能块，
@@ -1284,7 +1333,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
               extra_context: str = "", scope: str = "", publish: bool = True,
               profile: dict[str, Any] | None = None, assistant_id: str = "",
               member: dict[str, Any] | None = None, step: str = "", cancel_check: Any = None,
-              template_ref: dict | None = None, tool_allowlist: list[str] | None = None) -> dict[str, Any]:
+              template_ref: dict | None = None, tool_allowlist: list[str] | None = None,
+              image_ids: list[str] | None = None, image_inputs: list[dict] | None = None) -> dict[str, Any]:
     """工具调用循环。emit(event) 每产生一条事件调用一次（SSE 用）。
     system/tools 不传就是通用 Agent（AGENT_SYSTEM + 全量工具）；创新点审查/确认大纲那两步会传受限工具 + 记忆块。
     scope 决定这轮对话和哪一步共用历史（'' = 创新点审查/通用，'outline' = 确认大纲）。
@@ -1296,14 +1346,19 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     import agent_integrations
     import execution
     cancel_check = cancel_check or execution.current_check()
-    cfg = agent_settings.runtime_config(db, task_id, assistant_id or (profile or {}).get("assistant_id", ""), member)
+    frozen = getattr(db,'agent_runtime_snapshot',None) if not assistant_id and member is None and not (profile or {}).get('assistant_id') else None
+    cfg = frozen or agent_settings.runtime_config(db, task_id, assistant_id or (profile or {}).get("assistant_id", ""), member)
     if profile is None:
         profile = db.model(cfg["model_id"]) if cfg["model_id"] else agent_profile(db, task_id)
     profile = dict(profile or {})
     for key in ("reasoning", "permission"):
         profile.setdefault(key, cfg[key])
     permission = profile.get("permission", "auto")
+    extra_context += "\n" + str(cfg.get("execution_context") or "")
     aid = cfg["assistant_id"]
+    expert_name = cfg.get("assistant_name") or (db.assistant(aid) or {}).get("name") or "执行专家"
+    send_event = say
+    say = lambda event: send_event({"assistant_id": aid, "sender": expert_name, **event})
     profile["assistant_id"] = aid
     resume = getattr(db, "agent_resume", {}) or {}
     save_checkpoint = getattr(db, "save_agent_checkpoint", lambda **values: None)
@@ -1336,6 +1391,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     import run_service
     tracked_run = run_service.get(db, resume.get("workflow_run_id", "")) if resume.get("messages") else None
     tracked_run = tracked_run or run_service.start(db, ctx_id, "agent", idempotency_key="")
+    profile['_usage_context']={**profile.get('_usage_context',{}),'db_path':str(db.path),
+                               'project_id':bound or (task_id if not chat_row else ''),
+                               'owner_id':task_id,'assistant_id':aid,'run_id':tracked_run['id']}
     import workflow_state
     import asset_service
     handoff, _, input_assets = workflow_state.handoff(db, bound, scope) if bound and scope in STAGES else ("", "", [])
@@ -1383,8 +1441,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         except Exception:
             pass
     elif chat_row:  # 首页 Agent = 智研管家：不绑项目，但有全局视野
-        ctx = ("你叫「览籍智研」，是这个软件的主 Agent（首页就叫「智研管家」），用户的科研助手。"
-               "有人问「你是谁」，答：我是览籍智研，你的科研助手。\n"
+        ctx = ("你叫「览籍智研」，是这个软件的主 Agent（首页就叫「智研管家」），用户的科研专家。"
+               "有人问「你是谁」，答：我是览籍智研，你的科研专家。\n"
                "你是 **智研管家**（首页 Agent，不属于任何单个项目）：可以跨项目工作 —— 查任意项目、"
                "任意文献/笔记/日程，也能新建项目、加日程、检索下载精读文献、写笔记。\n"
                "项目工作流里跑的是 **绑定单个项目的 Partner Agent**；要在某个项目内部推进，就按「哪个项目、要什么产出」把话说清，"
@@ -1398,17 +1456,17 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                f"当前项目：{task['title']}\n研究问题：{task['question']}\n"
                f"关键词 / 材料体系：{task['material_system']}\n项目 ID：{task_id}\n产出目录：{db.out_dir(task_id)}")
         ctx += "\n\n" + db.memory_block(task_id)
-    # builtin-steward 的 rules 就是 AGENT_SYSTEM，首页/通用对话上面已经整段写过了，再套一层【当前助手】等于把同一段话重复一遍
+    # builtin-steward 的 rules 就是 AGENT_SYSTEM，首页/通用对话上面已经整段写过了，再套一层【当前专家】等于把同一段话重复一遍
     if aid and aid != "builtin-steward":   # Also applies to each team's selected assistant.
         try:
             asst = db.require_assistant(aid)
         except Exception:
             asst = None
         if asst:
-            ctx += "\n\n【当前助手】%s（%s）\n规则：%s" % (
-                asst["name"], "公开内置" if asst["source"] == "builtin" else "我的助手", asst["rules"] or "（没写规则）")
+            ctx += "\n\n【当前专家】%s（%s）\n规则：%s" % (
+                asst["name"], "公开内置" if asst["source"] == "builtin" else "我的专家", asst["rules"] or "（没写规则）")
     who = STEP_AGENT.get(step or scope or "", "")
-    if who:      # 工作流里的每一步都是一个独立助手，别让它自称「览籍智研 / 智研管家 / Partner Agent」
+    if who:      # 工作流里的每一步都是一个独立专家，别让它自称「览籍智研 / 智研管家 / Partner Agent」
         ctx += (f"\n\n【你的身份】这一步你是「{who}」，只负责这一步的事；上面提到的「览籍智研 / 智研管家 / Partner Agent」是"
                 f"整台机器和首页的称呼，不是你的自称。有人问「你是谁」，就答「我是{who}」，再用一句话说这一步负责什么。")
         ctx += f"\n本步「{STAGE_LABEL[step or scope]}」职责：{STAGE_PURPOSE[step or scope]}。"
@@ -1467,6 +1525,13 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     ]
     if resume.get("messages"):
         messages = resume["messages"]
+    elif image_ids or image_inputs:
+        import image_tools
+        import account_providers
+        if profile.get('api') in account_providers.WIRES:
+            raise ValueError('此账号客户端不支持图片输入，请选择支持视觉的 API 模型')
+        messages[-1]['content']=[{'type':'text','text':messages[-1]['content']},
+                                 *image_tools.message_images(db,bound or task_id,image_ids,snapshots=image_inputs)]
     events: list[dict[str, Any]] = resume.get("events", [])
     if template_event and not any(e.get("type") == "template_used" for e in events):
         events.append(template_event)
@@ -1493,7 +1558,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             say({"type": "reasoning_delta", "id": reasoning_id, "content": piece})
         def forward_delta(piece: str) -> None:
             partial.append(piece)
-            say({"type": "assistant_delta", "content": piece})
+            say({"type": "assistant_delta", "content": piece, "message_id": reasoning_id})
         try:
             resuming_tools = bool(pending_calls)
             if getattr(db, 'workflow_end_to_end', False):
@@ -1503,6 +1568,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                     raise ValueError('长上下文需要分页读取，请在节点允许的工具中加入 workflow_context_read')
             else:
                 model_messages = messages
+            if not resuming_tools:say({'type':'model_request','id':reasoning_id,'round':turn,'model':profile.get('model',''),'permission':permission})
             msg = {"content": "", "tool_calls": pending_calls} if resuming_tools else chat_raw(profile, model_messages, tools=tool_specs,
                            # 写作那步的产出（整份正文）就是一个大参数：4096 预算下推理模型的思维链把额度吃光，
                            # doc_write / skill_write / project_note_write 的 markdown 直接被截断 → 工具调用变成「空参数」或半截。
@@ -1510,12 +1576,13 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                            max_tokens=WRITE_MAX_TOKENS,
                            on_delta=forward_delta if emit else None, cancel_check=cancel_check,
                            on_reasoning=forward_reasoning if emit else None)
+            if not resuming_tools:say({'type':'model_response','id':reasoning_id,'round':turn,'duration_ms':int((time.monotonic()-model_started)*1000),'usage':msg.get('usage') or {}})
             pending_calls = []
         except Exception as exc:
             say({"type": "reasoning_done", "id": reasoning_id, "content": "".join(reasoning_parts),
                  "duration_ms": int((time.monotonic() - model_started) * 1000)})
             if cancel_check and cancel_check() and publish and partial:
-                db.add_message(task_id, "assistant", "".join(partial), scope=scope)
+                db.add_message(task_id, "assistant", "".join(partial), scope=scope, sender=expert_name)
             run_service.finish_node(db, tracked_node["id"], "failed", error=str(exc))
             run_service.finish(db, tracked_run["id"], "failed", error=str(exc))
             raise
@@ -1551,8 +1618,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                        + "\n\n> ⚠ 本次工具返回里没找到这些数字的出处："
                        + "、".join(x["value"] for x in rep["bad"][:8])}
         if msg.get("content"):
-            say({"type": "assistant", "content": msg["content"], "step": step})
-            events.append({"type": "assistant", "content": msg["content"]})
+            reply_event = {"type": "assistant", "content": msg["content"], "step": step, "message_id": reasoning_id}
+            say(reply_event)
+            events.append(reply_event)
         if not calls:
             final = (msg.get("content") or "").strip()
             if not final:
@@ -1575,14 +1643,14 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 args = json.loads(fn.get("arguments") or "{}")
             except ValueError:
                 args = {}
-            ev = {"type": "tool_call", "name": name, "args": args, "id": call.get("id")}
+            ev = {"type": "tool_call", "name": name, "args": args, "id": call.get("id"),"round":turn}
             say(ev); events.append(ev)
             cache_key = name + "\x00" + json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
             t_tool_start = time.monotonic()
             save_checkpoint(phase="tool", messages=messages, events=events, turn=turn, inflight=call)
             try:
                 if name not in allowed_names:
-                    raise PermissionError("当前助手未获准使用此工具：" + name)
+                    raise PermissionError("当前专家未获准使用此工具：" + name)
                 enforce_tool_policy(name, args, permission)
                 enforce_project_scope(db, bound, name, args)
                 if name != "delegate" and cache_key in _done_calls:
@@ -1616,8 +1684,12 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             except Exception:
                 pass
             path = result.get("path") if isinstance(result, dict) else None
+            import workspace_trajectory
             ev2 = {"type": "tool_result", "name": name, "ok": ok, "summary": brief,
-                   "path": path or "", "id": call.get("id")}
+                   "path": path or "", "id": call.get("id"),"round":turn,"duration_ms":duration_ms,
+                   "result":workspace_trajectory.safe_result(result)}
+            if ok and name in ('workflow_prepare', 'workflow_start', 'workflow_status', 'graph_workflow_run', 'graph_workflow_status') and result.get('navigation'):
+                ev2['navigation'] = {**result['navigation'], 'chat_id': task_id if bound and bound != task_id else ''}
             say(ev2); events.append(ev2)
             messages.append({"role": "tool", "tool_call_id": call.get("id") or name, "name": name,
                              # 工具结果回喂给模型的字符数上限：读一份 3 万字的正文，4000 字只够看到标题
@@ -1642,10 +1714,10 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         say({"type": "assistant", "content": final})
         if publish:
             # soft=True：撞上限是「暂停」，不是失败 —— 结果都在，别把下游交付锁死
-            db.add_message(task_id, "assistant", final, [*events, {"type": "error", "content": final, "soft": True}], scope=scope)
+            db.add_message(task_id, "assistant", final, [*events, {"type": "error", "content": final, "soft": True}], scope=scope, sender=expert_name)
         raise RuntimeError(final)
     if publish:
-        db.add_message(task_id, "assistant", final, events, scope=scope)
+        db.add_message(task_id, "assistant", final, events, scope=scope, sender=expert_name)
         db.log_step(task_id, "agent", "done", text[:60])
         if chat_row:  # 对话置顶 + 首次提问当标题（默认名用久了列表没法认）
             db.db.execute("UPDATE chats SET updated_at=? WHERE id=?",
@@ -1679,6 +1751,13 @@ def _brief(name: str, result: Any) -> str:
         return "已组队「%s」：%d 人（加急办公室）" % (result.get("name", ""), len(result.get("added") or []))
     if name == "project_create":
         return "已建项目「%s」· %s" % (result.get("title", ""), str(result.get("project_id", ""))[:8])
+    if name == 'project_create_from_idea':
+        return '项目「%s」已装配：%d 位专家 · 团队与 LangGraph 流程 · %s' % (result.get('title', ''), len(result.get('experts', [])), result.get('status', 'configured'))
+    if name == 'project_resource_write':
+        return '已保存项目资料：' + str(result.get('path') or '')
+    if name == 'project_resources':
+        if 'indexed' in result: return '已整理项目资料索引：%d 个文件' % result['indexed']
+        return '已读取：' + str(result.get('path')) if 'content' in result else '项目资料 %d 项' % result.get('total', 0)
     if name == "calendar_list":
         return "%s 共 %d 条日程" % (result.get("range", ""), result.get("count", 0))
     if name == "schedule_manage":

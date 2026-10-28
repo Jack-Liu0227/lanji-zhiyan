@@ -29,20 +29,20 @@ class PromptUITest(unittest.TestCase):
         self.page.wait_for_function("document.querySelector('[data-result]')?.textContent.includes('experimental controls')")
         dialog.get_by_role('button', name='应用到本轮任务').click()
         dialog.wait_for(state='detached')
-        self.page.locator('#ask').wait_for()
+        self.page.locator('#pwAsk').wait_for()
         self.assertIn('浏览器模板', self.page.locator('.pt-composer').inner_text())
         self.page.evaluate("""()=>{
             requireModelKey=async()=>true;
-            followChatRun=async run=>{window.capturedTemplateRequest=run.request;};
+            observeAgentRun=async run=>{window.capturedTemplateRequest=run.request;};
         }""")
-        self.page.locator('#ask').fill('Perform review')
-        self.page.locator('#send').click()
+        self.page.locator('#pwAsk').fill('Perform review')
+        self.page.locator('#pwSend').click()
         self.page.wait_for_function('window.capturedTemplateRequest')
         request = self.page.evaluate('window.capturedTemplateRequest')
         self.assertEqual(request['template_ref']['template_id'], created['template'])
         self.assertEqual(request['template_ref']['variables'], {'focus': 'experimental controls'})
         self.assertTrue(request['template_ref']['revision_id'])
-        self.page.evaluate("appendOne(document.querySelector('#msgs'),{type:'template_used',title:'浏览器模板',revision:1,revision_id:'revision-test'})")
+        self.page.evaluate("appendOne(document.querySelector('#pwMessages'),{type:'template_used',title:'浏览器模板',revision:1,revision_id:'revision-test'})")
         self.assertIn('v1', self.page.locator('.pt-used').inner_text())
         self.assertEqual(self.errors, [])
 
@@ -77,7 +77,8 @@ class PromptUITest(unittest.TestCase):
     def test_workflow_template_selection_reaches_request(self):
         created = self.create_template()
         self.page.evaluate("openTab('workflow')")
-        self.page.locator('#wv-ask').wait_for()
+        self.page.locator('#pwTab-chat').click()
+        self.page.locator('#pwAsk').wait_for()
         self.page.locator('.pt-composer').get_by_role('button', name='提示词模板', exact=True).click()
         picker = self.page.get_by_role('dialog', name='选择提示词模板', exact=True)
         picker.locator(f'[data-template="{created["template"]}"]').click()
@@ -87,10 +88,10 @@ class PromptUITest(unittest.TestCase):
         dialog.wait_for(state='detached')
         self.page.evaluate("""()=>{
             requireModelKey=async()=>true;
-            wfFollowRun=async run=>{window.capturedWorkflowRequest=run.request;};
+            observeAgentRun=async run=>{window.capturedWorkflowRequest=run.request;};
         }""")
-        self.page.locator('#wv-ask').fill('Review this project')
-        self.page.locator('#wv-send').click()
+        self.page.locator('#pwAsk').fill('Review this project')
+        self.page.locator('#pwSend').click()
         self.page.wait_for_function('window.capturedWorkflowRequest')
         self.assertEqual(self.page.evaluate('capturedWorkflowRequest.template_ref.template_id'), created['template'])
         self.assertEqual(self.errors, [])

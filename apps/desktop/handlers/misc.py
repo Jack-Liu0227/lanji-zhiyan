@@ -47,7 +47,7 @@ class MiscRoutes:
                 return self._json(team.teams((q.get("project") or [""])[0] or None))
             except ValueError as exc:
                 return self._json({"error": str(exc), "teams": []}, 400)
-        if path == "/api/team/chat":                 # 团队 v2：成员（从助手选）+ 群记录 + 接力状态
+        if path == "/api/team/chat":                 # 团队 v2：成员（从专家选）+ 群记录 + 接力状态
             try:
                 return self._json(team.chat_state((q.get("scope") or [""])[0]))
             except ValueError as exc:
@@ -59,7 +59,12 @@ class MiscRoutes:
                 return self._json({"error": str(exc), "members": [], "tasks": [], "counts": {}}, 400)
         if path == "/api/schedules":                 # 定时任务页：规则 + 最近运行
             with WorkflowDB(DB_PATH) as db:
-                return self._json({"schedules": db.schedules(), "runs": db.schedule_runs(),
+                rules, runs = db.schedules(), db.schedule_runs()
+                for run in runs:
+                    origin = db.db.execute("SELECT task_id FROM project_task_origins WHERE kind='schedule_run' AND legacy_id=?", (run['id'],)).fetchone()
+                    run['project_task_id'] = origin['task_id'] if origin else ''
+                    run['project_id'] = next((rule['project_id'] for rule in rules if rule['id'] == run['schedule_id']), '')
+                return self._json({"schedules": rules, "runs": runs,
                                    "freq": schedule.FREQ_LABELS, "run_status": schedule.RUN_STATUS,
                                    "retryable": sorted(schedule.RETRYABLE)})
         if path == "/api/mdnotes":
@@ -164,7 +169,9 @@ class MiscRoutes:
                 sid = (q.get("source") or [""])[0]
                 kw = (q.get("q") or [""])[0].strip()
                 yr = (q.get("year") or [""])[0].strip()
-                return self._json({"items": db.rss_items(sid, kw, yr),
+                import literature_import
+                return self._json({"items": literature_import.annotate(db, db.rss_items(sid, kw, yr),
+                                     (q.get('project_id') or [''])[0]),
                                    "total": db.rss_count(sid, kw, yr)})
         if path == "/api/tools":
             return self._json({"tools": [{"name": t["function"]["name"],

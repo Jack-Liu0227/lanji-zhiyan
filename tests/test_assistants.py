@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""助手自检：内置播种 / 只读不可删 / 保存更新 / 对话绑定 / 规则进 system。
+"""专家自检：内置播种 / 只读不可删 / 保存更新 / 对话绑定 / 规则进 system。
 
     python -m unittest test_assistants -v
 """
@@ -33,7 +33,7 @@ class AssistantTest(unittest.TestCase):
     def test_01_builtin_seeded_and_idempotent(self):
         a = self.db.assistants()
         N = len(workflow.BUILTIN_ASSISTANTS)
-        self.assertGreaterEqual(N, 20)                                # 装了就有 ≥20 个可用助手
+        self.assertGreaterEqual(N, 20)                                # 装了就有 ≥20 个可用专家
         self.assertEqual(len(a), N)
         self.assertTrue(all(x["source"] == "builtin" for x in a))
         names = [x["name"] for x in a]
@@ -57,7 +57,7 @@ class AssistantTest(unittest.TestCase):
         self.assertNotIn("builtin-searcher", {a["id"] for a in self.db.selectable_assistants()})
 
     def test_03_user_crud(self):
-        a = self.db.assistant_save("a-test1", name="我的助手", avatar="🧪", description="d",
+        a = self.db.assistant_save("a-test1", name="我的专家", avatar="🧪", description="d",
                                    rules="只做检索", prompts=json.dumps(["问1", "问2"], ensure_ascii=False))
         self.assertEqual(a["source"], "user")
         a2 = self.db.assistant_save("a-test1", name="改名了", rules="只做检索 + 去重")
@@ -74,7 +74,7 @@ class AssistantTest(unittest.TestCase):
         self.assertEqual(self.db.assistant_of_chat(cid), "builtin-searcher")
 
     def test_05_rules_reach_system_ctx(self):
-        """最要紧的一条：助手绑到对话后，它的名字与规则必须真的进 system。"""
+        """最要紧的一条：专家绑到对话后，它的名字与规则必须真的进 system。"""
         cid = self.db.create_chat("规则测试")
         self.db.set_chat_assistant(cid, "builtin-searcher")
         self.db.add_model("假模型", "http://127.0.0.1:1/v1", "fake", "sk", activate=True)
@@ -91,13 +91,13 @@ class AssistantTest(unittest.TestCase):
         finally:
             workflow.chat_raw = old
         system = "\n".join(m["content"] for m in seen["msgs"] if m["role"] == "system")
-        self.assertIn("【当前助手】", system)
+        self.assertIn("【当前专家】", system)
         self.assertIn("文献检索员", system)
         self.assertIn("开放获取", system)          # 规则正文
         self.assertIn("智研管家", system)      # 原有 Leader 口径没被挤掉
 
     def test_06_unbound_chat_has_no_assistant_block(self):
-        cid = self.db.create_chat("没绑助手")
+        cid = self.db.create_chat("没绑专家")
         self.db.add_model("假模型", "http://127.0.0.1:1/v1", "fake", "sk", activate=True)
         seen = {}
 
@@ -112,7 +112,7 @@ class AssistantTest(unittest.TestCase):
         finally:
             workflow.chat_raw = old
         system = "\n".join(m["content"] for m in seen["msgs"] if m["role"] == "system")
-        self.assertNotIn("【当前助手】", system)
+        self.assertNotIn("【当前专家】", system)
 
 
 if __name__ == "__main__":

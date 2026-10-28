@@ -282,7 +282,7 @@ def host_pick_folder(initial: str = "", title: str = "选择文件夹") -> dict:
 def assert_not_zotero_write(path: str | os.PathLike[str]) -> None:
     """Protect known Zotero storage and linked-attachment roots at write boundaries."""
     target = Path(path).expanduser().resolve()
-    if "zotero" in {part.casefold() for part in target.parts} or target.name.casefold().startswith("zotero.sqlite"):
+    if target.name.casefold().startswith("zotero.sqlite"):
         raise ValueError("Zotero 管理文件只读，请在独立项目中处理副本")
     if any((folder / "zotero.sqlite").exists() for folder in (target, *target.parents)):
         raise ValueError("Zotero 数据目录只读，请在独立项目中处理副本")
@@ -389,7 +389,8 @@ def mark_write_roots_low(verbose: bool = False) -> dict[str, str]:
 
     **不在每次启动都跑 /T**：递归 icacls 是逐文件设 ACL，三千个文件 1.5s，而这一步同步
     挡在「起子进程」之前（用户感受就是点图标后半天没反应）。一个根整棵树标过一次就记进
-    lowroots.json，以后每次只做非递归标：(OI)(CI) 挂在新目录上，之后新建的文件自动继承 Low。
+    lowroots.json，以后先读取根的实际完整性标签，符合继承要求时不重复改写权限。
+    即使不传 /T，重复设置根权限仍可能遍历大量后代；新目录由 (OI)(CI) 自动继承 Low。
     """
     import lowbox
     if not lowbox.available():

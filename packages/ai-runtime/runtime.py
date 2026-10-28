@@ -223,12 +223,7 @@ def _call_wire_openai_completions(profile: dict[str, Any], messages: list[dict[s
         "content": (msg.get("content") or "").strip(),
         "reasoning": msg.get("reasoning_content") or msg.get("reasoning") or "",
         "tool_calls": msg.get("tool_calls") or [],
-        "usage": {
-            "prompt": int(usage.get("prompt_tokens") or 0),
-            "completion": int(usage.get("completion_tokens") or 0),
-            "total": int(usage.get("total_tokens") or 0),
-            "exact": bool(usage),
-        },
+        "usage": __import__("usage_stats").normalize(usage,"openai-completions"),
     }
 
 
@@ -257,14 +252,17 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
         if cancel_check and cancel_check():
             raise CancelledError("Operation cancelled during execution")
         streamed_any = False
+        attempt_start=time.monotonic();first_token_ms=None;result=None;meter_status="error"
         def forward_delta(piece: str) -> None:
-            nonlocal streamed_any
+            nonlocal streamed_any, first_token_ms
             streamed_any = True
+            if first_token_ms is None:first_token_ms=int((time.monotonic()-attempt_start)*1000)
             if on_delta:
                 on_delta(piece)
         def forward_reasoning(piece: str) -> None:
-            nonlocal streamed_any
+            nonlocal streamed_any, first_token_ms
             streamed_any = True
+            if first_token_ms is None:first_token_ms=int((time.monotonic()-attempt_start)*1000)
             if on_reasoning:
                 on_reasoning(piece)
         try:
@@ -280,6 +278,7 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
 
             duration_ms = int((time.monotonic() - t0) * 1000)
             use = result.get("usage") or {}
+            meter_status="ok"
             if budget:
                 budget.add_usage(use.get("prompt", 0), use.get("completion", 0))
             GLOBAL_TELEMETRY.record(api, profile.get("model", ""), duration_ms, use, "ok")
@@ -288,10 +287,19 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
         except urllib.error.HTTPError as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
             last_exc = exc
+            detail = exc.read().decode('utf-8', 'replace')[:4096]
+            try:
+                remote_error = json.loads(detail).get('error') or {}
+            except (ValueError, AttributeError):
+                remote_error = {}
+            if isinstance(remote_error, dict) and remote_error.get('code') == 'get_channel_failed':
+                message = '模型网关当前没有该模型的可用渠道。请在“设置 → 模型列表”选择其他可用模型，或联系网关管理员检查模型分组和渠道；配置已保留。'
+                GLOBAL_TELEMETRY.record(api, profile.get("model", ""), duration_ms, {}, "error", message)
+                raise AIRuntimeError(message) from exc
             if not streamed_any and exc.code in policy.retryable_codes and attempt < policy.max_retries:
                 time.sleep(policy.delay_for_attempt(attempt))
                 continue
-            err_msg = f"HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:300]}"
+            err_msg = f"HTTP {exc.code}: {detail[:300]}"
             GLOBAL_TELEMETRY.record(api, profile.get("model", ""), duration_ms, {}, "error", err_msg)
             raise AIRuntimeError(f"Model interface {err_msg}") from exc
 
@@ -309,5 +317,9 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
             duration_ms = int((time.monotonic() - t0) * 1000)
             GLOBAL_TELEMETRY.record(api, profile.get("model", ""), duration_ms, {}, "error", str(exc))
             raise
+        finally:
+            import usage_stats
+            usage_stats.record(profile,messages,tools,int((time.monotonic()-attempt_start)*1000),
+                               (result or {}).get('usage') or {},meter_status,attempt,first_token_ms)
 
     raise AIRuntimeError(f"Exhausted retries: {last_exc}")

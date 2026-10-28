@@ -131,6 +131,27 @@ def discover(profile, timeout=25):
     return workflow.discover_models(base, key, timeout)
 
 
+def image_content(content, api):
+    if not isinstance(content, list):
+        content = [{'type':'text','text':content or ''}]
+    blocks = []
+    for part in content:
+        if part.get('type') == 'text':
+            blocks.append({'type':'input_text','text':part['text']} if api == 'openai-responses'
+                          else {'text':part['text']} if api == 'google-generative-ai' else part)
+        elif part.get('type') == 'image_url':
+            url = part['image_url']['url']
+            if api == 'openai-responses':
+                blocks.append({'type':'input_image','image_url':url})
+            else:
+                if not url.startswith('data:') or ';base64,' not in url:
+                    raise ValueError('图片必须是本地上传的文件')
+                mime, data = url[5:].split(';base64,',1)
+                blocks.append({'inlineData':{'mimeType':mime,'data':data}} if api == 'google-generative-ai'
+                              else {'type':'image','source':{'type':'base64','media_type':mime,'data':data}})
+    return blocks
+
+
 def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_tokens=4096,
              on_delta: Callable[[str], None] | None = None, cancel_check=None, on_reasoning=None):
     api = profile.get("api", "openai-completions")
@@ -152,7 +173,7 @@ def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_to
                 inputs.append({"type": "function_call_output", "call_id": m["tool_call_id"], "output": m["content"]})
             else:
                 if m.get("content"):
-                    inputs.append({"role": "developer" if m["role"] == "system" else m["role"], "content": m["content"]})
+                    inputs.append({"role": "developer" if m["role"] == "system" else m["role"], "content": image_content(m['content'],api) if isinstance(m['content'],list) else m['content']})
                 for c in m.get("tool_calls", []):
                     inputs.append({"type": "function_call", "call_id": c["id"], **c["function"]})
         payload = {"model": model, "input": inputs, "max_output_tokens": max_tokens, "include": ["reasoning.encrypted_content"]}
@@ -187,7 +208,7 @@ def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_to
                 if m["role"] == "assistant" and wire.get("api") == api:
                     content = list(wire["content"])
                 else:
-                    content = [{"type": "text", "text": m["content"]}] if m.get("content") else []
+                    content = image_content(m['content'],api) if m.get('content') else []
                     content.extend({"type": "tool_use", "id": c["id"], "name": c["function"]["name"], "input": json.loads(c["function"]["arguments"])} for c in m.get("tool_calls", []))
                 entry = {"role": m["role"], "content": content or [{"type": "text", "text": " "}]}
             if hist and hist[-1]["role"] == entry["role"]:
@@ -222,7 +243,7 @@ def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_to
                 if m["role"] == "assistant" and wire.get("api") == api:
                     parts = wire["parts"]
                 else:
-                    parts = [{"text": m["content"]}] if m.get("content") else []
+                    parts = image_content(m['content'],api) if m.get('content') else []
                     parts.extend({"functionCall": {"name": c["function"]["name"], "args": json.loads(c["function"]["arguments"])}} for c in m.get("tool_calls", []))
             role = "model" if m["role"] == "assistant" else "user"
             if contents and contents[-1]["role"] == role:
@@ -249,9 +270,10 @@ def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_to
         usage = raw.get("usageMetadata", {})
     else:
         raise ValueError("Unsupported protocol: " + api)
+    import usage_stats
     prompt = int(usage.get("input_tokens", usage.get("promptTokenCount", 0)))
     output = int(usage.get("output_tokens", usage.get("candidatesTokenCount", 0)))
     # Signed thinking blocks must survive tool-result turns without reconstruction.
     return {"role": "assistant", "content": "".join(text) if api == "google-generative-ai" else "\n".join(text),
             "tool_calls": calls, "_protocol": protocol, "reasoning": "\n".join(reasoning),
-            "usage": {"prompt": prompt, "completion": output, "total": int(usage.get("total_tokens", usage.get("totalTokenCount", prompt + output))), "exact": bool(usage)}}
+            "usage": usage_stats.normalize(usage,api)}

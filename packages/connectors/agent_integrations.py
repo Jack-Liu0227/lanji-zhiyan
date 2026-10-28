@@ -48,7 +48,7 @@ def invoke(name: str, db: Any, task_id: str, args: dict, assistant_id: str = "",
                              "zotero_local_link_pdf"} or (name == "zotero_sync" and args.get("dry_run") is False)
     if external_write:
         if permission in {"read_only", "read-only"}:
-            raise ValueError("当前助手为只读权限，禁止外发/写入")
+            raise ValueError("当前专家为只读权限，禁止外发/写入")
         if permission not in {"full_access", "full-access"}:
             raise ValueError("此操作会外发或修改远端数据，请由用户在专家设置中开启 Full Access")
     if name == "mail_accounts":

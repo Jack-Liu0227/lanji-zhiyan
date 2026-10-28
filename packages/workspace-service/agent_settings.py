@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 REASONING = ("auto", "none", "minimal", "low", "medium", "high", "xhigh")
 PERMISSIONS = ("auto", "read_only", "workspace_write", "full_access")
 READ_TOOLS = frozenset(("library_overview", "knowledge_query", "calendar_list", "outline_read", "map_read", "map_sources", "doc_read", "cite_read", "read_attachment", "skill_read", "mail_accounts", "mail_list", "mail_read", "zotero_collections", "project_note_list", "project_note_read"))
-READ_TOOLS = READ_TOOLS | {"prompt_template_search", "prompt_template_read", "prompt_template_render", "workflow_context_read"}
+READ_TOOLS = READ_TOOLS | {"prompt_template_search", "prompt_template_read", "prompt_template_render", "workflow_context_read", "graph_workflow_status", "workflow_templates", "workflow_status", "task_status"}
 
 
 def migrate(db):
@@ -91,8 +91,10 @@ def session(db, team_id, sid="", create=False, title=""):
         row = db.db.execute("SELECT * FROM team_sessions WHERE id=? AND team_id=?", (sid, team_id)).fetchone()
         if not row:
             raise ValueError("会话不属于此团队")
+        flags=db.db.execute("SELECT * FROM conversation_flags WHERE kind='team' AND id=?",(sid,)).fetchone()
+        if flags and (flags['deleted_at'] or flags['archived_at']):raise ValueError('请先恢复或取消归档此会话')
     else:
-        row = db.db.execute("SELECT * FROM team_sessions WHERE team_id=? AND active=1 ORDER BY updated_at DESC LIMIT 1", (team_id,)).fetchone()
+        row = db.db.execute("SELECT * FROM team_sessions s WHERE team_id=? AND active=1 AND NOT EXISTS(SELECT 1 FROM conversation_flags f WHERE f.kind='team' AND f.id=s.id AND (f.deleted_at<>'' OR f.archived_at<>'')) ORDER BY updated_at DESC LIMIT 1", (team_id,)).fetchone()
     if row and not create:
         return dict(row)
     sid = uuid.uuid4().hex
@@ -141,6 +143,9 @@ def runtime_config(db, task_id, assistant_id="", member=None):
 
 
 def route(method, path, body, query, db):
+    import workspace_trajectory
+    trajectory=workspace_trajectory.route(method,path,body,query,db)
+    if trajectory is not None:return trajectory
     if not path.startswith("/api/agent-settings/"):
         return None
     import workflow
@@ -280,7 +285,7 @@ def route(method, path, body, query, db):
             if not aid and not str(fields.get("name") or "").strip():
                 raise ValueError("自定义角色需要填写名称")
             if aid and any(m["assistant_id"] == aid for m in db.team_members(tid)):
-                raise ValueError("这个助手已在当前团队中")
+                raise ValueError("这个专家已在当前团队中")
             m = db.team_member_add(tid, fields.get("name") or a.get("name", "成员"), "member",
                                    prompt=fields.get("prompt", a.get("rules", "")), assistant_id=aid,
                                    color=len(db.team_members(tid)),

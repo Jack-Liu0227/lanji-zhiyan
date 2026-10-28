@@ -7,13 +7,42 @@
 import os
 import sys
 import sqlite3
+import subprocess
+import shutil
 import urllib.request
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_ROOT / "packages" / "workspace-core"))
-sys.path.insert(0, str(_ROOT / "packages" / "workspace-service"))
-sys.path.insert(0, str(_ROOT / "packages" / "connectors"))
+for package in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
+    sys.path.insert(0, str(_ROOT / "packages" / package))
+
+
+def warmup_translation():
+    import papertran
+    import paths
+    import lowbox
+    engine = papertran.MANAGED_BABELDOC
+    if not engine.is_file():
+        uv = shutil.which("uv")
+        if not uv:
+            print("请先安装 uv，再初始化翻译环境。")
+            return 1
+        environment = engine.parents[1]
+        python = environment / "Scripts" / "python.exe"
+        if not python.is_file():
+            interpreter = sys.executable if sys.version_info < (3, 14) else "3.13"
+            run = subprocess.run([uv, "venv", "--python", interpreter, str(environment)], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if run.returncode:
+                return run.returncode
+        run = subprocess.run([uv, "pip", "install", "--python", str(python), "babeldoc", "bitstring<5"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if run.returncode:
+            return run.returncode
+    paths.LOWTMP.mkdir(parents=True, exist_ok=True)
+    if lowbox.available() and not lowbox.mark_low(paths.LOWTMP, recursive=True):
+        print("无法为翻译缓存设置桌面沙箱写入权限，请检查数据目录权限。")
+        return 1
+    return subprocess.run([str(engine), "--warmup"], env=papertran._env(),
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).returncode
 
 def run_check():
     print("=" * 60)
@@ -31,7 +60,7 @@ def run_check():
         print("      修复动作: 启动一次应用会自动创建基础结构，文献通过「论文搜索」或「Zotero 导入」重新入库。")
     else:
         try:
-            conn = sqlite3.connect(str(db_path))
+            conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
             c = conn.cursor()
             def count(t):
                 try: return c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
@@ -55,7 +84,7 @@ def run_check():
         sec_mode = securestore.security()
         print(f"  [+] 凭据安全存储模式: {sec_mode}")
         if db_path.is_file():
-            conn = sqlite3.connect(str(db_path))
+            conn = sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
             rows = conn.execute("SELECT id, name, api_key FROM providers").fetchall()
             conn.close()
@@ -80,8 +109,9 @@ def run_check():
     # 3. 翻译引擎 (P3)
     print("\n[3/5] 论文翻译环境 (P3 · babeldoc / uv)")
     uv_path = os.popen("where uv 2>nul").read().strip()
-    babel_path = os.popen("where babeldoc 2>nul").read().strip()
-    cache_dir = Path.home() / ".cache" / "babeldoc"
+    import papertran
+    babel_path = str(papertran.MANAGED_BABELDOC) if papertran.MANAGED_BABELDOC.is_file() else os.popen("where babeldoc 2>nul").read().strip()
+    cache_dir = paths.LOWTMP / "home" / ".cache" / "babeldoc"
     cache_ok = cache_dir.is_dir() and any(cache_dir.iterdir()) if cache_dir.is_dir() else False
 
     if uv_path:
@@ -93,13 +123,13 @@ def run_check():
     if babel_path or uv_path:
         print(f"  [+] babeldoc 命令可用性: {'已安装' if babel_path else '可通过 uv tool 运行'}")
     else:
-        print("  [-] 未找到 babeldoc。修复动作: uv tool install babeldoc")
+        print('  [-] 未找到 babeldoc。修复动作: uv tool install --with "bitstring<5" babeldoc')
 
     if cache_ok:
-        print(f"  [+] ~/.cache/babeldoc 模型缓存就绪: {cache_dir}")
+        print(f"  [+] 应用翻译缓存已存在: {cache_dir}")
     else:
-        print("  [-] ~/.cache/babeldoc 缓存为空或不存在。")
-        print("      修复动作: 联网状态下运行 `uv tool run babeldoc 任意文件.pdf` 进行一次离线初始化。")
+        print("  [-] 应用翻译缓存为空或不存在。")
+        print('      修复动作: 运行 `python tools/check_literature_env.py --warmup` 初始化应用使用的模型与字体缓存。')
 
     # 4. Zotero 7 本地接口 (P4)
     print("\n[4/5] Zotero 7 自适应接入 (P4)")
@@ -139,4 +169,6 @@ def run_check():
     print("=" * 60)
 
 if __name__ == "__main__":
+    if "--warmup" in sys.argv:
+        raise SystemExit(warmup_translation())
     run_check()

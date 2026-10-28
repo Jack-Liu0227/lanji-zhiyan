@@ -5,10 +5,11 @@
 const OFFICE_INK = "#7E93A3";
 const OFFICE_COLORS = ["#7E93A3", "#93A385", "#B08B84", "#C9A67E", "#9C8FA6", "#7E9C90",
                        "#B98F6A", "#8E8C86", "#A8A06B", "#C0A0A6", "#6F8B8E"];
-const OFFICE_CN = { idle: "待命", queued: "排队", running: "在跑", done: "完成", failed: "失败", blocked: "卡住" };
+const OFFICE_CN = { idle: "休眠", queued: "排队", running: "运行中", done: "完成", failed: "失败", blocked: "等待输入", awaiting_review: "待审查" };
 let officeSel = "";
 let officeRAF = 0;
 let officeWalkers = [];
+let officeRenderSequence = 0;
 
 const offEsc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const offAgo = (iso) => {
@@ -169,7 +170,7 @@ function officeSit() {
 /* ---------- 渲染 ---------- */
 function officeRoom(p, colorOf) {
   const members = [p.leader, ...(p.members || [])].filter(Boolean).slice(0, 4);   // 2×2 格点 = 4 个工位
-  const running = (p.members || []).some((m) => m.status === "running" || m.status === "queued");
+  const running = [p.leader,...(p.members || [])].filter(Boolean).some((m) => m.status === "running" || m.status === "queued");
   const figs = members.map((m) => `<div class="tof-fig ${m.status === "running" || m.status === "queued" ? "sel act-run" : ""}" data-status="${offEsc(m.status || "idle")}"
       data-hair="${offHair(m)}" style="--c:${colorOf(m)};--skin:${offSkin(m)}" title="${offEsc(m.name)} · ${OFFICE_CN[m.status] || m.status}">
       <span class="tag"><i class="tag-dot" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:${m.status==='running'?'var(--accent,#4ade80)':m.status==='queued'?'#eab308':'var(--muted)'};margin-right:3px;vertical-align:middle"></i>${offEsc(m.name)}</span>
@@ -210,7 +211,7 @@ function officePanel(p, colorOf) {
       ${av}
       <div class="mc"><b>${offEsc(m.name)}<u>${offEsc((m.assistant_id || m.id || "").slice(-4))}</u></b>
         <i>${offEsc(m.prompt || (m.model ? "模型 " + m.model : "跟随当前模型"))}</i></div>
-      <span class="pill ${st === "running" || st === "queued" ? "run" : ""}">${isLead ? "Leader" : (OFFICE_CN[st] || st)}</span>
+      <span class="pill ${st === "running" || st === "queued" ? "run" : ""}">${isLead?"负责人 · ":""}${OFFICE_CN[st]||st}</span>
     </div>`;
   };
   return `<div class="tof-pd">
@@ -239,8 +240,10 @@ function officePanel(p, colorOf) {
 }
 
 async function renderTeamOffice(m) {
+  const ticket=++officeRenderSequence;
   cancelAnimationFrame(officeRAF);
   const pid = curTask || ((S.tasks || [])[0] || {}).id || "";
+  if(pid&&!curTask){curTask=pid;localStorage.setItem('rw-task',pid);}
   if (!pid) {
     m.classList.add("tof-fill");
     m.innerHTML = `<div class="tof-empty"><b>团队挂在项目上</b>
@@ -249,12 +252,15 @@ async function renderTeamOffice(m) {
     return;
   }
   m.classList.add("tof-fill");
+  m.innerHTML='<div class="hint" role="status">正在读取团队…</div>';
   let d;
   try { d = await api("/api/teams?project=" + encodeURIComponent(pid)); }
   catch (e) {
+    if(ticket!==officeRenderSequence || route()!=='team' || curTask!==pid || !m.isConnected)return;
     m.innerHTML = `<div class="tof-empty"><b>团队没读出来</b><p>${offEsc(e.message)}</p></div>`;
     return;
   }
+  if(ticket!==officeRenderSequence || route()!=='team' || curTask!==pid || !m.isConnected)return;
   const teams = d.teams || [];
   if (!teams.some((t) => t.id === officeSel)) officeSel = (teams[0] || {}).id || "";
 
@@ -280,7 +286,7 @@ async function renderTeamOffice(m) {
           <select id="tofProj">${(S.tasks || []).map((t) =>
             `<option value="${offEsc(t.id)}" ${t.id === pid ? "selected" : ""}>${offEsc(t.title)}</option>`).join("")}</select>
         </label>
-        <button class="btn btn-primary" id="tofNew">＋ 组队</button>
+        <button class="btn btn-primary" id="tofNew" ${vacancies?'':'disabled title="加急团队已满，请先在修改编制中解散不再使用的加急团队"'}>＋ 组队</button>
       </div>
     </header>
     <div class="tof-body">
@@ -288,7 +294,7 @@ async function renderTeamOffice(m) {
         <div class="tof-row top" style="grid-template-columns:repeat(${Math.max(1, fixed.length)},1fr)">${fixed.map((p) => officeRoom(p, colorOf)).join("")}</div>
         <div class="tof-corr">
           <span>走 廊</span><i class="cl"></i>
-          <div class="tof-fig butler" data-status="running" data-hair="0" style="--c:var(--accent);--skin:${OFFICE_SKINS[0]}">
+          <div class="tof-fig butler" data-status="idle" data-hair="0" style="--c:var(--accent);--skin:${OFFICE_SKINS[0]}">
             <span class="in"><i class="h"></i><i class="b"></i><i class="a1"></i><i class="a2"></i><i class="l1"></i><i class="l2"></i></span></div>
         </div>
         <div class="tof-row bottom">${temp.map((p) => officeRoom(p, colorOf)).join("")}
@@ -310,8 +316,8 @@ async function renderTeamOffice(m) {
   });
   const bindPanel = () => {
     const ed = $("tofEdit"), en = $("tofEnter"), cl = $("tofClose");
-    if (ed) ed.onclick = () => { window.__teamMode = "manage"; render(); };
-    if (en) en.onclick = () => officeEnter(pid);
+    if (ed) ed.onclick = () => { teamScope=officeSel;teamSession='';teamList=null;localStorage.setItem('rw-team-chat',teamScope);window.__teamMode = "manage"; render(); };
+    if (en) en.onclick = () => officeEnter(pid,officeSel);
     if (cl) cl.onclick = () => { window.__teamMode = ""; render(); };
   };
   bindPanel();
@@ -326,10 +332,12 @@ async function renderTeamOffice(m) {
   officeSit();
 }
 
-function officeEnter(pid) {
+function officeEnter(pid,teamId=officeSel) {
   if (pid) { curTask = pid; localStorage.setItem("rw-task", pid); }
-  window.__teamMode = "";
-  openTab("workflow");       // 科研台：这个项目正在跑的任务/对话
+  teamScope=teamId;teamList=null;teamData=null;teamSession='';
+  localStorage.setItem('rw-team-chat',teamScope);
+  window.__teamMode = "chat";
+  return openTab('team');
 }
 
 /* 手动组队（管家也能用 team_form 工具自己组） */

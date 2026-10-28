@@ -18,6 +18,7 @@ class ReadOnlyProjectNotesTest(unittest.TestCase):
         self.folder = self.root / "zotero" / "existing-project"
         self.note = self.folder / "笔记/研究计划/existing.md"
         self.note.parent.mkdir(parents=True)
+        (self.root / "zotero/zotero.sqlite").touch()
         self.note.write_text("# Existing note\n\nREAD_ONLY_EVIDENCE", encoding="utf-8")
         self.db.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?", (str(self.folder), self.project))
         self.db.db.commit()

@@ -96,6 +96,9 @@ class CoreRoutes:
                 return self._json({"notes": db.notes(tid) if tid else db.notes()})
         if path == "/api/chat":
             with WorkflowDB(DB_PATH) as db:
+                import execution_conversations
+                linked=execution_conversations.read(db,q["id"][0])
+                if linked is not None:return self._json(linked)
                 return self._json({"messages": db.messages(q["id"][0])})
         if path == "/api/security":                   # 权限模式：all=不再逐次问，ask=编译/写文件每次问
             with WorkflowDB(DB_PATH) as db:

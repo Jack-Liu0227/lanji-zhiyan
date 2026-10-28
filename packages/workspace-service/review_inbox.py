@@ -27,6 +27,26 @@ def pending(db):
             'dismissed': bool(row['dismissed']), 'overdue': bool(due and due < now),
             'notify': bool(not row['dismissed'] and remind <= now),
             'summary': json.loads(row['checkpoint']).get('reply', '')[:500]})
+    import project_tasks
+    linked = set()
+    for item in items:
+        task = project_tasks.find_origin(db, 'workflow_node', item['node_id'])
+        item['canonical_task_id'] = task['id'] if task else ''
+        if task:
+            linked.add(task['id'])
+    for row in db.db.execute("""SELECT p.id,p.title,p.project_id,p.workflow_run_id,t.title AS project_title,
+        r.started_at,r.ended_at,r.checkpoint,m.due_at,m.remind_at,m.dismissed FROM project_tasks p
+        JOIN research_tasks t ON t.id=p.project_id JOIN project_task_runs r ON r.id=p.latest_run_id
+        LEFT JOIN review_reminders m ON m.node_id=p.id WHERE p.status='awaiting_review'"""):
+        if row['id'] in linked:
+            continue
+        received = _stamp(row['ended_at'] or row['started_at'])
+        due, remind = _stamp(row['due_at']), _stamp(row['remind_at']) or received
+        items.append({'node_id': row['id'], 'canonical_task_id': row['id'], 'run_id': row['workflow_run_id'],
+            'project_id': row['project_id'], 'project_title': row['project_title'], 'label': row['title'],
+            'received_at': received, 'due_at': due, 'remind_at': remind, 'dismissed': bool(row['dismissed']),
+            'overdue': bool(due and due < now), 'notify': bool(not row['dismissed'] and remind <= now),
+            'summary': json.loads(row['checkpoint']).get('reply', '')[:500]})
     return sorted(items, key=lambda r: r['due_at'] or r['received_at'])
 
 

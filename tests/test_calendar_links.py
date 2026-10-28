@@ -74,7 +74,9 @@ class CalendarLinksTest(unittest.TestCase):
 
     def test_workflow_reviews_are_visible_and_calendar_cannot_bypass_acceptance(self):
         workflow_layout.ensure_schema(self.db)
-        layout = workflow_layout.save_layout(self.db, {"name": "Review gate", **workflow_layout._linear(["outline"])})["layout"]
+        definition = workflow_layout._linear(["outline"])
+        definition["nodes"][0]["assistant_id"] = "builtin-steward"
+        layout = workflow_layout.save_layout(self.db, {"name": "Review gate", **definition})["layout"]
         workflow_layout.select_layout(self.db, {"task_id": self.pid, "layout_id": layout["id"]})
         run = workflow_execution.create(self.db, self.pid)
         def write(db, pid, prompt, **kwargs):

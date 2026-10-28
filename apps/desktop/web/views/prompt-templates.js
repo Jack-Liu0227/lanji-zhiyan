@@ -1,7 +1,7 @@
 window.PromptUI = (() => {
   const pending = new Map();
   const apiFor = (action, project, body={}) => api(`/api/prompt-templates/${action}`, {project_id:project,...body});
-  const scopeNames = {project:'项目',step:'工作流步骤',assistant:'助手',member:'团队成员',schedule:'日程'};
+  const scopeNames = {project:'项目',step:'工作流步骤',assistant:'专家',member:'团队成员',schedule:'日程'};
   const autoNames = new Set(['project.title','project.question','research_question','研究问题']);
   const ref = (key, project) => pending.get(key)?.project_id===project ? pending.get(key) : undefined;
 
@@ -22,50 +22,51 @@ window.PromptUI = (() => {
     }));
   }
 
-  async function configure(project, templateId, choose){
+  async function configure(project, templateId, choose, options={}){
     const d=Notebook.dialog('应用提示词模板','<p class="hint">正在读取模板…</p>');
     try{
-      const [item,options]=await Promise.all([apiFor('read',project,{template_id:templateId}),apiFor('options',project)]);
+      const [item,bindingOptions]=await Promise.all([apiFor('read',project,{template_id:templateId}),apiFor('options',project)]);
       d.querySelector('.hint').remove();
       const body=document.createElement('div');body.innerHTML=`<p><strong>${esc(item.title)}</strong> · 版本 ${item.revision}</p><div class="nb-form" data-variables></div>
-        <details class="pt-preview"><summary>模板原文</summary><pre>${esc(item.body)}</pre></details><div class="nb-actions"><button class="btn ghost" data-preview>预览效果</button><button class="btn" data-apply>应用到本轮任务</button><button class="btn ghost" data-binding>默认绑定…</button></div><pre class="pt-preview" data-result hidden></pre>`;
+        <details class="pt-preview"><summary>模板原文</summary><pre>${esc(item.body)}</pre></details><div class="nb-actions"><button class="btn ghost" data-preview>预览效果</button><button class="btn" data-apply>${esc(options.applyLabel||'应用到本轮任务')}</button><button class="btn ghost" data-binding ${options.bindings===false?'hidden':''}>默认绑定…</button></div><pre class="pt-preview" data-result hidden></pre>`;
       d.querySelector('.nb-error').before(body);
-      const values=fields(body.querySelector('[data-variables]'),item,options);
+      const values=fields(body.querySelector('[data-variables]'),item,bindingOptions);
       async function validate(){
         const result=await apiFor('render',project,{template_id:templateId,revision_id:item.revision_id,variables:values()});
         if(!result.ok)throw new Error([...result.missing.map(n=>`请填写 ${n}`),...Object.entries(result.errors).map(([n,e])=>`${n}：${e}`)].join('\n'));
         Notebook.error(d,'');return result;
       }
       body.querySelector('[data-preview]').onclick=async()=>{try{const result=await validate(),out=body.querySelector('[data-result]');out.hidden=false;out.textContent=result.rendered;}catch(e){Notebook.error(d,e);}};
-      body.querySelector('[data-apply]').onclick=async()=>{try{await validate();await choose({project_id:project,template_id:templateId,revision_id:item.revision_id,variables:values(),title:item.title,revision:item.revision});d.close();}catch(e){Notebook.error(d,e);}};
+      body.querySelector('[data-apply]').onclick=async()=>{try{const rendered=await validate();await choose({project_id:project,template_id:templateId,revision_id:item.revision_id,variables:values(),title:item.title,revision:item.revision},rendered);d.close();}catch(e){Notebook.error(d,e);}};
       body.querySelector('[data-binding]').onclick=()=>bindingDialog(project,templateId);
     }catch(e){Notebook.error(d,e);}
   }
 
-  async function picker(project, choose){
+  async function picker(project, choose, options={}){
     if(!project)return uiNotify('先选择一个项目，再引用该项目的提示词模板。');
     const d=Notebook.dialog('选择提示词模板','<div class="nb-form"><label>搜索模板<input type="search" placeholder="标题或内容"></label></div><div data-tags></div><div class="pt-template-list"></div>');
     let items=[], tags=[], sequence=0;
     const input=d.querySelector('input');
     function paint(){d.querySelector('.pt-template-list').innerHTML=items.filter(t=>tags.every(v=>t.tags.includes(v))).map(t=>`<button class="pt-template-pick" data-template="${esc(t.template_id)}"><strong>${esc(t.title)}</strong><span class="hint">${esc(t.tags.join(' · ')||'固定文本或变量模板')}</span></button>`).join('')||'<p class="hint">没有可用模板。可在笔记中点击“新建模板”，保存后使用。</p>';
-      d.querySelectorAll('[data-template]').forEach(b=>b.onclick=()=>configure(project,b.dataset.template,async v=>{await choose(v);d.close();}));}
+      d.querySelectorAll('[data-template]').forEach(b=>b.onclick=()=>configure(project,b.dataset.template,async(v,rendered)=>{await choose(v,rendered);d.close();},options));}
     try{items=(await apiFor('search',project)).templates;Notebook.tagPicker(d.querySelector('[data-tags]'),[],[...new Set(items.flatMap(t=>t.tags))],v=>{tags=v;paint();},{allowCreate:false,name:'筛选标签'});input.oninput=async()=>{const seq=++sequence;try{const result=await apiFor('search',project,{query:input.value});if(seq===sequence&&d.isConnected){items=result.templates;paint();}}catch(e){Notebook.error(d,e);}};paint();}catch(e){Notebook.error(d,e);}
   }
 
-  function mount(textarea, key, project){
+  function mount(textarea, key, project, onChange=()=>{}){
     if(!textarea)return;
     textarea.parentElement.querySelector('.pt-composer')?.remove();
     const host=document.createElement('div');host.className='pt-composer';textarea.before(host);
     function paint(){const value=ref(key,project);host.innerHTML=`<button type="button" class="btn ghost" data-pick ${project?'':'disabled'} title="${project?'为本轮任务选择提示词模板':'请先绑定项目'}">提示词模板</button>${value?`<span>${esc(value.title)} · v${value.revision}</span><button type="button" class="btn ghost" data-clear aria-label="移除本轮模板">×</button>`:'<small class="hint">未单独选择时使用已启用的默认绑定</small>'}`;
-      host.querySelector('[data-pick]').onclick=()=>picker(project,v=>{pending.set(key,v);paint();});
-      host.querySelector('[data-clear]')?.addEventListener('click',()=>{pending.delete(key);paint();});}
+      host.querySelector('[data-pick]').onclick=()=>picker(project,v=>{pending.set(key,v);onChange(v);paint();});
+      host.querySelector('[data-clear]')?.addEventListener('click',()=>{pending.delete(key);onChange(null);paint();});}
     paint();
   }
 
   async function applyToChat(project, templateId){
     await configure(project,templateId,async value=>{
+      if(window.ProjectWorkspace)return ProjectWorkspace.applyTemplate(project,value);
       let chat=(S.chats||[]).find(c=>c.id===curChat&&c.task_id===project);
-      if(!chat){const created=await api('/api/chat/create',{title:value.title});chat=created.chat;await api('/api/chat/bind',{id:chat.id,task_id:project});}
+      if(!chat){const created=await api('/api/chat/create',{title:value.title,task_id:project});chat=created.chat;}
       curChat=chat.id;localStorage.setItem('rw-chat',curChat);pending.set(`chat:${curChat}`,value);
       await refreshState(false);openTab('agent');
       if($('ask')){$('ask').value=`请按照「${value.title}」完成任务。`;$('ask').focus();grow();}
@@ -101,7 +102,7 @@ window.PromptUI = (() => {
   }
 
   async function bindingDialog(project, templateId){
-    const d=Notebook.dialog('默认模板绑定','<p class="hint">优先级：本轮选择 → 日程 → 工作流步骤 → 团队成员 → 助手 → 项目。默认固定当前版本，可选择跟随更新。</p>');
+    const d=Notebook.dialog('默认模板绑定','<p class="hint">优先级：本轮选择 → 日程 → 工作流步骤 → 团队成员 → 专家 → 项目。默认固定当前版本，可选择跟随更新。</p>');
     try{
       const [item,options,state]=await Promise.all([apiFor('read',project,{template_id:templateId}),apiFor('options',project),apiFor('bindings',project)]);
       const wrapper=document.createElement('div');wrapper.innerHTML=`<p>模板：${esc(item.title)} · v${item.revision}</p><form class="nb-form"><label>绑定范围<select name="scope">${Object.entries(scopeNames).map(([v,n])=>`<option value="${v}">${n}</option>`).join('')}</select></label><label>绑定对象<select name="target"></select></label><div class="nb-form" data-values></div><label><span><input name="latest" type="checkbox">跟随模板最新版本</span></label><label><span><input name="enabled" type="checkbox" checked>启用此绑定</span></label><button class="btn" type="submit">保存默认绑定</button></form><div data-existing></div>`;
@@ -121,7 +122,7 @@ window.PromptUI = (() => {
 
   async function usageHistory(project, templateId){
     const d=Notebook.dialog('模板使用记录','<div data-history></div>');
-    try{const {history}=await apiFor('history',project,{template_id:templateId});d.querySelector('[data-history]').innerHTML=history.map(r=>`<details class="pt-preview"><summary>${esc(r.created_at)} · v${esc(String(r.input_snapshot.revision||''))} · ${esc(r.run_id||'')}</summary><pre>${esc(r.input_snapshot.rendered||'')}</pre></details>`).join('')||'<p class="hint">还没有运行使用过此模板。预览不会计入使用记录。</p>';}catch(e){Notebook.error(d,e);}
+    try{const {history}=await apiFor('history',project,{template_id:templateId});d.querySelector('[data-history]').innerHTML=history.map(r=>`<details class="pt-preview"><summary>${esc(r.created_at)} · v${esc(String(r.input_snapshot.revision||''))} · ${esc(r.run_id||'')}${r.input_snapshot.applied_prompt!==undefined&&r.input_snapshot.applied_prompt!==r.input_snapshot.rendered?' · 本次已修改':''}</summary><pre>${esc(r.input_snapshot.applied_prompt??r.input_snapshot.rendered??'')}</pre></details>`).join('')||'<p class="hint">还没有运行使用过此模板。预览不会计入使用记录。</p>';}catch(e){Notebook.error(d,e);}
   }
 
   async function manageBindings(project){
@@ -137,5 +138,5 @@ window.PromptUI = (() => {
   }
 
   function event(box,ev){const card=document.createElement('div');card.className='pt-used';card.textContent=`提示词模板：${ev.title} · v${ev.revision}`;card.title=`模板版本：${ev.revision_id}`;box.appendChild(card);}
-  return {picker,mount,ref,noteActions,bindingDialog,manageBindings,event};
+  return {picker,configure,usageHistory,mount,ref,select(key,value){if(value)pending.set(key,value);else pending.delete(key);},noteActions,bindingDialog,manageBindings,event};
 })();

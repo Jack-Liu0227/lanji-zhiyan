@@ -58,7 +58,10 @@ class PromptTemplatesTest(unittest.TestCase):
         self.assertEqual(prompt_templates.read(self.db, self.pid, saved["template_id"])["body"], "Fixed prompt")
         plain = project_notes.write(self.db, self.pid, "", "plain", metadata={"category_id": "prompt_templates", "tags": ["模板"]})
         self.assertEqual(plain["note_type"], "note")
-        self.assertEqual(len(prompt_templates.search(self.db, self.pid)["templates"]), 1)
+        templates=prompt_templates.search(self.db, self.pid)["templates"]
+        self.assertIn(saved['template_id'],[item['template_id'] for item in templates])
+        self.assertNotIn(plain['path'],[item['path'] for item in templates])
+        self.assertEqual(len(templates),3)  # Custom template plus project defaults.
 
     def test_disabled_and_cross_project_are_rejected(self):
         saved = self.template("Fixed")

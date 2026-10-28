@@ -58,7 +58,7 @@ def _clip(text: str, n: int) -> str:
 
 
 def _team(say: Any, events: list[dict[str, Any]], frm: str, to: str, tag: str, content: str) -> None:
-    """发一条「agent 对 agent」的发言：进事件流（前台边跑边画）+ 进 events（随助手消息落库，刷新还在）。"""
+    """发一条「agent 对 agent」的发言：进事件流（前台边跑边画）+ 进 events（随专家消息落库，刷新还在）。"""
     name, emoji = TEAM_ROLE[frm]
     ev = {"type": "team", "role": frm, "name": name, "emoji": emoji,
           "to": to, "tag": tag, "content": (content or "").strip()}
@@ -413,7 +413,7 @@ def entrans_system(db: Any, task_id: str) -> str:
     except OSError:
         pass
     dest = src.with_name(src.stem + "_en.md")
-    return f"""你是「览籍智研」里「中译英」这一步的翻译助手：产出英文，跟用户用中文说话。
+    return f"""你是「览籍智研」里「中译英」这一步的翻译专家：产出英文，跟用户用中文说话。
 
 硬规则：
 1. **源只有一份**：《{task['title']}》的正文 `{src}`（现在约 {chars} 字）。你只翻它，不要另找文件，也不要自己重新拼一份稿子。

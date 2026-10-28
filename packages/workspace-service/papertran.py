@@ -24,10 +24,18 @@ from pathlib import Path
 from typing import Any
 
 # BabelDOC 实测：模型/字体走本机缓存，只有 tiktoken 小文件首次要联网（已灌进缓存）
-# 优先直跑 uv tools 里装好的 exe：`uv tool run` 要写 %LOCALAPPDATA%\uv\cache，
+# 优先直跑应用执行器目录里的 exe：`uv tool run` 要写 %LOCALAPPDATA%\uv\cache，
 # 在低完整性沙箱里直接 "Failed to initialize cache / 拒绝访问"；直跑 exe 就可以进沙箱。
-BABELDOC_EXE = Path(os.environ.get("APPDATA", "")) / "uv" / "tools" / "babeldoc" / "Scripts" / "babeldoc.exe"
-BABELDOC_CMD = [str(BABELDOC_EXE)] if BABELDOC_EXE.is_file() else ["uv", "tool", "run", "babeldoc"]
+MANAGED_BABELDOC = paths.EXECUTORS / "babeldoc" / "Scripts" / "babeldoc.exe"
+_LEGACY_BABELDOC = Path(os.environ.get("APPDATA", "")) / "uv" / "tools" / "babeldoc" / "Scripts" / "babeldoc.exe"
+BABELDOC_EXE = MANAGED_BABELDOC if MANAGED_BABELDOC.is_file() or not _LEGACY_BABELDOC.is_file() else _LEGACY_BABELDOC
+BABELDOC_CMD = [str(BABELDOC_EXE)] if BABELDOC_EXE.is_file() else ["uv", "tool", "run", "--with", "bitstring<5", "babeldoc"]
+
+
+def babeldoc_command() -> list[str]:
+    # Setup can finish while the desktop service is already running.
+    native = MANAGED_BABELDOC if MANAGED_BABELDOC.is_file() else BABELDOC_EXE
+    return [str(native)] if native.is_file() else BABELDOC_CMD
 
 # 从 pythonw（无控制台）里起控制台程序，Windows 会给子进程新建一个黑窗；
 # 用户一关这个黑窗，子进程就收到控制台事件、以 0xC000013A 退出 —— 表现就是
@@ -273,6 +281,8 @@ def start(db: Any, paper_id: str, out_dir: Path, pages: str = "", force: bool = 
     path = pdf_path(db, paper_id)
     if not path:
         return {"error": "找不到这篇 PDF 的文件"}
+    if os.name == "nt" and os.environ.get("RW_LOW_SERVER") == "1" and not (MANAGED_BABELDOC.is_file() or BABELDOC_EXE.is_file()):
+        return {"error": "翻译引擎尚未初始化。请先完成翻译环境初始化，再重新开始翻译。"}
     out_dir.mkdir(parents=True, exist_ok=True)
     dual, mono = out_paths(path, out_dir)
     cfg = _llm_cfg(db)
@@ -334,7 +344,7 @@ def _spawn(paper_id: str, cmd: list[str], env: dict[str, str], fh: Any, a: int, 
     """跑一段 babeldoc：日志边写边刷新，状态里同步进度"""
     # 直跑 exe 时进 Low IL 沙箱（只能写项目目录）；还在走 uv 包装器时只能普通 spawn
     # —— uv 要写 %LOCALAPPDATA%\uv\cache，Low 下直接拒绝访问。
-    if BABELDOC_EXE.is_file():
+    if Path(cmd[0]).name.lower() == "babeldoc.exe":
         proc = lowbox.popen(cmd, env=env)
     else:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -508,7 +518,7 @@ def _run(paper_id: str, path: Path, out_dir: Path, cfg: dict[str, str],
         _off_think = ("--openai-thinking", "disabled") if (
             "deepseek" in str(cfg.get("base") or "").lower()
             or "deepseek" in str(cfg.get("model") or "").lower()) else ()
-        cmd = BABELDOC_CMD + ["--files", str(path), "--lang-in", "en", "--lang-out", "zh",
+        cmd = babeldoc_command() + ["--files", str(path), "--lang-in", "en", "--lang-out", "zh",
                               "--openai", "--openai-model", cfg["model"],
                               "--openai-base-url", cfg["base"], "--openai-api-key", cfg["key"],
                               "--watermark-output-mode", "no_watermark",

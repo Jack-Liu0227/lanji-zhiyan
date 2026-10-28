@@ -22,7 +22,7 @@ def main() -> None:
     if sys.platform != "win32" or sys.version_info < (3, 10):
         raise RuntimeError("Windows and Python 3.10 or newer are required")
     missing = [name for name in ("PyInstaller", "webview", "pythonnet", "docx", "yaml",
-                                "pypdf", "pdfplumber", "numpy", "qrcode", "lark_oapi")
+                                "pypdf", "pdfplumber", "numpy", "qrcode", "lark_oapi", "langgraph")
                if importlib.util.find_spec(name) is None]
     if missing:
         raise RuntimeError("Missing dependencies: %s\nRun: %s -m pip install -r requirements-build.txt"

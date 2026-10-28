@@ -9,9 +9,11 @@ import workflow_context
 import workflow_execution as engine
 import review_inbox
 import calendar_service
+import project_tasks
 
 
 class WorkflowContinuityTest(unittest.TestCase):
+    default_executor = 'builtin-steward'
     setUp = fixtures.WorkflowExecutionTest.setUp
     layout = fixtures.WorkflowExecutionTest.layout
     execute = fixtures.WorkflowExecutionTest.execute
@@ -56,14 +58,14 @@ class WorkflowContinuityTest(unittest.TestCase):
         self.layout([{'step':'outline'}])
         run=engine.create(self.db,self.pid)
         calls=[{'id':str(i),'type':'function','function':{'name':'doc_write','arguments':json.dumps({'markdown':'Artifact '+str(i)})}} for i in (1,2)]
-        original=engine._checkpoint
+        original=project_tasks.save_checkpoint
         class Crash(BaseException):
             pass
-        def checkpoint(db,node_id,value):
-            original(db,node_id,value)
-            if value.get('agent',{}).get('phase')=='tools_ready':
+        def checkpoint(db,task_run_id,**value):
+            original(db,task_run_id,**value)
+            if value.get('phase')=='tools_ready':
                 raise Crash()
-        with patch.object(workflow,'_chat_raw',return_value={'tool_calls':calls}), patch.object(engine,'_checkpoint',side_effect=checkpoint), \
+        with patch.object(workflow,'_chat_raw',return_value={'tool_calls':calls}), patch.object(project_tasks,'save_checkpoint',side_effect=checkpoint), \
                 patch.object(workflow,'_tool_impl',wraps=workflow._tool_impl) as tool:
             with self.assertRaises(Crash):
                 engine.advance(self.db,run['id'])

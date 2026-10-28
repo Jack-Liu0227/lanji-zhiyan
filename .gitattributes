@@ -1,3 +1,6 @@
 # Windows 脚本必须 CRLF：cmd 读 LF 结尾的 .bat 会把 if(...) 块与 & 拆错
 #（现象：自检.bat 报一堆「不是内部或外部命令」，退出码 255）
 *.bat text eol=crlf
+
+# Preserve upstream Mermaid bundle bytes and its recorded checksum.
+apps/desktop/web/vendor/mermaid/mermaid.min.js -text -whitespace linguist-vendored

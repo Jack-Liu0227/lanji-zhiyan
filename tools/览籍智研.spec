@@ -33,7 +33,8 @@ a = Analysis(
                    'research_core', 'workflow', 'team', 'schedule', 'papertran', 'zotero', 'vault',
                    'mail', 'rss', 'integrations', 'guards', 'pdfio', 'agent_settings', 'agent_protocols',
                    'capabilities', 'skill_registry', 'workflow_layout', 'folder_picker', 'agent_integrations',
-                   'feishu', 'zotero_sync', 'service_settings', 'feature_routes', 'tkinter', 'tkinter.filedialog'],
+                   'feishu', 'zotero_sync', 'service_settings', 'feature_routes', 'tkinter', 'tkinter.filedialog',
+                   'langgraph.graph', 'langgraph.channels', 'langgraph.pregel', 'langgraph.checkpoint.sqlite', 'task_adapters'],
     # 说明：pdfminer.six / pdfplumber 里有条件导入（cryptography 处理加密 PDF、PIL/pypdfium2 渲染），
     # 静态分析看不到，必须显式列出；PyMuPDF(AGPL) 已弃用，见 pdfio.py。
    # cryptography: pdfminer.six 里是条件导入，静态分析看不到   # PyMuPDF(AGPL) 已弃用，见 pdfio.py / requirements.txt

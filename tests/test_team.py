@@ -10,9 +10,10 @@ for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-
 import pathlib
 import tempfile
 import unittest
-# 多团队（2 固定 + 3 机动）+ 固定团队预置成员 + 助手=模型 的自检。
+from unittest.mock import patch
+# 多团队（2 固定 + 3 机动）+ 固定团队预置成员 + 专家=模型 的自检。
 # python -m unittest test_teams -v
-# 团队 v2 自检：成员从助手选（≤5）/ 交接规则 / 团队群记录 / 自动接力跑一轮。
+# 团队 v2 自检：成员从专家选（≤5）/ 交接规则 / 团队群记录 / 自动接力跑一轮。
 # python -m unittest test_team_chat -v
 
 
@@ -50,8 +51,9 @@ class TeamTest(unittest.TestCase):
         team.DB_PATH = _p          # 每个用例都把团队库指回自己的（多模块一起跑时别串）
         _safe_clean(_p)
         with workflow.WorkflowDB(_p) as db:
-            self.tid = db.create_task("测试项目", "问题", "体系", "")
+            self.tid = db.team_add("测试讨论组", "custom")["id"]
             db.add_model("假模型", "http://127.0.0.1:1/v1", "fake", "sk", activate=True)
+            team.ensure_leader(self.tid, db)
 
     def test_leader_seeded_once_and_immutable(self) -> None:
         ms = team.members(self.tid)
@@ -66,7 +68,8 @@ class TeamTest(unittest.TestCase):
         leader = team.members(self.tid)[0]
         with workflow.WorkflowDB(_p) as db:
             db.team_member_update(leader["id"], name="全局 Leader")
-        self.assertEqual(team.members(self.tid)[0]["name"], "团队协调员")
+        team.ensure_leader(self.tid)
+        self.assertEqual(team.members(self.tid)[0]["name"], "测试讨论组负责人")
         self.assertEqual(len(team.members(self.tid)), 1)                      # 不是又插一个
 
     def test_assign_requires_existing_member(self) -> None:
@@ -95,15 +98,11 @@ class TeamTest(unittest.TestCase):
         b = team.board(self.tid)
         t = [x for x in b["tasks"] if x["id"] == row["id"]][0]
         self.assertEqual(t["status"], "done")
-        self.assertTrue(t["output_path"])
-        self.assertTrue(pathlib.Path(t["output_path"]).is_file())            # 产物真落盘
+        self.assertFalse(t["output_path"])
+        self.assertIn("写好了", team.transcript(self.tid)[-1]["content"])
         with workflow.WorkflowDB(_p) as db:
-            out_assets = db.db.execute(
-                "SELECT id FROM assets WHERE canonical_uri=?",
-                (str(pathlib.Path(t["output_path"]).resolve()),),
-            ).fetchall()
-            self.assertEqual(len(out_assets), 1)
-            self.assertEqual(t["output_assets"], "[\"%s\"]" % out_assets[0][0])
+            self.assertEqual(db.db.execute("SELECT COUNT(*) FROM project_tasks").fetchone()[0], 0)
+            self.assertEqual(t["output_assets"], "[]")
         kinds = [e["kind"] for e in t["events"]]
         for k in ("assign", "start", "assistant", "done"):
             self.assertIn(k, kinds)                                          # 看板的事件流有料
@@ -136,18 +135,22 @@ class TeamTest(unittest.TestCase):
 
     def test_leader_tool_dispatch(self) -> None:
         """Leader 通过工具派活：项目内可直接派；首页通用对话必须点名项目，不许瞎猜。"""
-        team.add_member(self.tid, "检索员", "search")
-        with workflow.WorkflowDB(_p) as db:
-            out = workflow._tool_impl("team_assign", db, self.tid, {"member": "检索员", "prompt": "检索一下"})
+        with workflow.WorkflowDB(_p) as db, patch("project_task_execution.kick"):
+            project = db.create_task("测试项目")
+            office = db.team_add("检索团队", "custom", project_id=project)
+            db.team_member_add(office["id"], "检索员", "leader", assistant_id="builtin-searcher")
+            args = {"team_id": office["id"], "member": "检索员", "prompt": "检索一下"}
+            out = workflow._tool_impl("team_assign", db, project, args)
             self.assertEqual(out["status"], "queued")
-            b = workflow._tool_impl("team_board", db, self.tid, {})
-            self.assertEqual(len(b["members"]), 2)
+            self.assertEqual(out["canonical_task"]["project_id"], project)
+            b = workflow._tool_impl("team_board", db, project, {"team_id": office["id"]})
+            self.assertEqual(len(b["members"]), 1)
             self.assertIn("单进程串行队列", b["serial_note"])
             chat = db.create_chat("通用对话")
             with self.assertRaises(ValueError):
                 workflow._tool_impl("team_assign", db, chat, {"member": "检索员", "prompt": "x"})
-            out2 = workflow._tool_impl("team_assign", db, chat, {"project": "测试项目", "member": "检索员", "prompt": "再检索"})
-            self.assertEqual(out2["task_id"], self.tid)
+            out2 = workflow._tool_impl("team_assign", db, chat, {**args, "project": "测试项目", "prompt": "再检索"})
+            self.assertEqual(out2["task_id"], office["id"])
 
 
 # ---------------- 来自 test_teams.py ----------------
@@ -165,6 +168,8 @@ class TeamsTest(unittest.TestCase):
         team.DB_PATH = _p
         with workflow.WorkflowDB(_p) as db:
             self.db = db
+            self.project = db.create_task("Preset team project")
+            self.legacy_project = db.create_task("Legacy team project")
 
     def _t(self, tid):
         with workflow.WorkflowDB(_p) as db:
@@ -172,29 +177,29 @@ class TeamsTest(unittest.TestCase):
 
     # ---------- 固定位 ----------
     def test_01_two_fixed_seeded_idempotent(self):
-        a = team.ensure_defaults("p1")
+        a = team.ensure_defaults(self.project)
         fixed = [x for x in a if x["kind"] == "fixed"]
         self.assertEqual([x["name"] for x in fixed], ["文献抽取", "文件撰写"])
-        b = team.ensure_defaults("p1")
+        b = team.ensure_defaults(self.project)
         self.assertEqual(len(b), 2)                       # 幂等，不重复播
-        self.assertEqual(team.teams("p1")["fixed"], 2)
+        self.assertEqual(team.teams(self.project)["fixed"], 2)
         with self.assertRaises(ValueError):
-            team.new_team("fixed", "", "p1")              # 第 3 个常驻位不给
+            team.new_team("fixed", "", self.project)              # 第 3 个常驻位不给
 
     def test_01b_fixed_teams_preseeded_roster(self):
-        """两个固定团队各预置 3 个成员（按助手名字找），再调一次不会重复拉人。"""
-        team.ensure_defaults("p1")
+        """两个固定团队各预置 3 个成员（按专家名字找），再调一次不会重复拉人。"""
+        team.ensure_defaults(self.project)
         want = {"文献抽取": ["文献检索员", "分块员", "图表解读员", "数据抽取员"],
                 "文件撰写": ["结构规划员", "写作搭档", "论文写作", "语言润色"]}
-        for t in team.teams("p1")["teams"]:
+        for t in team.teams(self.project)["teams"]:
             if t["kind"] != "fixed":
                 continue
             names = [m["name"] for m in team.picks(t["id"])]
             self.assertEqual(names, want[t["name"]], t["name"])
             for m in team.picks(t["id"]):
-                self.assertTrue(m["assistant_id"])        # 每个成员都挂在助手上
+                self.assertTrue(m["assistant_id"])        # 每个成员都挂在专家上
                 self.assertGreaterEqual(m["color"], 1)    # Leader 占 0 号色
-        again = [m["name"] for t in team.teams("p1")["teams"] if t["name"] == "文献抽取"
+        again = [m["name"] for t in team.teams(self.project)["teams"] if t["name"] == "文献抽取"
                  for m in team.picks(t["id"])]
         self.assertEqual(again, want["文献抽取"])          # 幂等：不会重复拉人
 
@@ -251,20 +256,20 @@ class TeamsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             team.rename_team(t["id"], "  ")
 
-    # ---------- 助手 = 模型接入 ----------
+    # ---------- 专家 = 模型接入 ----------
     def test_07_agent_profile_follows_assistant_model(self):
         with workflow.WorkflowDB(_p) as db:
             db.add_model("激活的", "http://127.0.0.1:1/v1", "active-model", "k", activate=True)
             m2 = db.add_model("deepseek", "https://api.deepseek.com/v1", "deepseek-chat", "k2")
-            db.assistant_save("a-ds", name="deepseek 助手", model_id=m2["id"])
+            db.assistant_save("a-ds", name="deepseek 专家", model_id=m2["id"])
             cid = db.create_chat("接了 deepseek 的对话")
-            # 没绑助手 → 用激活模型
+            # 没绑专家 → 用激活模型
             self.assertEqual(workflow.agent_profile(db, cid)["model"], "active-model")
-            # 绑了助手 → 用助手接的那个模型（这就是「deepseek 接进去就是个助手」）
+            # 绑了专家 → 用专家接的那个模型（这就是「deepseek 接进去就是个专家」）
             db.set_chat_assistant(cid, "a-ds")
             self.assertEqual(workflow.agent_profile(db, cid)["model"], "deepseek-chat")
             self.assertEqual(workflow.agent_profile(db, cid)["name"], "deepseek")
-            # 助手没指定模型 → 退回激活模型
+            # 专家没指定模型 → 退回激活模型
             db.assistant_save("a-none", name="没指模型")
             db.set_chat_assistant(cid, "a-none")
             self.assertEqual(workflow.agent_profile(db, cid)["model"], "active-model")
@@ -272,7 +277,7 @@ class TeamsTest(unittest.TestCase):
     def test_08_member_model_shown(self):
         with workflow.WorkflowDB(_p) as db:
             db.add_model("deepseek", "https://api.deepseek.com/v1", "deepseek-chat", "k")
-            db.assistant_save("a-ds", name="ds 助手", model_id=db.models()[0]["id"])
+            db.assistant_save("a-ds", name="ds 专家", model_id=db.models()[0]["id"])
         t = team.new_team("temp")
         team.add_assistant(t["id"], "a-ds")
         st = team.chat_state(t["id"])
@@ -288,14 +293,14 @@ class TeamsTest(unittest.TestCase):
         for i in (1, 2, 3):
             with workflow.WorkflowDB(_p) as db:
                 db.team_add("团队 %d" % i, "fixed")
-        team.ensure_defaults("p9")
-        ts = team.teams("p9")["teams"]
+        team.ensure_defaults(self.legacy_project)
+        ts = team.teams(self.legacy_project)["teams"]
         fixed = [x["name"] for x in ts if x["kind"] == "fixed"]
         self.assertEqual(sorted(fixed), ["文件撰写", "文献抽取"])
         left = [x for x in team.teams()["teams"] if x["kind"] == "temp" and x["name"].startswith("团队")]
         self.assertEqual(len(left), 1)                    # 多出来的那一个转成了机动位
         self.assertEqual(left[0]["status"], "done")       # 标已收工，等着被回收
-        self.assertEqual(team.teams("p9")["fixed"], 2)
+        self.assertEqual(team.teams(self.legacy_project)["fixed"], 2)
 
 
 # ---------------- 来自 test_team_chat.py ----------------
@@ -329,7 +334,7 @@ class TeamChatTest(unittest.TestCase):
         self.assertIsNone(team.next_speaker("@甲", [], "甲"))                  # 没人了就停
         self.assertEqual(team.next_speaker("", names, "丙"), "甲")             # 轮到尾巴回开头
 
-    # ---------- 成员 = 从助手里选，最多 5 个 ----------
+    # ---------- 成员 = 从专家里选，最多 5 个 ----------
     def test_02_members_are_assistants_without_truncation(self):
         self.assertEqual(team.picks(self.scope), [])
         m = self._pick()
@@ -338,14 +343,14 @@ class TeamChatTest(unittest.TestCase):
         self.assertEqual(m["color"], 1)                    # 0 号色留给 Leader
         self.assertEqual(team.color_of(m), "#5c9ea4")
         with self.assertRaises(ValueError):
-            self._pick()                                   # 同一个助手不许进两次
+            self._pick()                                   # 同一个专家不许进两次
         for aid in ("builtin-writer", "builtin-reviewer", "builtin-extractor"):
             team.add_assistant(self.scope, aid)
         self.assertEqual(len(team.picks(self.scope)), 4)
         with self.assertRaises(ValueError) as e:           # 第 6 个（这里已是第 5 个之外）
             team.add_assistant(self.scope, "a-new")
-        self.assertIn("没有这个助手", str(e.exception))     # 先撞「助手不存在」
-        with workflow.WorkflowDB(_p) as db:                # 造 5 个助手把上限顶满
+        self.assertIn("没有这个专家", str(e.exception))     # 先撞「专家不存在」
+        with workflow.WorkflowDB(_p) as db:                # 造 5 个专家把上限顶满
             for i in range(5):
                 db.assistant_save("x-%d" % i, name="凑数%d" % i)
         team.add_assistant(self.scope, "x-0")

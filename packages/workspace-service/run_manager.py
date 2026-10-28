@@ -60,6 +60,9 @@ class RunState:
                         db.update_background_job(self.run_id, status=status, progress=1.0, last_event_id=eid)
                 elif hasattr(db, "update_background_job"):
                     db.update_background_job(self.run_id, last_event_id=eid)
+                if hasattr(db, 'assistant'):
+                    import execution_board
+                    execution_board.agent_event(db, self.task_id, self.run_id, event)
             self.status = status
             self.events.append(ev_record)
 

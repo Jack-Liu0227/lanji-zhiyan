@@ -197,7 +197,7 @@ function mdCmd(command, value=""){
   if(command==="table") return mdInsert("","","| 列 1 | 列 2 | 列 3 |\n| --- | --- | --- |\n| 内容 | 内容 | 内容 |");
 }
 async function mdImport(files){
-  if(mdDashReadOnly && (route()==="space" || route()==="notes")) return;
+  if(mdDashReadOnly && (uiRouteIs("space") || route()==="notes")) return;
   const input=[...(files||[])], list=input.filter(f=>/\.(?:md|markdown)$/i.test(f.name));
   if(!list.length) return uiNotify("请选择 .md 或 .markdown 文件（笔记仅读取 Markdown）");
   if(mdProj || spTab === "notes"){
@@ -425,7 +425,7 @@ function zotBind(){
         if(fr) fr.src = "/kb.html?theme=" + (document.documentElement.dataset.theme||"dark") + "&rebuild=1";
       }catch(_){}
       await refreshState(false);
-      if(route() === "space" || route() === "library") render();
+      if(uiRouteIs("space") || route() === "library") render();
     }catch(e){ $("zotStatus").textContent = "导入失败：" + e.message; }
     finally{ btn.disabled = false; updateZotSelectCount(); }
   };
@@ -474,8 +474,8 @@ function schEditorHTML(){
   const e = schEdit;
   const projOpts = `<option value="">未绑定（运行会被阻断）</option>` +
     (S.tasks||[]).map(t=>`<option value="${t.id}" ${t.id===e.project_id?"selected":""}>${esc(t.title)}</option>`).join("");
-  const assistantOpts = `<option value="">请选择专家</option>` +
-    (S.assistants||[]).filter(a=>a.enabled).map(a=>`<option value="${esc(a.id)}" ${a.id===e.assistant_id?"selected":""}>${esc(a.name)}</option>`).join("");
+  const assistantOpts = `<option value="builtin-scheduler" ${!e.assistant_id||e.assistant_id==='builtin-scheduler'?"selected":""}>定时任务专家（默认）</option>` +
+    (S.assistants||[]).filter(a=>a.enabled&&!(["builtin-steward","builtin-scheduler"].includes(a.id))).map(a=>`<option value="${esc(a.id)}" ${a.id===e.assistant_id?"selected":""}>${esc(a.name)}</option>`).join("");
   const freqOpts = Object.keys(schFreq).length ? Object.keys(schFreq) : Object.keys(SCH_PRESETS);
   return `<div class="card" style="margin-top:12px"><div class="sch-head">
     <div><p class="sch-eyebrow">${e.id?"EDIT SCHEDULE":"NEW SCHEDULE"}</p>
@@ -488,23 +488,23 @@ function schEditorHTML(){
       <label><span>Cron（分 时 日 月 周）</span><input id="schCron" value="${esc(e.cron)}" style="font-family:ui-monospace,Consolas,monospace"></label>
       <label><span>项目</span><select id="schProj">${projOpts}</select></label>
        <label><span>执行专家</span><select id="schAssistant">${assistantOpts}</select></label>
-       <label><span>执行完整工作流（可选）</span><select id="schWorkflow"><option value="">只运行所选专家</option></select></label>
+       <label><span>LangGraph 流程（可选）</span><select id="schWorkflow"><option value="">只运行所选专家</option></select></label>
        <label><span>关联项目待办（可选）</span><select id="schTodo"><option value="">正在读取…</option></select></label>
       <label><span>输出目录（项目目录内的相对路径）</span><input id="schOut" value="${esc(e.output_dir)}"></label>
       <label><span>启用</span><select id="schOn"><option value="1" ${e.enabled?"selected":""}>已启用</option><option value="0" ${e.enabled?"":"selected"}>已暂停</option></select></label>
-      <label class="full"><span>任务目标（工作流按节点配置选择团队、助手、工具和技能）</span><textarea id="schPrompt">${esc(e.prompt)}</textarea></label>
+      <label class="full"><span>任务目标（工作流按节点配置选择团队、专家、工具和技能）</span><textarea id="schPrompt">${esc(e.prompt)}</textarea></label>
     </div>
     <div class="hint" style="margin-top:10px">输出目录为项目目录内的相对目录，保存与运行前都会再校验一次：绝对路径、盘符、<code>..</code>、隐藏目录（如 <code>.obsidian</code>）会被拒绝。</div>
     <div class="pf-actions" style="margin-top:12px"><button class="btn ghost" id="schCancel2">取消</button><button class="btn" id="schSave">${e.id?"更新任务":"保存任务"}</button></div></div>`;
 }
 function schCardHTML(r){
   const next = r.enabled ? (r.next_run_at ? fmtDate(r.next_run_at) : "未排期") : "已暂停";
-  return `<div class="sch-card ${r.enabled?"":"off"}">
+  return `<div class="sch-card ${r.enabled?"":"off"}" data-schedule-id="${esc(r.id)}">
     <div class="ic">⏰</div>
     <div class="main"><div class="nmrow"><span class="nm">${esc(r.name)}</span>
       <span class="pill ${r.enabled?"ok":"warn"}">${r.enabled?"已启用":"已暂停"}</span>
       <span class="pill">${esc(schFreqLabel(r.frequency))} · ${esc(r.cron)}</span></div>
-       <div class="ln">${r.project_id?esc(schTaskName(r.project_id)||"已绑定项目"):"未绑定项目"} · ${r.workflow_id?'完整工作流':esc((S.assistants||[]).find(a=>a.id===r.assistant_id)?.name||"未绑定专家")} · 输出 ${esc(r.output_dir)}</div>
+       <div class="ln">${r.project_id?esc(schTaskName(r.project_id)||"已绑定项目"):"未绑定项目"} · ${r.workflow_id?'LangGraph 流程':esc((S.assistants||[]).find(a=>a.id===r.assistant_id)?.name||"未绑定专家")} · 输出 ${esc(r.output_dir)}</div>
       <div class="ln">${esc((r.prompt||"").replace(/\s+/g," ").slice(0,110))}</div>
       <div class="ln">下次 ${esc(next)} · 最近 ${esc(r.last_run_at?fmtDate(r.last_run_at):"尚未运行")}</div></div>
     <div class="acts">
@@ -521,7 +521,7 @@ function schRunHTML(e){
     <span class="tm">${esc(schWhen(e.started_at))}${e.ended_at?` → ${esc(fmtDate(e.ended_at).slice(-5))}`:""}</span>
     <div class="acts">
       ${retry?`<button class="btn ghost" data-run-retry="${e.schedule_id}">重试</button>`:""}
-      ${e.workflow_run_id?`<button class="btn ghost" data-run-workflow="${esc(e.workflow_run_id)}" data-run-project="${esc(schRows.find(s=>s.id===e.schedule_id)?.project_id||'')}">查看工作流 / 审查</button>`:''}
+      ${e.project_task_id?`<button class="btn ghost" data-run-task="${esc(e.project_task_id)}" data-run-project="${esc(e.project_id)}">查看任务与核查</button>`:e.workflow_run_id?`<button class="btn ghost" data-run-workflow="${esc(e.workflow_run_id)}" data-run-project="${esc(e.project_id||schRows.find(s=>s.id===e.schedule_id)?.project_id||'')}">查看流程与核查</button>`:''}
       ${e.note_id && e.note_path?`<button class="btn ghost" data-run-note="${esc(e.note_id)}" data-note-project="${esc(e.note_project_id)}" data-note-path="${esc(e.note_path)}">打开笔记</button>`:""}
       <button class="btn ghost" data-run-del="${e.id}">删除</button></div>
     ${e.reason?`<div class="det">阻断/失败原因：${esc(e.reason)}</div>`:""}
@@ -534,31 +534,36 @@ async function schLoad(keepMsg){
   schRunStatus = d.run_status||{}; schRetryable = d.retryable||[];
   if(!keepMsg) schFeedback = "";
 }
-async function renderSchedules(m){
+async function renderSchedules(m, options={}){
+  const live=()=>m.isConnected&&(options.live?options.live():route()==='schedules');
+  const refresh=()=>{if(live())return renderSchedules(m,options);};
   m.style.padding = "";
   m.innerHTML = `<div class="muted">正在读取定时任务…</div>`;
   try{ await schLoad(true); }
   catch(e){ m.innerHTML = `<div class="msg error">读取失败：${esc(e.message)}</div>`; return; }
-  if(route() !== "schedules" || !m.isConnected) return;
+  if(!live()) return;
+  const visibleRows=schRows.filter(row=>!options.projectId||row.project_id===options.projectId);
+  const visibleRuns=schRuns.filter(row=>!options.projectId||schRows.some(rule=>rule.id===row.schedule_id&&rule.project_id===options.projectId));
+  if(options.projectId&&schEdit&&schEdit.project_id!==options.projectId)schEdit=null;
   m.innerHTML = `
     <div class="card"><div class="sch-head">
-      <div><p class="sch-eyebrow">AUTOMATION / SCHEDULES</p><h3>定时任务</h3>
-        <p>管理由本应用 Agent 执行的定时研究任务。任务仅在应用运行时调度，写入范围遵循项目目录约定。</p></div>
+      <div><h3>自动化规则</h3>
+        <p>按计划创建项目任务，执行结果与人工核查归入同一任务记录。仅在应用运行时调度。</p></div>
       <button class="btn" id="schNew">＋ 新建定时任务</button></div></div>
     ${schFeedback?`<div class="card" style="margin-top:10px"><span class="hint">${esc(schFeedback)}</span></div>`:""}
     ${schEditorHTML()}
-    <div class="card" style="margin-top:12px">
+    <section data-schedule-list><div data-schedule-search-anchor></div><div class="card" style="margin-top:12px">
       <div class="sch-head"><div><p class="sch-eyebrow">RUNTIME SCHEDULE</p><h3>已配置任务</h3></div>
-        <span class="pill">${schRows.length} 个任务</span></div>
-      ${schRows.length? schRows.map(schCardHTML).join("") : `<div class="hint" style="margin-top:10px">还没有定时任务。创建每日摘要、文献检索或项目进度提醒，由本应用 Agent 在应用运行时执行。</div>`}
+        <span class="pill">${visibleRows.length} 个任务</span></div>
+      ${visibleRows.length? visibleRows.map(schCardHTML).join("") : `<div class="hint" style="margin-top:10px">还没有定时任务。创建每日摘要、文献检索或项目进度提醒，由本应用 Agent 在应用运行时执行。</div>`}
       <div class="sch-note">🕒 <span>调度依赖应用进程；关闭「览籍智研」期间不会后台执行。重新打开时错过的每日时间点最多补跑一次，其余等待下一个时间点（可随时暂停/启用）。</span></div>
     </div>
     <div class="card" style="margin-top:12px">
       <div class="sch-head"><div><p class="sch-eyebrow">RUN HISTORY</p><h3>最近运行</h3></div>
-        <span class="pill">${schRuns.length} 条</span>
-        ${schRuns.length?`<button class="btn ghost" id="schRunsClear">清空记录</button>`:""}</div>
-      ${schRuns.length? schRuns.map(schRunHTML).join("") : `<div class="hint" style="margin-top:10px">尚无定时运行记录；每次到点触发、启动补跑或立即运行都会在这里记录状态、原因和产物路径。</div>`}
-    </div>`;
+        <span class="pill">${visibleRuns.length} 条</span>
+        ${visibleRuns.length?`<button class="btn ghost" id="schRunsClear">清空记录</button>`:""}</div>
+      ${visibleRuns.length? visibleRuns.map(schRunHTML).join("") : `<div class="hint" style="margin-top:10px">尚无定时运行记录；每次到点触发、启动补跑或立即运行都会在这里记录状态、原因和产物路径。</div>`}
+    </div></section>`;
 
   const nm = () => esc($("schName").value.trim() || "未命名任务");
   const bindEditor = ()=>{
@@ -582,9 +587,10 @@ async function renderSchedules(m){
       }catch(e){ select.innerHTML='<option value="">读取失败，请重新选择项目</option>'; uiNotify(e.message); }
     };
     $("schProj").onchange = loadTodos;
+    if(options.projectId)$("schProj").disabled=true;
     loadTodos();
-    $("schCancel") && ($("schCancel").onclick = ()=>{ schEdit=null; render(); });
-    $("schCancel2") && ($("schCancel2").onclick = ()=>{ schEdit=null; render(); });
+    $("schCancel") && ($("schCancel").onclick = ()=>{ schEdit=null; refresh(); });
+    $("schCancel2") && ($("schCancel2").onclick = ()=>{ schEdit=null; refresh(); });
     $("schFreq").onchange = (e)=>{ const k=e.target.value; const c=SCH_PRESETS[k]; if(c) $("schCron").value=c;
       schEdit.frequency=k; if(c) schEdit.cron=c; };
     $("schSave").onclick = async ()=>{
@@ -593,42 +599,43 @@ async function renderSchedules(m){
         output_dir: $("schOut").value.trim() || "定时任务", enabled: $("schOn").value === "1" };
       if(!body.prompt) return uiNotify("Prompt 必填");
       try{ await api("/api/schedule/save", body); schEdit=null; await schLoad();
-           schFeedback = "定时任务已保存；仅在应用运行时执行。"; render(); }
+           schFeedback = "定时任务已保存；仅在应用运行时执行。"; refresh(); }
       catch(e){ uiNotify("保存失败：" + e.message); }
     };
   };
-  $("schNew").onclick = ()=>{ schEdit = schEditSeed(null); render(); setTimeout(()=>$("schName")?.focus(),30); };
+  $("schNew").onclick = ()=>{ schEdit = schEditSeed(null); if(options.projectId)schEdit.project_id=options.projectId; refresh(); setTimeout(()=>$("schName")?.focus(),30); };
   bindEditor();
   m.querySelectorAll("[data-sch-edit]").forEach(b=>b.onclick=()=>{
-    const r = schRows.find(x=>x.id===b.dataset.schEdit); schEdit = schEditSeed(r); render(); });
+    const r = schRows.find(x=>x.id===b.dataset.schEdit); schEdit = schEditSeed(r); refresh(); });
   m.querySelectorAll("[data-sch-toggle]").forEach(b=>b.onclick=async ()=>{
     try{ await api("/api/schedule/toggle", { id:b.dataset.schToggle, enabled: b.dataset.on !== "1" });
-         schFeedback = "定时任务状态已更新。"; await schLoad(); render(); }
+         schFeedback = "定时任务状态已更新。"; await schLoad(); refresh(); }
     catch(e){ uiNotify("状态更新失败：" + e.message); } });
   m.querySelectorAll("[data-sch-del]").forEach(b=>b.onclick=async ()=>{
     const r = schRows.find(x=>x.id===b.dataset.schDel);
     if(!await uiConfirm(`确认归档“${r?r.name:""}”？归档后不会再自动运行。`)) return;
     try{ await api("/api/schedule/delete", { id:b.dataset.schDel }); schFeedback = "定时任务已归档。";
-         await schLoad(); render(); }
+         await schLoad(); refresh(); }
     catch(e){ uiNotify("归档失败：" + e.message); } });
   m.querySelectorAll("[data-sch-run]").forEach(b=>b.onclick=async ()=>{
     try{ await api("/api/schedule/run", { id:b.dataset.schRun }); schFeedback = "定时任务已立即触发；跑完会出现在「最近运行」。";
-         render(); setTimeout(()=>{ if(route()==="schedules") render(); }, 6000); }
+         refresh(); setTimeout(()=>{ if(live()) refresh(); }, 6000); }
     catch(e){ uiNotify("触发失败：" + e.message); } });
   m.querySelectorAll("[data-run-retry]").forEach(b=>b.onclick=async ()=>{
     try{ await api("/api/schedule/run", { id:b.dataset.runRetry }); schFeedback = "已按该规则重新触发一次。";
-         render(); setTimeout(()=>{ if(route()==="schedules") render(); }, 6000); }
+         refresh(); setTimeout(()=>{ if(live()) refresh(); }, 6000); }
     catch(e){ uiNotify("重试失败：" + e.message); } });
   m.querySelectorAll("[data-run-del]").forEach(b=>b.onclick=async ()=>{
-    try{ await api("/api/schedule/run/delete", { ids:[b.dataset.runDel] }); await schLoad(); render(); }
+    try{ await api("/api/schedule/run/delete", { ids:[b.dataset.runDel] }); await schLoad(); refresh(); }
     catch(e){ uiNotify("删除运行记录失败：" + e.message); } });
   m.querySelectorAll("[data-run-note]").forEach(b=>b.onclick=async()=>{
     await ConnectedResearch.openNote(b.dataset.noteProject,b.dataset.notePath);
   });
   m.querySelectorAll('[data-run-workflow]').forEach(b=>b.onclick=()=>ConnectedResearch.openRun(b.dataset.runProject,b.dataset.runWorkflow));
+  m.querySelectorAll('[data-run-task]').forEach(b=>b.onclick=()=>ProjectWorkspace.openTask(b.dataset.runTask,b.dataset.runProject));
   $("schRunsClear") && ($("schRunsClear").onclick = async ()=>{
-    if(!await uiConfirm(`删除全部 ${schRuns.length} 条运行记录？定时规则与产物文件都不会被改动。`)) return;
-    try{ await api("/api/schedule/run/delete", { ids: schRuns.map(x=>x.id) }); await schLoad(); render(); }
+    if(!await uiConfirm(`删除全部 ${visibleRuns.length} 条运行记录？定时规则与产物文件都不会被改动。`)) return;
+    try{ await api("/api/schedule/run/delete", { ids: visibleRuns.map(x=>x.id) }); await schLoad(); refresh(); }
     catch(e){ uiNotify("清空失败：" + e.message); } });
 }
 const schTaskName = (id)=> (S.tasks||[]).find(t=>t.id===id)?.title || "";
@@ -645,24 +652,9 @@ function spWhen(iso){ return iso ? fmtDate(iso) : "—"; }
 function spBodyHTML(d){
   const t = d.task||{}, sum = d.summary||{};
 
-  // ---------- 1. 进度与计划（嵌入原「科研进度与计划看板」，含十步管道与排期视图） ----------
-  if(spTab === "plan"){
-    return `<div class="card sp-plan" style="margin-top:12px;padding:14px 16px">
-      <div id="spPlan" style="min-height:320px"><div class="hint">正在读取进度…</div></div>
-    </div>`;
-  }
-
   // ---------- 2. 文献与 easyScholar 期刊分区 ----------
   if(spTab === "papers"){
-    const rows = d.library_items || d.paper_list || [];
-    return `<div class="card" style="margin-top:12px"><div class="sch-head"><div><p class="inst-label">PAPERS / PROJECT</p><h3>${esc(t.title||"")} 的文献</h3></div>
-      <span class="pill">${rows.length} 条</span><button class="btn btn-primary" id="spZoteroBtn" style="margin-left:auto">从 Zotero 导入</button><button class="btn ghost" id="spToLib">去知识库 →</button></div>
-      ${rows.length ? rows.map((r, idx)=>`<div class="sp-row"><span class="sp-ic">📄</span><div class="sp-main">
-        <div class="sp-nm">${esc(r.title||r.filename||"未命名")} <span class="pill">${r.has_pdf || r.source_path ? "有 PDF" : "题录"}</span>${r.zotero_key ? '<span class="pill">Zotero 已关联</span>' : ""}</div>
-        <div class="sp-meta">${esc(r.authors||"作者未识别")}${r.doi?` · <span class="sp-doi">DOI ${esc(r.doi)}</span>`:" · DOI 未识别"}${r.year?` · ${esc(r.year)}`:""}${r.pages?` · ${String(r.pages).split(",").length} 页`:""}</div>
-        <div class="es-badges" id="es-paper-${idx}" data-journal="${esc(r.journal || r.title || '')}" style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap"></div>
-      </div></div>`).join("")
-      : `<div class="hint" style="margin-top:10px">这个项目还没有入库文献。<button class="btn btn-sm btn-primary" id="spZoteroBtnEmpty" style="margin-left:8px">从本机 Zotero 一键导入</button> 或到「知识库」检索入库。</div>`}</div>`;
+    return ProjectLiterature.html();
   }
 
   // ---------- 3. 论文星图 ----------
@@ -785,9 +777,6 @@ function spBind(d){
   const go = (id, route)=>{ const b=$(id); if(b) b.onclick = ()=>openTab(route); };
   go("spToFlow","workflow"); go("spToLib","library");
   document.querySelectorAll("[data-sp-flow]").forEach(b=>b.onclick=()=>openTab("workflow"));
-  const zb = $("spZoteroBtn"), zbe = $("spZoteroBtnEmpty");
-  if(zb) zb.onclick = zotOpen;
-  if(zbe) zbe.onclick = zotOpen;
   const sg = $("spStarGen");                 // 论文星图是编译产物：点一下才算，算完落库
   if(sg) sg.onclick = async ()=>{
     const t0 = Date.now();
@@ -805,33 +794,9 @@ function spBind(d){
     curTask = null; localStorage.removeItem("rw-task"); await refreshState(false); openTab("tasks");
   };
 
-  // ---------- 进度与计划：直接嵌看板（四列拖拽 / 十步管道 / 排期） ----------
-  if(spTab === "plan"){
-    const host = $("spPlan");
-    if(host && window.renderKanban) window.renderKanban(host, {embedded:true});
-  }
-
   // ---------- easyScholar 期刊等级标签（文献页） ----------
   if(spTab === "papers"){
-    const badgeContainers = document.querySelectorAll(".es-badges[data-journal]");
-    badgeContainers.forEach(async el => {
-      const jname = el.dataset.journal;
-      if(!jname) return;
-      if(esBadgeCache.has(jname)){
-        const cached = esBadgeCache.get(jname);
-        if(cached.length) el.innerHTML = cached.map(b => `<span class="es-badge ${b.type}">${esc(b.label)}</span>`).join("");
-        return;
-      }
-      try{
-        const res = await api("/api/easyscholar/rank?journal=" + encodeURIComponent(jname));
-        if(res && res.ok && res.badges){
-          esBadgeCache.set(jname, res.badges);
-          if(res.badges.length){
-            el.innerHTML = res.badges.map(b => `<span class="es-badge ${b.type}">${esc(b.label)}</span>`).join("");
-          }
-        }
-      }catch(_){}
-    });
+    ProjectLiterature.mount($('projectLiterature'),curTask,d.library_items||d.paper_list||[]);
   }
 
   // ---------- 笔记：完整项目笔记仪表板 + 编辑器 ----------
@@ -851,7 +816,30 @@ function spBind(d){
   }
 }
 
+function spLoadPaperBadges(container){
+    const badgeContainers = container.querySelectorAll(".es-badges[data-journal]");
+    badgeContainers.forEach(async el => {
+      const jname = el.dataset.journal;
+      if(!jname) return;
+      if(esBadgeCache.has(jname)){
+        const cached = esBadgeCache.get(jname);
+        if(cached.length) el.innerHTML = cached.map(b => `<span class="es-badge ${b.type}">${esc(b.label)}</span>`).join("");
+        return;
+      }
+      try{
+        const res = await api("/api/easyscholar/rank?journal=" + encodeURIComponent(jname));
+        if(res && res.ok && res.badges){
+          esBadgeCache.set(jname, res.badges);
+          if(res.badges.length){
+            el.innerHTML = res.badges.map(b => `<span class="es-badge ${b.type}">${esc(b.label)}</span>`).join("");
+          }
+        }
+      }catch(_){}
+    });
+}
+
 async function renderSpace(m){
+  if(m.id==='main' && route()==='workspace') return ProjectWorkspace.render(m);
   m.style.padding = "";
   m.classList.remove("sp-fill");
   if(!curTask){ m.innerHTML = needTask(); return; }
@@ -873,7 +861,7 @@ async function renderSpace(m){
       break;
     }
   }
-  if(curTask !== project || route() !== "space" || !m.isConnected) return;
+  if(curTask !== project || !uiRouteIs("space") || !m.isConnected) return;
   if(!d || lastErr){ m.innerHTML = `<div class="msg error">读取项目失败：${esc(lastErr ? lastErr.message : "未知错误")}</div>`; return; }
   const t = d.task||{};
   const opts = (S.tasks||[]).map(x=>`<option value="${x.id}" ${x.id===curTask?"selected":""}>${esc(x.title)}</option>`).join("");
@@ -892,7 +880,7 @@ async function renderSpace(m){
         <span class="hint" id="spAssetStatus" aria-live="polite"></span>
       </div>
       <div class="sp-hd2">
-        <p class="hint">项目级聚合只读取已关联的本地数据；写操作回到各领域的 Command 和安全通道。归档可恢复，外部文件不会被删除。</p>
+        <p class="hint">在当前项目管理文献、笔记与研究进度。文献题录与工作流保持一致。</p>
         <select id="spPick" class="control" style="max-width:200px" title="选择项目空间">${opts}</select>
       </div>
       <div class="sp-search-bar" style="margin-top:12px;position:relative;">
@@ -912,7 +900,7 @@ async function renderSpace(m){
     </div>
     <div id="spBody"></div>`;
 
-  $("spPick").onchange = (e)=>{ curTask = e.target.value; localStorage.setItem("rw-task", curTask); spId = null; render(); };
+  $("spPick").onchange = (e)=>{ curTask = e.target.value; localStorage.setItem("rw-task", curTask); spId = spTab==='papers'?curTask:null; render(); };
   $("spFlow").onclick = ()=>openTab("workflow");
   const sl = $("spLeader"); if(sl) sl.onclick = ()=>openTab("agent");
   m.querySelectorAll("[data-sp-tab]").forEach(b=>b.onclick=()=>{ spTab = b.dataset.spTab; render(); });
@@ -1447,6 +1435,8 @@ async function mdSaveProj(){
         metadata, create: !!note.newFile, ...(note.content_hash !== undefined ? {expected_hash: note.content_hash} : {})});
       note.content_hash = data.content_hash;
       note.saved_content = data.content;
+      note.saved_title = title;
+      note.savedVersion = version;
       if(note.metadata && data.template_id) note.metadata.template_id = data.template_id;
       note.newFile = false;
       if(mdProj === note && mdDashProject === note.pid){
@@ -1685,7 +1675,7 @@ async function renderNotes(m){
 if(!window.__rwMdEsc){                     // Esc 退出专注（只注册一次，renderNotes 会被反复调用）
   window.__rwMdEsc = 1;
   document.addEventListener("keydown", (e)=>{
-    if(e.key==="Escape" && mdFocusOn && (route()==="notes" || (route()==="space" && spTab==="notes"))){
+    if(e.key==="Escape" && mdFocusOn && (route()==="notes" || (uiRouteIs("space") && spTab==="notes"))){
       if(mdNarrowOn) mdNarrow();          // 窄栏里 Esc = 退出专注 + 回铺满（别把人留在几十像素的分栏里）
       mdFocus(false);
     }
@@ -1937,7 +1927,7 @@ function setPanel(){
 }
 function renderSettings(m){
   m.innerHTML = `<div class="page-head"><div><p class="inst-label">SETTINGS</p><h3>设置</h3></div>
-      <div class="ph-acts"><button class="btn ghost" id="to-assist">管理助手 →</button></div></div>
+      <div class="ph-acts"><button class="btn ghost" id="to-assist">管理专家 →</button></div></div>
     <div class="set-wrap" style="margin-top:12px">
       <nav class="set-nav">${SET_SECS.map(([k,i,l])=>`<button class="set-row ${k===setSec?"on":""}" data-set="${k}"><span class="set-ico">${i}</span>${l}</button>`).join("")}</nav>
       <div class="set-body" id="set-body">${setPanel()}</div></div>`;
@@ -2024,71 +2014,5 @@ refreshState().catch(e=>{ $("main").innerHTML=`<div class="msg error">加载失�
 const _hashRoute = (location.hash || "").replace(/^#\/?/, "");
 if (_hashRoute && TITLES[_hashRoute]) openTab(_hashRoute);
 
-/* ---------------- 情报日报（RSS，来源固定 5 个；读侧：
-     来源/关键词/年份三条件筛选 + 手动刷新） ---------------- */
-let itSrc = "", itQ = "", itYear = "", itItems = [], itTotal = 0, itTimer = 0, itSources = [];
-
-async function intelLoad(){
-  const p = new URLSearchParams({ source: itSrc, q: itQ, year: itYear });
-  const d = await api("/api/rss/items?" + p.toString());
-  itItems = d.items || []; itTotal = d.total || 0;
-}
-async function intelLoadSrcs(){
-  const d = await api("/api/rss/sources");
-  itSources = d.sources || [];
-  const opts = [`<option value="">全部来源</option>`].concat(
-    itSources.map(s=>`<option value="${s.id}" ${s.id===itSrc?"selected":""}>${esc(s.title)}（${s.count}）</option>`)).join("");
-  const sel = $("itSrc"); if(sel) sel.innerHTML = opts;
-}
-function intelPaintList(){
-  const box = $("itList"); if(!box) return;
-  const n = $("itCount"); if(n) n.textContent = `${itTotal} 条`;
-  box.innerHTML = itItems.length ? itItems.map(r=>`
-    <div class="it-row">
-      <a class="it-t" href="${esc(r.link)}" target="_blank" rel="noreferrer">${esc(r.title)}</a>
-      <div class="it-m">${esc(r.authors || "作者未知")} · ${esc((r.published_at || "").slice(0,10) || "日期未知")} · ${esc(r.source_title || "")}</div>
-      ${r.summary ? `<div class="it-s">${esc(r.summary)}</div>` : ""}
-    </div>`).join("")
-    : `<div class="hint">${itTotal ? "暂无匹配条目，换个条件或清掉筛选。" : "还没有数据：点右上「刷新」抓一批。"}</div>`;
-}
-async function intelRefresh(){
-  const btn = $("itGo"); if(!btn || btn.disabled) return;
-  const msg = $("itMsg");
-  btn.disabled = true; btn.textContent = "抓取中…";
-  if(msg) msg.textContent = "正在抓取 5 个来源…";
-  try{
-    const r = await api("/api/rss/refresh", {});
-    const fail = (r.failures || []).length ? `；失败 ${r.failures.length} 个（${r.failures.map(f=>f.title).join("、")}）` : "";
-    if(msg) msg.textContent = `已抓取 ${r.fetched}/${r.sources} 个来源，新增 ${r.added} 条${fail}`;
-    await intelLoadSrcs(); await intelLoad(); intelPaintList();
-  }catch(e){ if(msg) msg.textContent = "刷新失败：" + e.message; }
-  btn.disabled = false; btn.textContent = "刷新";
-}
-function intelFilterDebounced(){
-  clearTimeout(itTimer);
-  itTimer = setTimeout(async ()=>{
-    try{ await intelLoad(); intelPaintList(); }
-    catch(e){ const m = $("itMsg"); if(m) m.textContent = "查询失败：" + e.message; }
-  }, 300);
-}
-async function renderIntel(m){
-  m.innerHTML = `
-    <div class="card intel">
-      <div class="it-head"><h3>情报日报 <span class="pill" id="itCount">…</span></h3>
-        <button class="btn" id="itGo">刷新</button></div>
-      <div class="it-bar">
-        <select id="itSrc" class="control"><option value="">全部来源</option></select>
-        <input id="itQ" placeholder="关键词（标题 / 摘要 / 作者）">
-        <input id="itYear" placeholder="年份" inputmode="numeric">
-      </div>
-      <div class="hint" id="itMsg"></div>
-      <div class="it-list" id="itList"></div>
-    </div>`;
-  $("itGo").onclick = intelRefresh;
-  $("itQ").oninput = (e)=>{ itQ = e.target.value.trim(); intelFilterDebounced(); };
-  $("itYear").oninput = (e)=>{ itYear = e.target.value.trim(); intelFilterDebounced(); };
-  $("itSrc").onchange = async (e)=>{ itSrc = e.target.value; await intelLoad(); intelPaintList(); };
-  try{ await intelLoadSrcs(); await intelLoad(); }
-  catch(e){ m.querySelector("#itList").innerHTML = `<div class="hint">读不到数据：${esc(e.message)}</div>`; return; }
-  intelPaintList();
-}
+/* Intelligence discovery and imports share the project bibliography. */
+async function renderIntel(container){return IntelligenceView.render(container);}

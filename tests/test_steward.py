@@ -110,19 +110,24 @@ class StewardTest(unittest.TestCase):
             workflow._tool_impl("team_create", self.db, self.a, {"name": "Team", "assistant_ids": ["builtin-steward", "missing"]})
         self.assertEqual(self.db.db.execute("SELECT COUNT(*) FROM teams").fetchone()[0], count)
 
-    def test_new_team_can_receive_work_and_other_project_team_is_blocked(self):
+    def test_new_team_is_shared_while_project_runtime_is_isolated(self):
         import team
-        created = workflow._tool_impl("team_create", self.db, self.a, {"name": "Research team"})
+        import project_task_execution
+        created = workflow._tool_impl("team_create", self.db, self.a, {"name": "Research team", "assistant_ids": ["builtin-reviewer"]})
         tid = created["team"]["id"]
-        with patch.object(team, "DB_PATH", self.db.path):
+        with patch.object(team, "DB_PATH", self.db.path), patch.object(project_task_execution, "kick"):
             board = workflow._tool_impl("team_board", self.db, self.a, {"team_id": tid})
             self.assertEqual(board["members"][0]["id"], created["members"][0]["id"])
             assigned = workflow._tool_impl("team_assign", self.db, self.a, {
                 "team_id": tid, "member": board["members"][0]["id"], "prompt": "Prepare a literature matrix"})
             self.assertEqual(assigned["status"], "queued")
             self.assertEqual(assigned["task_id"], tid)
-            with self.assertRaises(PermissionError):
-                workflow._tool_impl("team_board", self.db, self.b, {"team_id": tid})
+            shared=workflow._tool_impl("team_board", self.db, self.b, {"team_id": tid})
+            self.assertEqual(shared['team_id'],tid)
+            self.assertEqual(shared['tasks'],[])
+            shared_task=workflow._tool_impl('team_assign',self.db,self.b,{'team_id':tid,'member':shared['members'][0]['id'],'prompt':'Independent literature matrix'})
+            self.assertNotEqual(shared_task['task_id'],tid)
+            self.assertEqual(self.db.team(shared_task['task_id'])['project_id'],self.b)
 
     def test_legacy_managed_project_and_linked_attachment_writes_are_rejected(self):
         linked = self.root / "linked-papers"

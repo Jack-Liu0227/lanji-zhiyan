@@ -1,16 +1,16 @@
 """Research platform steps shared by settings, agents and delivery checks."""
 
 STAGE_CATALOG = [
-    {"id": "idea", "name": "创新点审查", "icon": "🔍", "agent": "创新点审查助手", "purpose": "审查创新性、可行性与证据缺口"},
-    {"id": "search", "name": "论文搜索", "icon": "📚", "agent": "文献检索助手", "purpose": "检索论文并筛选开放获取全文"},
-    {"id": "download", "name": "下载精读", "icon": "⬇️", "agent": "入库精读助手", "purpose": "下载入库并逐页精读，整理带页码的笔记"},
-    {"id": "notes", "name": "论文翻译", "icon": "🌐", "agent": "翻译助手", "purpose": "生成论文中文译文与双语对照，精读笔记不能替代译文交付"},
-    {"id": "outline", "name": "确认大纲", "icon": "🗂", "agent": "框架助手", "purpose": "确定章节结构与每节论证目标"},
-    {"id": "map", "name": "梳理精读", "icon": "🧩", "agent": "谱系助手", "purpose": "将精读笔记与证据按大纲组织成谱系图"},
-    {"id": "write", "name": "文章撰写", "icon": "✍️", "agent": "写作助手", "purpose": "按大纲和证据撰写正文"},
-    {"id": "review", "name": "稿件审查", "icon": "🧐", "agent": "审查助手", "purpose": "检查稿件逻辑、证据与引用"},
-    {"id": "entrans", "name": "中译英", "icon": "🌍", "agent": "中译英助手", "purpose": "将中文稿件翻译为学术英文"},
-    {"id": "convert", "name": "格式转换", "icon": "🔄", "agent": "格式助手", "purpose": "按目标格式导出稿件"},
+    {"id": "idea", "name": "创新点审查", "icon": "🔍", "agent": "创新点审查专家", "purpose": "审查创新性、可行性与证据缺口"},
+    {"id": "search", "name": "论文搜索", "icon": "📚", "agent": "文献检索专家", "purpose": "检索论文并筛选开放获取全文"},
+    {"id": "download", "name": "下载精读", "icon": "⬇️", "agent": "入库精读专家", "purpose": "下载入库并逐页精读，整理带页码的笔记"},
+    {"id": "notes", "name": "论文翻译", "icon": "🌐", "agent": "翻译专家", "purpose": "生成论文中文译文与双语对照，精读笔记不能替代译文交付"},
+    {"id": "outline", "name": "确认大纲", "icon": "🗂", "agent": "框架专家", "purpose": "确定章节结构与每节论证目标"},
+    {"id": "map", "name": "梳理精读", "icon": "🧩", "agent": "谱系专家", "purpose": "将精读笔记与证据按大纲组织成谱系图"},
+    {"id": "write", "name": "文章撰写", "icon": "✍️", "agent": "写作专家", "purpose": "按大纲和证据撰写正文"},
+    {"id": "review", "name": "稿件审查", "icon": "🧐", "agent": "审查专家", "purpose": "检查稿件逻辑、证据与引用"},
+    {"id": "entrans", "name": "中译英", "icon": "🌍", "agent": "中译英专家", "purpose": "将中文稿件翻译为学术英文"},
+    {"id": "convert", "name": "格式转换", "icon": "🔄", "agent": "格式专家", "purpose": "按目标格式导出稿件"},
 ]
 STAGES = [stage["id"] for stage in STAGE_CATALOG]
 STAGE_LABEL = {stage["id"]: stage["name"] for stage in STAGE_CATALOG}

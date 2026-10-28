@@ -189,39 +189,54 @@ const NAV = [
     {id:"agent",label:"智研管家",ico:"🤖"},
     {id:"assistants",label:"专家",ico:"👨‍🔬"},
     {id:"team",label:"团队",ico:"👥"},
-    {id:"calendar",label:"日历",ico:"📅"},
-    {id:"tasks",label:"项目管理",ico:"📁"},
-    {id:"space",label:"项目空间",ico:"🧭"}]},
+    {id:"workspace",label:"项目工作区",ico:"🧭"},
+    {id:"task-center",label:"任务与自动化",ico:"☑"},
+    {id:"toolbox",label:"论文工具箱",ico:"🧰"},
+    {id:"calendar",label:"日历",ico:"📅"}]},
   {g:"solo",items:[
     {id:"library",label:"知识库",ico:"📚"},
-    {id:"workflow",label:"科研平台",ico:"🔬"},
-    {id:"schedules",label:"定时任务",ico:"⏰"},
 
     {id:"intel",label:"情报日报",ico:"📡"}]},
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {assistants:"专家",team:"团队",agent:"智研管家",calendar:"日历",tasks:"项目管理",workflow:"科研平台",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
+const TITLES = {usage:"用量统计","task-center":"任务与自动化",toolbox:"论文工具箱",assistants:"专家",team:"团队",agent:"智研管家",workspace:"项目工作区",calendar:"日历",tasks:"项目管理",workflow:"项目工作区",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时自动化",space:"项目工作区",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
+function uiRouteIs(kind){
+  return route()===kind || (route()==="workspace" && !!window.ProjectWorkspace?.hasSurface(kind));
+}
 
 async function uiNavigate(action){
-  if(typeof mdProj !== "undefined" && mdProj && document.getElementById("mdSource")?.getClientRects().length){
+  const workspace=window.ProjectWorkspace?.active();
+  if(workspace && !await ProjectWorkspace.flush()) return;
+  if(!workspace && typeof mdProj !== "undefined" && mdProj && document.getElementById("mdSource")?.getClientRects().length){
     if(!await pnSaveCurrent()){ uiNotify("笔记保存失败，请重试保存后再切换页面。"); return; }
   }
   return action();
 }
 
 function openTab(r, title){
+  if(r==="schedules"){TaskCenter.requestView('automation');r='task-center';title='任务与自动化';}
+  if(r==="tasks"&&window.ProjectManager){ProjectManager.open();return;}
+  if(["workspace","space","workflow","notes"].includes(r) && window.ProjectWorkspace){
+    ProjectWorkspace.requestRoute(r);r="workspace";title="项目工作区";
+  }
+  if(window.ProjectWorkspace?.active() && r!=="workspace" && ProjectWorkspace.hasDirty()){
+    ProjectWorkspace.leave(()=>openTab(r,title));return;
+  }
   if(r === "notes"){
     if(spId !== curTask){ spActiveNoteId = null; spSelectedNoteIds.clear(); }
     spId = curTask; spTab = "notes"; r = "space"; title = "项目空间";
   }
   const t = tabs.find(x=>x.route===r);
-  if(t){ activeTab=t.id; render(); return; }          // 少了这行 render()，侧栏点了就没反应
+  if(t){ activeTab=t.id; return render(); }
   const id = "t"+(seq++); tabs.push({id,route:r,title:title||TITLES[r]||r}); activeTab=id;
-  render();
+  return render();
 }
 function closeTab(id){
+  if(id===activeTab && window.ProjectWorkspace?.active() && ProjectWorkspace.hasDirty()){
+    ProjectWorkspace.leave(()=>closeTab(id));return;
+  }
   const i = tabs.findIndex(t=>t.id===id); if(i<0) return;
   tabs.splice(i,1);
   if(!tabs.length) tabs=[{id:"agent",route:"agent",title:"智研管家"}];
@@ -293,6 +308,7 @@ function renderTopbar(){
     <span class="date">${clock()}</span>
     <span class="pill" title="当前模型">${S.active?("模型 "+esc(S.active.name)):"未配置模型"}</span>
     <div class="topbar-actions">
+      <button type="button" class="btn ghost" id="usageStats">用量统计</button><button type="button" class="btn ghost" id="paperToolbox" title="中英互译、润色、引文与格式转换">论文工具箱</button>
       <button type="button" class="btn ghost btn-sm btn-zen" id="btnZenMode" title="全屏专注工作区 (F10)">⛶ 专注</button>
       <button type="button" class="btn ghost" data-command="palette" title="搜索命令与页面（Ctrl+K）">搜索命令 <kbd>Ctrl+K</kbd></button>
       <button type="button" class="btn ghost" data-command="help" title="快捷键与操作帮助（F1）" aria-label="快捷键与操作帮助">快捷键</button>
@@ -311,6 +327,8 @@ function renderTopbar(){
   });
   $("topbar").querySelectorAll(".topbar-actions button").forEach(b=>b.onmousedown=e=>e.stopPropagation());
   const btnTopSide = $("btnTopToggleSidebar");
+  $("usageStats").onclick=()=>openTab("usage");
+  $("paperToolbox").onclick=()=>PaperToolbox.open();
   if(btnTopSide) btnTopSide.onclick = toggleSidebarCollapse;
   const btnZen = $("btnZenMode");
   if(btnZen) btnZen.onclick = () => toggleZenMode();
@@ -499,6 +517,10 @@ async function setPermissionMode(mode) {
    新装用户没配 Key 时，发消息/翻译/出计划一律先拦下来，别让一轮请求打到后端再回一句报错。
    「编译 .tex」不走这里：那是本地 xelatex，不需要任何 Key。 */
 function hasModelKey() {
+  if((S.models||[]).some(model=>{
+    if(['codex-cli','claude-code-cli','antigravity-cli'].includes(model.api))return true;
+    try{return ['localhost','127.0.0.1','[::1]'].includes(new URL(model.base_url).hostname);}catch{return false;}
+  }))return true;
   if ((S.models || []).some(m => m.api_key)) return true;        // 任一档案填了 key（前端只会拿到 "***"）
   if (S.active && S.active.api_key) return true;
   return (S.providers || []).some(p => p.key_present);
@@ -506,8 +528,8 @@ function hasModelKey() {
 async function requireModelKey() {
   if (hasModelKey()) return true;
   const go = await uiConfirm(
-    "还没有配置模型 API Key，助手任何一步都跑不起来。先去「设置 → 模型」填一家的 Key，再回来继续。",
-    { title: "需要先配 API Key", ok: "去设置", cancel: "知道了", danger: false });
-  if (go) openTab("settings");
+    "请先在「设置 → 模型列表」配置可用模型。云端接口通常需要 API Key，本机接口或账号客户端可使用各自的连接方式。",
+    { title: "需要先配置模型", ok: "去设置", cancel: "知道了", danger: false });
+  if (go){setSec='models';openTab("settings");}
   return false;
 }

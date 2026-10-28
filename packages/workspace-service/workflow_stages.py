@@ -195,9 +195,11 @@ def stage_zotero_import(db: WorkflowDB, task_id: str, collection: str = "",
             "url": it["url"] or (f"https://doi.org/{it['doi']}" if it["doi"] else ""),
             "pdf_url": "", "abstract": it["abstract"],
         })
-        db.db.execute("INSERT OR REPLACE INTO zotero_item_links VALUES (?,?,?,?,?)",
+        db.db.execute("INSERT OR IGNORE INTO zotero_item_links VALUES (?,?,?,?,?)",
                       (task_id, rid, it["key"], it.get("version", 0), zotero_sync._hash(db.result(rid))))
         db.db.commit()
+        import project_library
+        project_library.index_record(db, task_id, rid)
         path = zotero.pdf_path(it["key"])
         if not path:
             db.set_queue(task_id, rid, "manual", "", "Zotero 里这条没有 PDF 附件")
@@ -445,7 +447,7 @@ def stage_write(db: WorkflowDB, task_id: str, title: str = "", section: str = "�
     context = "\n\n".join(f"### {n['title']}\n{n['markdown'][:6000]}" for n in notes[:6])
     ev_text = "\n".join(f"- {r['field']}: {r['value']}（{r['filename']} p.{r['page_no']}）" for r in ev[:60])
     md = chat(profile, [
-        {"role": "system", "content": f"你是中文材料科学论文写作助手。按《{section}》写，只使用给定资料，每个关键结论后用（文献名 p.页码）标注出处；资料没给的写「资料不足」，禁止编造数据或引用。"},
+        {"role": "system", "content": f"你是中文材料科学论文写作专家。按《{section}》写，只使用给定资料，每个关键结论后用（文献名 p.页码）标注出处；资料没给的写「资料不足」，禁止编造数据或引用。"},
         {"role": "user", "content": f"题目：{title or task['title']}\n研究问题：{task['question']}\n关键词：{task['material_system']}\n\n== 笔记 ==\n{context}\n\n== 证据 ==\n{ev_text}"},
     ], max_tokens=4000)
     doc = f"# {title or task['title']} · {section}\n\n{md}\n"

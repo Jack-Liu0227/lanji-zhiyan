@@ -5,6 +5,7 @@ import threading
 import uuid
 
 import execution
+import conversation_history
 from run_manager import RunManager
 
 import workflow_runners
@@ -13,6 +14,7 @@ import workflow_runners
 TERMINAL = {"done", "failed", "cancelled", "interrupted"}
 
 
+@conversation_history.synchronized
 def start(db_path, request: dict, step: str = "", *, resume_id: str = ""):
     import workflow
     manager = RunManager.get_instance()
@@ -39,6 +41,8 @@ def start(db_path, request: dict, step: str = "", *, resume_id: str = ""):
                 raise ValueError("原项目或会话已删除")
             tid = db.create_chat("")
         request["task_id"] = tid
+        hidden=db.db.execute('SELECT deleted_at,archived_at FROM chats WHERE id=?',(tid,)).fetchone()
+        if hidden and (hidden['deleted_at'] or hidden['archived_at']):raise ValueError('会话已归档或删除，请先恢复再执行')
         if not resume_id:
             existing = db.get_async_task_by_idempotency(str(request.get("idempotency_key") or ""))
             saved_request = (existing or {}).get("checkpoint", {}).get("request")
@@ -55,8 +59,12 @@ def start(db_path, request: dict, step: str = "", *, resume_id: str = ""):
                 if project:
                     import prompt_templates
                     import agent_settings
-                    cfg = agent_settings.runtime_config(db, tid)
-                    request["_template_snapshot"] = prompt_templates.resolve(db, project, request.get("template_ref"), step=step, assistant_id=cfg["assistant_id"])
+                    import workspace_chat
+                    cfg = workspace_chat.snapshot(db, tid, request) if chat else agent_settings.runtime_config(db, tid)
+                    request["_template_snapshot"] = prompt_templates.resolve(db, project, request.get("template_ref"), step=step, assistant_id=cfg["assistant_id"], member_id=cfg.get('member_id',''))
+        if not resume_id and not saved_request:
+            import workspace_chat
+            request['_runtime_snapshot']=workspace_chat.snapshot(db,tid,request)
         request["idempotency_key"] = str(request.get("idempotency_key") or uuid.uuid4().hex)
         run = manager.create_run(tid, request["idempotency_key"], db)
         if resume_id:
@@ -94,6 +102,10 @@ def _execute(db_path, run, request, step):
         db.template_snapshot = request.get("_template_snapshot")
         db.template_resolved = "_template_snapshot" in request
         db.resuming = bool(checkpoint.get("messages") or checkpoint.get("completed_calls"))
+        owner=db.db.execute('SELECT task_id FROM chats WHERE id=?',(tid,)).fetchone()
+        db.usage_context={'owner_id':tid,'project_id':owner['task_id'] if owner else tid,'run_id':run.run_id,'assistant_id':(request.get('_runtime_snapshot') or {}).get('assistant_id','')}
+        import workspace_chat
+        selected = request.get('_runtime_snapshot') or {}
 
         def save(**values):
             checkpoint.update(values)
@@ -115,16 +127,28 @@ def _execute(db_path, run, request, step):
 
         track = bool(step in workflow.STAGES and db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
         try:
+            workspace_chat.apply(db,request.get('_runtime_snapshot'))
+            if selected.get('executor_binding_id'):
+                import project_bindings
+                current = project_bindings.resolve(db, db.chat(tid)['task_id'], selected['executor_binding_id'], member_id=selected.get('member_id',''))
+                if current['assistant_id'] != selected['assistant_id']:
+                    raise ValueError('执行者配置已改变，请重新发送消息')
+                selected = {**selected, 'tools': project_bindings._intersect(selected.get('tools'), current['tools'])}
             with execution.scope(lambda: run.cancel_requested):
                 if track:
                     db.log_step(tid, step, "running", "恢复执行" if db.resuming else "开始执行")
                 runners = {"idea": workflow.run_idea, "outline": workflow.run_outline, "map": workflow.run_map,
                            "write": workflow.run_write, "review": workflow.run_review}
-                if step in runners:
+                if step == 'paper_toolbox':
+                    import paper_toolbox
+                    result = paper_toolbox.execute(db, request, emit)
+                elif step in runners:
                     result = runners[step](db, tid, request.get("message", ""), emit)
                 else:
                     wstep = step or str(request.get("step") or "")
                     extra = db.tr_hl_context(tid) if track else ""
+                    if selected.get('member_prompt'):
+                        extra += '\n【当前团队成员职责】\n' + selected['member_prompt']
                     if wstep == "files" and request.get("sel"):
                         extra += "\n【当前选中的文件】" + str(request["sel"])
                     on_project = bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
@@ -132,7 +156,8 @@ def _execute(db_path, run, request, step):
                         system=(workflow.files_system(db, tid) if wstep == "files" else
                                 workflow.convert_system(db, tid) if wstep == "convert" else
                                 workflow_runners.entrans_system(db, tid) if wstep == "entrans" else None),
-                        step=wstep, scope=wstep if on_project else "", cancel_check=lambda: run.cancel_requested)
+                        step=wstep, scope=wstep if on_project else "", cancel_check=lambda: run.cancel_requested,
+                        tool_allowlist=selected.get('tools'), image_ids=request.get('image_ids'))
                 execution.check()
                 if error:
                     raise RuntimeError(error)

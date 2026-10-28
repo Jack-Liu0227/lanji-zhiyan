@@ -73,7 +73,7 @@ class MapStepTest(unittest.TestCase):
     def test_sources_list_outline_notes_and_data(self):
         s = workflow.map_sources(self.db, self.tid)
         self.assertEqual(s["sections"], ["1.1 背景", "1.2 现状"])
-        # 笔记给「标题 + id」，不给哈希文件名 —— 助手要能认出挂的是哪一篇
+        # 笔记给「标题 + id」，不给哈希文件名 —— 专家要能认出挂的是哪一篇
         self.assertIn("精读-A", [n["id"] for n in s["notes"]])
         self.assertIn("精读-A.md", [n["title"] for n in s["notes"]])
         self.assertIn("XRD-2026-10.csv", s["data"])

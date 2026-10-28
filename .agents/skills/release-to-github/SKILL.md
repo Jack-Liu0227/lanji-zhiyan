@@ -28,8 +28,8 @@ Prepare a reviewable release, publish it to the repository's configured GitHub r
 
 ## This repository: 览籍智研
 
-- Read the app version from `VERSION`; update the download entry in `README.md` and add a dated entry to `doc/CHANGELOG.md`.
-- Build Windows desktop files with Python 3.10 and the pinned `requirements.txt`: run PyInstaller on `tools/览籍智研.spec`, then `tools/installer.spec`. The regular build is `dist/览籍智研/`; the installer is `dist/览籍智研-安装程序.exe`.
-- Create `LanjiZhiyan-<version>-Portable.zip` containing the complete `dist/览籍智研/` directory and `LanjiZhiyan-<version>-Setup.exe` copied from the fresh installer. Store release artifacts in ignored `dist/release/`.
+- Read the app version from `VERSION`; update the download entry in `README.md` and add a dated entry to the repository-root `CHANGELOG.md`, as required by `AGENTS.md`.
+- Build Windows desktop files with Python 3.10 or newer and `requirements-build.txt`: run `tools/build-app.bat --no-pause`. The script uses the repository virtual environment, builds both PyInstaller specs, and runs isolated portable, installation and reinstallation checks. The regular build is `dist/览籍智研/`; the installer is `dist/览籍智研.exe`.
+- Create `LanjiZhiyan-<version>-Portable.zip` containing the complete `dist/览籍智研/` directory and `LanjiZhiyan-<version>-Setup.exe` copied from the freshly verified installer. Store release artifacts in ignored `dist/release/` and verify these exact versioned files before upload.
 - Smoke-check the portable executable with an isolated `LANJI_ZHIYAN_HOME` and an unused local port; verify the app serves HTTP 200, then stop only the process started for that check.
 - Include only the two versioned assets in the GitHub Release. Do not upload the local test-report directory or temporary verification scripts.

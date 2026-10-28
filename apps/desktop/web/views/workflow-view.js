@@ -5,7 +5,7 @@ function ideaPanelHTML(active){
       <div class="ol-head"><b>我的创新点</b><span class="ol-meta" id="iw-mine-state">自动保存</span>
         <span class="ol-spacer"></span>
         <button class="btn ghost" id="iw-save-mine" title="立即保存我修改的创新点">保存</button>
-        <span class="ol-meta">右边助手每轮都读这份文字</span></div>
+        <span class="ol-meta">右边专家每轮都读这份文字</span></div>
       <textarea class="iw-mine" id="iwMine" spellcheck="true"
         placeholder="写清楚：做了什么、和谁不一样、凭什么能成（约束也写上：数据 / 算力 / 时间 / 目标期刊）"></textarea>
     </div>
@@ -23,7 +23,7 @@ function ideaPanelHTML(active){
         <span class="ol-spacer"></span>
         <button class="btn ghost" id="iw-edit-verdict" title="手改判定报告">✎ 手改判定</button>
         <button class="btn ghost hidden" id="iw-save-verdict">保存判定</button>
-        <span class="ol-meta">由右侧「创新点审查助手」产出</span></div>
+        <span class="ol-meta">由右侧「创新点审查专家」产出</span></div>
       <div class="md-render iw-verdict" id="iwVerdict"></div>
       <textarea class="hidden iw-mine" id="iwVerdictSrc" style="min-height:220px;font-family:var(--font-mono);font-size:12.5px"></textarea>
     </div>
@@ -130,7 +130,7 @@ function docPanelHTML(k, active){
                 <label class="at-sel" title="这一步用哪个模型档案">🔌<select id="${k}-modpick"><option value="">未配置模型</option>
                   ${S.models.map(mm => `<option value="${mm.id}" ${S.active && mm.id === S.active.id ? "selected" : ""}>${esc(mm.name)}</option>`).join("")}</select></label></div>
               <div class="at-tools-r">
-                <label class="at-sel" title="助手署名">🤖<input id="${k}-assist" placeholder="researcher" value="${esc(assistantKey())}"></label>
+                <label class="at-sel" title="专家署名">🤖<input id="${k}-assist" placeholder="researcher" value="${esc(assistantKey())}"></label>
                 <button class="send-btn" id="${k}-send" title="发送" aria-label="发送">↑</button></div>
             </div>
             <input type="file" id="${k}-filepick" multiple style="display:none">
@@ -169,6 +169,7 @@ function docShow(k, d){
   const cb = docEl(k, "cite"); if(cb) cb.classList.remove("active");
   const body = docEl(k, "body");
   const ta = docEl(k, "src"); if(ta) ta.value = md;
+  if(ta)ta.dataset.savedMarkdown=md;
   if(body){
     body.innerHTML = md.trim() ? renderMarkdown(md)
       : `<div class="ol-empty">${DOC_UI[k].empty[1]} 还没有内容。<br>右边跟 agent 说一句，或点上面「${DOC_UI[k].seed || "让 agent 写"}」。</div>`;
@@ -198,12 +199,14 @@ function docRestore(k, msgs, out){
   docStats(k); docPaint(k);
 }
 async function docLoad(k){
-  const st = docState(k);
+  const st = docState(k),project=curTask,panel=$("panel-"+k);
   try{
-    const d = await api(`/api/doc/state?id=${encodeURIComponent(curTask)}&step=${encodeURIComponent(k)}`);
+    const d = await api(`/api/doc/state?id=${encodeURIComponent(project)}&step=${encodeURIComponent(k)}`);
+    if(curTask!==project || !panel?.isConnected || $("panel-"+k)!==panel)return;
     st.out = d.out || "";
     docRestore(k, d.messages, d.out);
-    docShow(k, d);
+    const source=docEl(k,'src');
+    if(!source?.getClientRects().length || source.value===(source.dataset.savedMarkdown||''))docShow(k, d);
     if(!st.files) st.files = JSON.parse(localStorage.getItem("rw-marks-" + k + "-" + (curTask || "")) || "[]");
     docPaintMarks(k); docMarks(k);
   }catch(e){ docMsg(k, "读取失败：" + e.message); }
@@ -221,8 +224,12 @@ function docLiveStart(k){
       clearInterval(docLivePoll); docLivePoll = null; return;
     }
     if(!curTask) return;
+    const project=curTask,source=docEl(k,'src');
+    if(source?.getClientRects().length && source.value!==(source.dataset.savedMarkdown||''))return;
     try{
       const d = await api(`/api/doc/state?id=${encodeURIComponent(curTask)}&step=${encodeURIComponent(k)}`);
+      if(curTask!==project || !panel.isConnected || $("panel-"+k)!==panel)return;
+      if(source?.getClientRects().length && source.value!==(source.dataset.savedMarkdown||''))return;
       const sig = (d.exists ? 1 : 0) + ":" + (d.chars || 0);
       if(sig === docLiveSig) return;
       docLiveSig = sig;
@@ -262,13 +269,20 @@ function docEdit(k, on){
   docApplyMode(k, on ? 'edit' : 'preview');
 }
 
-async function docSaveEdit(k){
+async function docSaveEdit(k, project=curTask){
+  const source=docEl(k,'src');if(!source)return true;
+  const text=source.value;
   try{
-    const d = await api("/api/doc/save", { task_id: curTask, step: k, markdown: docEl(k, "src").value });
-    docShow(k, d);
-    docMsg(k, "已保存到 " + docState(k).path);
+    const d = await api("/api/doc/save", { task_id: project, step: k, markdown:text });
+    const unchanged=source.value===text;
+    if(curTask===project && source.isConnected && source===docEl(k,'src')){
+      source.dataset.savedMarkdown=d.markdown??text;
+      if(unchanged)docShow(k,d);
+      docMsg(k,unchanged?"已保存到 "+docState(k).path:"还有未保存的修改");
+    }
     uiNotify("文档已保存");
-  }catch(e){ docMsg(k, "保存失败：" + e.message); uiNotify("保存失败: " + e.message); }
+    return unchanged;
+  }catch(e){ if(source.isConnected)docMsg(k, "保存失败：" + e.message); uiNotify("保存失败: " + e.message); return false; }
 }
 function docCandidate(text){
   /* 从一条回复里抠出「像成稿」的那段：优先 ``` 代码块，否则从第一个标题行截到结尾（至少 2 个标题）。 */
@@ -747,6 +761,13 @@ async function flInitTree(){
     tag.textContent = parts.slice(-2).join("/"); tag.title = flTreeRoot;
   }
   flRenderTree();
+  for(const rel of [...flExpanded].sort((a,b)=>a.split('/').length-b.split('/').length)){
+    if(generation!==flTreeGeneration || project!==curTask || !list.isConnected)return;
+    if(!flExpanded.has(rel)||!flFindRow(rel)?.dir||flTreeCache[rel])continue;
+    const pending=flLoadNode(rel);flRenderTree();await pending;
+    if(generation!==flTreeGeneration || project!==curTask || !list.isConnected)return;
+    flRenderTree();
+  }
 }
 
 function flRenderTree(){
@@ -769,7 +790,7 @@ function flRenderTree(){
       if(isDir){
         const isLoading = flTreeLoading.has(r.rel);
         html += `
-          <div class="fl-tree-row dir ${isOpen ? 'open' : ''} ${isSel ? 'on' : ''}" data-project-id="${esc(r.project_id)}" data-rel="${esc(r.rel)}" data-dir="1" style="padding-left:${padLeft}px" title="${esc(r.name)}">
+          <div class="fl-tree-row dir ${isOpen ? 'open' : ''} ${isSel ? 'on' : ''}" data-project-id="${esc(r.project_id)}" data-rel="${esc(r.rel)}" data-dir="1" aria-expanded="${isOpen}" aria-busy="${isLoading}" style="padding-left:${padLeft}px" title="${esc(r.name)}">
             <span class="fl-chevron">${isLoading ? '⌛' : (isOpen ? '▾' : '▸')}</span>
             <span class="fl-folder-ico">${isOpen ? '📂' : '📁'}</span>
             <span class="fl-name">${esc(r.name)}</span>
@@ -861,7 +882,7 @@ async function flShow(row){
   const project = curTask;
   flSel = row.rel;
   $("flHand").disabled=false;
-  $("flHand").title="交给当前工作流中的节点、团队或助手（Alt+Shift+H）";
+  $("flHand").title="交给当前工作流中的节点、团队或专家（Alt+Shift+H）";
   $("flHandoffHistory").disabled=false;
   FileHandoff.preview({project_id:project,relative:row.rel});
   document.querySelectorAll("#flList .fl-tree-row").forEach(x => x.classList.toggle("on", x.dataset.rel === flSel));
@@ -901,6 +922,7 @@ async function flShow(row){
   try{
     const d = await api(`/api/conv/preview?path=${encodeURIComponent(row.path)}`);
     if(d.error) throw new Error(d.error);
+    if(curTask!==project || flSel!==row.rel || !stage.isConnected) return;
     if(d.kind === "image") stage.innerHTML = `<img class="fl-img" src="${d.url}&t=${Date.now()}" alt="${esc(row.name)}">`;
     else if(d.kind === "pdf" || d.kind === "html") stage.innerHTML = `<iframe class="fl-frame" src="${d.url}&t=${Date.now()}"></iframe>`;
     else stage.innerHTML = `<p class="fl-empty">这类文件这里不预览 —— 点右上角 ↗ 用系统程序打开</p>`;
@@ -1026,7 +1048,7 @@ function convPanelHTML(active){
 
 function cvMsg(t, ms){ const el = $("cvMsg"); if(el) el.textContent = t || ""; if(ms) setTimeout(()=>{ if(el && el.textContent === t) el.textContent = ""; }, ms); }
 
-const CV_BLANK = '<div class="cv-ph">未生成<br><span>在右边跟格式助手说清楚要什么（成品格式 + 期刊模板），编好的成品会显示在这里</span></div>';
+const CV_BLANK = '<div class="cv-ph">未生成<br><span>在右边跟格式专家说清楚要什么（成品格式 + 期刊模板），编好的成品会显示在这里</span></div>';
 function cvClearStage(){
   const f = $("cvFrame"), i = $("cvImg"), e = $("cvEmpty"), o = $("cvOpenExt");   // 工具行已删，o 可能不存在
   if(f){ f.classList.add("hidden"); f.src = "about:blank"; }
@@ -1301,34 +1323,34 @@ const PANELS = {
 let wfStep=localStorage.getItem("rw-wf-step")||"idea";
 let wfMin=localStorage.getItem("rw-wf-min")==="1";
 let wfAgentCollapsed=localStorage.getItem("rw-wf-agent-collapsed")==="1";
-let wfMsgs=[], wfEvents=[];   // 右栏「本步助手」的历史与事件（统计口径只算这个助手自己）
+let wfMsgs=[], wfEvents=[];   // 右栏「本步专家」的历史与事件（统计口径只算这个专家自己）
 
-/* ==== 三栏工作台：左十步 / 中展示区+确认交付 / 右本步助手 ==== */
-/* 每一步一个助手：emoji + 名字 + 一句话职责 + 聊天挂在哪个 scoped 端点 */
+/* ==== 三栏工作台：左十步 / 中展示区+确认交付 / 右本步专家 ==== */
+/* 每一步一个专家：emoji + 名字 + 一句话职责 + 聊天挂在哪个 scoped 端点 */
 const WF_AGENT = {
-  idea:    {emoji:"🔍", name:"创新点审查助手", sub:"多轮问清约束 → 出正式判定；对话只在这一步", api:"/api/idea",
+  idea:    {emoji:"🔍", name:"创新点审查专家", sub:"多轮问清约束 → 出正式判定；对话只在这一步", api:"/api/idea",
             ph:"说说你的创新点，或回答追问…", hint:"Enter 发送 · 说「出一版判定」→ 结论写进本步产出"},
-  search:  {emoji:"📚", name:"文献检索助手", sub:"检索式、筛选口径、入库都归它管", api:"/api/agent",
+  search:  {emoji:"📚", name:"文献检索专家", sub:"检索式、筛选口径、入库都归它管", api:"/api/agent",
             ph:"说检索式，或让我按目标改筛选…", hint:"Enter 发送 · 说「重跑检索」→ 结果刷新到左边"},
-  download:{emoji:"⬇️", name:"入库助手", sub:"下载队列、OA 直链、手动补全文", api:"/api/agent",
+  download:{emoji:"⬇️", name:"入库专家", sub:"下载队列、OA 直链、手动补全文", api:"/api/agent",
             ph:"说下要下哪批 / 哪篇要手动补…", hint:"Enter 发送 · 说「继续下载」→ 队列接着跑"},
-  notes:   {emoji:"🌐", name:"翻译助手", sub:"翻译口径、术语表、双语对照", api:"/api/agent",
+  notes:   {emoji:"🌐", name:"翻译专家", sub:"翻译口径、术语表、双语对照", api:"/api/agent",
             ph:"说翻译要求（保留排版 / 术语表 / 只译正文）…", hint:"Enter 发送 · 说「重译这段」→ 译文更新"},
-  outline: {emoji:"🗂", name:"框架助手", sub:"大标题 + 小标题 + 一句说明，定稿写进框架.md", api:"/api/outline",
+  outline: {emoji:"🗂", name:"框架专家", sub:"大标题 + 小标题 + 一句说明，定稿写进框架.md", api:"/api/outline",
             ph:"说题目和目标 / 贴导师要求…", hint:"Enter 发送 · 说「更新框架」→ 左边立刻换新版"},
-  map:     {emoji:"🧩", name:"谱系助手", sub:"按大纲把精读结论挂成树，改完立刻重画", api:"/api/map",
+  map:     {emoji:"🧩", name:"谱系专家", sub:"按大纲把精读结论挂成树，改完立刻重画", api:"/api/map",
             ph:"说说怎么改，比如「按大纲建一版谱系图」…", hint:"Enter 发送 · 说「更新谱系」→ 画布立刻换新版"},
-  write:   {emoji:"✍️", name:"写作助手", sub:"按框架逐节写，缺数据写「待补」，不编数字", api:"/api/write",
+  write:   {emoji:"✍️", name:"写作专家", sub:"按框架逐节写，缺数据写「待补」，不编数字", api:"/api/write",
             ph:"说要求 / 让我写某一节…", hint:"Enter 发送 · 说「更新正文」→ 左边立刻换新版"},
-  review:  {emoji:"🧐", name:"审查助手", sub:"以审稿人视角挑问题，先说大思路", api:"/api/review",
+  review:  {emoji:"🧐", name:"审查专家", sub:"以审稿人视角挑问题，先说大思路", api:"/api/review",
             ph:"说「审一遍」或问某处逻辑…", hint:"Enter 发送 · 说「更新正文」→ 左边立刻换新版"},
-  entrans: {emoji:"🌍", name:"中译英助手", sub:"学术口径中译英，术语统一", api:"/api/agent",
+  entrans: {emoji:"🌍", name:"中译英专家", sub:"学术口径中译英，术语统一", api:"/api/agent",
             ph:"说目标期刊口径 / 要不要译图表标题…", hint:"Enter 发送 · 说「开始翻译」→ 译文落进产出"},
-  convert: {emoji:"🔄", name:"格式助手", sub:"转 docx / pdf / tex，样式跟模板走", api:"/api/agent",
+  convert: {emoji:"🔄", name:"格式专家", sub:"转 docx / pdf / tex，样式跟模板走", api:"/api/agent",
             ph:"说导出格式和模板…", hint:"Enter 发送 · 说「导出 docx」→ 文件落进产出"},
-  /* 左栏第 11 项「项目文件夹」的助手：不是一步，不进 WF_ORDER，也不占 steps 表 */
-  files:   {emoji:"📁", name:"文件管理助手", sub:"看 / 找 / 传：问文件内容，说「交给写作助手」就转过去", api:"/api/agent",
-            ph:"问这个文件 / 这个夹，或说「交给写作助手」…", hint:"Enter 发送 · 左边点文件出预览 · 右上 ↗ 用系统程序打开"}
+  /* 左栏第 11 项「项目文件夹」的专家：不是一步，不进 WF_ORDER，也不占 steps 表 */
+  files:   {emoji:"📁", name:"文件管理专家", sub:"看 / 找 / 传：问文件内容，说「交给写作专家」就转过去", api:"/api/agent",
+            ph:"问这个文件 / 这个夹，或说「交给写作专家」…", hint:"Enter 发送 · 左边点文件出预览 · 右上 ↗ 用系统程序打开"}
 };
 /* 这五步的面板本来就自带对话 —— 三栏页里对话统一收到右栏，面板里那份藏掉，避免两个聊天 */
 const WF_OWN_CHAT = new Set(["idea", "map", "outline", "write", "review"]);
@@ -1356,7 +1378,7 @@ function wfAgentHTML(step){
       <div>
         <div style="display:flex;align-items:center;gap:8px">
           <h1>${esc(a.name)}</h1>
-          <select id="wvStepPick" class="at-sel" style="padding:2px 6px;font-size:11.5px;background:var(--bg-hover);color:var(--fg);border:1px solid var(--border);border-radius:4px" title="切换助手并自动跳转工作流">
+          <select id="wvStepPick" class="at-sel" style="padding:2px 6px;font-size:11.5px;background:var(--bg-hover);color:var(--fg);border:1px solid var(--border);border-radius:4px" title="切换专家并自动跳转工作流">
             ${WF_ORDER.map(s => {
               const ag = WF_AGENT[s] || {};
               return `<option value="${s}" ${s === step ? "selected" : ""}>${ag.emoji || ""} ${esc(ag.name || s)}</option>`;
@@ -1369,7 +1391,7 @@ function wfAgentHTML(step){
         <button class="btn ghost" id="wv-history-btn" title="查看对话历史与工作流切换" style="padding:3px 8px;font-size:11.5px">⏱ 历史</button>
         <button class="btn ghost" id="wv-newchat-btn" title="新建这一步的对话" style="padding:3px 8px;font-size:11.5px">＋ 新建</button>
         <span class="wf-mdl" title="这一步用的模型">${esc(mdl)}</span>
-        <button class="btn ghost wf-agent-collapse-btn" id="wv-agent-collapse" title="折叠助手（扩大工作区）" style="padding:3px 8px;font-size:11.5px;display:flex;align-items:center;gap:3px">▶ 折叠</button>
+        <button class="btn ghost wf-agent-collapse-btn" id="wv-agent-collapse" title="折叠专家（扩大工作区）" style="padding:3px 8px;font-size:11.5px;display:flex;align-items:center;gap:3px">▶ 折叠</button>
       </div>
     </div>
   </header>
@@ -1400,10 +1422,10 @@ async function wfAgentPaint(m, step){
   const a = WF_AGENT[step] || WF_AGENT.idea;
   if(wfAgentCollapsed){
     host.className = "wf-agent collapsed";
-    host.innerHTML = `<button class="wf-agent-dock-btn" id="wv-agent-expand" title="展开 ${esc(a.name || "智研助手")}">
+    host.innerHTML = `<button class="wf-agent-dock-btn" id="wv-agent-expand" title="展开 ${esc(a.name || "智研专家")}">
       <span class="wf-dock-chevron">◀</span>
-      <span class="wf-dock-avatar" title="${esc(a.name || "智研助手")}">${a.emoji || "🤖"}</span>
-      <span class="wf-dock-label">助手</span>
+      <span class="wf-dock-avatar" title="${esc(a.name || "智研专家")}">${a.emoji || "🤖"}</span>
+      <span class="wf-dock-label">专家</span>
     </button>`;
     const exp = host.querySelector("#wv-agent-expand");
     if(exp) exp.onclick = ()=>{
@@ -1414,7 +1436,7 @@ async function wfAgentPaint(m, step){
     return;
   }
   host.className = "wf-agent";
-  // 论文翻译的「笔记模式」：右栏这一列换成阅读笔记窄栏（点「助手模式」再换回来）
+  // 论文翻译的「笔记模式」：右栏这一列换成阅读笔记窄栏（点「专家模式」再换回来）
   if(step === "notes" && window.TR && TR.noteMode && typeof trPaintNoteColumn === "function"){
     trPaintNoteColumn();
     return;
@@ -1533,7 +1555,7 @@ const WF_SUGGESTIONS = {
 };
 
 let wfView = "conversation";
-/* 右栏空态 = 这一步的助手看着上一步的交付现写的「进度同步 + 本步计划」（后端 step_plan 落库，
+/* 右栏空态 = 这一步的专家看着上一步的交付现写的「进度同步 + 本步计划」（后端 step_plan 落库，
    已有就直接读消息，不会重复烧模型）。plan 消息的 events 带 {type:"plan"}，最后一条才挂「同意」。 */
 function wfPlanHTML(step, text, pending){
   const a = WF_AGENT[step] || WF_AGENT.idea;
@@ -1604,7 +1626,7 @@ function wfPaintMsgs(step){
   if(!wfMsgs.length){
     const a = WF_AGENT[step] || WF_AGENT.idea;
     const suggestions = WF_SUGGESTIONS[step] || [
-      { icon: "💬", title: "向助手直接提问", prompt: `关于${a.name}，我想请教…` },
+      { icon: "💬", title: "向专家直接提问", prompt: `关于${a.name}，我想请教…` },
       { icon: "📌", title: "同步当前研究进展", prompt: "同步一下当前项目的研究进度和接下来的计划" }
     ];
     box.innerHTML = `
@@ -1642,7 +1664,7 @@ function wfPaintMsgs(step){
     return;
   }
   box.innerHTML = "";
-  const who = WF_AGENT[step] || WF_AGENT.idea;          // 这一步的助手说话，不是智研管家
+  const who = WF_AGENT[step] || WF_AGENT.idea;          // 这一步的专家说话，不是智研管家
   wfMsgs.forEach((mv, i) => {
     if((mv.events||[]).some(e => e.type === "plan")){
       box.insertAdjacentHTML("beforeend", wfPlanHTML(step, mv.content, i === wfMsgs.length-1));
@@ -1661,7 +1683,7 @@ function wfPaintMsgs(step){
   box.scrollTop = box.scrollHeight;
 }
 function wfPaintStats(){
-  // 口径 = 这个助手自己（本步对话 + 本步事件流）；不显示项目合计，混进别步的数字就定位不到「这一步花了多少」。
+  // 口径 = 这个专家自己（本步对话 + 本步事件流）；不显示项目合计，混进别步的数字就定位不到「这一步花了多少」。
   const turns = wfMsgs.filter(x=>x.role==="user").length;
   const calls = wfEvents.filter(e=>e.type==="tool_call");
   const tok = wfEvents.filter(e=>e.type==="usage").reduce((n,e)=>n+(e.total||0),0);
@@ -1766,7 +1788,7 @@ async function uiGoWorkflowStep(step){
   return uiNavigate(async()=>{
     const projectId=curTask;
     if(!projectId) return uiNotify('请先选择项目。');
-    const button=route()==='workflow' && wfProjectId===projectId
+    const button=uiRouteIs('workflow') && wfProjectId===projectId
       ? [...document.querySelectorAll('.wf-step[data-step]')].find(b=>b.dataset.step===step) : null;
     if(button){ button.click(); await wfSelectionSave; return; }
     await wfSelectionSave;
@@ -1776,12 +1798,14 @@ async function uiGoWorkflowStep(step){
     if(curTask!==projectId) return;
     await api('/api/workflow/layouts/select',{task_id:projectId,layout_id:state.layout.id,node_id:node.id});
     if(curTask!==projectId) return;
-    openTab('workflow');
+    openTab('workspace');
+    await ProjectWorkspace.showResource('workflow');
   });
 }
 
 let wfRenderSequence=0;
 async function renderWorkflow(m){
+  if(m.id==='main' && route()==='workspace') return ProjectWorkspace.showResource('workflow');
   const renderSequence=++wfRenderSequence;
   const projectId = curTask;
   let layoutState = null;
@@ -1789,7 +1813,7 @@ async function renderWorkflow(m){
     try{
       await wfSelectionSave;
       const state = await api(`/api/workflow/layouts/state?task_id=${encodeURIComponent(projectId)}`);
-      if(renderSequence !== wfRenderSequence || curTask !== projectId || route() !== "workflow" || !m.isConnected) return;
+      if(renderSequence !== wfRenderSequence || curTask !== projectId || !uiRouteIs("workflow") || !m.isConnected) return;
       wfNodes = Object.fromEntries(state.nodes.map(n=>[n.step,n]));
       WF_ORDER = state.nodes.map(n=>n.step);
       wfApplyCatalog(state.stages);
@@ -1918,14 +1942,14 @@ async function renderWorkflow(m){
   const layoutBtn = m.querySelector("#wfLayoutSettings");
   if(layoutBtn) layoutBtn.onclick=()=>{ setSec="workflows"; openTab("settings"); render(); };
   const syncBtn = m.querySelector("#wfSyncSettings");
-  if(syncBtn) syncBtn.onclick=()=>IntegrationSettings.openZotero(curTask);
+  if(syncBtn) syncBtn.onclick=()=>ProjectLiterature.open(curTask,true);
   const layoutSelect = m.querySelector("#wfLayoutSelect");
   if(layoutSelect) layoutSelect.onchange=async event=>{
     const select=event.target; select.disabled=true;
     try{
       await wfSelectionSave;
       const state=await api("/api/workflow/layouts/select",{task_id:projectId,layout_id:select.value});
-      if(curTask!==projectId || route()!=="workflow" || !m.isConnected) return;
+      if(curTask!==projectId || !uiRouteIs("workflow") || !m.isConnected) return;
       wfStep=state.nodes.find(node=>node.id===state.selected_node)?.step || state.nodes[0].step;
       await renderWorkflow(m);
     }catch(error){ select.disabled=false; select.value=layoutState.layout.id; uiNotify("工作流切换失败："+error.message); }
@@ -2022,7 +2046,7 @@ function wfPaintFoot(){
   const hint = $("wfFootHint"), pill = $("wfFootPill"), back = $("wfBack"), deliver = $("wfDeliver");
   if(wfStep === "files"){                       // 第 11 项不是一步：不编号、不交付、不给「退回上一步」
     if(pill) pill.textContent = `项目文件夹 · ${flRows.length} 项`;
-    if(hint) hint.textContent = "点文件看预览 · 在右边问它这个文件 · 说「交给写作助手」就转到那一步";
+    if(hint) hint.textContent = "点文件看预览 · 在右边问它这个文件 · 说「交给写作专家」就转到那一步";
     if(back) back.style.display = "none";
     if(deliver) deliver.style.display = "none";
     return;
@@ -2042,12 +2066,15 @@ function wfPaintFoot(){
 }
 function iwBind(m){
   const ta = $("iwMine"); if(!ta) return;
-  let t0 = 0;
+  const project=curTask;let t0 = 0,pending=Promise.resolve();ta.dataset.savedValue='';
   const save = async ()=>{
+    clearTimeout(t0);const text=ta.value;
     const st = $("iw-mine-state"); if(st) st.textContent = "保存中…";
-    try{ await api("/api/idea/input", {task_id: curTask, text: ta.value}); if(st) st.textContent = "已保存"; }
-    catch(e){ if(st) st.textContent = "保存失败：" + e.message; }
+    const work=pending.catch(()=>{}).then(()=>api("/api/idea/input",{task_id:project,text}));pending=work;
+    try{await work;ta.dataset.savedValue=text;if(st)st.textContent=ta.value===text?"已保存":"未保存…";return ta.value===text;}
+    catch(e){if(st)st.textContent="保存失败："+e.message;return false;}
   };
+  ta.projectSave=save;
   ta.oninput = ()=>{ const st = $("iw-mine-state"); if(st) st.textContent = "未保存…";
     clearTimeout(t0); t0 = setTimeout(save, 700); };
   ta.onblur = ()=>{ clearTimeout(t0); save(); };
@@ -2104,7 +2131,7 @@ function iwBind(m){
       if(!body || !src) return;
       const text = src.value;
       try{
-        await api("/api/idea/verdict_save", { task_id: curTask, text: text });
+        await api("/api/idea/verdict_save", { task_id: project, text: text });
         body.dataset.raw = text;
         body.innerHTML = renderMarkdown(text);
         src.classList.add("hidden");
@@ -2119,7 +2146,7 @@ function iwBind(m){
   iwLoad();
 }
 async function iwFlush(){
-  /* 送消息之前先把上区刚改的字落库 —— 右栏助手这一轮就要读到最新的 */
+  /* 送消息之前先把上区刚改的字落库 —— 右栏专家这一轮就要读到最新的 */
   const ta = $("iwMine"); if(!ta || !curTask) return;
   try{ await api("/api/idea/input", {task_id: curTask, text: ta.value}); }catch(_){}
 }
@@ -2127,7 +2154,7 @@ function iwVerdictPaint(v){
   const box = $("iwVerdict"), at = $("iw-verdict-at"); if(!box) return;
   const recCard = $("iwRecCard"), recBody = $("iwRecBody"), recSrc = $("iwRecSrc");
   if(!v || !v.markdown){
-    box.innerHTML = `<p class="ol-empty">还没有判定 —— 在右边跟助手把约束问清，说「出一版判定」，结果落在这里。</p>`;
+    box.innerHTML = `<p class="ol-empty">还没有判定 —— 在右边跟专家把约束问清，说「出一版判定」，结果落在这里。</p>`;
     if(at) at.textContent = "";
     if(recCard) recCard.style.display = "none";
     return;
@@ -2149,10 +2176,13 @@ function iwVerdictPaint(v){
 }
 async function iwLoad(){
   if(!curTask) return;
+  const project=curTask,original=$("iwMine");
   try{
-    const d = await api(`/api/idea/memory?id=${encodeURIComponent(curTask)}`);
+    const d = await api(`/api/idea/memory?id=${encodeURIComponent(project)}`);
+    if(curTask!==project || !original?.isConnected || $("iwMine")!==original)return;
     const ta = $("iwMine");
-    if(ta && document.activeElement !== ta && ta.value !== (d.mine || "")) ta.value = d.mine || "";
+    if(ta && document.activeElement !== ta && ta.value===(ta.dataset.savedValue||'') && ta.value !== (d.mine || "")) ta.value = d.mine || "";
+    if(ta)ta.dataset.savedValue=d.mine||'';
     iwVerdictPaint(d.verdict);
   }catch(e){}
 }
@@ -2197,7 +2227,7 @@ async function showCiteModal(taskId){
     const d = await api(`/api/doc/cite?id=${encodeURIComponent(taskId || curTask)}`);
     const entries = d.matched || [];
     if(!entries.length){
-      body.innerHTML = `<p class="muted" style="text-align:center;padding:30px">正文中暂无已确认引用记录。可以在写作时向助手指定引用文献，或在正文中插入文献锚点。</p>`;
+      body.innerHTML = `<p class="muted" style="text-align:center;padding:30px">正文中暂无已确认引用记录。可以在写作时向专家指定引用文献，或在正文中插入文献锚点。</p>`;
       return;
     }
     const allBibs = entries.map(e => makeBibtex(e)).join("\n\n");
@@ -2260,13 +2290,13 @@ async function showHistoryModal(taskId, currentStep){
       <div class="modal-mask" id="wfHistMask"></div>
       <div class="modal-dialog hist-modal-box">
         <div class="modal-head">
-          <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:6px"><span>⏱</span> 对话历史与助手切换</h3>
+          <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:6px"><span>⏱</span> 对话历史与专家切换</h3>
           <button class="modal-close" id="wfHistClose">✕</button>
         </div>
         <div class="hist-tabs">
           <button class="hist-tab-btn on" data-htab="all">全部记录</button>
           <button class="hist-tab-btn" data-htab="workflow">工作流节点 (10)</button>
-          <button class="hist-tab-btn" data-htab="assistant">一级助手</button>
+          <button class="hist-tab-btn" data-htab="assistant">一级专家</button>
         </div>
         <div class="modal-body" id="wfHistBody" style="padding:14px 18px;overflow-y:auto;flex:1">
           <p class="muted">加载中…</p>
@@ -2350,7 +2380,7 @@ async function showHistoryModal(taskId, currentStep){
           });
         }
 
-        // 2. 一级助手分组 (Level 1)
+        // 2. 一级专家分组 (Level 1)
         if(activeTab === "all" || activeTab === "assistant"){
           const asMap = new Map();
           const defaultKey = "builtin-steward";
@@ -2372,7 +2402,7 @@ async function showHistoryModal(taskId, currentStep){
                 type: "assistant",
                 assistant_id: c.assistant_id,
                 emoji: "🤖",
-                title: c.assistant_name || "一级助手",
+                title: c.assistant_name || "一级专家",
                 isCurrent: false,
                 subItems: []
               });
@@ -2382,7 +2412,7 @@ async function showHistoryModal(taskId, currentStep){
               kind: "assistant",
               id: c.id,
               assistant_id: c.assistant_id,
-              title: c.title || "助手对话",
+              title: c.title || "专家对话",
               last_msg: c.last_msg || "暂无最近消息",
               count: c.count || 0,
               updated_at: c.updated_at || "",
@@ -2455,7 +2485,7 @@ async function showHistoryModal(taskId, currentStep){
                     `).join('') : `
                       <div class="hist-empty-sub" data-empty-step="${g.step || ''}" data-empty-kind="${g.type}">
                         <span>尚未建立独立对话</span>
-                        <span style="font-size:11px;color:var(--accent);cursor:pointer">${g.type === 'workflow' ? '点击切换至此节点 ➔' : '点击切换至此助手 ➔'}</span>
+                        <span style="font-size:11px;color:var(--accent);cursor:pointer">${g.type === 'workflow' ? '点击切换至此节点 ➔' : '点击切换至此专家 ➔'}</span>
                       </div>
                     `}
                   </div>
@@ -2595,13 +2625,13 @@ let dlPoll = null, dlBusy = false;
 let dlStatPoll = null;                    // 「已下载论文总数」：面板开着就每 5 秒自己刷，不等人点
 let dlTruth = 0;                          // 文献库里真实篇数（/api/task 的 papers）—— 只在进面板/精读收尾时拉，不跟 5 秒轮询走（那接口 770KB）
 let dlSt = null, dlLastQueue = null;      // 最近一次精读状态 / 最近一次队列（进度刻格的事实来源）
-const wsFiltered = ()=> (wsRes||[]).slice();   // 没有手动筛选了：检索条件都交给右栏助手
+const wsFiltered = ()=> (wsRes||[]).slice();   // 没有手动筛选了：检索条件都交给右栏专家
 function searchPanelHTML(active){
   return `<div class="ws" id="panel-search"${active?"":' style="display:none"'}>
     <div class="ws-results">
       <div class="ws-head"><p class="eyebrow">SEARCH / FREE SOURCES</p>
         <h1>联网检索<span id="wsCount" class="hint" style="font-size:12px;font-weight:400"></span></h1>
-        <p class="hint">在右边助手说方向和年份（例：2020–2024 钠电 O3 型 NFM 掺杂），或直接在此输入关键词检索。多源聚合、综合高相关排序并自动关联 easyScholar 期刊分级。</p>
+        <p class="hint">在右边专家说方向和年份（例：2020–2024 钠电 O3 型 NFM 掺杂），或直接在此输入关键词检索。多源聚合、综合高相关排序并自动关联 easyScholar 期刊分级。</p>
         <div class="ws-toolbar">
           <input type="text" id="wsInputQuery" placeholder="输入搜索关键词（支持中英文、方向、体系等）…" />
           <select id="wsSort" title="检索排序方式">
@@ -2661,7 +2691,7 @@ function dlBind(m){
   dlTruthRefresh();                                    // 进面板先问一次文献库真篇数
   $("dlRead").onclick = dlRead;
   const zSyncBtn = $("dlZoteroSyncBtn");
-  if(zSyncBtn) zSyncBtn.onclick=()=>IntegrationSettings.openZotero(curTask);
+  if(zSyncBtn) zSyncBtn.onclick=()=>ProjectLiterature.open(curTask,true);
   if($("dlList")){
     $("dlList").onclick = (e)=>{
       const c = e.target.closest("[data-copy]"); if(!c) return;
@@ -2873,7 +2903,7 @@ async function wsPaint(){
   listEl.innerHTML = slice.length ? slice.map(r=>wsCard(r,"search")).join("")
     : `<div style="display:grid;place-items:center;height:100%;padding:30px 16px;text-align:center">
         <div><p class="hint" style="font-size:13px;margin:0 0 6px">暂无检索结果</p>
-        <p class="hint">在右边助手说方向和年份，或在上方工具条输入关键词，检索完结果会回填到这里；同一个项目里会累积。</p></div></div>`;
+        <p class="hint">在右边专家说方向和年份，或在上方工具条输入关键词，检索完结果会回填到这里；同一个项目里会累积。</p></div></div>`;
   $("wsCount").textContent = all.length ? ` · ${all.length}` : "";
   $("wsNote").textContent = wsNote || (wsRes.length? `项目里累计 ${wsRes.length} 条检索结果` : "");
   wsSyncPick();
@@ -2999,74 +3029,7 @@ async function loadTaskState(){
   }catch(e){}
 }
 /* ---------------- 项目 ---------------- */
-function renderTasks(m){
-  const kws = t => String(t.material_system || "").split(/[，,、;；]+/).map(s => s.trim()).filter(Boolean)
-    .slice(0, 4).map(s => `<span class="kw">${esc(s)}</span>`).join("");
-  m.innerHTML = `
-    <div class="pj-page">
-      <h1>项目</h1>
-      <div class="sub">每个课题一个托盘 —— 卡片颜色跟着项目走，一眼认出做的是哪摊</div>
-      <div class="card proj-new pj-new"><h3>新建项目</h3>
-        <div class="row">
-          <label><span>项目标题</span>
-            <input type="text" id="t-title" placeholder="例：锂离子正极掺杂研究"></label>
-          <label><span>关键词</span>
-            <input type="text" id="t-kw" placeholder="例：钠离子，层状正极，NFM"></label>
-          <label class="full"><span>研究问题</span>
-            <textarea id="t-q" rows="2" placeholder="一句话说清主线与创新点"></textarea></label>
-          <label class="full"><span>项目位置</span>
-            <div class="pf-dir" id="t-dir-box"><span class="dp" id="t-dir">尚未选择文件夹（可选，选好会自动建好六个子文件夹）</span>
-              <button class="btn" id="t-dir-pick" type="button">＋ 选择文件夹</button></div></label>
-        </div>
-        <div class="pf-actions" style="margin-top:10px"><button class="btn" id="t-go">创建项目</button></div></div>
-    <div class="card pj-sec"><h3>${S.tasks.length} 个项目</h3>${S.tasks.length?
-      `<div class="proj-cards">${S.tasks.map((t, i) => `<div class="proj-row ${t.id===curTask?"cur":""}">
-        <div class="nm">${esc(t.title)}</div>
-        <div class="q">${esc(t.question||"未填研究问题")}</div>
-        <div class="kws">${kws(t)}</div>
-        <div class="meta"><span class="st">${esc(t.stage_now||"—")}</span>
-          <button class="go" data-go="${t.id}">进入 →</button>
-          <span class="tm">${fmtDate(t.updated_at)}</span>
-          <button class="go del" data-del="${t.id}" title="删除项目">删除</button></div></div>`).join("")}
-        <div class="proj-add">＋ 新建项目</div></div>`
-      :`<div class="hint">还没有项目</div>`}</div>
-    </div>`;   // /.pj-page
-  m.querySelectorAll(".proj-row").forEach(r=>r.onclick=()=>{           // 点整行 = 切换当前项目（不动页面）
-    const id=[...r.querySelectorAll("[data-go]")][0]?.dataset.go; if(!id) return;
-    curTask = id; localStorage.setItem("rw-task",curTask); render();
-  });
-  m.querySelectorAll("[data-go]").forEach(b=>b.onclick=(e)=>{          // 进入项目 → 切当前 + 进科研平台（十步工作流）
-    e.stopPropagation(); curTask = b.dataset.go; localStorage.setItem("rw-task",curTask); openTab("workflow");
-  });
-  m.querySelectorAll("[data-del]").forEach(b=>b.onclick=async (e)=>{    // 删除项目（连带数据，先确认）
-    e.stopPropagation();
-    const t = S.tasks.find(x=>x.id===b.dataset.del);
-    if(!await uiConfirm(`删除项目「${t?t.title:""}」？\n它的文献、证据、笔记、会话、日程、步骤都会一起删掉，不可撤销。`)) return;
-    try{ await api("/api/task/delete",{id:b.dataset.del}); }catch(err){ return uiNotify("删除失败："+err.message); }
-    if(curTask===b.dataset.del){ curTask=null; localStorage.removeItem("rw-task"); }
-    await refreshState(false); render();
-  });
-  const addCard = m.querySelector(".proj-add");                    // 「＋ 新建项目」卡 = 把焦点送回上面的表单
-  if(addCard) addCard.onclick = ()=>{ const t = $("t-title"); t.scrollIntoView({block:"center",behavior:"smooth"}); t.focus(); };
-  $("t-dir-pick").onclick = async ()=>{
-    const btn = $("t-dir-pick"); const old = btn.textContent; btn.disabled = true; btn.textContent = "选择中…";
-    try{
-      const r = await api("/api/folder/pick?title=" + encodeURIComponent("选择项目位置") +
-                          "&initial=" + encodeURIComponent(tDir||""), {method:"GET"});
-      if(r && r.dir){ tDir = r.dir; $("t-dir").textContent = tDir; $("t-dir-box").classList.add("set"); }
-    }catch(e){ uiNotify("打开文件夹选择框失败：" + e.message); }
-    btn.disabled = false; btn.textContent = old;
-  };
-  $("t-go").onclick = async ()=>{
-    const title=$("t-title").value.trim(); const question=$("t-q").value.trim();
-    if(!title) return uiNotify("标题必填");
-    const r = await api("/api/task/create",{title,question,material_system:$("t-kw").value.trim(),base_dir:tDir});
-    curTask = r.task_id; localStorage.setItem("rw-task",curTask);
-    tDir = "";
-    await refreshState(false); render();
-    if(r.dirs && r.dirs.length) uiNotify(`项目已创建，并在项目位置里建好：\n${r.dirs.join(" / ")}\n（每个子文件夹里都写了 README.md）`);
-  };
-}
+function renderTasks(){return ProjectManager.open();}
 
 /* ---------------- 日历：版式/类名照 lit（app.js 的 calendarDateInfo/renderCalendar/renderCalDayEvents + index.html 的 home-mid/home-bottom），只多了年/月下拉 ---------------- */
 let calY = new Date().getFullYear(), calM = new Date().getMonth();   // calM 0-11
@@ -3102,6 +3065,7 @@ function calendarEntryHTML(e){
     <span class="check-title">${esc(e.title)}${e.linked?`<small style="display:block;color:var(--muted)">${esc(project?.title || "")} · ${esc(e.source_label)} · ${esc(status)}</small>`:""}</span>
     ${e.linked?`<button class="btn ghost" data-cal-open="${esc(e.id)}">${e.target_type==="note"?"打开笔记":e.source_type==="workflow_review" && e.is_pending?"审查节点":"打开来源"}</button>`:`<button class="check-del" data-del="${esc(e.id)}" title="删除">✕</button>`}</div>`;
 }
+let calendarSearch='';
 function renderCalendar(m){
   const y = calY, mo = calM, t0 = today();
   const lead = (new Date(y,mo,1).getDay()+6)%7;                       // 周一=0
@@ -3132,7 +3096,7 @@ function renderCalendar(m){
   const soon = S.events.filter(e=>!e.done && e.is_pending!==false && e.date>=t0).sort((a,b)=>a.date.localeCompare(b.date));
   const DAY = 86400000, base = new Date(t0+"T00:00:00").getTime();
 
-  m.innerHTML = `<div class="cal-page">
+  m.innerHTML = `<div class="cal-page"><div class="cal-search"><input type="search" class="control" aria-label="搜索全部日程" placeholder="搜索日程名称、日期或项目…" value="${esc(calendarSearch)}" data-cal-search><div data-cal-search-results aria-live="polite"></div></div>
     <div class="cal-mid">
       <div class="cal-left">
       <div class="card cal-hello">
@@ -3185,6 +3149,15 @@ function renderCalendar(m){
     </div>
   </div>`;
 
+  const search=m.querySelector('[data-cal-search]'),results=m.querySelector('[data-cal-search-results]');
+  const searchEvents=()=>{
+    calendarSearch=search.value;const query=calendarSearch.trim().toLowerCase();results.hidden=!query;
+    if(!query){results.replaceChildren();return;}
+    const matches=S.events.filter(event=>[event.title,event.date,event.project_title,event.kind].join(' ').toLowerCase().includes(query)).slice(0,100);
+    results.innerHTML=matches.length?matches.map(event=>`<button type="button" class="cal-search-result" data-cal-result="${esc(event.id)}"><strong>${esc(event.title)}</strong><span>${esc(event.date)} ${esc(event.time||'')}</span></button>`).join(''):'<p class="hint">没有匹配的日程</p>';
+    results.querySelectorAll('[data-cal-result]').forEach(button=>button.onclick=()=>{const event=S.events.find(item=>item.id===button.dataset.calResult);if(!event)return;calSel=event.date;const d=new Date(event.date+'T00:00:00');calY=d.getFullYear();calM=d.getMonth();calendarSearch='';render();});
+  };
+  search.oninput=searchEvents;searchEvents();
   $("calY").onchange = e=>{ calY = +e.target.value; render(); };
   $("calM").onchange = e=>{ calM = +e.target.value; render(); };
   $("calPrev").onclick = ()=>{ if(--calM<0){calM=11;calY--;} render(); };

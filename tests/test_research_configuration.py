@@ -27,6 +27,7 @@ class ResearchConfigurationTest(unittest.TestCase):
         db_patch = patch.object(team, "DB_PATH", self.db.path)
         db_patch.start()
         self.addCleanup(db_patch.stop)
+        team.ensure_defaults(self.project)
 
     def tool(self, tool_name, **args):
         return workflow._tool_impl(tool_name, self.db, self.project, args)
@@ -50,7 +51,7 @@ class ResearchConfigurationTest(unittest.TestCase):
             migrated = workflow_layout.route("GET", "/api/workflow/layouts", None, {}, reopened)["layouts"][0]
         self.assertEqual(migrated["nodes"][1]["label"], "My custom search")
         self.assertEqual(migrated["nodes"][3]["label"], "论文翻译")
-        self.assertEqual(workflow.STEP_AGENT["notes"], "翻译助手")
+        self.assertEqual(workflow.STEP_AGENT["notes"], "翻译专家")
 
     def test_saved_custom_label_is_preserved_when_it_matches_a_legacy_name(self):
         self.tool("workflow_manage", action="list")
@@ -162,7 +163,7 @@ class ResearchConfigurationTest(unittest.TestCase):
     def test_configuration_respects_project_and_permission_boundaries(self):
         office = self.tool("team_create", name="Custom team")["team"]
         self.assertEqual(office["kind"], "custom")
-        self.assertNotEqual(team.members(office["id"])[0]["name"], "智研管家")
+        self.assertEqual(team.members(office["id"]), [])
         other = self.db.create_task("Other")
         foreign = self.db.team_add("Foreign", "custom", project_id=other)
         with self.assertRaises(PermissionError):

@@ -1,6 +1,5 @@
 """easyScholar API 客户端与本地缓存适配器。
 
-文档基准：docs/easyScholar _ 显示期刊等级_SCI分区.html
 接口协议：
   GET https://www.easyscholar.cc/open/getPublicationRank?secretKey={key}&publicationName={name}
 约束：

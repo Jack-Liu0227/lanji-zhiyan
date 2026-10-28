@@ -1,4 +1,4 @@
-/* One workflow-bound task model behind the toolbar, context menu and keyboard. */
+/* File work can be a project task or belong to a specific workflow node. */
 const FileHandoff = (() => {
   "use strict";
   const h = value => esc(String(value ?? ""));
@@ -30,7 +30,7 @@ const FileHandoff = (() => {
       const relative=flow?row.dataset.rel:row.dataset.treePath || row.querySelector('[data-pn-file]')?.dataset.pnFile;
       if(relative) return {project_id:flow?(row.dataset.projectId || curTask):mdDashProject,relative};
     }
-    if(element?.closest('.fl-col') && flSel && route()==="workflow" && document.getElementById("flHand")?.disabled===false) return {project_id:curTask,relative:flSel};
+    if(element?.closest('.fl-col') && flSel && uiRouteIs("workflow") && document.getElementById("flHand")?.disabled===false) return {project_id:curTask,relative:flSel};
     return null;
   }
   function dirty(ref){
@@ -42,26 +42,37 @@ const FileHandoff = (() => {
   }
   async function open(ref, preferred=""){
     if(!ref?.project_id || !ref.relative){ uiNotify("请先选择项目中的文件"); return; }
-    if(route()==="workflow" && ref.project_id!==curTask){uiNotify("项目已切换，请重新选择文件。");return;}
+    if(uiRouteIs("workflow") && ref.project_id!==curTask){uiNotify("项目已切换，请重新选择文件。");return;}
     ref={project_id:ref.project_id,relative:ref.relative};
     const activeProject=curTask;
     const el=dialog("交给当前工作流"), body=el.querySelector("[data-body]"), error=el.querySelector("[data-error]");
     const draftKey="rw-handoff-draft:"+ref.project_id+":"+ref.relative;
     let data=null, view="node", selection=null, group=[], related=[], requestKey=crypto.randomUUID(), prepared=null;
     const saved=read(draftKey) || {};
-    body.innerHTML=`<div class="handoff-context"><b>${h((S.tasks || []).find(t=>t.id===ref.project_id)?.title || "当前项目")}</b><div>${h(ref.relative)}</div><div class="handoff-muted" data-workflow>读取当前工作流…</div><div class="handoff-muted">${dirty(ref)?"有未保存修改，准备或发送前会先保存。":"使用已保存的文件；执行时固定输入版本。"}</div></div>
+    body.innerHTML=`<div class="handoff-row" role="group" aria-label="任务范围"><button class="btn" data-handoff-project aria-pressed="false">项目任务 · 无需工作流</button><button class="btn" data-handoff-workflow aria-pressed="true">当前工作流节点</button></div>
+      <div class="handoff-context"><b>${h((S.tasks || []).find(t=>t.id===ref.project_id)?.title || "当前项目")}</b><div>${h(ref.relative)}</div><div class="handoff-muted" data-workflow>读取当前工作流…</div><div class="handoff-muted">${dirty(ref)?"有未保存修改，准备或发送前会先保存。":"使用已保存的文件；执行时固定输入版本。"}</div></div>
       <div class="handoff-context" data-configuration hidden role="status"></div>
-      <div class="handoff-row" role="group" aria-label="目标查找方式">${[["node","按节点"],["team","按团队"],["assistant","按助手"]].map(([id,label])=>`<button class="btn" data-view="${id}" aria-pressed="${id==="node"}">${label}</button>`).join("")}<button class="btn ghost" data-refresh>刷新目标</button><button class="btn ghost" data-configure>配置工作流</button></div>
+      <div class="handoff-row" role="group" aria-label="目标查找方式">${[["node","按节点"],["team","按团队"],["assistant","按专家"]].map(([id,label])=>`<button class="btn" data-view="${id}" aria-pressed="${id==="node"}">${label}</button>`).join("")}<button class="btn ghost" data-refresh>刷新目标</button><button class="btn ghost" data-configure>配置工作流</button></div>
       <label>查找目标<input type="search" data-search placeholder="搜索当前工作流内的名称"></label>
       <label><span data-target-label>选择节点</span><select data-target-select aria-label="选择节点" disabled><option value="">正在读取…</option></select></label>
       <div class="handoff-targets" data-targets>正在读取…</div>
-      <div class="handoff-context" data-selection>选择一个目标；团队或助手都需要归属到具体节点。</div>
+      <div class="handoff-context" data-selection>选择一个目标；团队或专家都需要归属到具体节点。</div>
       <label>接收方式<select data-parent><option value="">新建节点任务</option></select></label><div class="handoff-muted">补充已有任务会另建关联的处理记录，保留原任务与运行输入。</div>
       <label>任务说明<textarea data-instruction maxlength="20000" placeholder="希望用这个文件完成什么？">${h(saved.instruction || "")}</textarea></label>
       <p class="handoff-muted">只执行选中的节点。前置交付尚未验收、或项目已有运行时，材料会保留为待处理任务。</p>
       <div class="handoff-row handoff-actions"><button class="btn" data-prepare disabled>准备任务</button><button class="btn btn-primary" data-start disabled>发送并开始</button></div>`;
     const instruction=body.querySelector("[data-instruction]"), search=body.querySelector("[data-search]");
     const remember=()=>write(draftKey,{instruction:instruction.value,layout_id:data?.layout_id,selection:selection?keyOf(selection.node,selection.actor):""});
+    body.querySelector("[data-handoff-project]").onclick=async()=>{
+      remember();
+      const goal=instruction.value;
+      el.close();
+      await ProjectTasks.compose(ref.project_id,{title:ref.relative.split(/[\\/]/).at(-1),goal,inputs:[{relative:ref.relative}],metadata:{source:"file_handoff"},beforeSubmit:async()=>{
+        if(curTask!==activeProject) throw new Error("项目已切换，已保留任务说明。请从当前项目重新打开文件任务。");
+        await saveInput(ref);
+      }});
+    };
+    body.querySelector("[data-handoff-workflow]").onclick=()=>instruction.focus();
     const invalidate=()=>{prepared=null;requestKey=crypto.randomUUID();remember();};
     const preferences=()=>read("rw-handoff-targets:"+ref.project_id+":"+data.layout_id) || {pins:[],recent:[]};
     function choose(node,actor,focus=true){ selection={node,actor}; invalidate(); drawSelection(); drawTargets(); if(focus) body.querySelector('[data-target][aria-pressed="true"]')?.focus(); }
@@ -77,13 +88,13 @@ const FileHandoff = (() => {
         if(group.length>1){
           host.innerHTML=`<label>此执行者参与多个节点，请选择归属节点<select data-handoff-node><option value="">请选择节点…</option>${group.map((r,i)=>`<option value="${i}">${h(r.node.label+(r.actor.team_name?" · "+r.actor.team_name+" / "+r.actor.member_name:""))}</option>`).join("")}</select></label>`;
           host.querySelector("select").onchange=e=>{if(e.target.value!==""){const row=group[Number(e.target.value)];choose(row.node,row.actor);}};
-        }else host.textContent="选择一个目标；团队或助手都需要归属到具体节点。";
+        }else host.textContent="选择一个目标；团队或专家都需要归属到具体节点。";
         return;
       }
       const {node,actor}=selection;
       host.innerHTML=`<b>${h(node.label)}</b><p>${h(actor.team_name?actor.team_name+" → "+actor.member_name+"（"+actor.assistant_name+"）":actor.assistant_name)}</p><div class="handoff-muted">${node.dependencies.length?"前置节点："+h(node.dependencies.map(id=>data.nodes.find(n=>n.id===id)?.label || id).join("、")):"无前置依赖"} · ${node.review_required===false?"沿用节点自动交付配置":"生成产物后等待节点验收"}</div>
         ${actor.binding_source==="project_team"?'<div class="handoff-muted">沿用当前内置工作流的项目常驻团队配置</div>':""}
-        ${view!=="assistant" && node.actors.length>1?`<label>执行助手<select data-actor-select aria-label="执行助手">${node.actors.map(a=>`<option value="${h(keyOf(node,a))}" ${keyOf(node,a)===keyOf(node,actor)?"selected":""}>${h((a.member_name?a.member_name+" · ":"")+a.assistant_name)}</option>`).join("")}</select></label>`:""}
+        ${view!=="assistant" && node.actors.length>1?`<label>执行专家<select data-actor-select aria-label="执行专家">${node.actors.map(a=>`<option value="${h(keyOf(node,a))}" ${keyOf(node,a)===keyOf(node,actor)?"selected":""}>${h((a.member_name?a.member_name+" · ":"")+a.assistant_name)}</option>`).join("")}</select></label>`:""}
         <button class="btn ghost" data-pin>${preferences().pins.includes(keyOf(node,actor))?"取消常用":"设为常用"}</button>`;
       const executor=host.querySelector("[data-actor-select]");
       if(executor) executor.onchange=e=>{
@@ -123,7 +134,7 @@ const FileHandoff = (() => {
         if(!groups.has(key)) groups.set(key,[]);groups.get(key).push(row);
       }
       const filtered=[...groups.values()];
-      const targetSelect=body.querySelector("[data-target-select]"), label={node:"选择节点",team:"选择团队",assistant:"选择助手"}[view];
+      const targetSelect=body.querySelector("[data-target-select]"), label={node:"选择节点",team:"选择团队",assistant:"选择专家"}[view];
       body.querySelector("[data-target-label]").textContent=label;
       targetSelect.setAttribute("aria-label",label);
       const groupId=row=>view==="node" || !row.actor?row.node.id:view==="team"?row.actor.team_id:row.actor.assistant_id;
@@ -143,7 +154,7 @@ const FileHandoff = (() => {
         const title=view==="team"?actor?.team_name || "团队配置待修复":view==="assistant"?actor.assistant_name:node.label;
         const key=actor?keyOf(node,actor):"";
         return `<button class="handoff-target" data-target="${i}" ${actor?"":"disabled"} aria-pressed="${!!selection && options.some(r=>r.actor && keyOf(r.node,r.actor)===keyOf(selection.node,selection.actor))}"><b>${h(title)}</b>${prefs.pins.includes(key)?" · 常用":prefs.recent.includes(key)?" · 最近使用":""}<small class="handoff-muted">${options.length>1?h(options.map(r=>r.node.label).join("、"))+" · 请选择归属节点":actor?h((view==="node"?"":node.label+" · ")+(actor.team_name?actor.team_name+" / "+actor.member_name+" / ":"")+actor.assistant_name):h(node.disabled_reason)}</small></button>`;
-      }).join("") || (q?'<p class="handoff-muted">没有匹配的目标，请修改搜索词。</p>':`<div class="handoff-muted">当前没有可用的${view==="team"?"团队":view==="assistant"?"助手":"节点"}。${data.nodes.some(n=>n.disabled_reason)?`<details open><summary>查看节点配置原因</summary>${data.nodes.filter(n=>n.disabled_reason).map(n=>`<div>${h(n.label)}：${h(n.disabled_reason)}</div>`).join("")}</details>`:"该工作流只配置了直接执行的助手，未绑定团队。"}</div>`);
+      }).join("") || (q?'<p class="handoff-muted">没有匹配的目标，请修改搜索词。</p>':`<div class="handoff-muted">当前没有可用的${view==="team"?"团队":view==="assistant"?"专家":"节点"}。${data.nodes.some(n=>n.disabled_reason)?`<details open><summary>查看节点配置原因</summary>${data.nodes.filter(n=>n.disabled_reason).map(n=>`<div>${h(n.label)}：${h(n.disabled_reason)}</div>`).join("")}</details>`:"该工作流只配置了直接执行的专家，未绑定团队。"}</div>`);
       host.querySelectorAll("[data-target]").forEach(button=>button.onclick=()=>{
         selectGroup(filtered[Number(button.dataset.target)]);
       });
@@ -166,7 +177,7 @@ const FileHandoff = (() => {
         notice.hidden=true;notice.innerHTML="";
         if(config.legacy_leaders>0){
           notice.hidden=false;
-          notice.innerHTML=`<p>本项目的团队仍有 ${config.legacy_leaders} 个旧版负责人缺少助手绑定。修复后即可从当前工作流选择团队和助手。</p><button class="btn" data-repair>修复本项目团队绑定</button>`;
+          notice.innerHTML=`<p>本项目的团队仍有 ${config.legacy_leaders} 个旧版负责人缺少专家绑定。修复后即可从当前工作流选择团队和专家。</p><button class="btn" data-repair>修复本项目团队绑定</button>`;
           notice.querySelector("[data-repair]").onclick=async event=>{
             event.target.disabled=true;error.textContent="";
             try{
@@ -220,6 +231,7 @@ const FileHandoff = (() => {
     await refresh();
   }
   function showRecord(initial){
+    if(initial.canonical_task_id && window.ProjectTasks) return ProjectTasks.openTask(initial.canonical_task_id,initial.project_id);
     const el=dialog("节点文件任务与回执"), body=el.querySelector("[data-body]"), error=el.querySelector("[data-error]");
     let record=initial, signature="", busy=false, feedback="";
     function draw(){

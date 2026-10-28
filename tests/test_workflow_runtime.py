@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from tests.test_web_runtime import workspace_section
 from unittest.mock import patch
 
 from tests import test_web_runtime as runtime
@@ -92,41 +93,43 @@ class WorkflowRuntimeTest(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
     def open_workflow(self):
-        self.page.evaluate("pid => { curTask=pid; localStorage.setItem('rw-task',pid); wfStep='search'; openTab('workflow'); }", self.project)
-        self.page.wait_for_selector("#wv-ask")
-        self.page.wait_for_function("document.querySelector('#wv-send')?.onclick != null")
+        self.page.evaluate("pid => { curTask=pid; localStorage.setItem('rw-task',pid); wfStep='search'; openTab('workspace'); }", self.project)
+        self.page.wait_for_selector("#pwAsk")
+        self.page.wait_for_function("document.querySelector('#pwSend')?.onclick != null")
 
     def test_custom_navigation_reload_replays_without_second_execution(self):
         self.open_workflow()
-        self.assertEqual(self.page.locator(".wf-step[data-step]").evaluate_all("nodes=>nodes.map(n=>n.dataset.step)"), ["search", "outline"])
-        self.page.locator("#wv-ask").fill("[hold] workflow reload")
-        self.page.locator("#wv-send").click()
-        self.page.wait_for_function("document.querySelector('#wv-msgs')?.textContent.includes('FIRST-PART')")
-        self.assertEqual(self.page.locator("#wv-send").inner_text(), "■")
+        workspace_section(self.page, 'workflow')
+        self.page.locator('[data-wfl-node]').first.wait_for()
+        self.assertEqual(self.page.locator('[data-wfl-node]').evaluate_all('nodes=>nodes.map(n=>n.dataset.wflNode)'), ['search','outline'])
+        self.page.locator('#pwTab-chat').click()
+        self.page.locator("#pwAsk").fill("[hold] workflow reload")
+        self.page.locator("#pwSend").click()
+        self.page.wait_for_function("document.querySelector('#pwMessages')?.textContent.includes('FIRST-PART')")
+        self.assertEqual(self.page.locator("#pwSend").get_attribute("aria-label"), "停止当前对话")
         self.page.reload(wait_until="domcontentloaded")
-        self.page.wait_for_function("document.querySelector('#wv-msgs')?.textContent.includes('FIRST-PART')")
+        self.page.wait_for_function("document.querySelector('#pwMessages')?.textContent.includes('FIRST-PART')")
         self.release.set()
-        self.page.wait_for_function("wfRuns.size === 0")
-        self.page.wait_for_function("document.querySelector('#wv-msgs')?.textContent.includes('FINAL-PART')")
+        self.page.wait_for_function("document.querySelector('#pwSend')?.getAttribute('aria-label')==='发送'")
+        self.page.wait_for_function("document.querySelector('#pwMessages')?.textContent.includes('FINAL-PART')")
         self.assertEqual(len(self.calls), 1)
-        self.page.locator("#wv-ask").press("ArrowUp")
-        self.assertEqual(self.page.locator("#wv-ask").input_value(), "[hold] workflow reload")
+        self.assertEqual(self.page.locator("#pwAsk").input_value(), "")
 
     def test_stop_before_first_model_byte_and_switch_project(self):
         self.open_workflow()
-        self.page.locator("#wv-ask").fill("[stall] cancel")
-        self.page.locator("#wv-send").click()
-        self.page.wait_for_function("!!wfActiveRun()?.runId")
+        self.page.locator("#pwAsk").fill("[stall] cancel")
+        self.page.locator("#pwSend").click()
+        self.page.wait_for_function("JSON.parse(localStorage.getItem('rw-workspace-runs')||'[]').some(r=>r.runId)")
         self.assertTrue(self.entered.wait(5))
-        run_id = self.page.evaluate("wfActiveRun().runId")
-        self.page.locator("#wv-ask").press("Escape")
-        self.page.wait_for_function("wfRuns.size === 0", timeout=3000)
+        run_id = self.page.evaluate("JSON.parse(localStorage.getItem('rw-workspace-runs'))[0].runId")
+        self.page.locator("#pwAsk").press("Escape")
+        self.page.wait_for_function("document.querySelector('#pwSend')?.getAttribute('aria-label')==='发送'", timeout=3000)
         self.assertEqual(self.page.request.get(self.url + "api/runs/" + run_id).json()["status"], "cancelled")
-        self.page.select_option("#wfProjSelect", self.other)
-        self.page.wait_for_function("pid=>curTask===pid && document.querySelectorAll('.wf-step[data-step]').length===10", arg=self.other)
+        self.page.select_option("#pwProject", self.other)
+        self.page.wait_for_function("pid=>curTask===pid && document.querySelector('#projectWorkspace')?.dataset.projectId===pid", arg=self.other)
         self.release.set()
         self.page.wait_for_timeout(100)
-        self.assertNotIn("FINAL-PART", self.page.locator("#wv-msgs").inner_text())
+        self.assertNotIn("FINAL-PART", self.page.locator("#pwMessages").inner_text())
 
     def test_main_chat_reload_resumes_same_run(self):
         self.page.evaluate("cid => { curChat=cid; localStorage.setItem('rw-chat',cid); openTab('agent'); }", self.chat)
@@ -148,7 +151,7 @@ class WorkflowRuntimeTest(unittest.TestCase):
         self.page.locator("#schNew").click()
         self.page.wait_for_function("document.querySelector('#schTodo') && !document.querySelector('#schTodo').disabled")
         self.page.locator("#schTodo").select_option(todo["id"])
-        self.page.locator("#schAssistant").select_option("builtin-steward")
+        self.page.locator("#schAssistant").select_option("builtin-scheduler")
         self.page.locator("#schSave").click()
         self.page.wait_for_function("schEdit === null")
         with workflow.WorkflowDB(self.path) as db:

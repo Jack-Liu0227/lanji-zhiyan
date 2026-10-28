@@ -130,31 +130,33 @@ class CoordinationTest(unittest.TestCase):
         self.assertTrue(workflow.step_done(self.db, self.project, "entrans"))
 
     def test_expert_dispatch_reviews_real_artifact_and_updates_all_views(self):
-        import team
+        import project_tasks
+        import project_task_execution
         self.layout(["outline"])
         todo = project_todos.add_todo(self.db, self.project, "Outline", stage="outline",
                                       assigned_assistant="builtin-steward")
-        reviewer = self.db.team_member_add(self.project, "Reviewer")
-        task = project_todos.dispatch(self.db, todo["id"], reviewer_id=reviewer["id"])
+        with patch.object(project_task_execution, "kick"):
+            task = project_todos.dispatch(self.db, todo["id"])
         with self.assertRaisesRegex(ValueError, "已有执行任务"):
             project_todos.dispatch(self.db, todo["id"])
-        self.assertEqual(len(self.db.team_tasks(self.project)), 1)
+        self.assertEqual(len(self.db.team_tasks(self.project)), 0)
 
         def run(db, tid, prompt, **kwargs):
             workflow.doc_write(db, tid, "outline", "# Outline\nResearch question and evidence")
             return {"reply": "Outline saved"}
 
-        with patch.object(team, "DB_PATH", self.db.path), patch.object(workflow, "run_agent", side_effect=run):
-            self.assertEqual(team.tick(), 1)
+        with patch.object(workflow, "run_agent", side_effect=run):
+            project_task_execution.execute(self.db, task["latest_run"]["id"])
             self.assertEqual(project_todos.list_todos(self.db, self.project)[0]["status"], "REVIEW")
-            team.review(task["id"], True, reviewer["id"])
+            project_tasks.review(self.db, task["id"], approved=True, authority=project_tasks.CommandContext.ui(self.project))
         overview = project_todos.kanban_overview(self.db, self.project)
         self.assertEqual(overview["stats"]["stages_done"], 1)
         self.assertEqual(overview["todos"][0]["status"], "DONE")
         self.assertTrue(overview["todos"][0]["execution"]["run_id"])
         self.assertTrue(json.loads(overview["todos"][0]["execution"]["output_assets"]))
         self.write("outline", "Changed version")
-        self.assertEqual(project_todos.list_todos(self.db)[0]["status"], "REVIEW")
+        self.assertEqual(workflow_state.states(self.db, self.project)["outline"]["status"], "stale")
+        self.assertEqual(project_tasks.get(self.db, task["id"])["status"], "delivered")
 
     def test_schedule_and_export_outputs_are_searchable_and_linked(self):
         import schedule
@@ -206,9 +208,14 @@ class CoordinationTest(unittest.TestCase):
             workflow.doc_write(db, pid, "outline", "Scheduled artifact")
             return {"reply": "Saved"}
         with patch.object(schedule, "DB_PATH", self.db.path), patch.object(workflow, "run_agent", side_effect=produce):
-            self.assertEqual(schedule.run_once(sched)["status"], "completed")
+            attempt = schedule.run_once(sched)
+            self.assertEqual(attempt["status"], "awaiting_review")
             self.assertEqual(workflow_state.states(self.db, self.project)["outline"]["status"], "succeeded")
-            self.accept("outline")
+            self.assertEqual(workflow.doc_read(self.db, self.project, "outline")["markdown"].strip(), "Scheduled artifact")
+            import project_tasks
+            canonical = project_tasks.find_origin(self.db, "schedule_run", attempt["id"])
+            project_tasks.review(self.db, canonical["id"], approved=True, authority=project_tasks.CommandContext.ui(self.project))
+            self.assertEqual(self.db.schedule_runs()[0]["status"], "completed")
             self.db.schedule_run_add({"id": "crashed", "schedule_id": sched["id"], "status": "running"})
             tracked = run_service.start(self.db, self.project, "schedule", idempotency_key="schedule:crashed")
             run_service.node_start(self.db, tracked["id"], "schedule")

@@ -80,21 +80,8 @@ let cmdItems = [];
 function buildCommandList() {
   const items = typeof AppInteractions === "undefined" ? [] : AppInteractions.commandItems();
 
-  const NAV_ITEMS = [
-    { id: "agent", title: "Agent 全局对话", ico: "💬", cat: "导航" },
-    { id: "assistants", title: "专家管理", ico: "👨‍🔬", cat: "导航" },
-    { id: "team", title: "团队协作", ico: "👥", cat: "导航" },
-    { id: "calendar", title: "日历与日程", ico: "📅", cat: "导航" },
-    { id: "tasks", title: "项目管理", ico: "📁", cat: "导航" },
-    { id: "space", title: "项目空间", ico: "🌌", cat: "导航" },
-    { id: "workflow", title: "工作流总览", ico: "🔀", cat: "导航" },
-    { id: "schedules", title: "定时任务", ico: "⏰", cat: "导航" },
-    { id: "library", title: "知识星图", ico: "📚", cat: "导航" },
-    { id: "notes", title: "笔记中心", ico: "📝", cat: "导航" },
-    { id: "intel", title: "情报日报 (RSS)", ico: "📡", cat: "导航" },
-    { id: "mail", title: "邮箱通讯", ico: "✉️", cat: "导航" },
-    { id: "settings", title: "系统设置", ico: "⚙️", cat: "导航" },
-  ];
+  const NAV_ITEMS=NAV.flatMap(group=>group.items).map(item=>({id:item.id,title:item.label,ico:item.ico}));
+  items.push({text:'新建项目',sub:'在项目工作区创建项目',ico:'＋',cat:'项目',run:()=>ProjectManager.open()});
   NAV_ITEMS.forEach(n => {
     items.push({
       text: n.title,
@@ -102,19 +89,6 @@ function buildCommandList() {
       ico: n.ico,
       cat: "主模块",
       run: () => uiNavigate(()=>openTab(n.id))
-    });
-  });
-
-  WF_ORDER.forEach((s, idx) => {
-    const rawName = STAGE[s] || s;
-    const ico = rawName.split(" ")[0] || "✦";
-    const name = rawName.slice(rawName.indexOf(" ") + 1) || rawName;
-    items.push({
-      text: `Step ${idx + 1}: ${name}`,
-      sub: `直达工作流第 ${idx + 1} 步`,
-      ico: ico,
-      cat: "工作流步骤",
-      run: () => uiGoWorkflowStep(s)
     });
   });
 

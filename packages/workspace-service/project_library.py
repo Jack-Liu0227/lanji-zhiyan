@@ -119,5 +119,18 @@ def route(method, path, body, query, db):
         rows = items(db, project_id)
         return {"task_id": project_id, "items": rows, "version": __import__("workflow_state").digest(rows)}
     if method == "POST":
-        return {"item": update_record(db, project_id, str(body.get("result_id") or ""), body.get("fields") or {})}
+        import zotero_sync
+        with zotero_sync._sync_lock:
+            rid = str(body.get('result_id') or '')
+            row = db.result(rid)
+            if row['task_id'] != project_id:
+                raise ValueError('文献不属于当前项目')
+            expected = body.get('expected')
+            if expected is not None:
+                keys = ('title', 'authors', 'year', 'doi', 'url', 'abstract')
+                if not isinstance(expected, dict) or set(expected) != set(keys):
+                    raise ValueError('请提供完整的题录编辑基准')
+                if any(str(row.get(key) or '') != str(expected[key] or '') for key in keys):
+                    raise ValueError('编辑期间文献已更新，已保留你的编辑内容；请重新读取最新题录后修改')
+            return {'item': update_record(db, project_id, rid, body.get('fields') or {})}
     return None

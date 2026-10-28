@@ -418,8 +418,18 @@ def test_account(acc: dict[str, Any]) -> dict[str, Any]:
         conn = open_client(acc)
         exists = _folder_select(conn, "INBOX")
         typ, data = conn.list()
-        folders = max(0, len(data or []) - 1) if typ == "OK" else 0
-        return {"ok": True, "inboxMessages": exists, "folderCount": folders}
+        folders = sum(isinstance(row, bytes) and bool(row) for row in (data or [])) if typ == "OK" else 0
+    smtp = {"ok": False, "message": "未配置 SMTP，当前只能收信"}
+    if acc.get("smtpHost"):
+        try:
+            server = _smtp_client(acc)
+            try:
+                smtp = {"ok": True, "message": "SMTP 登录成功，未发送邮件"}
+            finally:
+                _close_smtp(server)
+        except Exception as exc:
+            smtp = {"ok": False, "message": describe_mail_error(exc)}
+    return {"ok": smtp["ok"], "inboxMessages": exists, "folderCount": folders, "imap": {"ok": True}, "smtp": smtp}
 
 
 def list_folders(acc: dict[str, Any]) -> list[dict[str, Any]]:
@@ -670,16 +680,51 @@ def delete_message(acc: dict[str, Any], folder: str = "INBOX", uid: str = "") ->
     return {"ok": True}
 
 
-def send_mail(acc: dict[str, Any], to: str = "", cc: str = "", subject: str = "",
-              text: str = "", html: str = "") -> dict[str, Any]:
+def _close_smtp(server) -> None:
+    try:
+        server.quit()
+    except Exception:
+        try:
+            server.close()
+        except OSError:
+            pass
+
+
+def _smtp_client(acc: dict[str, Any]):
     if not acc.get("smtpHost"):
         raise ValueError("该账户未配置 SMTP 服务器，无法发信（可在邮箱管理中补填）")
+    host = str(acc["smtpHost"])
+    port = int(acc.get("smtpPort") or 465)
+    server = (smtplib.SMTP_SSL(host, port, timeout=25, context=_ssl_context(acc)) if acc.get("smtpSecure", True)
+              else smtplib.SMTP(host, port, timeout=25))
+    try:
+        if not acc.get("smtpSecure", True):
+            try:
+                server.starttls(context=_ssl_context(acc))
+            except smtplib.SMTPException:
+                raise ValueError("SMTP 服务器不支持 STARTTLS，已拒绝明文发送凭据；请检查端口或改用 SSL") from None
+        server.login(str(acc.get("email")), str(acc.get("password")))
+    except Exception:
+        _close_smtp(server)
+        raise
+    return server
+
+
+def send_mail(acc: dict[str, Any], to: str = "", cc: str = "", subject: str = "",
+              text: str = "", html: str = "") -> dict[str, Any]:
+    to = str(to or "").replace(";", ",").strip()
+    cc = str(cc or "").replace(";", ",").strip()
+    recipients = list(dict.fromkeys(addr for _, addr in email.utils.getaddresses([to, cc]) if addr))
+    if not recipients or any(not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", addr) for addr in recipients):
+        raise ValueError("请填写正确的收件人邮箱地址，多个地址用逗号或分号分隔")
     msg = EmailMessage()
     msg["From"] = f'"{acc.get("displayName")}" <{acc.get("email")}>' if acc.get("displayName") else str(acc.get("email"))
-    msg["To"] = str(to or "").strip()
-    if str(cc or "").strip():
-        msg["Cc"] = str(cc).strip()
+    msg["To"] = to
+    if cc:
+        msg["Cc"] = cc
     msg["Subject"] = str(subject or "(无主题)")
+    msg["Message-ID"] = email.utils.make_msgid()
+    msg["Date"] = email.utils.formatdate(localtime=True)
     if text:
         msg.set_content(str(text))
     elif html:
@@ -687,24 +732,10 @@ def send_mail(acc: dict[str, Any], to: str = "", cc: str = "", subject: str = ""
     if html:
         msg.add_alternative(str(html), subtype="html")
 
-    host = str(acc.get("smtpHost"))
-    port = int(acc.get("smtpPort") or 465)
-    recipients = [x.strip() for x in re.split(r"[,;]", str(to or "") + "," + str(cc or "")) if x.strip()]
-    if acc.get("smtpSecure", True):
-        server = smtplib.SMTP_SSL(host, port, timeout=25, context=_ssl_context(acc))
-    else:
-        server = smtplib.SMTP(host, port, timeout=25)
-        try:
-            server.starttls(context=_ssl_context(acc))
-        except smtplib.SMTPException:
-            server.quit()
-            raise ValueError("SMTP 服务器不支持 STARTTLS，已拒绝明文发送凭据；请检查端口或改用 SSL")
+    server = _smtp_client(acc)
     try:
-        server.login(str(acc.get("email")), str(acc.get("password")))
-        server.send_message(msg, from_addr=str(acc.get("email")), to_addrs=recipients)
+        refused = server.send_message(msg, from_addr=str(acc.get("email")), to_addrs=recipients)
     finally:
-        try:
-            server.quit()
-        except Exception:
-            pass
-    return {"ok": True, "messageId": msg.get("Message-ID") or ""}
+        _close_smtp(server)
+    return {"ok": not bool(refused), "partial": bool(refused), "refusedRecipients": list(refused),
+            "acceptedCount": len(recipients) - len(refused), "messageId": msg["Message-ID"]}

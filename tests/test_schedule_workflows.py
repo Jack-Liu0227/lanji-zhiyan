@@ -18,7 +18,9 @@ class ScheduleWorkflowsTest(unittest.TestCase):
         self.addCleanup(self.db.close)
         self.pid = self.db.create_task('Scheduled workflow', base_dir=str(Path(temp.name) / 'project'))
         workflow_layout.ensure_schema(self.db)
-        layout = workflow_layout.save_layout(self.db, {'name': 'Scheduled outline', **workflow_layout._linear(['outline'])})['layout']
+        definition = workflow_layout._linear(['outline'])
+        definition['nodes'][0]['assistant_id'] = 'builtin-steward'
+        layout = workflow_layout.save_layout(self.db, {'name': 'Scheduled outline', **definition})['layout']
         self.sched = self.db.schedule_save({'name': 'Reviewed report', 'project_id': self.pid, 'workflow_id': layout['id'],
             'prompt': 'Build reviewed evidence', 'frequency': 'manual', 'output_dir': 'Reports'})
         patched = patch.object(schedule, 'DB_PATH', self.db.path)

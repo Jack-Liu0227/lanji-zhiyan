@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import io
+import urllib.error
 import unittest
 from unittest.mock import MagicMock, patch
 
 from runtime import (
+    AIRuntimeError,
     Budget,
     BudgetExceededError,
     CancelledError,
@@ -16,6 +19,15 @@ from runtime import (
 
 
 class AIRuntimeTest(unittest.TestCase):
+    def test_unavailable_gateway_channel_has_actionable_error_without_blind_retries(self):
+        raw = json.dumps({'error': {'code': 'get_channel_failed', 'message': 'no channel'}}).encode()
+        error = urllib.error.HTTPError('https://example.test/v1/chat/completions', 500, 'failure', {}, io.BytesIO(raw))
+        with patch('runtime.open_guarded_url', side_effect=error) as request, patch('runtime.time.sleep') as sleep:
+            with self.assertRaisesRegex(AIRuntimeError, '可用渠道'):
+                call({'base_url': 'https://example.test/v1', 'model': 'unavailable', 'api_key': 'test'}, [{'role': 'user', 'content': 'test'}])
+        request.assert_called_once()
+        sleep.assert_not_called()
+
     def test_retry_policy_delay_calculation(self):
         policy = RetryPolicy(base_delay=1.0, max_delay=10.0, backoff_factor=2.0)
         delay0 = policy.delay_for_attempt(0)

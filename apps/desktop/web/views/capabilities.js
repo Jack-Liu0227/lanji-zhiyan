@@ -360,7 +360,7 @@
           <div class="cap-section-head">
             <div>
               <h4 class="cap-section-title">专家启用授权</h4>
-              <p class="hint" style="margin:2px 0 0">指定哪些助手在工作流与对话中可以使用此能力。勾选立即保存。</p>
+              <p class="hint" style="margin:2px 0 0">指定哪些专家在工作流与对话中可以使用此能力。勾选立即保存。</p>
             </div>
             <div class="cap-bulk-btns">
               <button class="cap-btn-mini on" id="cap-detail-all-on">全部启用</button>
@@ -774,7 +774,7 @@
     });
     host.querySelectorAll("[data-cap-mcp-preview]").forEach(button => button.onclick = () => {
       const item = items.find(row => row.id === button.dataset.capMcpPreview);
-      dialog(item.name + " · MCP 工具", `<p class="hint">${item.tools.length ? "已发现工具；助手实际调用时会重新连接服务器。" : "尚未发现工具，请先明确点击“连接 / 拉取工具”。"}</p><pre>${e(JSON.stringify(item.tools, null, 2))}</pre>`);
+      dialog(item.name + " · MCP 工具", `<p class="hint">${item.tools.length ? "已发现工具；专家实际调用时会重新连接服务器。" : "尚未发现工具，请先明确点击“连接 / 拉取工具”。"}</p><pre>${e(JSON.stringify(item.tools, null, 2))}</pre>`);
     });
     if (selected) {
       const field = host.querySelector("#cap-search");

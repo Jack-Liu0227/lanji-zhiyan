@@ -18,7 +18,7 @@ class WorkflowRoutes:
     def _r_workflow(self, path: str, q: dict[str, list[str]]) -> Any:
         """命中就返回响应（None 也算已响应），没命中返回 None 交给下一段。"""
         from server import DB_PATH        # 启动可能改写它（迁移失败退回老库），导入期绑死会拿旧值
-        if path == "/api/step/messages":               # 三栏页：右栏「本步助手」的历史（按 scope 取）
+        if path == "/api/step/messages":               # 三栏页：右栏「本步专家」的历史（按 scope 取）
             with WorkflowDB(DB_PATH) as db:
                 step = (q.get("step") or ["idea"])[0]
                 tid = q["id"][0]
@@ -181,7 +181,7 @@ class WorkflowRoutes:
                             "last_msg": last, "updated_at": ar["updated_at"]
                         })
 
-                    # 3. 一级助手 / 通用会话（智研管家、独立助手等）
+                    # 3. 一级专家 / 通用会话（智研管家、独立专家等）
                     ast_rows = db.db.execute("SELECT id, title, assistant_id, created_at, updated_at FROM chats WHERE (assistant_id NOT LIKE 'step-%' OR assistant_id IS NULL) ORDER BY updated_at DESC").fetchall()
                     assistants_meta = {a["id"]: a["name"] for a in db.assistants()}
                     assistants_meta["builtin-steward"] = "智研管家"
@@ -189,7 +189,7 @@ class WorkflowRoutes:
                     for asr in ast_rows:
                         cid = asr["id"]
                         aid = asr["assistant_id"] or ""
-                        aname = assistants_meta.get(aid, "智能助手")
+                        aname = assistants_meta.get(aid, "智能专家")
                         cnt_row = db.db.execute("SELECT count(*) as c, content FROM chat WHERE task_id=? ORDER BY created_at DESC LIMIT 1", (cid,)).fetchone()
                         cnt = cnt_row["c"] if cnt_row else 0
                         last = cnt_row["content"][:60] if cnt_row and cnt_row["content"] else ""

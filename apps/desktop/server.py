@@ -100,6 +100,7 @@ import zotero_sync
 import agent_integrations
 import reproduction_routes
 import feature_routes
+import langgraph_workflow
 # handlers/ 是本目录下的包：被 importlib 按文件加载（测试）或从别处 import 时，本目录不一定在 sys.path 上
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -380,6 +381,7 @@ def _webview_window(url: str, stamp: int) -> bool:
     except Exception:
         return False
     # 打包后图标在 exe 目录的 build/icon.ico（spec 把 tools/build 打进去），源码跑在 tools/build/icon.ico
+    webview.settings['ALLOW_DOWNLOADS'] = True
     icon = ROOT / "build" / "icon.ico"
     if not icon.is_file():
         icon = ROOT / "tools" / "build" / "icon.ico"
@@ -631,10 +633,12 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
 
     def _extension_route(self, method: str, path: str, body: dict, query: dict) -> bool:
         prefixes = (
+            "/api/rss/import", "/api/usage", "/api/message-channels",
+            "/api/execution-board", "/api/execution-conversations", "/api/plans", "/api/conversation-history", "/api/paper-toolbox",
             "/api/agent-settings", "/api/capabilities", "/api/workflow/layouts", "/api/feishu/", "/api/zotero/web/",
             "/api/projects", "/api/papers/", "/api/chats", "/api/assistants", "/api/teams/", "/api/runs/",
             "/api/mcp/", "/api/audit/", "/api/easyscholar/", "/api/zotero/mcp/", "/api/todos", "/api/kanban", "/api/space/",
-            "/api/assets", "/api/workflow/run", "/api/workflow/runs", "/api/workflow/recover", "/api/workflow/execution", "/api/workflow/reviews", "/api/handoff/", "/api/library/", "/api/calendar/linked",
+            "/api/project-tasks", "/api/project/files/", "/api/project/resources", "/api/assets", "/api/workflow/run", "/api/workflow/runs", "/api/workflow/recover", "/api/workflow/execution", "/api/workflow/reviews", "/api/handoff/", "/api/library/", "/api/calendar/linked", "/api/langgraph/",
         )
         if not path.startswith(prefixes):
             return False
@@ -643,7 +647,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
             return False
         try:
             with WorkflowDB(DB_PATH) as db:
-                for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync, reproduction_routes, feature_routes):
+                for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync, reproduction_routes, feature_routes, langgraph_workflow):
                     result = extension.route(method, path, body, query, db)
                     if result is not None:
                         # These explicit user actions may reveal credentials; never put them in general state.
@@ -762,7 +766,11 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                 return True
 
         if path == "/api/mail/test" and method == "POST":
-            acc = M.normalize_account_input(data, {})
+            base = M.get_mail_account(str(data["id"])) if data.get("id") else {}
+            if data.get("id") and not base:
+                self._json({"error": "账户不存在，请刷新账户列表"}, 404)
+                return True
+            acc = M.normalize_account_input(data, base)
             err = M.validate_account(acc)
             if err:
                 self._json({"error": err}, 400)
@@ -975,6 +983,18 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     run_id = m_run_stream.group(1)
                     last_id = int(self.headers.get("Last-Event-ID") or (q.get("after") or [0])[0] or 0)
                     return self._stream_run(run_id, last_id)
+            if path == '/api/execution-board/stream':
+                return self._stream_execution_board(q)
+            if path == '/api/paper-toolbox/file':
+                import asset_service
+                with WorkflowDB(DB_PATH) as db:
+                    asset=asset_service.get(db,(q.get('asset_id') or [''])[0])
+                    if not asset or asset['project_id']!=(q.get('project_id') or [''])[0] or asset['source'] not in ('image_conversion','image_caption'):
+                        return self._json({'error':'文件不存在或不属于当前项目'},404)
+                    target=Path(asset['canonical_uri'])
+                    if not target.is_file():return self._json({'error':'文件已移动'},404)
+                    return self._send(200,target.read_bytes(),asset['mime'] or 'application/octet-stream',
+                                      {'Content-Disposition':"attachment; filename*=UTF-8''"+urllib.parse.quote(target.name)})
             if self._extension_route("GET", path, {}, q):
                 return
             if self._mail_route("GET", path, q, None):
@@ -991,6 +1011,34 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
             self._json({"error": f"找不到对象：{exc}"}, 404)
         except Exception as exc:  # 界面永远拿到可读错误
             self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
+
+    def _stream_execution_board(self, query):
+        import execution_board
+        project_id = str((query.get('project_id') or [''])[0])
+        all_projects = not project_id and (query.get('all_projects') or [''])[0] == '1'
+        after = int(self.headers.get('Last-Event-ID') or (query.get('after') or [0])[0])
+        if not all_projects:
+            with WorkflowDB(DB_PATH) as db:
+                execution_board.project_tasks._project(db, project_id)
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+        self.send_header('Cache-Control', 'no-cache')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        deadline = time.monotonic() + 25
+        try:
+            while time.monotonic() < deadline:
+                with WorkflowDB(DB_PATH) as db:
+                    value = execution_board.events(db, project_id, after, all_projects=all_projects)
+                for event in value['events']:
+                    self.wfile.write(('id: '+str(event['id'])+'\ndata: '+json.dumps(event,ensure_ascii=False)+'\n\n').encode('utf-8'))
+                after = value['cursor']
+                self.wfile.write(b': heartbeat\n\n')
+                self.wfile.flush()
+                time.sleep(.5)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
+        self.close_connection = True
 
     def _drain(self) -> None:
         """早退（403/415）前把 body 读掉 —— 不读就回包，客户端拿到的是 RST 而不是干净的状态码。"""
@@ -1009,6 +1057,21 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
         if origin and not re.match(r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$", origin):
             self._drain()
             return self._json({"error": "来源不被允许"}, 403)
+        if path == '/api/project/files/upload':
+            try:
+                import project_files
+                if self.headers.get('Content-Type','').split(';')[0].strip().lower()!='application/octet-stream':
+                    self._drain()
+                    return self._json({'error':'文件上传需要 application/octet-stream'},415)
+                length=int(self.headers.get('Content-Length') or 0)
+                if not 0<length<=50*1024*1024:
+                    self.close_connection=True
+                    return self._json({'error':'请选择非空文件，每个文件最多 50 MB'},400)
+                with WorkflowDB(DB_PATH) as db:
+                    result=project_files.upload(db,(q.get('project_id') or [''])[0],(q.get('name') or [''])[0],self.rfile.read(length))
+                return self._json(result)
+            except (ValueError,OSError) as exc:
+                return self._json({'error':str(exc)},400)
         if path == "/api/upload":                        # 原始字节走 body，所以放在 JSON 检查之前
             return self._upload(q)
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
@@ -1044,14 +1107,14 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                 ok = paths._grant_post("/close", {})
                 return self._json({"ok": "close"} if ok else {"error": "关闭窗口失败"})
             return self._json(_win(path.rsplit("/", 1)[-1]))
-        if path == "/api/idea/input":                # 创新点审查：存上区那段原文（助手每轮读它）
+        if path == "/api/idea/input":                # 创新点审查：存上区那段原文（专家每轮读它）
             try:
                 with WorkflowDB(DB_PATH) as db:
                     n = db.idea_input_save(str(data.get("task_id") or ""), str(data.get("text") or ""))
                 return self._json({"saved": n})
             except Exception as exc:
                 return self._json({"error": f"{type(exc).__name__}: {exc}"}, 400)
-        if path == "/api/tr/hl":                     # 论文翻译：荧光笔标注（存：助手要读）
+        if path == "/api/tr/hl":                     # 论文翻译：荧光笔标注（存：专家要读）
             try:
                 with WorkflowDB(DB_PATH) as db:
                     n = db.tr_hl_save(str(data.get("id") or ""), str(data.get("task_id") or ""),
@@ -1108,7 +1171,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                                 aid = (b.get("id") or "").strip()
                                 cur = db.assistant(aid)
                                 if not cur:
-                                    return self._json({"error": "助手不存在"}, 404)
+                                    return self._json({"error": "专家不存在"}, 404)
                                 target = int(b["enabled"]) if "enabled" in b else (0 if cur.get("enabled", 1) else 1)
                                 return self._json({"assistant": db.assistant_save(aid, enabled=target)})
                             if path == "/api/assistant/batch-toggle":
@@ -1142,7 +1205,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                             return self._json(team.dissolve(b.get("id", "")))
                     except ValueError as exc:
                         return self._json({"error": str(exc)}, 400)
-                if path.startswith("/api/team/chat/"):      # 团队 v2：选助手 / 移人 / 说话（接力）/ 停止
+                if path.startswith("/api/team/chat/"):      # 团队 v2：选专家 / 移人 / 说话（接力）/ 停止
                     b = data or {}
                     try:
                         if path == "/api/team/chat/member":
@@ -1166,6 +1229,17 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
 
                 if path.startswith("/api/team/"):           # 团队：成员增删改 / 派活 / 取消 / 重试
                     b = data or {}
+                    command_context = None
+                    if path in ("/api/team/assign", "/api/team/task/cancel", "/api/team/task/retry", "/api/team/task/review"):
+                        import project_tasks
+                        with WorkflowDB(DB_PATH) as command_db:
+                            owner = str(b.get("id") or "")
+                            if b.get("row_id"):
+                                task_row = command_db.db.execute("SELECT task_id FROM team_tasks WHERE id=?", (b["row_id"],)).fetchone()
+                                owner = task_row["task_id"] if task_row else ""
+                            selected_team = command_db.team(owner)
+                            project_id = (selected_team or {}).get("project_id") or owner
+                            command_context = project_tasks.CommandContext.ui(project_id)
                     if path == "/api/team/member/add":
                         return self._json({"member": team.add_member(
                             b.get("id", ""), b.get("name", ""), b.get("step", ""), b.get("prompt", ""))})
@@ -1179,15 +1253,15 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                             b.get("id", ""), b.get("member", ""), b.get("prompt", ""),
                             b.get("title", ""), "manual" if b.get("manual") else "leader",
                             depends_on=b.get("depends_on"), output_contract=b.get("output_contract"),
-                            reviewer_id=b.get("reviewer_id", ""))})
+                            reviewer_id=b.get("reviewer_id", ""), authority=command_context)})
                     if path == "/api/team/task/cancel":
-                        return self._json(team.cancel(b.get("row_id", "")))
+                        return self._json(team.cancel(b.get("row_id", ""), authority=command_context))
                     if path == "/api/team/task/retry":
-                        return self._json(team.retry(b.get("row_id", "")))
+                        return self._json(team.retry(b.get("row_id", ""), authority=command_context))
                     if path == "/api/team/task/review":
                         return self._json({"task": team.review(
                             b.get("row_id", ""), bool(b.get("approved")),
-                            b.get("reviewer_id", ""), b.get("feedback", ""))})
+                            b.get("reviewer_id", ""), b.get("feedback", ""), authority=command_context)})
                 if path.startswith("/api/schedule/"):      # 定时任务：保存/启停/删除/立即运行/删运行记录
                     if path == "/api/schedule/save":
                         name = str(data.get("name") or "").strip()
@@ -1433,6 +1507,11 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                         return self._json(papertran.reading_note(db, tid, (data.get("id") or "").strip(), out))
                 if path == "/api/rss/refresh":
                     return self._json(rss.refresh(db))
+                if path in ('/api/rss/sources/save','/api/rss/sources/delete','/api/rss/sources/defaults'):
+                    with WorkflowDB(DB_PATH) as rss_db:
+                        if path.endswith('/save'):return self._json(rss.save_source(rss_db,data))
+                        if path.endswith('/delete'):return self._json(rss.delete_source(rss_db,data))
+                        return self._json(rss.add_defaults(rss_db))
                 if path == "/api/task/create":
                     base = (data.get("base_dir") or "").strip()
                     if base:
@@ -1452,16 +1531,30 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     actual_base = str(db.base_dir(tid) or "")
                     return self._json({"task_id": tid, "base_dir": actual_base,
                                        "dirs": made or [name for name, _ in workflow.PROJ_DIRS]})
+                if path == "/api/task/update":
+                    tid = str(data.get("id") or "")
+                    title = str(data.get("title") or "").strip()
+                    if not title or len(title) > 200:
+                        raise ValueError("项目标题须为 1 至 200 个字符")
+                    existing = db.db.execute("SELECT updated_at FROM research_tasks WHERE id=?", (tid,)).fetchone()
+                    if not existing:
+                        raise ValueError("项目不存在")
+                    if data.get("expected_updated_at") and existing["updated_at"] != data["expected_updated_at"]:
+                        raise ValueError("项目已更新，请重新打开后编辑")
+                    with db.db:
+                        db.db.execute("UPDATE research_tasks SET title=?,question=?,material_system=?,updated_at=? WHERE id=?",
+                            (title, str(data.get("question") or "")[:20000], str(data.get("material_system") or "")[:2000], workflow.now(), tid))
+                    return self._json({"task": db.summary(tid)["task"]})
                 if path == "/api/task/delete":
                     return self._json(db.delete_task(data.get("id", "")))
                 if path == "/api/task/papergraph/build":          # 论文星图：点「生成」才编译一次，结果落库
                     return self._json(db.build_paper_graph(data.get("id", "")))
                 if path == "/api/chat/create":
-                    return self._json({"chat": db.chat(db.create_chat(data.get("title", "")))})
+                    return self._json({"chat": db.chat(db.create_chat(data.get("title", ""), task_id=data.get("task_id", "")))})
                 if path == "/api/chat/delete":
                     cid = data.get("id", "")
-                    db.clear_messages(cid)
-                    return self._json(db.delete_chat(cid))
+                    import conversation_history
+                    return self._json(conversation_history.command(db,'chat',cid,'trash'))
                 if path == "/api/step/done":                  # 三栏页「确认交付」：把这一步记成已完成
                     tid = str(data.get("task_id") or "")
                     step = str(data.get("step") or "")
@@ -1501,7 +1594,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                         sec["history_chars"] = chars
                     kv_store.write(db, "security", sec)
                     return self._json({"ok": True, **sec})
-                if path == "/api/step/plan":                  # 三栏页右栏：本步助手看着上一步的交付现写「进度同步 + 计划」
+                if path == "/api/step/plan":                  # 三栏页右栏：本步专家看着上一步的交付现写「进度同步 + 计划」
                     tid = str(data.get("task_id") or "")
                     step = str(data.get("step") or "")
                     if not tid or step not in STAGES:
@@ -1517,9 +1610,8 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                 if path == "/api/chat/rename":               # 对话改名（点标题原地改）
                     b = data or {}
                     with WorkflowDB(DB_PATH) as db:
-                        db.db.execute("UPDATE chats SET title=?, updated_at=? WHERE id=?",
-                                      ((b.get("title") or "").strip()[:120] or "新对话", workflow.now(), b.get("id", "")))
-                        db.db.commit()
+                        import conversation_history
+                        conversation_history.command(db,'chat',b.get('id',''),'rename',title=(b.get('title') or '').strip()[:120] or '新对话')
                     return self._json({"ok": True})
                 if path == "/api/chat/outdir":
                     cid = data.get("id", "")
@@ -1637,7 +1729,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
         import agent_jobs
         with WorkflowDB(DB_PATH) as db:
             if not db.get_async_task(run_id):
-                return self._json({"error": "?????"}, 404)
+                return self._json({"error": "运行记录不存在"}, 404)
         self._responded = True
         self.protocol_version = "HTTP/1.1"
         self.close_connection = True

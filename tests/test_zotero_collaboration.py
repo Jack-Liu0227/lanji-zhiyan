@@ -382,5 +382,17 @@ class ZoteroCollaborationTest(unittest.TestCase):
         self.assertEqual(self.remote.rows['PAPER001']['data']['collections'], ['COLLA001'])
         self.assertEqual(self.remote.writes, [])
 
+    def test_importing_attachment_does_not_reset_pending_local_metadata_edit(self):
+        remote = self.remote.add(collections=['COLLA001'])
+        self.apply()
+        rid = project_library.items(self.db,self.pid)[0]['result_id']
+        project_library.update_record(self.db,self.pid,rid,{'title':'Local edit before PDF import'})
+        normalized = {**sync._from_remote(remote),'key':'PAPER001','version':remote['version'],'creators':['Alice Chen'],'type':'journalArticle'}
+        with patch.object(zotero,'item',return_value=normalized), patch.object(zotero,'pdf_path',return_value=''):
+            workflow.stage_zotero_import(self.db,self.pid,keys=['PAPER001'])
+        self.apply()
+        self.assertEqual(self.remote.rows['PAPER001']['data']['title'],'Local edit before PDF import')
+        self.assertEqual(self.db.result(rid)['title'],'Local edit before PDF import')
+
 
 ORIGINAL_REQUEST = sync.request

@@ -26,24 +26,26 @@ def current_layout(db, project_id):
     row = db.db.execute("SELECT layout_id FROM project_workflow_layouts WHERE task_id=?", (project_id,)).fetchone()
     if not row:
         raise ValueError("项目尚未绑定工作流，请先打开科研平台并配置工作流")
-    layout = workflow_layout._layout(db, row["layout_id"])
+    import project_workflows
+    layout = project_workflows.effective(db, project_id, workflow_layout._layout(db, row["layout_id"]))
     return {**layout, **workflow_layout.validate_definition(layout)}
 
 
 def actors(db, project_id, node):
-    """No global fallback. Team candidates retain both team and member identity."""
+    """Read configured profiles without copying another project's runtime."""
     mode = node.get("execution_mode") or ("team" if node.get("team_id") else "assistant")
     aid, tid, mid = (node.get(k, "") for k in ("assistant_id", "team_id", "member_id"))
     if mode == "assistant":
         if tid or mid:
-            raise ValueError("助手执行模式仍有团队绑定，请重新保存节点执行配置")
+            raise ValueError("专家执行模式仍有团队绑定，请重新保存节点执行配置")
         if not aid:
-            raise ValueError("尚未配置执行助手或团队")
+            raise ValueError("尚未配置执行专家或团队")
         members = [None]
         team = None
     else:
+        import shared_executors
         team = db.team(tid) if tid else None
-        if not team or team.get("status") in ("archived", "disabled") or team.get("project_id") not in ("", project_id):
+        if not team or team.get("status") in ("archived", "disabled", "dissolved") or (team.get("project_id") != project_id and shared_executors.is_instance(db,tid)):
             raise ValueError("节点团队不存在、已停用或属于其他项目")
         roster = db.team_members(tid)
         members = [m for m in roster if (not mid or m["id"] == mid)
@@ -59,18 +61,18 @@ def actors(db, project_id, node):
     for member in members:
         effective = member.get("assistant_id", "") if member else aid
         if member and aid and aid != effective:
-            errors.append("助手与团队成员绑定冲突，请在节点设置中明确执行方式")
+            errors.append("专家与团队成员绑定冲突，请在节点设置中明确执行方式")
             continue
         assistant = db.assistant(effective) if effective else None
         if not assistant or not assistant.get("enabled"):
-            errors.append("执行助手不存在或已停用")
+            errors.append("执行专家不存在或已停用")
             continue
         results.append({"assistant_id": effective, "assistant_name": assistant["name"],
                         "team_id": tid if member else "", "team_name": team["name"] if team else "",
                         "member_id": member["id"] if member else "", "member_name": member["name"] if member else "",
                         "execution_mode": mode, **({"binding_source": node["binding_source"]} if node.get("binding_source") else {})})
     if not results:
-        raise ValueError(errors[0] if errors else "没有可用的执行助手")
+        raise ValueError(errors[0] if errors else "没有可用的执行专家")
     return results
 
 
@@ -83,11 +85,25 @@ def targets(db, project_id):
     legacy = team_configuration.legacy_plan(db, project_id) if layout["id"] in LEGACY_TEAM_WORKFLOWS else []
     nodes = []
     fingerprints = []
+    import project_bindings
+    roles = {r["role_id"]: r for r in project_bindings.list_roles(db, project_id, layout["id"])}
     for node in layout["nodes"]:
         reason = ""
         try:
-            node = workflow_layout.resolve_node(db, project_id, layout["id"], node)
+            explicit = any(node.get(key) for key in ('executor_binding_id','assistant_id','team_id','execution_mode'))
+            node = workflow_layout.resolve_node(db, project_id, layout["id"], node, materialize=False)
+            role = roles.get(project_bindings.role_id(node), {})
+            if role.get("source") == "user" and not explicit:
+                executor = project_bindings.resolve_role(db, project_id, layout["id"], project_bindings.role_id(node), materialize=False)
+                node = {**node, "execution_mode": "team" if executor.get("team_id") else "assistant",
+                        "team_id": executor.get("team_id", ""), "member_id": executor.get("requested_member_id", ""),
+                        "assistant_id": executor["assistant_id"] if not executor.get("team_id") else ""}
             choices = actors(db, project_id, node)
+            for choice in choices:
+                kind, target_id = ("team", choice["team_id"]) if choice["team_id"] else ("assistant", choice["assistant_id"])
+                grant = next((b for b in project_bindings.list_bindings(db, project_id) if b["kind"] == kind and b["target_id"] == target_id), None)
+                if grant:
+                    project_bindings.resolve(db, project_id, grant["id"], member_id=choice["member_id"], materialize=False)
         except ValueError as exc:
             choices, reason = [], str(exc)
         for actor in choices:
@@ -132,7 +148,7 @@ def _target(db, body):
     actor = next((a for a in node["actors"] if all(a[k] == body.get(k, "")
                  for k in ("assistant_id", "team_id", "member_id"))), None)
     if not actor:
-        raise ValueError("该助手或成员不能执行当前节点，请重新选择工作流内的目标")
+        raise ValueError("该专家或成员不能执行当前节点，请重新选择工作流内的目标")
     return node, actor
 
 
@@ -225,7 +241,23 @@ def validate_run(db, run):
     if not hid:
         return
     record = detail(db, hid)
-    _target(db, record["payload"])
+    if 'revision' in run['layout']:
+        node=next((node for node in run['layout']['nodes'] if node['id']==record['payload']['node_id']),None)
+        if not node:raise ValueError('文件任务的运行快照缺少目标节点')
+        actor=run['settings']['actor']
+        engine._actor(db,run['project_id'],{**node,**actor})
+        import project_bindings
+        kind='team' if actor.get('team_id') else 'assistant'
+        target=actor.get('team_id') or actor['assistant_id']
+        if kind=='team':
+            profile=db.db.execute('SELECT template_team_id FROM team_execution_instances WHERE instance_team_id=?',(target,)).fetchone()
+            if profile:target=profile[0]
+        grant=next((binding for binding in project_bindings.list_bindings(db,run['project_id'])
+                    if binding['kind']==kind and binding['target_id']==target),None)
+        if not grant:raise ValueError('文件任务的执行者已不在当前项目范围内')
+        project_bindings.resolve(db,run['project_id'],grant['id'],member_id=actor.get('member_id',''))
+    else:
+        _target(db, record["payload"])
     snapshot = run["settings"]["file_input"]
     for item in [snapshot, *snapshot.get("related_inputs", [])]:
         path = Path(item["path"])
@@ -249,7 +281,10 @@ def start(db, handoff_id):
         active = engine.active(db, project_id)
         if active:
             return {**record, "waiting_reason": "项目已有执行或待审查任务。材料已保存，请在现有运行结束后开始本任务。"}
-        state = workflow_state.states(db, project_id)[node["step"]]
+        layout = current_layout(db, project_id)
+        stages = [n["step"] for n in layout["nodes"]]
+        state = (workflow_state.node_states(db, project_id, layout)[node["id"]] if "task" in stages or len(stages) != len(set(stages))
+                 else workflow_state.states(db, project_id)[node["step"]])
         if state["status"] == "running":
             return {**record, "waiting_reason": "此节点已有任务正在执行，材料已保留，完成后可再次开始。"}
         if state["blocked_by"]:

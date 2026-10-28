@@ -64,8 +64,11 @@ class ProjectIntegrationTest(unittest.TestCase):
             paths.validate_project_dir(Path.home())
         with self.assertRaises(ValueError):
             paths.validate_project_dir(Path(self.root.anchor))
+        managed = Path(self.tmp.name) / "Zotero"
+        managed.mkdir()
+        (managed / "zotero.sqlite").touch()
         with self.assertRaises(ValueError):
-            paths.validate_project_dir(Path(self.tmp.name) / "Zotero" / "storage")
+            paths.validate_project_dir(managed / "storage")
 
     def test_empty_notebook_exposes_a_usable_category_path(self):
         with workflow.WorkflowDB(self.db_path) as db:
@@ -102,6 +105,9 @@ class ProjectIntegrationTest(unittest.TestCase):
         self.assertFalse((self.root / "研究计划/rejected.md").exists())
 
     def test_feishu_cannot_bind_a_legacy_zotero_project_for_writes(self):
+        managed = Path(self.tmp.name) / "Zotero"
+        managed.mkdir()
+        (managed / "zotero.sqlite").touch()
         with workflow.WorkflowDB(self.db_path) as db:
             db.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?",
                           (str(Path(self.tmp.name) / "Zotero/library"), self.project_id))
@@ -127,7 +133,7 @@ class ProjectIntegrationTest(unittest.TestCase):
         self.assertEqual(result["status"], "completed", result)
         self.assertTrue(Path(result["output_path"]).is_relative_to(self.root))
         self.assertIn("今天的摘要", Path(result["output_path"]).read_text(encoding="utf-8"))
-        self.assertEqual(agent.call_args.kwargs["assistant_id"], "builtin-steward")
+        self.assertEqual(agent.call_args.kwargs["assistant_id"], "builtin-scheduler")
 
     def test_feishu_message_becomes_project_chat_and_duplicate_is_ignored(self):
         with workflow.WorkflowDB(self.db_path) as db:

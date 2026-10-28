@@ -71,10 +71,6 @@ select,select option,select optgroup{background:var(--panel2);color:var(--fg)}
 .global-todo-copy span{font-size:11px;color:var(--muted)}
 .global-todo-row.done strong{text-decoration:line-through;color:var(--muted)}
 .todo-list-empty{padding:24px 8px;color:var(--muted);font-size:13px;text-align:center}
-.kb-card>.context-trigger{position:absolute;right:7px;top:7px}
-.kb-card-head{padding-right:26px}
-.kb-col-head>.context-trigger{margin-left:4px}
-.kb-root>.context-trigger{position:absolute;right:8px;bottom:8px}
 .fl-tree-row>.context-trigger{margin-left:auto;opacity:0;transition:opacity .15s ease;padding:0 4px;min-width:22px;min-height:22px;font-size:13px;line-height:1}
 .fl-tree-row:hover>.context-trigger,.fl-tree-row.context-active>.context-trigger,.fl-tree-row:focus-within>.context-trigger{opacity:1}
 .nb-note-row>.context-trigger{align-self:center;margin-right:6px}

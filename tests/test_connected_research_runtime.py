@@ -6,6 +6,7 @@ from pathlib import Path
 import threading
 import time
 import unittest
+from tests.test_web_runtime import workspace_section
 
 from tests import test_web_runtime as runtime
 import workflow
@@ -110,17 +111,23 @@ class ConnectedResearchRuntimeTest(unittest.TestCase):
             self.use_model(model.url)
             self.page.evaluate("""async pid => {
               const result=await api('/api/workflow/layouts/save',{name:'Browser sequence',
-                nodes:[{id:'o',step:'outline',label:'Outline',prompt:'BROWSER_OUTLINE'},
-                       {id:'w',step:'write',label:'Write',prompt:'BROWSER_WRITE',review_required:false}],
+                nodes:[{id:'o',step:'outline',label:'Outline',assistant_id:'builtin-steward',prompt:'BROWSER_OUTLINE'},
+                       {id:'w',step:'write',label:'Write',assistant_id:'builtin-steward',prompt:'BROWSER_WRITE',review_required:false}],
                 edges:[{source:'o',target:'w'}],order:['o','w']});
               await api('/api/workflow/layouts/select',{task_id:pid,layout_id:result.layout.id});
               openTab('workflow');
             }""", pid)
-            self.page.locator("#wfSequenceOpen").click()
+            self.page.locator('#pwWorkflowRun').click()
             self.page.locator("[data-sequence-start]").click()
             state = self.poll_json('/api/workflow/execution?task_id=' + pid, lambda d: (d.get('run') or {}).get('status') in ('awaiting_review', 'failed'))['run']
             self.assertEqual(state["status"], "awaiting_review", state)
-            self.page.locator("[data-sequence-approve]").wait_for(timeout=30000)
+            current=next((node for node in state['nodes'] if node['id']==state['current_node']),None)
+            self.assertIsNotNone(current,state)
+            self.assertEqual(current['status'],'awaiting_review',state)
+            try:
+                self.page.locator("[data-sequence-approve]").wait_for(timeout=8000)
+            except Exception:
+                self.fail(json.dumps({'dialog':self.page.locator('dialog.connected-dialog').inner_text(),'errors':self.errors,'state':state},ensure_ascii=False,default=str))
             self.assertIn("BROWSER_ARTIFACT_outline", self.page.locator("dialog.connected-dialog").inner_text())
             self.page.locator("[data-sequence-feedback]").fill("BROWSER_HUMAN_FEEDBACK")
             self.page.locator("[data-sequence-approve]").click()
@@ -166,8 +173,8 @@ class ConnectedResearchRuntimeTest(unittest.TestCase):
         self.page.evaluate("async data => api('/api/library/project',{task_id:data.pid,result_id:data.rid,fields:{title:'After sync shared title'}})", {"pid": pid, "rid": rid})
         self.page.get_by_text("After sync shared title", exact=False).wait_for(timeout=15000)
         self.page.evaluate("() => openTab('workflow')")
-        self.page.locator('[data-step="search"]').click()
-        self.page.wait_for_function("wsRes.some(r=>r.title==='After sync shared title')", timeout=15000)
+        workspace_section(self.page, 'papers')
+        self.page.get_by_text('After sync shared title',exact=False).wait_for(timeout=15000)
         self.assertEqual(self.errors, [])
 
     def test_calendar_todo_checkbox_updates_task_and_source_opens_editor(self):
@@ -180,8 +187,8 @@ class ConnectedResearchRuntimeTest(unittest.TestCase):
         row.check()
         self.poll_json('/api/todos?task_id=' + pid, lambda d: any(t['id'] == todo['id'] and t['status'] == 'DONE' for t in d['todos']))
         self.page.locator(f'.check-list [data-cal-open="{event_id}"]').click()
-        self.page.locator('#kbTaskModal').wait_for(timeout=15000)
-        self.assertIn('CALENDAR_DEADLINE_TASK', self.page.locator('#kbTaskModal').inner_text() + self.page.locator('#kbTaskModal').evaluate("node=>[...node.querySelectorAll('input')].map(i=>i.value).join(' ' )"))
+        self.page.locator('dialog:has(.ec-plan-form)').wait_for(timeout=15000)
+        self.assertIn('CALENDAR_DEADLINE_TASK', self.page.locator('dialog:has(.ec-plan-form)').inner_text() + self.page.locator('dialog:has(.ec-plan-form)').evaluate("node=>[...node.querySelectorAll('input')].map(i=>i.value).join(' ' )"))
         self.assertEqual(self.errors, [])
 
     def test_calendar_opens_scheduled_result_note(self):
@@ -209,7 +216,7 @@ class ConnectedResearchRuntimeTest(unittest.TestCase):
             self.use_model(model.url)
             self.page.evaluate("""async pid => {
               const saved=await api('/api/workflow/layouts/save',{name:'Calendar review',
-                nodes:[{id:'o',step:'outline',label:'CALENDAR_REVIEW_NODE',prompt:'BROWSER_OUTLINE'}],edges:[],order:['o']});
+                nodes:[{id:'o',step:'outline',label:'CALENDAR_REVIEW_NODE',assistant_id:'builtin-steward',prompt:'BROWSER_OUTLINE'}],edges:[],order:['o']});
               await api('/api/workflow/layouts/select',{task_id:pid,layout_id:saved.layout.id});
               await api('/api/workflow/execution/start',{task_id:pid});
             }""", pid)

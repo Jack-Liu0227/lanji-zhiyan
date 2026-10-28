@@ -57,7 +57,7 @@ def smoke_app(directory: Path, home: Path, on_ready: Callable[[], None] | None =
         catalog = json.loads((directory / "packages/contracts/providers_catalog.json").read_text(encoding="utf-8"))
         assert {p["id"] for p in providers} >= set(catalog), "Provider catalog was not loaded"
         for url in ("/", "/views/app-core.js", "/views/notes-and-settings.js",
-                    "/views/kanban-view.js", "/views/workflow-view.js", "/vendor/pdfjs/pdf.min.js"):
+                    "/views/task-center.js", "/views/conversation-history.js", "/views/paper-toolbox.js", "/views/workflow-view.js", "/vendor/pdfjs/pdf.min.js"):
             with http.open(base + url, timeout=5) as response:
                 body = response.read()
                 assert response.status == 200 and body, url

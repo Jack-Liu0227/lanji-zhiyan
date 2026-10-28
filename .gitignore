@@ -4,7 +4,6 @@ data/
 data.old-*/
 output/recovery/
 output/
-doc/test-reports/
 提交文件/
 .pytest_cache/
 .ruff_cache/
@@ -30,6 +29,10 @@ venv/
 # 他放头像素材的源图夹（只在本地，成品是 web/vendor/img/av*.png）
 q/
 
-# 诊断与设计临时文档（仅保留 doc/ 目录）
+# Legacy scratch documentation; canonical user documentation lives in doc/
 docs/
 sketches/
+
+# 本地计划与浏览器诊断记录
+/[Pp]lan/
+/.playwright-mcp/

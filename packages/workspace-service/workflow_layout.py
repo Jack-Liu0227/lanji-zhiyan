@@ -78,12 +78,12 @@ def ensure_schema(db: Any) -> None:
 
 
 def validate_definition(data: dict[str, Any]) -> dict[str, Any]:
-    """Validate a DAG of real UI steps; a step appears once to avoid false state."""
+    """Validate a DAG whose identity is the node ID, independent of its stage."""
     if not isinstance(data, dict):
         raise ValueError("工作流定义必须是 JSON 对象")
     nodes, edges = data.get("nodes"), data.get("edges", [])
-    if not isinstance(nodes, list) or not 1 <= len(nodes) <= len(STAGES):
-        raise ValueError(f"工作流需包含 1 至 {len(STAGES)} 个节点")
+    if not isinstance(nodes, list) or not 1 <= len(nodes) <= 100:
+        raise ValueError("工作流需包含 1 至 100 个节点")
     if not isinstance(edges, list):
         raise ValueError("edges 必须是数组")
     clean, ids, steps = [], set(), set()
@@ -93,27 +93,52 @@ def validate_definition(data: dict[str, Any]) -> dict[str, Any]:
         nid, step = str(raw.get("id", "")), str(raw.get("step", ""))
         if not _ID.fullmatch(nid) or nid in ids:
             raise ValueError("节点 id 须唯一且仅包含字母、数字、下划线、点和横线")
-        if step not in STAGES:
+        if step not in (*STAGES, "task"):
             raise ValueError("不支持的工作流步骤：" + step)
-        if step in steps:
-            raise ValueError("同一步骤不能重复，避免节点状态含义不清：" + step)
-        label = str(raw.get("label") or STAGE_LABEL[step]).strip()
+        label = str(raw.get("label") or STAGE_LABEL.get(step, "项目任务")).strip()
         if not label or len(label) > 120:
             raise ValueError("节点名称须为 1 至 120 字符")
         review = raw.get("review_required", True)
         if not isinstance(review, bool):
             raise ValueError("review_required 必须是布尔值，默认需要人工审查")
         config = {"review_required": review}
+        kind = raw.get('node_kind', 'executor')
+        if kind not in ('executor', 'tool', 'workflow'):
+            raise ValueError('节点类型须为执行者、固定工具或子工作流')
+        if kind != 'executor':
+            config['node_kind'] = kind
+        if kind == 'tool':
+            name, args = raw.get('tool_name'), raw.get('tool_args', {})
+            if not isinstance(name, str) or not name.strip() or len(name) > 200 or not isinstance(args, dict):
+                raise ValueError('固定工具节点需指定工具 ID 和 JSON 参数')
+            if len(json.dumps(args, ensure_ascii=False)) > 100000:
+                raise ValueError('工具参数过长')
+            config.update(tool_name=name.strip(), tool_args=args)
+        if kind == 'workflow':
+            template = raw.get('workflow_template_id')
+            if not isinstance(template, str) or not template or len(template) > 120:
+                raise ValueError('子工作流节点需指定模板 ID')
+            config['workflow_template_id'] = template
+            if step != 'task':
+                raise ValueError('子工作流节点请使用通用项目任务步骤')
         mode = raw.get("execution_mode", "")
         if mode not in ("", "assistant", "team"):
-            raise ValueError("节点执行方式必须是助手或团队")
+            raise ValueError("节点执行方式必须是专家或团队")
         if mode:
             config["execution_mode"] = mode
-        for key in ("assistant_id", "team_id", "member_id", "prompt"):
+        for key in ("assistant_id", "team_id", "member_id", "prompt", "executor_binding_id"):
             value = raw.get(key, "")
             if not isinstance(value, str) or len(value) > (20000 if key == "prompt" else 120):
                 raise ValueError("节点执行配置无效：" + key)
             config[key] = value.strip()
+        role = str(raw.get("executor_role_id") or raw.get("executor_role") or raw.get("role_id") or nid)
+        if not _ID.fullmatch(role):
+            raise ValueError("执行角色 ID 格式无效")
+        config["executor_role_id"] = role
+        contract = raw.get("output_contract") or {}
+        if not isinstance(contract, dict):
+            raise ValueError("节点输出约定必须是 JSON 对象")
+        config["output_contract"] = contract
         for key in ("tools", "skills"):
             value = raw.get(key)
             if value is not None and (not isinstance(value, list) or len(value) > 300 or any(not isinstance(x, str) or not x or len(x) > 200 for x in value)):
@@ -178,8 +203,17 @@ def _project(db: Any, task_id: str) -> None:
         raise ValueError("请先选择有效项目")
 
 
-def resolve_node(db: Any, project_id: str, layout_id: str, node: dict) -> dict:
+def resolve_node(db: Any, project_id: str, layout_id: str, node: dict, *, materialize=True) -> dict:
     """Read the effective binding of a node, including legacy built-in offices."""
+    if node.get('executor_binding_id'):
+        import project_bindings
+        actor=project_bindings.resolve(db,project_id,node['executor_binding_id'],member_id=node.get('member_id',''),materialize=materialize)
+        return {**node,'execution_mode':'team' if actor.get('team_id') else 'assistant','team_id':actor.get('team_id',''),'member_id':actor.get('requested_member_id',''),'assistant_id':(node.get('assistant_id') or '') if actor.get('team_id') else actor['assistant_id']}
+    if node.get('team_id'):
+        import project_bindings
+        grant=db.db.execute("SELECT id FROM project_executor_bindings WHERE project_id=? AND kind='team' AND target_id=?",(project_id,node['team_id'])).fetchone()
+        actor=project_bindings.resolve(db,project_id,grant['id'] if grant else 'global:team:'+node['team_id'],member_id=node.get('member_id',''),materialize=materialize)
+        return {**node,'team_id':actor['team_id'],'member_id':actor['requested_member_id'],'assistant_id':node.get('assistant_id') or '', 'execution_mode':'team'}
     from workflow_catalog import LEGACY_TEAM_WORKFLOWS, LEGACY_TEAM_STAGES, LEGACY_MEMBER_STAGES
     if any(node.get(k) for k in ("execution_mode", "assistant_id", "team_id", "member_id")):
         return node
@@ -214,7 +248,8 @@ def save_layout(db: Any, body: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("工作流名称须为 1 至 120 字符")
     if len(description) > 4000:
         raise ValueError("工作流说明不能超过 4000 字符")
-    definition = validate_definition(body)
+    import shared_executors
+    definition = validate_definition({**body,'nodes':[shared_executors.portable_node(db,node) for node in body.get('nodes',[])]})
     wid, stamp = str(body.get("id") or ""), now()
     if wid:
         _layout(db, wid)
@@ -230,13 +265,17 @@ def save_layout(db: Any, body: dict[str, Any]) -> dict[str, Any]:
         db.db.execute("INSERT INTO workflow_layouts VALUES (?,?,?,?,?,?)",
                       (wid, name, description, json.dumps(definition, ensure_ascii=False), stamp, stamp))
     db.db.commit()
+    import project_bindings
+    for binding in db.db.execute("SELECT task_id FROM project_workflow_layouts WHERE layout_id=?", (wid,)).fetchall():
+        project_bindings.import_legacy(db, binding["task_id"])
     return {"ok": True, "layout": _layout(db, wid)}
 
 
 def select_layout(db: Any, body: dict[str, Any]) -> dict[str, Any]:
     tid, wid = str(body.get("task_id", "")), str(body.get("layout_id", ""))
     _project(db, tid)
-    layout = _layout(db, wid)
+    import project_workflows
+    layout = project_workflows.effective(db,tid,_layout(db,wid))
     selected = str(body.get("node_id") or layout["order"][0])
     if selected not in {n["id"] for n in layout["nodes"]}:
         raise ValueError("所选节点不属于当前工作流")
@@ -244,6 +283,8 @@ def select_layout(db: Any, body: dict[str, Any]) -> dict[str, Any]:
                   "layout_id=excluded.layout_id,selected_node=excluded.selected_node,updated_at=excluded.updated_at",
                   (tid, wid, selected, now()))
     db.db.commit()
+    import project_bindings
+    project_bindings.import_legacy(db, tid)
     return state(db, tid)
 
 
@@ -323,6 +364,8 @@ def state(db: Any, task_id: str) -> dict[str, Any]:
     binding = db.db.execute("SELECT * FROM project_workflow_layouts WHERE task_id=?", (task_id,)).fetchone()
     fallback = next((item for item in layouts if item["id"] == DEFAULT_LAYOUT_ID), layouts[0])
     layout = next((item for item in layouts if binding and item["id"] == binding["layout_id"]), fallback)
+    import project_workflows
+    layout=project_workflows.effective(db,task_id,layout)
     if not binding or binding["layout_id"] != layout["id"]:
         db.db.execute("INSERT OR REPLACE INTO project_workflow_layouts VALUES (?,?,?,?)",
                       (task_id, layout["id"], layout["order"][0], now()))
@@ -332,9 +375,11 @@ def state(db: Any, task_id: str) -> dict[str, Any]:
         selected = binding["selected_node"] or layout["order"][0]
     import workflow_state
     evidence = workflow_state.states(db, task_id, layout)
+    stages = [n["step"] for n in layout["nodes"]]
+    by_node = "task" in stages or len(stages) != len(set(stages))
     nodes = {node["id"]: dict(node) for node in layout["nodes"]}
     for node in nodes.values():
-        node.update(evidence.get(node["step"], {"status": "pending", "raw_status": "", "summary": "尚无执行记录",
+        node.update(evidence.get(node["id"] if by_node else node["step"], {"status": "pending", "raw_status": "", "summary": "尚无执行记录",
                                               "updated_at": "", "source": "", "record_id": ""}))
     for nid in layout["order"]:
         node = nodes[nid]
@@ -350,6 +395,9 @@ def state(db: Any, task_id: str) -> dict[str, Any]:
 
 
 def route(method: str, path: str, body: dict[str, Any] | None, query: dict[str, Any], db: Any) -> dict[str, Any] | None:
+    import project_workflows
+    project_response=project_workflows.route(method,path,body or {},query,db)
+    if project_response is not None:return project_response
     endpoints = {("GET", "/api/workflow/layouts"), ("GET", "/api/workflow/layouts/state"),
                  ("POST", "/api/workflow/layouts/save"), ("POST", "/api/workflow/layouts/delete"),
                  ("POST", "/api/workflow/layouts/select")}

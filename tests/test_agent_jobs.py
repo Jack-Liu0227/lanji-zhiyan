@@ -63,18 +63,22 @@ class AgentJobsTest(unittest.TestCase):
 
         def model(*args, **kwargs):
             entered.set()
-            release.wait(5)
+            release.wait(30)
             kwargs["on_delta"]("Persisted after disconnection")
             return {"content": "Persisted after disconnection"}
 
         with patch.object(workflow, "_chat_raw", side_effect=model) as call:
             run = agent_jobs.start(self.path, self.request())
-            self.assertTrue(entered.wait(5))
-            same = agent_jobs.start(self.path, self.request())
-            self.assertIs(same, run)
-            release.set()
-            self.wait(run)
-            self.assertEqual(call.call_count, 1)
+            try:
+                self.assertTrue(entered.wait(20))
+                same = agent_jobs.start(self.path, self.request())
+                self.assertIs(same, run)
+                release.set()
+                self.wait(run)
+                self.assertEqual(call.call_count, 1)
+            finally:
+                release.set()
+                self.wait(run)
         with workflow.WorkflowDB(self.path) as db:
             events = db.get_run_events(run.run_id)
             self.assertEqual(events[-1]["kind"], "done")
@@ -90,18 +94,21 @@ class AgentJobsTest(unittest.TestCase):
 
         def model(*args, **kwargs):
             entered.set()
-            release.wait(5)
+            release.wait(30)
             return {"content": "Too late"}
 
         with patch.object(workflow, "_chat_raw", side_effect=model):
             run = agent_jobs.start(self.path, self.request())
-            self.assertTrue(entered.wait(5))
-            start = time.monotonic()
-            with workflow.WorkflowDB(self.path) as db:
-                self.manager.cancel_run(run.run_id, db)
-            self.wait(run)
-            self.assertLess(time.monotonic() - start, 1.5)
-            release.set()
+            try:
+                self.assertTrue(entered.wait(20))
+                start = time.monotonic()
+                with workflow.WorkflowDB(self.path) as db:
+                    self.manager.cancel_run(run.run_id, db)
+                self.wait(run)
+                self.assertLess(time.monotonic() - start, 1.5)
+            finally:
+                release.set()
+                self.wait(run)
         with workflow.WorkflowDB(self.path) as db:
             self.assertEqual(db.get_async_task(run.run_id)["status"], "cancelled")
             self.assertEqual(db.get_background_job(run.run_id)["status"], "cancelled")

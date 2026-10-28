@@ -248,13 +248,13 @@ function trExitFull(){
 const TR_COLORS = ["#FFE066", "#8BD498", "#7FC4F0", "#F0A9C0", "#F07C7C"];
 let trHlT = 0;
 function trHlSave(){
-  /* 本机立刻落一份（离线也画得出来），服务端 400ms 防抖 —— 助手读的是服务端那份 */
+  /* 本机立刻落一份（离线也画得出来），服务端 400ms 防抖 —— 专家读的是服务端那份 */
   try{ localStorage.setItem("rw-hl-" + TR.pid, JSON.stringify({v: 2, list: TR.hl})); }catch(_){}
   clearTimeout(trHlT);
   trHlT = setTimeout(()=>{ api("/api/tr/hl", {id: TR.pid, task_id: curTask || "", list: TR.hl}).catch(()=>{}); }, 400);
 }
 async function trHlLoad(){
-  /* 先问服务端（助手要用），没有再用本机那份（离线时画得出来） */
+  /* 先问服务端（专家要用），没有再用本机那份（离线时画得出来） */
   let list = null;
   try{
     const d = await api(`/api/tr/hl?id=${encodeURIComponent(TR.pid)}&task=${encodeURIComponent(curTask||"")}`);
@@ -324,13 +324,13 @@ function trHlOnMouseUp(e){
   });
   const n = +pageEl.dataset.page;
   const th = TR.hlWidth;
-  const txt = (sel.toString() || "").replace(/\s+/g, " ").trim().slice(0, 400);   // 圈的是哪几个字 → 助手要用
+  const txt = (sel.toString() || "").replace(/\s+/g, " ").trim().slice(0, 400);   // 圈的是哪几个字 → 专家要用
   rows.forEach((r, i)=>{
     TR.hl.push({p:n, x:Math.round(r.left - pr.left), y:Math.round(r.top - pr.top + r.height/2 - th/2),
                 w:Math.round(r.right - r.left), th, c:TR.hlColor, t: i === 0 ? txt : ""});   // 一段话占多行时文字只记在第一行
   });
   trHlSave(); trPaintHls(n, pageEl); sel.removeAllRanges();
-  trMsg(`已标注 ${TR.hl.length} 处 —— 右侧助手能看到你圈的内容，直接问就行`);
+  trMsg(`已标注 ${TR.hl.length} 处 —— 右侧专家能看到你圈的内容，直接问就行`);
 }
 
 /* ---------------- 中英互译（BabelDOC 后台任务） ---------------- */
@@ -394,7 +394,7 @@ function trNoteColumnHTML(){
     <div class="tr-nc-h"><b>阅读笔记</b><span class="tr-nc-bind" id="trNoteBind">已绑论文：${esc(pname)} · 自动保存</span></div>
     <input id="trNoteTitle" class="tr-nc-title" placeholder="笔记名">
     <div class="tr-nc-hint"><span id="trNoteState"></span></div>
-    <textarea id="trNoteSrc" class="tr-nc-src" spellcheck="true" placeholder="在这里随记随写…Ctrl+滚轮不改字号；点「助手模式」回到对话"></textarea>
+    <textarea id="trNoteSrc" class="tr-nc-src" spellcheck="true" placeholder="在这里随记随写…Ctrl+滚轮不改字号；点「专家模式」回到对话"></textarea>
   </div>`;
 }
 async function trNoteMode(){
@@ -407,7 +407,7 @@ async function trNoteMode(){
     if(r.error) throw new Error(r.error);
     TR.note = r.note; TR.noteMode = true;
     trPaintNoteColumn();
-    trMsg("「阅读笔记」已绑到这篇论文 —— 右栏随记随写、自动存；点「🤖 助手模式」或 Esc 回到对话");
+    trMsg("「阅读笔记」已绑到这篇论文 —— 右栏随记随写、自动存；点「🤖 专家模式」或 Esc 回到对话");
   }catch(e){ trMsg("笔记打开失败：" + e.message + (/(not found|404)/i.test(e.message) ? "（服务端是旧版本，重启一次）" : "")); }
 }
 function trPaintNoteColumn(){
@@ -417,7 +417,7 @@ function trPaintNoteColumn(){
   $("trNoteTitle").value = (TR.note && TR.note.title) || "阅读笔记";
   $("trNoteSrc").value = (TR.note && TR.note.content) || "";
   trNoteBind();
-  const b = $("trBtnN"); if(b){ b.textContent = "🤖 助手模式"; b.classList.add("active"); }
+  const b = $("trBtnN"); if(b){ b.textContent = "🤖 专家模式"; b.classList.add("active"); }
 }
 function trExitNoteMode(){
   TR.noteMode = false;
@@ -608,7 +608,7 @@ function mapPanelHTML(active){
                 <label class="at-sel" title="这一步用哪个模型档案">🔌<select id="map-modpick"><option value="">未配置模型</option>
                   ${S.models.map(mm => `<option value="${mm.id}" ${S.active && mm.id === S.active.id ? "selected" : ""}>${esc(mm.name)}</option>`).join("")}</select></label></div>
               <div class="at-tools-r">
-                <label class="at-sel" title="助手署名">🤖<input id="map-assist" placeholder="researcher" value="${esc(assistantKey())}"></label>
+                <label class="at-sel" title="专家署名">🤖<input id="map-assist" placeholder="researcher" value="${esc(assistantKey())}"></label>
                 <button class="send-btn" id="map-send" title="发送" aria-label="发送">↑</button></div>
             </div>
             <input type="file" id="map-filepick" multiple style="display:none">
@@ -956,7 +956,7 @@ function mpSay(t){
 
 async function mpTidy(){
   /* 重新整理 = 按大纲**当前的**顺序重认一遍框架。结构性重排交给服务端（标题认身份、挂着的资料跟着走、
-     手动坐标全清）；「哪条精读笔记挂哪一节」要读内容判断，交给右边谱系助手。 */
+     手动坐标全清）；「哪条精读笔记挂哪一节」要读内容判断，交给右边谱系专家。 */
   try{
     const d = await api("/api/map/tidy", {task_id: curTask});
     if(d.error) throw new Error(d.error);

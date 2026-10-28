@@ -44,7 +44,9 @@ class ChatMigrateTest(unittest.TestCase):
         self._open()                                     # 首开：建表
         team = __import__("team")
         team.DB_PATH = str(_DB)                          # 不走 server 兜底
-        team.teams("p1")                                 # 幂等播种这个项目的两个常驻办公室
+        with self.workflow.WorkflowDB(_DB) as db:
+            project = db.create_task("Team migration")
+        team.ensure_defaults(project)                    # 显式采用预置团队
         self.assertTrue(self._sql("SELECT 1 FROM teams LIMIT 1"), "固定团队应该被播种")
         self.assertEqual(self._sql("SELECT id FROM chats"), [], "团队不该被抄进 chats")
 

@@ -27,6 +27,29 @@ EDGE = next(
 )
 
 
+def workspace_section(page, section):
+    """Use the public primary view and secondary navigation, including its drawer."""
+    if section in ('tasks','automation','plan'):
+        tab=page.locator('#pwTab-tasks');tab.wait_for()
+        tab.click()
+        page.locator('[data-ec-view="'+{'tasks':'board','automation':'automation','plan':'plans'}[section]+'"]').click()
+        return
+    if section in ('manuscripts','experiments','outputs'):
+        workspace_section(page,'catalog')
+        page.locator('[data-pr-kind="'+{'manuscripts':'manuscript','experiments':'experiment','outputs':'output'}[section]+'"]').click()
+        return
+    surface = {'catalog':'library','manuscripts':'library','experiments':'library','outputs':'library','files':'library','papers':'library','notes':'library','stars':'library',
+               'tasks':'tasks','automation':'tasks','plan':'tasks','workflow':'flow','tools':'flow'}[section]
+    tab = page.locator('#pwTab-' + surface)
+    tab.wait_for()
+    if tab.get_attribute('aria-selected') != 'true':
+        tab.click()
+    target = page.locator(f'[data-pw-view="{section}"]')
+    if not target.is_visible():
+        page.locator('#pwToggleNav').click()
+    target.click()
+
+
 @unittest.skipUnless(sync_playwright and EDGE, "Requires Playwright and Microsoft Edge")
 class WebRuntimeTest(unittest.TestCase):
     """Execute the actual page: syntax checks cannot catch failed DOM bindings."""
@@ -78,7 +101,7 @@ class WebRuntimeTest(unittest.TestCase):
 
         playwright = sync_playwright().start()
         cls.addClassCleanup(playwright.stop)
-        cls.browser = playwright.chromium.launch(executable_path=str(EDGE), headless=True)
+        cls.browser = playwright.chromium.launch(executable_path=str(EDGE), headless=os.environ.get("LANJI_BROWSER_VISIBLE") != "1")
         cls.addClassCleanup(cls.browser.close)
 
     def setUp(self) -> None:
@@ -100,17 +123,16 @@ class WebRuntimeTest(unittest.TestCase):
         self.assertEqual(self.page.locator("#tabsbar [data-t]").count(), 1)
         self.assertIn("SQLite", self.page.locator("#statusbar").inner_text())
 
-    def test_progress_board_stays_inside_project_space_in_every_view(self) -> None:
+    def test_progress_board_stays_inside_project_space_in_every_view(self):
         self.load_page()
         self.assertEqual(self.page.locator('#sidebar [data-nav="kanban"]').count(), 0)
-        self.page.locator('#sidebar [data-nav="space"]').click()
-        self.page.locator('[data-sp-tab="plan"]').click()
-        self.page.locator("#spPlan .kb-root").wait_for()
-        for view in ("pipeline", "timeline", "kanban"):
-            self.page.locator(f'#spPlan [data-view="{view}"]').click()
-            self.assertTrue(self.page.locator("#spTabs").is_visible())
-            self.assertTrue(self.page.locator("#spPlan .kb-root").is_visible())
-            self.assertEqual(self.page.locator("#main > .kb-root").count(), 0)
+        self.page.locator('#sidebar [data-nav="workspace"]').click()
+        workspace_section(self.page, 'plan')
+        for view in ('list','timeline'):
+            self.page.locator('[data-ec-layout]').select_option(view)
+            self.assertTrue(self.page.locator('#projectWorkspace .execution-center').is_visible())
+            self.assertTrue(self.page.locator('.pw-sidebar').is_hidden())
+            self.assertEqual(self.page.locator('#main > .execution-center').count(), 0)
         self.assertEqual(self.errors, [])
 
     def save_nested_note(self, filename: str) -> str:
@@ -125,8 +147,8 @@ class WebRuntimeTest(unittest.TestCase):
     def test_project_notes_expand_nested_folders_and_open_file(self) -> None:
         self.load_page()
         path = self.save_nested_note("笔记层级.md")
-        self.page.locator('#sidebar [data-nav="space"]').click()
-        self.page.locator('[data-sp-tab="notes"]').click()
+        self.page.locator('#sidebar [data-nav="workspace"]').click()
+        workspace_section(self.page, 'notes')
         self.page.locator('[data-nb-view="tree"]').click()
         self.page.locator("#nbTreeContainer").wait_for()
         for folder in ("笔记/界面验收", "笔记/界面验收/子目录"):
@@ -143,21 +165,22 @@ class WebRuntimeTest(unittest.TestCase):
     def test_research_platform_project_folder_expands_and_previews_file(self) -> None:
         self.load_page()
         path = self.save_nested_note("项目文件.md")
-        self.page.locator('#sidebar [data-nav="workflow"]').click()
-        self.page.locator("#wfFileLocCard").click()
+        self.page.locator('#sidebar [data-nav="workspace"]').click()
+        workspace_section(self.page, 'files')
         self.page.locator("#panel-files").wait_for(state="visible")
         for folder in ("笔记", "笔记/界面验收", "笔记/界面验收/子目录"):
             self.page.locator(f'#flList .fl-tree-row[data-rel="{folder}"]').click()
         self.page.locator(f'#flList .fl-tree-row[data-rel="{path}"]').click()
         self.page.wait_for_function("document.querySelector('#flStage')?.textContent.includes('NESTED_NOTE_CONTENT')")
-        self.assertTrue(self.page.locator("#wfFileLocCard.on").is_visible())
-        self.assertTrue(self.page.locator("#wfProjSelect").is_visible())
+        self.assertTrue(self.page.locator('[data-pw-view="files"][aria-current="page"]').is_visible())
+        self.assertTrue(self.page.locator("#pwProject").is_visible())
         self.assertEqual(self.errors, [])
 
     def test_protected_project_notes_open_read_only_and_navigation_does_not_save(self) -> None:
         folder = self.temporary_root / "zotero/existing-project"
         note = folder / "笔记/研究计划/existing.md"
         note.parent.mkdir(parents=True, exist_ok=True)
+        (self.temporary_root / "zotero/zotero.sqlite").touch()
         original_content = "# Protected evidence\n\nREAD_ONLY_BROWSER_EVIDENCE"
         note.write_text(original_content, encoding="utf-8")
         with closing(sqlite3.connect(self.database_path)) as db, db:
@@ -173,8 +196,8 @@ class WebRuntimeTest(unittest.TestCase):
         self.page.on("request", lambda request: saves.append(request.url)
                      if request.method == "POST" and "/api/project/note/" in request.url else None)
         self.load_page()
-        self.page.locator('#sidebar [data-nav="space"]').click()
-        self.page.locator('[data-sp-tab="notes"]').click()
+        self.page.locator('#sidebar [data-nav="workspace"]').click()
+        workspace_section(self.page, 'notes')
         self.page.locator('[data-pn-file="笔记/研究计划/existing.md"]').click()
         self.page.wait_for_function("document.querySelector('#mdPreview')?.textContent.includes('READ_ONLY_BROWSER_EVIDENCE')")
         self.assertTrue(self.page.locator("#mdSource").evaluate("element => element.readOnly"))

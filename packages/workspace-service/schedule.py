@@ -49,7 +49,7 @@ CATCHUP_GRACE = 6 * 3600      # 启动补跑：错过超过 6 小时的点只重
 FREQ_LABELS = {"manual": "手动", "hourly": "每小时", "daily": "每天",
                "weekdays": "工作日", "weekly": "每周", "custom": "自定义 Cron"}
 RETRYABLE = {"failed", "blocked", "canceled", "partial"}
-RUN_STATUS = {"running": "运行中", "completed": "完成", "partial": "部分完成",
+RUN_STATUS = {"queued": "待执行", "running": "运行中", "completed": "完成", "partial": "部分完成",
               "failed": "失败", "blocked": "已阻断", "canceled": "已取消",
               "awaiting_review": "等待人工审查", "interrupted": "中断待恢复"}
 
@@ -288,7 +288,7 @@ def _run_once(sched: dict[str, Any], trigger: str, emit: Any = None, cancel_chec
                                          run_id=run.get("workflow_run_id", ""), assets=run.get("output_assets"))
         return run
 
-    if not sched.get("enabled"):
+    if not sched.get("enabled") and trigger != "manual":
         return finish("canceled", reason="任务已暂停")
     if not str(sched.get("project_id") or "").strip():
         return finish("blocked", reason="未绑定项目：Agent 需要项目上下文（本应用的 Agent 按项目组织）")
@@ -308,71 +308,17 @@ def _run_once(sched: dict[str, Any], trigger: str, emit: Any = None, cancel_chec
     if not str(sched.get("assistant_id") or "").strip():
         return finish("blocked", reason="未绑定专家：请在任务中选择一个已启用的专家")
 
-    tracked_id = ""
-    stage = ""
     try:
+        import schedule_workflow
         with workflow.WorkflowDB(_db_path()) as db:
-            assistant = db.assistant(str(sched["assistant_id"]))
-            if not assistant or not assistant.get("enabled"):
-                return finish("blocked", reason="绑定的专家不存在或已停用")
-            folder = output_dir_for(db, sched)
-            prompt = sched["prompt"]
-            import asset_service
-            import run_service
-            import project_todos
-            project_todos.ensure_table(db)
-            linked = db.db.execute("SELECT p.stage FROM task_links l JOIN project_todos p ON p.id=l.todo_id "
-                                   "WHERE l.schedule_id=?", (sched["id"],)).fetchone()
-            stage = linked["stage"] if linked else ""
-            inputs = [a["id"] for a in asset_service.research_assets(db, sched["project_id"], limit=200)]
-            tracked = run_service.start(db, sched["project_id"], "schedule", idempotency_key="schedule:" + run["id"])
-            tracked_id = tracked["id"]
-            node = run_service.node_start(db, tracked_id, "schedule", inputs=inputs)
-            db.asset_run = {"id": tracked_id, "node_id": node["id"], "inputs": inputs, "outputs": []}
-            run["workflow_run_id"] = tracked_id
-            project_todos.sync_execution(db, schedule_id=sched["id"], status="running", run_id=tracked_id)
-            db.quiet_steps = not bool(stage)
-            if stage:
-                db.log_step(sched["project_id"], stage, "running", "定时任务开始执行")
-            def removed():
-                current = db.schedule(sched["id"])
-                return not current or current.get("project_id") != sched.get("project_id") or not db.db.execute(
-                    "SELECT 1 FROM research_tasks WHERE id=?", (sched["project_id"],)).fetchone()
-            db.template_schedule_id = sched["id"]
-            out = workflow.run_agent(db, sched["project_id"], prompt, emit=emit,
-                                     publish=False, assistant_id=sched["assistant_id"], scope=stage, cancel_check=cancel_check)
-            if removed():
-                raise ValueError("项目或定时任务已删除")
-            text = str(out.get("reply") or "").strip()
-            if not text:
-                raise ValueError("定时任务没有产出内容")
-            stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
-            path = folder / f"{_safe_name(sched['name'])[:60]}-{stamp}-{run['id'][:8]}.md"
-            header = (f"# {sched['name']}\n\n"
-                      f"> 由「定时任务」生成 · {datetime.now().strftime('%Y-%m-%d %H:%M')} · "
-                      f"触发：{'手动' if trigger == 'manual' else ('启动补跑' if trigger == 'catchup' else '定时')} · "
-                      f"Cron `{sched['cron']}`\n\n")
-            asset_service.atomic_write_text(path, header + text + "\n")
-            asset = asset_service.register_file(db, path, project_id=sched["project_id"], kind="schedule_output",
-                                                source="schedule", run_id=tracked_id, body=header + text,
-                                                metadata={"schedule_id": sched["id"], "schedule_run_id": run["id"]})
-            note = archive_note(db, sched, run, header + text + "\n", asset)
-            run.update(note_id=note["id"], note_path=note["canonical_path"])
-            if out.get("template_snapshot"):
-                used = out["template_snapshot"]
-                asset_service.link(db, asset["id"], "used_template", used["asset_id"], {"revision_id": used["revision_id"]})
-            run["output_assets"] = list(dict.fromkeys([*(out.get("output_assets") or []), asset["id"], *([note["asset_id"]] if note.get("asset_id") else [])]))
-            run_service.finish_node(db, node["id"], "succeeded", outputs=run["output_assets"])
-            if stage:
-                db.log_step(sched["project_id"], stage, "succeeded", "定时任务产物已生成，等待交付验收")
-        return finish("completed", path=str(path), summary=text[:160].replace("\n", " "))
-    except Exception as exc:                       # 任何失败都记下来，不能让调度线程死掉
-        if tracked_id:
-            with workflow.WorkflowDB(_db_path()) as db:
-                if db.db.execute("SELECT 1 FROM workflow_nodes WHERE id=?", (node["id"],)).fetchone():
-                    run_service.finish_node(db, node["id"], "failed", error=str(exc))
-                if stage and db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (sched["project_id"],)).fetchone():
-                    db.log_step(sched["project_id"], stage, "failed", str(exc))
+            return schedule_workflow.start_task(db, sched, run, emit=emit, cancel_check=cancel_check)
+    except ValueError as exc:
+        with workflow.WorkflowDB(_db_path()) as db:
+            current = db.schedule(sched['id'])
+            if not current or not db.db.execute('SELECT 1 FROM research_tasks WHERE id=?', (sched['project_id'],)).fetchone():
+                return finish("failed", reason=str(exc))
+        return finish("blocked", reason=str(exc))
+    except Exception as exc:
         return finish("failed", reason=f"{type(exc).__name__}: {exc}")
 
 
@@ -455,10 +401,25 @@ def recover_runs() -> int:
     count = 0
     with workflow.WorkflowDB(_db_path()) as db:
         project_todos.ensure_table(db)
-        rows = db.db.execute("SELECT * FROM schedule_runs WHERE status='running'").fetchall()
+        rows = db.db.execute("SELECT * FROM schedule_runs WHERE status IN ('queued','running')").fetchall()
         for record in rows:
             row = dict(record)
             if db.db.execute('SELECT 1 FROM schedule_workflow_runs WHERE schedule_run_id=?', (row['id'],)).fetchone():
+                continue
+            canonical = db.db.execute("SELECT task_id FROM project_task_origins WHERE kind='schedule_run' AND legacy_id=?", (row['id'],)).fetchone()
+            if canonical:
+                import project_tasks
+                import project_task_execution
+                import schedule_workflow
+                task = project_tasks.get(db, canonical['task_id'])
+                if (str(Path(_db_path()).resolve()), row['schedule_id']) not in _running:
+                    if task.get('latest_run'):
+                        project_task_execution.recover(db.path)
+                    elif task['status'] in ('draft', 'ready'):
+                        project_tasks.block_start(db, task['id'], row.get('reason') or '上次调度在启动执行前中断，请检查配置后重新开始',
+                            authority=project_tasks.CommandContext.system(task['project_id']))
+                        count += 1
+                schedule_workflow.refresh_task(db, project_tasks.get(db, canonical['task_id']))
                 continue
             if (str(Path(_db_path()).resolve()), row["schedule_id"]) in _running:
                 continue
