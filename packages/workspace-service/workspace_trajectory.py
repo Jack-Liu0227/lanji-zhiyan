@@ -35,6 +35,8 @@ def owner(db,chat_id,project_id):
 
 def listing(db,chat_id,project_id,*,before=0,limit=20):
     owner(db,chat_id,project_id)
+    execution=_execution_listing(db,chat_id,project_id,before=before,limit=limit)
+    if execution is not None:return execution
     limit=max(1,min(int(limit),50))
     rows=db.db.execute('SELECT rowid AS sequence,* FROM tasks WHERE owner_id=? AND (?=0 OR rowid<?) ORDER BY rowid DESC LIMIT ?',
                        (chat_id,int(before),int(before),limit+1)).fetchall()
@@ -56,6 +58,8 @@ def listing(db,chat_id,project_id,*,before=0,limit=20):
 
 def events(db,chat_id,project_id,run_id,*,after=0,limit=300):
     owner(db,chat_id,project_id)
+    execution=_execution_events(db,chat_id,project_id,run_id,after=after,limit=limit)
+    if execution is not None:return execution
     run=db.get_async_task(run_id)
     if not run or run['owner_id']!=chat_id:raise ValueError('此运行不属于当前对话')
     limit=max(1,min(int(limit),500))
@@ -64,6 +68,58 @@ def events(db,chat_id,project_id,run_id,*,after=0,limit=300):
     records=[{'event_id':row['event_id'],'kind':row['kind'],'created_at':row['created_at'],'payload':redact(json.loads(row['payload']))} for row in rows[:limit]]
     return {'run_id':run_id,'status':run['status'],'events':records,'has_more':len(rows)>limit,
             'next_after':records[-1]['event_id'] if records else int(after)}
+
+
+def _execution_binding(db,chat_id,project_id):
+    """Return the durable task/workflow binding used by execution chats.
+
+    Execution chats are projections of project task runs. They intentionally do
+    not create rows in the legacy ``tasks``/``run_events`` tables, so the
+    regular trajectory reader must use their event ledger instead.
+    """
+    import execution_conversations
+    binding=execution_conversations.by_chat(db,chat_id)
+    if not binding:return None
+    if project_id and binding.get('project_id')!=project_id:raise ValueError('此对话不属于当前项目')
+    return binding
+
+
+def _execution_listing(db,chat_id,project_id,*,before=0,limit=20):
+    binding=_execution_binding(db,chat_id,project_id)
+    if not binding:return None
+    limit=max(1,min(int(limit),50)); before=int(before or 0)
+    args=[binding['entity_id'] if binding['kind']=='task' else '',binding['entity_id'] if binding['kind']=='workflow' else '']
+    where='task_id IN (SELECT id FROM project_tasks WHERE id=? OR workflow_run_id=?)'
+    if before:
+        where+=' AND rowid<?';args.append(before)
+    args.append(limit+1)
+    rows=db.db.execute('SELECT rowid AS sequence,run_id,MIN(created_at) AS created_at,MAX(created_at) AS updated_at,COUNT(*) AS event_count FROM execution_conversation_events WHERE '+where+' GROUP BY run_id ORDER BY sequence DESC LIMIT ?',args).fetchall()
+    runs=[]
+    for row in rows:
+        task=db.db.execute('SELECT t.title,r.status,r.attempt,r.error FROM project_task_runs r JOIN project_tasks t ON t.id=r.task_id WHERE r.id=?',(row['run_id'],)).fetchone()
+        if task is None:
+            task=db.db.execute('SELECT title,status,0 AS attempt,error FROM workflow_runs WHERE id=?',(binding['entity_id'],)).fetchone()
+        status=(task['status'] if task else 'done')
+        runs.append({'id':row['run_id'],'sequence':row['sequence'],'status':status,'created_at':row['created_at'],'updated_at':row['updated_at'],
+                     'message':redact(task['title'] if task else '工作流执行'),'runtime':{},'model_name':'',
+                     'counts':{'execution_event':row['event_count']},'attempt':task['attempt'] if task else 0})
+    return {'runs':runs[:limit],'next_before':runs[-1]['sequence'] if len(runs)>limit else None,'chat_id':chat_id,'project_id':project_id}
+
+
+def _execution_events(db,chat_id,project_id,run_id,*,after=0,limit=300):
+    binding=_execution_binding(db,chat_id,project_id)
+    if not binding:return None
+    limit=max(1,min(int(limit),500)); after=int(after or 0)
+    rows=db.db.execute('SELECT rowid AS event_id,payload,created_at FROM execution_conversation_events WHERE run_id=? AND rowid>? ORDER BY rowid LIMIT ?',
+                       (run_id,after,limit+1)).fetchall()
+    records=[]
+    for row in rows[:limit]:
+        payload=redact(json.loads(row['payload'] or '{}'))
+        records.append({'event_id':row['event_id'],'kind':payload.get('type','execution_event'),'created_at':row['created_at'],'payload':payload})
+    task=db.db.execute('SELECT status FROM project_task_runs WHERE id=?',(run_id,)).fetchone()
+    status=task['status'] if task else 'done'
+    return {'run_id':run_id,'status':status,'events':records,'has_more':len(rows)>limit,
+            'next_after':records[-1]['event_id'] if records else after}
 
 
 def route(method,path,body,query,db):

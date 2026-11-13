@@ -1,24 +1,96 @@
-/* Conversation handoffs resolve live tasks; human edits stay attached to one attempt. */
+﻿/* Conversation handoffs resolve live tasks; human edits stay attached to one attempt. */
 const WorkflowReview=(()=>{
   const h=value=>esc(String(value??''));
+  const statusLabels={ready:'待执行',draft:'已准备',queued:'排队中',running:'执行中',awaiting_review:'等待人工核查',delivered:'已交付',succeeded:'已完成',blocked:'等待处理',failed:'执行失败',interrupted:'中断待恢复',cancelled:'已停止'};
   function mount(card,target){
     if(!target?.project_id||!target.workflow_run_id||card.querySelector('[data-wr-card]'))return;
     const host=document.createElement('div');host.dataset.wrCard='';host.className='pt-box';card.append(host);
-    let busy=false,timer;
+    let busy=false,timer,lastSignature='',pendingSignature='';
     async function refresh(){
       if(!card.isConnected){clearInterval(timer);return;}if(busy||document.hidden)return;busy=true;
       try{
-        const data=await api('/api/project-tasks?project_id='+encodeURIComponent(target.project_id)+'&workflow_run_id='+encodeURIComponent(target.workflow_run_id));
+        const [taskResponse,runResponse]=await Promise.allSettled([
+          api('/api/project-tasks?project_id='+encodeURIComponent(target.project_id)+'&workflow_run_id='+encodeURIComponent(target.workflow_run_id)),
+          api('/api/workflow/execution?id='+encodeURIComponent(target.workflow_run_id))
+        ]);
+        const data=taskResponse.status==='fulfilled'?taskResponse.value:{tasks:[]};
+        const run=(runResponse.status==='fulfilled'&&runResponse.value?.run)||null;
         if(!card.isConnected)return;
-        const tasks=data.tasks||[],pending=tasks.filter(task=>task.status==='awaiting_review');
-        const status=tasks.length&&tasks.every(task=>task.status==='delivered')?'工作流已完成':pending.length?'工作流等待你的审查':tasks.some(task=>['failed','blocked'].includes(task.status))?'工作流需要处理':tasks.length&&tasks.every(task=>['delivered','cancelled'].includes(task.status))?'工作流已停止':tasks.some(task=>['running','queued'].includes(task.status))?'工作流执行中':'工作流任务已保存';
-        host.innerHTML=`<strong>${status}</strong><div class="pt-row"><button type="button" class="btn" data-wr-chat>工作流对话</button><button type="button" class="btn ghost" data-wr-run>查看运行</button>${pending.map(task=>`<button type="button" class="btn btn-primary" data-wr-task="${h(task.id)}">审查 · ${h(task.title)}</button>`).join('')}</div>`;
-        host.querySelector('[data-wr-chat]').onclick=()=>ExecutionConversation.open('workflow',target.workflow_run_id,target.project_id);
-        host.querySelector('[data-wr-run]').onclick=()=>ConnectedResearch.openRun(target.project_id,target.workflow_run_id);
-        host.querySelectorAll('[data-wr-task]').forEach(button=>button.onclick=()=>ProjectWorkspace.openTask(button.dataset.wrTask,target.project_id,{chatId:target.chat_id||''}));
-        if(data.tasks?.length&&data.tasks.every(task=>['delivered','cancelled'].includes(task.status)))clearInterval(timer);
+        let tasks=data.tasks||[];
+        if(!tasks.length&&target.workflow_run_id){
+          try{
+            const graph=await api('/api/langgraph/state?project_id='+encodeURIComponent(target.project_id)+'&run_id='+encodeURIComponent(target.workflow_run_id));
+            const ids=(graph.checkpoints||[]).map(item=>item.task_id||item.id).filter(Boolean);
+            const details=await Promise.all(ids.map(id=>api('/api/project-tasks/detail?project_id='+encodeURIComponent(target.project_id)+'&id='+encodeURIComponent(id)).then(value=>value.task).catch(()=>null)));
+            tasks=details.filter(Boolean);
+          }catch{}
+        }
+        const pending=tasks.filter(task=>task.status==='awaiting_review');
+        const failed=tasks.find(task=>['failed','blocked','interrupted'].includes(task.status));
+        const runStatus=String(run?.status||'');
+        const taskStatuses=tasks.map(task=>task.status);
+        const status=runStatus==='failed'||runStatus==='blocked'||runStatus==='interrupted'||failed?'工作流需要处理':
+          ['succeeded','completed'].includes(runStatus)||(tasks.length&&tasks.every(task=>task.status==='delivered'))?'工作流已完成':
+          runStatus==='cancelled'||(tasks.length&&tasks.every(task=>task.status==='cancelled'))?'工作流已停止':
+          runStatus==='awaiting_review'||pending.length?'工作流等待你的审查':
+          runStatus==='running'||taskStatuses.some(value=>value==='running')?'工作流执行中':
+          runStatus==='queued'||taskStatuses.some(value=>['queued','ready','draft'].includes(value))?'工作流排队中':'工作流任务已保存';
+        const error=failed?.error||run?.error||'';
+        const nodeButtons=tasks.map(task=>{
+          if(WorkflowNodeWorkbench.eligible(task))return `<button type="button" class="btn btn-primary" data-wr-result="${h(task.id)}">${h(task.title)} · 查看并编辑产物</button><button type="button" class="btn ghost" data-wr-task="${h(task.id)}">打开核查 · ${h(task.title)}</button>`;
+          const label=task.status==='awaiting_review'?'打开核查':task.status==='succeeded'?'查看节点产物':'查看节点状态';
+          return `<button type="button" class="btn ghost" data-wr-task="${h(task.id)}">${label} · ${h(task.title)} · ${h(statusLabels[task.status]||task.status||'待执行')}</button>`;
+        }).join('');
+        const signature=JSON.stringify({status,error,tasks:tasks.map(task=>({id:task.id,title:task.title,status:task.status,version:task.version,run_id:task.latest_run_id,result:task.node_result||null}))});
+        if(signature===lastSignature){if(tasks.length&&tasks.every(task=>['delivered','cancelled'].includes(task.status)))clearInterval(timer);return;}
+        // Do not replace a button while the user is hovering it or moving
+        // focus into it. The next poll will apply the pending state after the
+        // click has either opened the node or left the card.
+        if(lastSignature&&(host.matches(':hover')||host.contains(document.activeElement))){pendingSignature=signature;return;}
+        pendingSignature='';
+        const configureNodeButton=(button,task)=>{
+          if(!task)return;
+          const available=WorkflowNodeWorkbench.eligible(task);
+          const resultButton=button.hasAttribute('data-wr-result');
+          if(resultButton&&!available){button.remove();return;}
+          if(resultButton){
+            button.className='btn btn-primary';button.dataset.wrResult=task.id;button.removeAttribute('data-wr-task');
+            button.textContent=`${task.title} · 查看并编辑产物`;
+            button.onclick=()=>ProjectWorkspace.openNodeResult(WorkflowNodeWorkbench.availableSelection(task),target.project_id,{chatId:target.chat_id||'',peek:true});
+            return;
+          }
+          button.className='btn ghost';button.dataset.wrTask=task.id;button.removeAttribute('data-wr-result');
+          button.textContent=available?`打开核查 · ${task.title}`:`${task.status==='awaiting_review'?'打开核查':task.status==='succeeded'?'查看节点产物':'查看节点状态'} · ${task.title} · ${statusLabels[task.status]||task.status||'待执行'}`;
+          button.onclick=()=>ProjectWorkspace.openTask(task.id,target.project_id,{chatId:target.chat_id||'',peek:true});
+        };
+        const existingNodeActions=host.querySelector('[data-wr-node-actions]');
+        if(lastSignature&&existingNodeActions){
+          const keyOf=button=>(button.hasAttribute('data-wr-result')?'result:':'task:')+(button.dataset.wrTask||button.dataset.wrResult);
+          const byId=new Map([...existingNodeActions.querySelectorAll('[data-wr-task],[data-wr-result]')].map(button=>[keyOf(button),button]));
+          const keep=new Set();
+          for(const task of tasks){
+            const needsResult=WorkflowNodeWorkbench.eligible(task);
+            const desired=[...(needsResult?['result:']:[]),'task:'].map(prefix=>prefix+task.id);
+            for(const key of desired){let button=byId.get(key);if(!button){button=document.createElement('button');if(key.startsWith('result:'))button.dataset.wrResult=task.id;else button.dataset.wrTask=task.id;existingNodeActions.append(button);}configureNodeButton(button,task);keep.add(button);}
+          }
+          for(const button of byId.values())if(!keep.has(button))button.remove();
+          host.querySelector('[data-wr-status]').textContent=status;
+          host.querySelector('[data-wr-note]').textContent=tasks.length?`已载入 ${tasks.length} 个工作流节点；完成节点会在这里直接打开产物预览和编辑工作台。`:'正在同步工作流节点…';
+          const errorNode=host.querySelector('[data-wr-error]');if(errorNode){errorNode.textContent=error;errorNode.hidden=!error;}
+          lastSignature=signature;
+          if(tasks.length&&tasks.every(task=>['delivered','cancelled'].includes(task.status)))clearInterval(timer);
+          return;
+        }
+        lastSignature=signature;
+        host.innerHTML=`<strong data-wr-status>${status}</strong>${error?`<p class="pw-error" data-wr-error>${h(error)}</p>`:'<p class="pw-error" data-wr-error hidden></p>'}<p class="pt-muted" data-wr-note>${tasks.length?`已载入 ${tasks.length} 个工作流节点；完成节点会在这里直接打开产物预览和编辑工作台。`:'正在同步工作流节点…'}</p><div class="pt-row"><button type="button" class="btn" data-wr-graph>打开 LangGraph</button><button type="button" class="btn ghost" data-wr-run>查看运行状态</button><button type="button" class="btn ghost" data-wr-refresh>刷新节点</button></div><div class="pt-row" data-wr-node-actions>${nodeButtons}</div>`;
+        host.querySelector('[data-wr-graph]').onclick=()=>ProjectWorkspace.openWorkflowRun(target.project_id,target.workflow_run_id);
+        host.querySelector('[data-wr-run]').onclick=()=>ProjectWorkspace.openWorkflowRun(target.project_id,target.workflow_run_id);
+        host.querySelector('[data-wr-refresh]').onclick=refresh;
+        host.querySelectorAll('[data-wr-task],[data-wr-result]').forEach(button=>configureNodeButton(button,tasks.find(item=>item.id===(button.dataset.wrTask||button.dataset.wrResult))));
+        if(tasks.length&&tasks.every(task=>['delivered','cancelled'].includes(task.status)))clearInterval(timer);
       }catch(error){if(card.isConnected)host.textContent='运行状态暂时无法读取：'+error.message;}finally{busy=false;}
     }
+    host.addEventListener('mouseleave',()=>{if(pendingSignature)refresh();});
     timer=setInterval(refresh,2500);refresh();
   }
   async function editGraph(projectId,taskId,onSaved){

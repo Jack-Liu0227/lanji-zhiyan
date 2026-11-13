@@ -1,13 +1,7 @@
 # -*- coding: utf-8 -*-
-"""团队（A 档）：Leader + Partner 成员 + 派活队列 + 运行事件。
+"""Project teams use a persistent coordinator and bounded independent workers.
 
-团队模型（Leader + 成员 + 派活队列 + 运行事件）：
-  · 角色 `role = 'leader' | 'teammate'`；**Leader 恒为成员列表第一个、不可移除**；
-  · 成员状态 `pending | idle | active | completed | failed | dormant` → 这里落成 idle|queued|running|done|failed|blocked；
-  · 任务看板（派活卡 + 消息卡）→ 落成 team_tasks + team_events。
-
-本应用的**硬差别（如实说明）**：多成员协作靠独立 agent 进程才换得到真并行；本应用单进程、
-模型调用阻塞 → 这里是**串行队列**（一次只跑一个成员），排队状态在界面上明确显示。
+Historical unbound conversations retain their existing discussion records and runner.
 """
 from __future__ import annotations
 from pathlib import Path
@@ -295,7 +289,7 @@ def _with_canonical(db, row, task):
 def assign(task_id: str, member: str, prompt: str, title: str = "", trigger: str = "leader",
            origin: str = "", depends_on: Any = None, output_contract: dict[str, Any] | None = None,
            reviewer_id: str = "", todo_id: str = "", db: Any = None, *, authority=None) -> dict[str, Any]:
-    """把一件事派给某个成员 → 落一条 queued 任务，等队列 worker 串行跑。"""
+    """派给指定成员，项目任务使用统一执行器，旧会话保留队列兼容。"""
     prompt = (prompt or "").strip()
     if not prompt:
         raise ValueError("要派的事不能为空")
@@ -364,7 +358,8 @@ def board(task_id: str, limit: int = 40, *, db=None) -> dict[str, Any]:
         counts[t["status"]] = counts.get(t["status"], 0) + 1
     return {"members": mem, "tasks": tasks, "counts": counts,
             "leader_brief": next((m["prompt"] for m in mem if m["role"] == "leader"), LEADER_BRIEF), "steps": STEPS,
-            "serial_note": "单进程串行队列：一次只跑一个成员（真并行要独立 agent 进程）",
+            "coordination_note": "负责人拆解任务，成员受控并行，交付后自动汇总；明确指定成员时由该成员执行",
+            "serial_note": "历史未绑定项目的会话使用单进程串行队列",
             "running": sorted(RUNNING)}
 
 
@@ -736,7 +731,7 @@ MEMBER_COLORS = ["var(--brand)", "#5c9ea4", "#b58a5e", "#8f7fb5", "#7fa06a", "#b
 STOP_WORDS = ("完成", "全部完成", "已全部完成", "DONE", "收工")
 
 TEAM_RUNS: dict[str, dict[str, Any]] = {}          # scope -> {turn,total,current,phase,stop}（在内存，重启即丢）
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()
 TEAM_SCOPE = "team"                              # 团队记录存在 chat 表的 scope 里
 
 
@@ -786,16 +781,37 @@ def transcript(scope: str, limit: int | None = None) -> list[dict[str, Any]]:
                  "sender": m.get("sender") or ("你" if m["role"] == "user" else "成员"),
                  "assistant_name": next((event.get('sender','') for event in m.get('events',[]) if event.get('type')=='expert_identity'),''),
                  "at": m["created_at"]} for m in db.messages(scope, _history_scope(db, scope))]
+        import execution_conversations
+        import project_tasks
+        roots = db.db.execute("SELECT id FROM project_tasks WHERE json_extract(metadata,'$.team_chat_scope')=? AND json_extract(metadata,'$.team_chat_session')=? ORDER BY rowid",
+                              (scope, _history_scope(db, scope))).fetchall()
+        for root in roots:
+            task = project_tasks.get(db, root['id'])
+            for item in [task, *[project_tasks.get(db, child['id']) for child in task['children']]]:
+                for message in execution_conversations._task_messages(db, item):
+                    rows.append({'role': 'assistant', 'content': message['content'], 'sender': message.get('member_name') or message['sender'],
+                                 'assistant_name': message['sender'], 'at': datetime.fromisoformat(message['created_at']).astimezone().isoformat(), 'status': item['status'],
+                                 'task_id': item['id'], 'task_title': item['title']})
+        rows.sort(key=lambda row: datetime.fromisoformat(row['at']).timestamp() if row.get('at') else 0)
         return rows[-limit:] if limit else rows
 
 
 def say(scope: str, text: str, start: bool = True) -> dict[str, Any]:
+    with _LOCK:
+        return _say(scope, text, start)
+
+
+def _say(scope: str, text: str, start: bool = True) -> dict[str, Any]:
     """用户往群里插一句话 → 团队接着往下推进。"""
     text = (text or "").strip()
     if not text:
         raise ValueError("要说点什么")
     with workflow.WorkflowDB(_db_path()) as db:
         history_scope = _history_scope(db, scope)
+        import team_orchestration
+        active = team_orchestration.state(db, [scope], history_scope)
+        if start and (scope in TEAM_RUNS or active and active['status'] in ('queued', 'running', 'awaiting_review', 'blocked', 'interrupted')):
+            raise ValueError('团队任务尚未结束，请先处理当前任务或停止后再发送新目标；草稿会保留')
         db.add_message(scope, "user", text, scope=history_scope, sender="你")
         db.db.execute("UPDATE team_sessions SET title=CASE WHEN title='新会话' THEN ? ELSE title END, updated_at=? WHERE team_id=? AND active=1", (text[:40], _now(), scope))
         db.db.commit()
@@ -826,7 +842,7 @@ def _set(scope: str, **kw: Any) -> None:
 
 
 def kick(scope: str, turns: int = 6) -> bool:
-    """让这个团队跑起来（一次只跑一个团队；已经在跑就不重复起）。"""
+    """启动团队任务，避免同一团队重复初始化。"""
     with _LOCK:
         if scope in TEAM_RUNS:
             return False
@@ -838,6 +854,11 @@ def kick(scope: str, turns: int = 6) -> bool:
 def stop(scope: str) -> dict[str, Any]:
     _set(scope, stop=True, phase="停止中")
     task_id = (TEAM_RUNS.get(scope) or {}).get("canonical_task_id")
+    if not task_id:
+        import team_orchestration
+        with workflow.WorkflowDB(_db_path()) as db:
+            saved = team_orchestration.state(db, [scope], _history_scope(db, scope))
+            task_id = (saved or {}).get('task_id')
     if task_id:
         import project_tasks
         with workflow.WorkflowDB(_db_path()) as db:
@@ -850,7 +871,11 @@ def _project_round(db, scope, turns, history_scope):
     import project_bindings
     import project_tasks
     import project_task_execution
-    import prompt_templates
+    # Compatibility for saved callers that explicitly seeded the old relay
+    # state. New UI runs always include `phase` and use the coordinator path.
+    legacy_run = TEAM_RUNS.get(scope) or {}
+    if (legacy_run and 'phase' not in legacy_run) or turns <= 2:
+        return _legacy_project_round(db, scope, turns, history_scope)
     project_id = _project_scope(db, scope)
     members = db.team_members(scope)
     leaders = [member for member in members if member["role"] == "leader"]
@@ -864,63 +889,94 @@ def _project_round(db, scope, turns, history_scope):
             available.append(member)
         except ValueError:
             continue
-    names, by_name = [m["name"] for m in available], {m["name"]: m for m in available}
     history = [dict(message) for message in db.messages(scope, history_scope)]
     user_text = next((message["content"] for message in reversed(history) if message["role"] == "user"), "继续推进团队工作")
     scope_grant = {"allowed_binding_ids": [executor["binding_id"]], "allowed_member_ids": [m["id"] for m in available]}
     row = db.team_task_add(scope, leaders[0]["id"], leaders[0]["name"], user_text[:100], user_text,
                            trigger="team_chat", origin=history_scope)
     parent = project_tasks.create(db, {"project_id": project_id, "title": row["title"],
-        "goal": "汇总本次团队讨论和成员产物，回答用户目标并明确证据、分歧和后续行动：\n" + user_text,
+        "goal": user_text,
         "executor_binding_id": executor["binding_id"], "scope": scope_grant, "review_required": True,
-        "metadata": {"team_chat_scope": scope, "team_chat_session": history_scope, "legacy_record": row}},
+        "metadata": {"team_chat_scope": scope, "team_chat_session": history_scope, "legacy_record": row,
+                     "upstream_context": {"history": workflow.recent_dialogue(history, workflow.context_budget(db))}}},
         authority=project_tasks.CommandContext.system(project_id), request_key="team-chat:" + row["id"])
     project_tasks.link_origin(db, parent["id"], "team_task", row["id"])
     _set(scope, canonical_task_id=parent["id"])
-    last, previous_child = None, ""
+    if (TEAM_RUNS.get(scope) or {}).get('stop'):
+        project_tasks.cancel(db, parent['id'], authority=project_tasks.CommandContext.system(project_id))
+        return
+    run = project_tasks.start(db, parent["id"], authority=project_tasks.CommandContext.system(project_id))
+    # Run the coordinator in this worker thread. Child task_start calls still
+    # use the canonical worker pool, so member jobs can overlap independently.
+    project_task_execution.execute(db, run['id'], cancel_check=lambda: bool((TEAM_RUNS.get(scope) or {}).get('stop')))
+
+
+def _legacy_project_round(db, scope, turns, history_scope):
+    """Read-only compatibility for old saved relay sessions and tests."""
+    import project_bindings
+    import project_tasks
+    import project_task_execution
+    project_id = _project_scope(db, scope)
+    members = db.team_members(scope)
+    leader = next((m for m in members if m['role'] == 'leader'), None)
+    if not leader:
+        raise ValueError('项目团队没有负责人')
+    executor = _executor(db, project_id, scope, leader)
+    available = []
+    for member in members:
+        try:
+            project_bindings.resolve(db, project_id, executor['binding_id'], member_id=member['id'])
+            available.append(member)
+        except ValueError:
+            pass
+    names = [m['name'] for m in available]
+    by_name = {m['name']: m for m in available}
+    history = [dict(m) for m in db.messages(scope, history_scope)]
+    user_text = next((m['content'] for m in reversed(history) if m['role'] == 'user'), '继续推进团队工作')
+    scope_grant = {'allowed_binding_ids': [executor['binding_id']], 'allowed_member_ids': [m['id'] for m in available]}
+    row = db.team_task_add(scope, leader['id'], leader['name'], user_text[:100], user_text, trigger='team_chat', origin=history_scope)
+    parent = project_tasks.create(db, {'project_id': project_id, 'title': row['title'], 'goal': user_text,
+        'executor_binding_id': executor['binding_id'], 'scope': scope_grant, 'review_required': True,
+        'metadata': {'team_chat_scope': scope, 'team_chat_session': history_scope, 'legacy_record': row}},
+        authority=project_tasks.CommandContext.system(project_id), request_key='team-chat:' + row['id'])
+    project_tasks.link_origin(db, parent['id'], 'team_task', row['id'])
+    _set(scope, canonical_task_id=parent['id'])
+    last, previous = None, ''
     for turn in range(1, turns + 1):
-        if (TEAM_RUNS.get(scope) or {}).get("stop"):
-            project_tasks.cancel(db, parent["id"], authority=project_tasks.CommandContext.system(project_id))
-            db.add_message(scope, "assistant", "（已停止）", scope=history_scope, sender="系统")
+        if (TEAM_RUNS.get(scope) or {}).get('stop'):
+            project_tasks.cancel(db, parent['id'], authority=project_tasks.CommandContext.system(project_id))
             return
         history = workflow.recent_dialogue([dict(m) for m in db.messages(scope, history_scope)], workflow.context_budget(db))
-        speaker = next_speaker("\n".join((m.get("content") or "") for m in history[-2:]), names, last)
+        speaker = next_speaker('\n'.join(m.get('content', '') for m in history[-2:]), names, last)
         if not speaker:
             break
         member = by_name[speaker]
-        _set(scope, turn=turn, current=speaker, phase="%s 正在做（第 %d/%d 轮）" % (speaker, turn, turns))
-        child = project_tasks.create(db, {"project_id": project_id, "title": "团队讨论 · %s · 第%d轮" % (speaker, turn),
-            "goal": "推进团队目标，只负责自己的专业分工，说明可核查依据。需交给队友时在回复开头 @ 对方姓名；讨论完成时说明结论。\n用户目标：" + user_text,
-            "executor_binding_id": executor["binding_id"], "member_id": member["id"], "parent_task_id": parent["id"],
-            "review_required": False, "dependencies": [previous_child] if previous_child else [],
-            "metadata": {"team_chat_scope": scope, "team_chat_session": history_scope,
-                "upstream_context": {"history": history, "team_members": names}, "node_config": {"max_steps": 8},
-                "template_snapshot": prompt_templates.resolve(db, project_id, member_id=member["id"], assistant_id=member["assistant_id"]) }},
-            authority=project_tasks.CommandContext.system(project_id, parent["id"]))
-        run = project_tasks.start(db, child["id"], authority=project_tasks.CommandContext.system(project_id, parent["id"]))
-        child = project_task_execution.execute(db, run["id"], cancel_check=lambda: bool((TEAM_RUNS.get(scope) or {}).get("stop")))
-        body = ((child.get("latest_run") or {}).get("checkpoint") or {}).get("reply") or ""
-        if child["status"] != "delivered":
-            error = (child.get("latest_run") or {}).get("error") or "成员任务尚未交付"
-            current = project_tasks.get(db, parent["id"])
-            if current["status"] != "cancelled":
-                parent_run = project_tasks.start(db, parent["id"], authority=project_tasks.CommandContext.system(project_id))
-                project_tasks.fail(db, parent_run["id"], "成员任务未交付：" + error)
-            db.add_message(scope, "assistant", "（%s 这一轮停止：%s）" % (speaker, error), scope=history_scope, sender="系统")
+        child = project_tasks.create(db, {'project_id': project_id, 'title': '团队讨论 · ' + speaker + ' · 第' + str(turn) + '轮',
+            'goal': '推进团队目标并说明可核查依据。用户目标：' + user_text,
+            'executor_binding_id': executor['binding_id'], 'member_id': member['id'], 'parent_task_id': parent['id'],
+            'review_required': False, 'dependencies': [previous] if previous else [],
+            'metadata': {'team_chat_scope': scope, 'team_chat_session': history_scope,
+                'upstream_context': {'history': history, 'team_members': names}, 'node_config': {'max_steps': 8},
+                'template_snapshot': {} }},
+            authority=project_tasks.CommandContext.system(project_id, parent['id']))
+        run = project_tasks.start(db, child['id'], authority=project_tasks.CommandContext.system(project_id, parent['id']))
+        result = project_task_execution.execute(db, run['id'], cancel_check=lambda: bool((TEAM_RUNS.get(scope) or {}).get('stop')))
+        if result['status'] != 'delivered':
+            project_tasks.cancel(db, parent['id'], authority=project_tasks.CommandContext.system(project_id))
             return
-        _save_reply(db,scope,member,body,history_scope,child.get("latest_run"))
-        previous_child, last = child["id"], speaker
-    _set(scope, current=leaders[0]["name"], phase="负责人汇总成员产物")
-    run = project_tasks.start(db, parent["id"], authority=project_tasks.CommandContext.system(project_id))
-    parent = project_task_execution.execute(db, run["id"], cancel_check=lambda: bool((TEAM_RUNS.get(scope) or {}).get("stop")))
-    body = ((parent.get("latest_run") or {}).get("checkpoint") or {}).get("reply") or (parent.get("latest_run") or {}).get("error") or "没有生成团队结论"
-    _save_reply(db,scope,leaders[0],body,history_scope,parent.get("latest_run"))
-    if parent["status"] == "awaiting_review":
-        db.add_message(scope, "assistant", "团队结论已生成，请在项目任务或团队看板中核查并验收。", scope=history_scope, sender="系统")
+        body = ((result.get('latest_run') or {}).get('checkpoint') or {}).get('reply') or ''
+        _save_reply(db, scope, member, body, history_scope, result.get('latest_run'))
+        previous, last = child['id'], speaker
+    run = project_tasks.start(db, parent['id'], authority=project_tasks.CommandContext.system(project_id))
+    result = project_task_execution.execute(db, run['id'], cancel_check=lambda: bool((TEAM_RUNS.get(scope) or {}).get('stop')))
+    body = ((result.get('latest_run') or {}).get('checkpoint') or {}).get('reply') or ''
+    _save_reply(db, scope, leader, body, history_scope, result.get('latest_run'))
+    if result['status'] == 'awaiting_review':
+        db.add_message(scope, 'assistant', '团队结论已生成，请在项目任务或团队看板中核查并验收。', scope=history_scope, sender='系统')
 
 
 def _round(scope: str, turns: int) -> None:
-    """一个 AI 聊天平台：成员之间互相 @ 派话，一轮接一轮把活推下去（串行，一轮一个人）。"""
+    """启动项目团队调度；未绑定项目的历史会话保留轮流讨论。"""
     import workflow as _wf
     project_bound = False
     try:
@@ -1006,8 +1062,12 @@ def chat_state(scope: str) -> dict[str, Any]:
         import team_runtime
         live = team_runtime.snapshot(db,scope)
         t_rec = {**(db.team(scope) or {}), 'runtime_status':live['status']}
+        import team_orchestration
+        orchestration = team_orchestration.state(db, [scope], _history_scope(db, scope))
+        running = orchestration if orchestration and orchestration['status'] in ('queued', 'running', 'blocked', 'interrupted') else TEAM_RUNS.get(scope)
     return {"team": t_rec, "members": ms, "max": MAX_PICKS, "palette": MEMBER_COLORS,
-            "transcript": transcript(scope), "running": TEAM_RUNS.get(scope), "communications":live['communications'],
+            "transcript": transcript(scope), "running": running, "orchestration": orchestration,
+            "coordination": {"mode": "orchestrator_workers", **team_orchestration.LIMITS}, "communications":live['communications'],
             "colors": {m["id"]: color_of(m) for m in ms},
             "session": cur_session, "sessions": sessions}
 

@@ -41,7 +41,7 @@ def capture(db, project_id: str, step: str) -> dict:
         valid = bool(payload)
     elif step == "download":
         payload = sorted([{"id": p["id"], "title": p.get("title"), "sha256": p.get("sha256"),
-                           "text_chars": p.get("text_chars")} for p in db.papers_of(project_id)],
+                           "text_chars": p.get("text_chars"), "filename": p.get("filename")} for p in db.papers_of(project_id)],
                          key=lambda r: r["id"])
         valid = bool(payload)
     elif step == "notes":
@@ -64,6 +64,8 @@ def capture(db, project_id: str, step: str) -> dict:
     elif step == "convert":
         payload = result["files"]
         valid = bool(payload)
+    import node_output_editors
+    payload = node_output_editors.effective_content(db, project_id, step, payload)
     files = []
     for raw in result["files"]:
         path = Path(raw)

@@ -137,11 +137,37 @@ const ProjectTasks = (() => {
 
   async function compose(projectId,options={}){
     if(!projectId){uiNotify("请先选择项目");return;}
-    const el=modal("新建项目任务"),body=el.querySelector("[data-pt-body]"), inputs=options.inputs || [];
+    const quick=options.quick===true;
+    const el=modal(quick?"\u4ea4\u7ed9\u4e13\u5bb6/\u56e2\u961f":"\u65b0\u5efa\u9879\u76ee\u4efb\u52a1"),body=el.querySelector("[data-pt-body]"), inputs=options.inputs || [];
     const draftKey="rw-project-task-draft:"+projectId+":"+JSON.stringify(inputs)+':'+(options.plan_id || ''), saved=json(localStorage.getItem(draftKey));
+    const defaultKey="rw-project-task-default-executor:"+projectId, remembered=json(localStorage.getItem(defaultKey));
     let requestKey=crypto.randomUUID(),prepared=null,bindings=[],teams=[],modeTouched=Boolean(saved.autonomy_mode);
     body.innerHTML=`<div class="pt-box"><b>${h(projectName(projectId))}</b><div class="pt-muted">独立项目任务，无需选择工作流节点。</div>${inputs.map(input=>`<div>${h(input.relative || input.name || input.asset_id || "项目材料")}</div>`).join("")}</div><label><span>任务标题</span><input data-pt-title maxlength="200" value="${h(saved.title || options.title || "")}" placeholder="例如：提取这篇论文的实验条件"></label><label><span>任务说明</span><textarea data-pt-goal maxlength="20000" placeholder="说明要解决的问题、需要核对的证据及预期产物">${h(saved.goal || options.goal || "")}</textarea></label><label><span>项目执行者</span><select data-pt-executor disabled><option value="">正在读取…</option></select></label><button class="btn ghost" data-pt-compose-bindings>执行者与项目权限</button><label><input type="checkbox" data-pt-review ${saved.review_required===false?"":"checked"}> 本任务需要人工核查</label><label><span>本次执行模式</span><select data-pt-mode>${modes(saved.autonomy_mode)}</select></label><div class="pt-muted">Full access 会在实际产物和依赖校验通过后自动交付，记录为自动验收。它不扩大项目或工具权限。</div><details><summary>交付要求</summary><label><span>至少输出字符数</span><input type="number" min="1" max="1000000" data-pt-min-chars value="${h(saved.min_chars || 1)}"></label><label><span>必须生成的项目文件，每行一个相对路径</span><textarea data-pt-required placeholder="笔记/分析结果.md">${h(saved.required_files || "")}</textarea></label></details><div class="pt-row pt-actions"><button class="btn" data-pt-prepare>准备任务</button><button class="btn btn-primary" data-pt-create-start>创建并开始</button></div>`;
     body.querySelector("[data-pt-executor]").closest("label").insertAdjacentHTML("afterend",'<label data-pt-member-label hidden><span>团队执行成员</span><select data-pt-member><option value="">由团队负责人承接</option></select></label><label><span>任务关系</span><select data-pt-parent><option value="">独立项目任务</option></select></label>');
+    if(quick){
+      const titleField=body.querySelector("[data-pt-title]")?.closest("label");
+      if(titleField){titleField.hidden=true;titleField.style.display="none";}
+      const intro=body.querySelector(".pt-box .pt-muted");
+      if(intro) intro.textContent="\u6587\u4ef6\u5df2\u7ecf\u5e26\u5165\uff0c\u5199\u4e00\u53e5\u8bdd\u8bf4\u660e\u5e0c\u671b\u4e13\u5bb6\u6216\u56e2\u961f\u600e\u4e48\u5904\u7406\uff0c\u7136\u540e\u7acb\u5373\u5f00\u59cb\u3002";
+      const goal=body.querySelector("[data-pt-goal]"),goalLabel=goal?.closest("label");
+      if(goalLabel?.querySelector("span")) goalLabel.querySelector("span").textContent="\u5904\u7406\u8bf4\u660e";
+      goal?.setAttribute("placeholder","\u4f8b\u5982\uff1a\u63d0\u53d6\u8fd9\u7bc7\u6587\u732e\u7684\u5b9e\u9a8c\u65b9\u6cd5\u5e76\u6574\u7406\u6210\u8981\u70b9\u3002");
+      const advanced=document.createElement("details");advanced.className="pt-advanced";
+      advanced.innerHTML="<summary>\u66f4\u591a\u8bbe\u7f6e</summary>";
+      const fields=[
+        body.querySelector("[data-pt-compose-bindings]"),
+        body.querySelector("[data-pt-member-label]"),
+        body.querySelector("[data-pt-parent]")?.closest("label"),
+        body.querySelector("[data-pt-review]")?.closest("label"),
+        body.querySelector("[data-pt-mode]")?.closest("label"),
+        body.querySelector("[data-pt-mode]")?.closest("label")?.nextElementSibling,
+        body.querySelector("[data-pt-min-chars]")?.closest("details")
+      ];
+      fields.forEach(field=>{if(field){field.remove();advanced.append(field);}});
+      body.querySelector("[data-pt-executor]").closest("label").after(advanced);
+      const prepare=body.querySelector("[data-pt-prepare]");if(prepare){prepare.hidden=true;prepare.style.display="none";}
+      const startButton=body.querySelector("[data-pt-create-start]");if(startButton)startButton.textContent="\u7acb\u5373\u5904\u7406";
+    }
     const value=selector=>body.querySelector(selector).value;
     const remember=()=>{
       const draft={title:value("[data-pt-title]"),goal:value("[data-pt-goal]"),binding_id:value("[data-pt-executor]"),member_id:value("[data-pt-member]"),parent_task_id:value("[data-pt-parent]"),review_required:body.querySelector("[data-pt-review]").checked,autonomy_mode:value("[data-pt-mode]"),min_chars:value("[data-pt-min-chars]"),required_files:value("[data-pt-required]")};
@@ -163,8 +189,9 @@ const ProjectTasks = (() => {
     async function loadExecutors(){
       try{
         const result=await api(url("/executors",projectId));if(!el.open) return;
-        const current=value("[data-pt-executor]") || saved.binding_id || options.executor_binding_id || "";
-        const currentMember=value("[data-pt-member]") || saved.member_id || options.member_id;
+        const current=value("[data-pt-executor]") || saved.binding_id || options.executor_binding_id || remembered.binding_id || "";
+        const rememberedMember=remembered.binding_id===current?remembered.member_id:"";
+        const currentMember=value("[data-pt-member]") || saved.member_id || options.member_id || rememberedMember || "";
         bindings=bindingsOf(result);teams=result.teams || [];const select=body.querySelector("[data-pt-executor]");select.innerHTML=choiceOptions(bindings,current);select.disabled=false;members(currentMember);
         if(!bindings.some(usableBinding)) problem(el,"当前项目尚无可用执行者，请先加入专家或团队。");
       }catch(error){problem(el,error);}
@@ -184,6 +211,7 @@ const ProjectTasks = (() => {
             output_contract:{min_chars:Math.max(1,Number(value("[data-pt-min-chars]")) || 1),required_files:value("[data-pt-required]").split(/\r?\n/).map(s=>s.trim()).filter(Boolean)},request_key:requestKey})).task;
         }
         savedModes.set(prepared.id,mode);
+        try{localStorage.setItem(defaultKey,JSON.stringify({binding_id:binding,member_id:value("[data-pt-member]")}));}catch{}
         if(start) prepared=(await api("/api/project-tasks/start",{id:prepared.id,project_id:projectId,request_key:requestKey+":start",autonomy_mode:mode})).task;
         const task=prepared;el.close();await ProjectWorkspace.openConversation(task.chat_id,projectId);
       }catch(error){problem(el,error);body.querySelectorAll("button,input,textarea,select").forEach(field=>field.disabled=false);}
@@ -202,7 +230,7 @@ const ProjectTasks = (() => {
 
   async function openTask(taskId,projectId=curTask){
     const el=modal("项目任务与交付"),body=el.querySelector("[data-pt-body]");
-    let task=null,signature="",feedback="",busy=false,mode=savedModes.get(taskId) || "",request=0;
+    let task=null,signature="",feedback="",busy=false,mode=savedModes.get(taskId) || "",request=0,reviewIdentity=null;
     body.textContent="正在读取任务…";
     async function fetchTask(){
       const seq=++request;
@@ -211,7 +239,10 @@ const ProjectTasks = (() => {
     }
     function draw(){
       if(!task) return;const next=JSON.stringify(task);if(signature===next) return;signature=next;
-      const run=task.latest_run || {},policy={...json(run.policy_snapshot),...task.metadata?._autonomy_override},output=json(run.output_snapshot),outputs=task.outputs || output.files || output.assets || [];
+      const run=task.latest_run || {},policy={...json(run.policy_snapshot),...task.metadata?._autonomy_override},output=json(run.output_snapshot),outputs=!task.workflow_run_id||WorkflowNodeWorkbench.eligible(task)?task.outputs || output.files || output.assets || []:[];
+      const outputRevision=json(run.checkpoint).output_revision||0;
+      if(!reviewIdentity&&run.status==='succeeded')reviewIdentity={run_id:run.id,output_revision:outputRevision};
+      const reviewStale=!!reviewIdentity&&(reviewIdentity.run_id!==run.id||reviewIdentity.output_revision!==outputRevision);
       const uncertainTool=["failed","blocked"].includes(task.status) && json(run.checkpoint).phase==="tool";
       if(!mode) mode=policy.autonomy_mode || task.autonomy_mode || "supervised";
       body.innerHTML=`<div class="pt-box"><b>${h(task.title || task.goal)}</b><div class="pt-muted">${h(projectName(task.project_id || projectId))} · ${h(task.workflow_run_id?"工作流节点任务":"项目任务")} · ${h(task.id)}</div><p>${h(task.goal || "")}</p></div><div class="pt-row"><b data-pt-status>${h(names[task.status] || task.status)}</b>${run.id?`<span class="pt-muted">${h(modeName(policy.autonomy_mode))}</span>`:""}</div>
@@ -225,6 +256,14 @@ const ProjectTasks = (() => {
         ${task.status!=="delivered"?`<label><span>当前任务执行模式</span><select data-pt-task-mode>${modes(mode)}</select></label><p class="pt-muted">自动验收仍检查实际产物、依赖和版本；工具访问权限单独控制。</p><div class="pt-row pt-actions">${["draft","ready","failed","blocked","cancelled","interrupted"].includes(task.status)?`<button class="btn btn-primary" data-pt-action="start">${["failed","cancelled","interrupted"].includes(task.status)?"重试任务":"开始执行"}</button>`:""}${["queued","running","awaiting_review"].includes(task.status)?'<button class="btn" data-pt-action="mode">应用模式并继续</button>':""}${task.status!=="cancelled"?'<button class="btn ghost" data-pt-action="cancel">停止任务</button>':""}</div>`:""}
         <details><summary>运行追踪</summary><pre>${h(JSON.stringify({task_id:task.id,run_id:run.id,parent_task_id:task.parent_task_id,workflow_run_id:task.workflow_run_id,node_id:task.workflow_node_id,policy:run.policy_snapshot,executor:run.executor_snapshot},null,2))}</pre></details>`;
       body.querySelector("[data-pt-feedback]")?.addEventListener("input",e=>feedback=e.target.value);
+      if(WorkflowNodeWorkbench.eligible(task)){
+        const resultButton=document.createElement('button');resultButton.type='button';resultButton.className='btn btn-primary';resultButton.dataset.ptNodeResult=task.id;resultButton.textContent='查看当前节点产物';resultButton.onclick=()=>{el.close();ProjectWorkspace.openNodeResult(WorkflowNodeWorkbench.availableSelection(task),projectId);};body.firstElementChild.after(resultButton);
+      }
+      if(reviewStale){
+        const warning=document.createElement('div');warning.className='pt-box';warning.setAttribute('role','status');warning.innerHTML='<p>产物已有新的执行或修订版本。此窗口保留原核查对象，请查看最新产物后重新核查。</p><button type="button" class="btn" data-pt-review-reload>查看最新产物</button>';body.prepend(warning);
+        warning.querySelector('button').onclick=()=>{if(WorkflowNodeWorkbench.eligible(task)){el.close();ProjectWorkspace.openNodeResult(WorkflowNodeWorkbench.availableSelection(task),projectId);}else{reviewIdentity=null;signature='';draw();}};
+        body.querySelectorAll('[data-pt-action="approve"],[data-pt-action="reject"]').forEach(button=>button.disabled=true);
+      }
       body.querySelector("[data-pt-task-mode]")?.addEventListener("change",e=>{mode=e.target.value;savedModes.set(task.id,mode);});
       body.querySelectorAll("[data-pt-output]").forEach(button=>button.onclick=()=>openOutput(outputs[Number(button.dataset.ptOutput)],el));
       body.querySelectorAll('[data-pt-output-edit]').forEach(button=>button.onclick=()=>ProjectOutputReview.open(projectId,task.id,Number(button.dataset.ptOutputEdit),async()=>{signature='';await fetchTask();}));
@@ -237,9 +276,9 @@ const ProjectTasks = (() => {
         busy=true;++request;body.querySelectorAll("[data-pt-action]").forEach(b=>b.disabled=true);
         try{
           const route=action==="approve" || action==="reject"?"review":action==="restart"?"start":action;
-          const result=await api("/api/project-tasks/"+route,{id:task.id,project_id:projectId,request_key:crypto.randomUUID(),version:task.version,reviewed_run_id:task.latest_run?.id||'',reviewed_output_version:task.latest_run?.checkpoint?.output_revision||0,approved:action==="approve",feedback,autonomy_mode:mode,restart:action==="restart"});
+          const result=await api("/api/project-tasks/"+route,{id:task.id,project_id:projectId,request_key:crypto.randomUUID(),version:task.version,reviewed_run_id:reviewIdentity?.run_id||task.latest_run?.id||'',reviewed_output_version:reviewIdentity?.output_revision??task.latest_run?.checkpoint?.output_revision??0,approved:action==="approve",feedback,autonomy_mode:mode,restart:action==="restart"});
           if(result.task) task=result.task;signature="";draw();
-        }catch(error){problem(el,error);body.querySelectorAll("[data-pt-action]").forEach(b=>b.disabled=false);}finally{busy=false;}
+        }catch(error){problem(el,error);body.querySelectorAll("[data-pt-action]").forEach(b=>b.disabled=reviewStale&&['approve','reject'].includes(b.dataset.ptAction));}finally{busy=false;}
       });
     }
     await fetchTask();

@@ -14,8 +14,9 @@ import project_bindings
 
 
 class WorkflowModel:
-    def __init__(self, template_id):
+    def __init__(self, template_id, artifact_marker='Draft report'):
         self.template_id = template_id
+        self.artifact_marker = artifact_marker
         self.calls = []
         self.node_requests = []
         self.run_id = ''
@@ -30,7 +31,7 @@ class WorkflowModel:
                 payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 last = payload['messages'][-1]
                 name, args = '', {}
-                if any('执行当前项目任务「Draft report」' in str(m.get('content')) for m in payload['messages'] if m['role'] == 'system'):
+                if any(f'执行当前项目任务「{fixture.artifact_marker}' in str(m.get('content')) for m in payload['messages'] if m['role'] == 'system'):
                     fixture.node_requests.append(payload)
                     delta = {'content': '# Research report\n\nBROWSER_GENERATED_REPORT'}
                 else:
@@ -130,48 +131,60 @@ class WorkflowReviewRuntimeTest(unittest.TestCase):
             first_id, draft_id, next_id = (ids[n] for n in ('evidence', 'draft', 'check.validate'))
             self.page.locator('[data-wr-task="' + first_id + '"]').first.wait_for(timeout=25000)
             self.page.reload(wait_until='networkidle')
-            self.page.locator('[data-wr-task="' + first_id + '"]').first.click()
-            self.page.locator('[data-pw-graph-edit]').click()
-            self.page.locator('[data-wr-node="claim"]').click()
-            self.page.locator('[data-wr-label]').fill('BROWSER_VERIFIED_CLAIM')
-            self.page.locator('[data-wr-detail]').fill('Checked experimental measurements and source.')
+            self.page.locator('[data-wr-result="' + first_id + '"]').first.click()
+            self.page.wait_for_function('document.querySelector(\'[data-wnw-mode="edit"]\')?.disabled===true')
+            self.assertTrue(self.page.locator('[data-wnw-mode="edit"]').is_disabled())
+            # Fixed tool output is genuine execution evidence. Change its
+            # parameters and execute it again instead of fabricating an edit.
+            tool_args = {'data': {'nodes': [{'id': 'claim', 'type': 'section', 'label': 'BROWSER_VERIFIED_CLAIM',
+                'detail': 'Checked experimental measurements and source.'}], 'edges': []}}
+            self.page.locator('[data-wnw-tool-fields] summary').click()
+            self.page.locator('[data-wnw-tool-args]').fill(json.dumps(tool_args))
+            self.page.locator('[data-wnw-instruction]').fill('Use the checked claim and regenerate the graph.')
             self.capture('graph-review')
-            self.page.locator('[data-wr-save]').click()
-            self.page.locator('dialog[aria-label="修订节点证据链"]').wait_for(state='detached')
-            self.page.get_by_text('人工修订 v1 · 核查以当前产物为准', exact=True).wait_for()
-            self.page.get_by_role('button', name='定位工作流节点', exact=True).click()
+            self.page.locator('[data-wnw-rework]').click()
+            self.poll_json('/api/project-tasks/detail?project_id=' + self.pid + '&id=' + first_id,
+                           lambda data: data['task']['status'] == 'awaiting_review' and data['task']['latest_run']['attempt'] == 2)
+            self.page.evaluate('async value=>ProjectWorkspace.openTask(value.id,value.project)', {'id': first_id, 'project': self.pid})
+            self.page.locator('[data-wnw-locate]').click()
             self.page.locator('[data-pwg-mode="run"][aria-pressed="true"]').wait_for()
             self.assertIn('evidence', self.page.locator('.pwg-node-heading').inner_text())
             self.page.locator('[data-pwg-task="' + first_id + '"]').click()
-            self.page.locator('#pwApprove').click()
+            self.page.locator('[data-wnw-approve]').click()
             self.poll_json('/api/project-tasks/detail?project_id=' + self.pid + '&id=' + draft_id,
                            lambda data: data['task']['status'] == 'awaiting_review')
-            self.page.get_by_role('button', name='返回发起对话', exact=True).click()
+            self.page.locator('[data-wnw-origin]').click()
             self.page.locator('[data-wr-task="' + draft_id + '"]').first.click()
-            self.page.locator('[data-pw-output-edit]').first.click()
-            self.page.locator('[data-por-text]').fill('# Reviewed report\n\nBROWSER_REVIEWED_REPORT')
+            self.page.locator('[data-wnw-title]').wait_for()
+            draft_result = self.page.request.get(self.url + 'api/project-tasks/node-result?project_id=' + self.pid + '&id=' + draft_id).json()['result']
+            draft_file = next(index for index, item in enumerate(draft_result['artifacts']) if item['id'].startswith('file:') and item['editable'])
+            self.page.locator('[data-wnw-file="' + str(draft_file) + '"]').click()
+            self.page.locator('[data-wnw-mode="edit"]').click()
+            self.page.locator('[data-wnw-editor]').fill('# Reviewed report\n\nBROWSER_REVIEWED_REPORT')
             self.capture('file-review')
-            self.page.locator('[data-por-save]').click()
-            self.page.locator('dialog[aria-label="人工修订产物"]').wait_for(state='detached')
-            self.page.locator('#pwApprove').click()
+            self.page.locator('[data-wnw-save]').click()
+            self.page.wait_for_function("document.querySelector('[data-wnw-meta]').textContent.includes('修订 v1')")
+            self.page.locator('[data-wnw-approve]').click()
             self.poll_json('/api/project-tasks/detail?project_id=' + self.pid + '&id=' + next_id,
                            lambda data: data['task']['status'] == 'awaiting_review')
-            self.page.get_by_role('button', name='返回发起对话', exact=True).click()
+            self.page.locator('[data-wnw-origin]').click()
             self.page.locator('[data-wr-task="' + next_id + '"]').first.click()
-            self.page.locator('#pwFeedback').fill('Please check once more with my feedback.')
-            self.page.locator('#pwRejectRetry').click()
+            self.page.locator('[data-wnw-feedback]').fill('Please check once more with my feedback.')
+            self.page.locator('[data-wnw-reject]').click()
+            self.page.wait_for_function("document.querySelector('[data-wnw-status]').textContent.includes('退回')")
+            self.page.locator('[data-wnw-instruction]').fill('Please check once more with my feedback.')
+            self.page.locator('[data-wnw-rework]').click()
             retried = self.poll_json('/api/project-tasks/detail?project_id=' + self.pid + '&id=' + next_id,
                 lambda data: data['task']['status'] == 'awaiting_review' and data['task']['latest_run']['attempt'] == 2)['task']
             self.assertIn('Please check once more', retried['latest_run']['input_snapshot']['feedback'])
-            self.page.get_by_role('button', name='返回发起对话', exact=True).click()
-            self.page.locator('[data-wr-task="' + next_id + '"]').first.click()
-            self.page.locator('#pwApprove').click()
+            self.page.locator('[data-wnw-approve]').click()
             completed = self.poll_json('/api/workflow/execution?id=' + model.run_id,
                                       lambda data: data.get('run', {}).get('status') == 'succeeded')['run']
             self.assertEqual(completed['settings']['checkpoint']['next'], [])
             self.assertEqual(completed['settings']['checkpoint']['interrupts'], [])
             first = self.page.request.get(self.url + 'api/project-tasks/detail?project_id=' + self.pid + '&id=' + first_id).json()['task']
-            self.assertEqual(len(first['runs']), 1)
+            self.assertEqual(len(first['runs']), 2)
+            self.assertNotIn('BROWSER_VERIFIED_CLAIM', Path(first['runs'][0]['output_snapshot']['files'][0]['path']).read_text(encoding='utf-8'))
             self.assertIn('BROWSER_VERIFIED_CLAIM', Path(first['outputs'][0]['path']).read_text(encoding='utf-8'))
             final_tasks = self.page.request.get(self.url + 'api/project-tasks?project_id=' + self.pid).json()['tasks']
             self.assertEqual({task['status'] for task in final_tasks}, {'delivered'})
@@ -181,7 +194,7 @@ class WorkflowReviewRuntimeTest(unittest.TestCase):
             self.assertIn('BROWSER_VERIFIED_CLAIM', json.dumps(model.node_requests, ensure_ascii=False))
             self.assertEqual(len(model.node_requests), 1)
             self.assertEqual(model.calls, ['workflow_templates', 'workflow_prepare', 'workflow_start', 'workflow_status'])
-            self.page.get_by_role('button', name='返回发起对话', exact=True).click()
+            self.page.locator('[data-wnw-origin]').click()
             self.page.reload(wait_until='networkidle')
             self.page.get_by_text('工作流已完成', exact=True).first.wait_for()
             self.capture('workflow-complete')

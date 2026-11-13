@@ -40,8 +40,20 @@ def drive(db, run, execute_node):
 
         def gate(state, project_task_id=task_id):
             # Resuming replays this function. All execution and file writes live in work().
-            if state['status'] != 'delivered':
-                interrupt(review_target(tasks.get(db, project_task_id)))
+            task = tasks.get(db, project_task_id)
+            if task['status'] == 'delivered':
+                tasks._validate_versions(db, task, task['latest_run'])
+                return {'status': 'delivered', 'delivery_id': task['accepted_delivery_id'],
+                        'output_revision': task['latest_run']['checkpoint'].get('output_revision', 0)}
+            if task['status'] == 'cancelled':
+                return {'status': 'cancelled'}
+            # A resume replays this node from its beginning. Check the canonical
+            # task before interrupting so an approval can advance to the next
+            # node instead of opening the same review gate again.
+            interrupt(review_target(task))
+            # Some LangGraph versions continue after interrupt() when a caller
+            # supplies a resume value in the same invocation. Re-read the task
+            # so both behaviours use the canonical delivery decision.
             task = tasks.get(db, project_task_id)
             if task['status'] == 'delivered':
                 tasks._validate_versions(db, task, task['latest_run'])

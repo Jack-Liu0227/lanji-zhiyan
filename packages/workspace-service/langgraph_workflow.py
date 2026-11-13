@@ -31,11 +31,17 @@ def _now_iso() -> str:
 # ==============================================================================
 
 class GraphNode:
-    def __init__(self, name: str, label: str = "", executor_hint: str = "", review_required: bool = True):
+    def __init__(self, name: str, label: str = "", executor_hint: str = "", review_required: bool = True,
+                 step: str = "task", prompt: str = "", tools: Optional[List[str]] = None,
+                 output_contract: Optional[Dict[str, Any]] = None):
         self.name = name
         self.label = label or name
         self.executor_hint = executor_hint  # assistant | team | default
         self.review_required = review_required
+        self.step = step or "task"
+        self.prompt = prompt
+        self.tools = list(tools) if tools is not None else None
+        self.output_contract = dict(output_contract or {})
 
 class GraphTemplate:
     """Built-in template metadata; execution belongs to workflow_tasks."""
@@ -46,8 +52,12 @@ class GraphTemplate:
         self.edges: Dict[str, str] = {}
         self.entry_point: Optional[str] = None
 
-    def add_node(self, name: str, label: str = "", executor_hint: str = "assistant", review_required: bool = True) -> "GraphTemplate":
-        self.nodes[name] = GraphNode(name, label=label, executor_hint=executor_hint, review_required=review_required)
+    def add_node(self, name: str, label: str = "", executor_hint: str = "assistant", review_required: bool = True,
+                 step: str = "task", prompt: str = "", tools: Optional[List[str]] = None,
+                 output_contract: Optional[Dict[str, Any]] = None) -> "GraphTemplate":
+        self.nodes[name] = GraphNode(name, label=label, executor_hint=executor_hint,
+                                     review_required=review_required, step=step, prompt=prompt,
+                                     tools=tools, output_contract=output_contract)
         return self
 
     def add_edge(self, source: str, target: str) -> "GraphTemplate":
@@ -68,6 +78,8 @@ class GraphTemplate:
                 "id": node.name,
                 "label": node.label,
                 "executor_hint": node.executor_hint,
+                "execution_mode": node.executor_hint if node.executor_hint in ("assistant", "team") else "",
+                "step": node.step,
                 "review_required": node.review_required,
                 "next": self.edges.get(curr)
             })
@@ -78,10 +90,10 @@ class GraphTemplate:
 # Scientific State Graphs
 def create_research_proposal_graph() -> GraphTemplate:
     g = GraphTemplate("research_proposal", "研究开题与方案论证图")
-    g.add_node("problem_formulation", "① 研究问题与科学假设提炼", executor_hint="assistant", review_required=True)
-    g.add_node("literature_gap", "② 文献现状与研究空白剖析", executor_hint="assistant", review_required=True)
-    g.add_node("methodology_design", "③ 技术路线与实验方案设计", executor_hint="team", review_required=True)
-    g.add_node("proposal_synthesis", "④ 开题论证总结报告撰写", executor_hint="assistant", review_required=True)
+    g.add_node("problem_formulation", "① 研究问题与科学假设提炼", executor_hint="assistant", step="idea", review_required=True)
+    g.add_node("literature_gap", "② 文献现状与研究空白剖析", executor_hint="assistant", step="search", review_required=True)
+    g.add_node("methodology_design", "③ 技术路线与实验方案设计", executor_hint="team", step="task", review_required=True)
+    g.add_node("proposal_synthesis", "④ 开题论证总结报告撰写", executor_hint="assistant", step="write", review_required=True)
     g.add_edge("problem_formulation", "literature_gap")
     g.add_edge("literature_gap", "methodology_design")
     g.add_edge("methodology_design", "proposal_synthesis")
@@ -90,10 +102,10 @@ def create_research_proposal_graph() -> GraphTemplate:
 
 def create_paper_writing_graph() -> GraphTemplate:
     g = GraphTemplate("paper_writing", "学术论文全流程起草与评审图")
-    g.add_node("outline_design", "① 论文大纲与核心逻辑构思", executor_hint="assistant", review_required=True)
-    g.add_node("section_drafting", "② 正文核心章节起草与论述", executor_hint="team", review_required=True)
-    g.add_node("peer_review", "③ 模拟同行评审与学术批判", executor_hint="assistant", review_required=True)
-    g.add_node("revision_polishing", "④ 针对审稿意见修订与润色", executor_hint="assistant", review_required=True)
+    g.add_node("outline_design", "① 论文大纲与核心逻辑构思", executor_hint="assistant", step="outline", review_required=True)
+    g.add_node("section_drafting", "② 正文核心章节起草与论述", executor_hint="team", step="write", review_required=True)
+    g.add_node("peer_review", "③ 模拟同行评审与学术批判", executor_hint="assistant", step="review", review_required=True)
+    g.add_node("revision_polishing", "④ 针对审稿意见修订与润色", executor_hint="assistant", step="write", review_required=True)
     g.add_edge("outline_design", "section_drafting")
     g.add_edge("section_drafting", "peer_review")
     g.add_edge("peer_review", "revision_polishing")
@@ -102,10 +114,10 @@ def create_paper_writing_graph() -> GraphTemplate:
 
 def create_literature_study_graph() -> GraphTemplate:
     g = GraphTemplate("literature_study", "文献深度研读与综述图")
-    g.add_node("literature_retrieval", "① 精准文献检索与初筛入库", executor_hint="assistant", review_required=True)
-    g.add_node("deep_analysis", "② 核心方法与证据链深度提取", executor_hint="assistant", review_required=True)
-    g.add_node("cross_comparison", "③ 文献横向比对与矩阵构建", executor_hint="team", review_required=True)
-    g.add_node("literature_survey", "④ 前沿综述综合报告生成", executor_hint="assistant", review_required=True)
+    g.add_node("literature_retrieval", "① 精准文献检索与初筛入库", executor_hint="assistant", step="search", review_required=True)
+    g.add_node("deep_analysis", "② 核心方法与证据链深度提取", executor_hint="assistant", step="download", review_required=True)
+    g.add_node("cross_comparison", "③ 文献横向比对与矩阵构建", executor_hint="team", step="map", review_required=True)
+    g.add_node("literature_survey", "④ 前沿综述综合报告生成", executor_hint="assistant", step="write", review_required=True)
     g.add_edge("literature_retrieval", "deep_analysis")
     g.add_edge("deep_analysis", "cross_comparison")
     g.add_edge("cross_comparison", "literature_survey")
@@ -145,29 +157,103 @@ def _template(db, graph_type):
     graph = GRAPH_REGISTRY[graph_type]()
     identifier = "builtin.langgraph." + graph_type
     if not db.db.execute("SELECT 1 FROM workflow_layouts WHERE id=?", (identifier,)).fetchone():
-        definition = {"nodes": [{"id": node.name, "step": "task", "label": node.label,
-            "prompt": "完成「" + node.label + "」，依据输入资料和前序交付，使用工具保存真实产物并标明证据来源。",
+        definition = {"nodes": [{"id": node.name, "step": node.step, "label": node.label,
+            "prompt": node.prompt or "完成「" + node.label + "」，依据输入资料和前序交付，使用工具保存真实产物并标明证据来源。",
             "executor_role_id": node.name, "review_required": node.review_required,
-            "executor_hint": node.executor_hint} for node in graph.nodes.values()],
+            "execution_mode": node.executor_hint if node.executor_hint in ("assistant", "team") else "",
+            "tools": node.tools, "output_contract": node.output_contract} for node in graph.nodes.values()],
             "edges": [{"source": source, "target": target} for source, target in graph.edges.items()]}
         definition=workflow_layout.validate_definition(definition)
         db.db.execute("INSERT INTO workflow_layouts VALUES (?,?,?,?,?,?)", (identifier, graph.description, graph.description,
             json.dumps(definition, ensure_ascii=False), _now_iso(), _now_iso()))
         db.db.commit()
     else:
-        stored=workflow_layout._layout(db, identifier)
-        if "order" not in stored:
+        stored = workflow_layout._layout(db, identifier)
+        # Older LangGraph templates stored every node as a generic task. Fill only
+        # missing semantic fields so existing labels, prompts and user edits survive.
+        upgraded = []
+        changed = False
+        for raw in stored.get("nodes", []):
+            spec = graph.nodes.get(raw.get("id"))
+            node = dict(raw)
+            if spec and raw.get("step") == "task" and spec.step != "task":
+                node["step"] = spec.step
+                changed = True
+            if spec and not raw.get("execution_mode") and spec.executor_hint in ("assistant", "team"):
+                node["execution_mode"] = spec.executor_hint
+                changed = True
+            upgraded.append(node)
+        if changed:
+            definition = workflow_layout.validate_definition({**stored, "nodes": upgraded})
+            db.db.execute("UPDATE workflow_layouts SET definition=?,updated_at=? WHERE id=?",
+                          (json.dumps(definition, ensure_ascii=False), _now_iso(), identifier))
+            db.db.commit()
+        elif "order" not in stored:
             workflow_layout.save_layout(db, stored)
     return identifier
 
 
-def start_graph(db, project_id: str, graph_type: str = "research_proposal", goal: str = "", inputs=None, request_key="") -> dict:
+def _resolve_graph_inputs(db, project_id: str, graph_type: str, inputs):
+    """Separate prose goals from pinned inputs and auto-select project literature."""
+    import asset_service
+    import project_notes
+    root = project_notes.project_root(db, project_id).resolve()
+    explicit = []
+    for raw in inputs or []:
+        if isinstance(raw, dict) and (raw.get('asset_id') or raw.get('relative')):
+            explicit.append(dict(raw)); continue
+        if isinstance(raw, str) and raw.strip():
+            candidate = Path(raw.strip())
+            if not candidate.is_absolute() and not candidate.drive:
+                path = (root / candidate).resolve()
+                if path.is_file() and path.is_relative_to(root):
+                    explicit.append({'relative': path.relative_to(root).as_posix()})
+    if explicit:
+        return explicit, 'explicit'
+    if graph_type != 'literature_study':
+        return [], 'none'
+    selected = []
+    try:
+        # Existing Zotero papers/evidence rows may not yet have asset records.
+        # Rebuild is idempotent and keeps the workflow input snapshot auditable.
+        asset_service.rebuild_project_index(db, project_id, include_files=True)
+        import project_resources
+        catalog = project_resources.catalog(db, project_id, '', '', review_status='all')
+        for item in catalog.get('items', []):
+            if item.get('kind') not in ('literature', 'evidence', 'note', 'file'):
+                continue
+            asset_id = str(item.get('asset_id') or '')
+            relative = str(item.get('relative') or '')
+            candidate = {'asset_id': asset_id} if asset_id else {'relative': relative}
+            if not candidate.get('asset_id') and not candidate.get('relative'):
+                continue
+            if candidate.get('relative'):
+                path = (root / candidate['relative']).resolve()
+                if not path.is_file() or not path.is_relative_to(root):
+                    continue
+            if candidate.get('asset_id'):
+                asset = asset_service.get(db, candidate['asset_id'])
+                if not asset or asset.get('project_id') != project_id or not asset_service.context_available(db, asset):
+                    continue
+            selected.append(candidate)
+    except Exception:
+        selected = []
+    unique, seen = [], set()
+    for item in selected:
+        key = item.get('asset_id') or 'path:' + item.get('relative', '')
+        if key not in seen:
+            seen.add(key); unique.append(item)
+    return unique[:100], 'project_literature' if unique else 'none'
+
+
+def start_graph(db, project_id: str, graph_type: str = "research_proposal", goal: str = "", inputs=None, request_key="", agent_invocation: bool = False) -> dict:
     """All graph entry points use the same versioned layouts and project tasks."""
     import project_bindings
     import project_workflows
     import workflow_execution as engine
     import workflow_layout
     import workflow_tasks
+    inputs, input_source = _resolve_graph_inputs(db, project_id, graph_type, inputs)
     workflow_layout._project(db, project_id)
     template_id = _template(db, graph_type)
     layout = project_workflows.current(db, project_id, template_id)
@@ -183,11 +269,15 @@ def start_graph(db, project_id: str, graph_type: str = "research_proposal", goal
         if not engine.active(db, project_id):
             workflow_layout.select_layout(db, {"task_id": project_id, "layout_id": template_id})
         run = workflow_tasks.prepare(db, project_id, goal, request_key, template_id, inputs=inputs)
+        if agent_invocation:
+            import workflow_node_workbench
+            workflow_node_workbench.mark_agent_started(db, run)
         if run["layout"]["id"] != template_id:
             raise ValueError("项目已有其他流程在执行或待核查，请先完成或停止当前运行")
         if inputs and run["settings"].get("task_inputs") != inputs:
             raise ValueError("当前运行已固定另一组输入，请先完成或停止当前运行")
         run["settings"]["graph_type"] = graph_type
+        run["settings"]["input_source"] = input_source
         workflow_tasks._save(db, run)
     if run["status"] == "queued":
         engine.kick(db.path, run["id"])
@@ -254,26 +344,31 @@ def get_graph_state(db, project_id: str, run_id=None) -> dict:
         "available_graphs": available}
 
 
-def review_checkpoint(db, run_id: str, node_id: str, action: str, feedback="", revised_content="", is_human=True) -> dict:
+def review_checkpoint(db, run_id: str, node_id: str, action: str, feedback="", revised_content="", is_human=True,
+                      reviewed_run_id='', reviewed_output_version=None) -> dict:
     import workflow_execution as engine
     import project_tasks
     if not is_human:
         raise PermissionError("人工核查须由用户操作；专家可在任务中记录修改建议")
     if action not in ("approve", "approved", "reject", "rejected"):
         raise ValueError("请选择批准或退回")
+    if revised_content:
+        raise ValueError('请先在节点产物页保存修订，再核查保存后的具体版本')
     legacy = db.db.execute("SELECT * FROM langgraph_runs WHERE id=?", (run_id,)).fetchone()
     if legacy:
         checkpoint = db.db.execute("SELECT * FROM langgraph_checkpoints WHERE run_id=? AND node_id=? ORDER BY created_at DESC LIMIT 1", (run_id, node_id)).fetchone()
         if not checkpoint or not checkpoint["task_id"]:
             raise ValueError("旧版运行没有可核查任务，请在统一流程中准备新运行")
         project_tasks.review(db, checkpoint["task_id"], approved=action in ("approve", "approved"), feedback=feedback,
-            authority=project_tasks.CommandContext.ui(legacy["project_id"]))
+            authority=project_tasks.CommandContext.ui(legacy["project_id"]),
+            reviewed_run_id=reviewed_run_id, reviewed_output_version=reviewed_output_version)
         return get_graph_state(db, legacy["project_id"], run_id)
     run = engine.detail(db, run_id)
     record = next((item for item in reversed(run["nodes"]) if item["acceptance"].get("node_id") == node_id or item["id"] == node_id), None)
     if not record:
         raise ValueError("当前节点尚未产生待核查结果")
-    engine.review(db, run_id, record["id"], action in ("approve", "approved"), feedback)
+    engine.review(db, run_id, record["id"], action in ("approve", "approved"), feedback,
+                  reviewed_output_version, reviewed_run_id)
     if action in ("approve", "approved"):
         engine.kick(db.path, run_id)
     return get_graph_state(db, run["project_id"], run_id)
@@ -331,8 +426,15 @@ LANGGRAPH_TOOL_SPECS = [
                 "rules": {"type": "string"}, "description": {"type": "string"}, "model_id": {"type": "string"}}, "required": ["role_id"]}},
             "workflow": {"type": "object", "description": "可选自定义 DAG，nodes 的 executor_role_id 对应 experts.role_id", "properties": {
                 "nodes": {"type": "array", "items": {"type": "object", "properties": {
-                    "id": {"type": "string"}, "step": {"type": "string", "enum": ["task"]}, "label": {"type": "string"},
-                    "prompt": {"type": "string"}, "executor_role_id": {"type": "string"}, "review_required": {"type": "boolean"}}, "required": ["id", "step", "label", "executor_role_id"]}},
+                    "id": {"type": "string"}, "step": {"type": "string", "enum": ["idea", "search", "download", "notes", "outline", "map", "write", "review", "entrans", "convert", "task"]}, "label": {"type": "string"},
+                    "prompt": {"type": "string"}, "executor_role_id": {"type": "string"},
+                    "execution_mode": {"type": "string", "enum": ["assistant", "team"]},
+                    "node_kind": {"type": "string", "enum": ["executor", "tool", "workflow"]},
+                    "tool_name": {"type": "string"}, "tool_args": {"type": "object"},
+                    "workflow_template_id": {"type": "string"},
+                    "tools": {"type": "array", "items": {"type": "string"}},
+                    "skills": {"type": "array", "items": {"type": "string"}},
+                    "review_required": {"type": "boolean"}}, "required": ["id", "step", "label", "executor_role_id"]}},
                 "edges": {"type": "array", "items": {"type": "object", "properties": {"source": {"type": "string"}, "target": {"type": "string"}}, "required": ["source", "target"]}}}, "required": ["nodes", "edges"]}}, "required": ["idea"]}}}
 ]
 
@@ -342,7 +444,7 @@ def invoke_agent_tool(name: str, db, project_id: str, args: Dict[str, Any]) -> A
         graph_type = str(args.get("graph_type") or "research_proposal")
         goal = str(args.get("goal") or "")
         inputs = args.get("inputs") or []
-        res = start_graph(db, project_id, graph_type=graph_type, goal=goal, inputs=inputs)
+        res = start_graph(db, project_id, graph_type=graph_type, goal=goal, inputs=inputs, agent_invocation=True)
         return {
             "status": "started",
             "navigation": res.get('navigation'), "review_targets": res.get('review_targets', []),
@@ -414,14 +516,20 @@ def route(method: str, path: str, body: dict, query: dict, db) -> Any:
             graph_type = str(body.get("graph_type") or "research_proposal")
             goal = str(body.get("goal") or "")
             inputs = body.get("inputs") or []
-            return start_graph(db, project_id, graph_type, goal, inputs)
+            # The visible LangGraph entry point is the same trusted workflow
+            # boundary used by the Agent tool. Preserve that provenance so
+            # node replies can open the result workbench after completion.
+            return start_graph(db, project_id, graph_type, goal, inputs, agent_invocation=True)
         elif action == "review":
+            if not body.get('reviewed_run_id') or body.get('reviewed_output_version') is None:
+                raise ValueError('请重新打开节点产物，并提交核查所用的尝试及修订版本')
             run_id = str(body.get("run_id") or "")
             node_id = str(body.get("node_id") or "")
             decision = str(body.get("action") or body.get("decision") or "approve")
             feedback = str(body.get("feedback") or "")
             revised_content = str(body.get("revised_content") or "")
-            return review_checkpoint(db, run_id, node_id, decision, feedback, revised_content, is_human=True)
+            return review_checkpoint(db, run_id, node_id, decision, feedback, revised_content, is_human=True,
+                                     reviewed_run_id=str(body['reviewed_run_id']), reviewed_output_version=body['reviewed_output_version'])
         elif action == "cancel":
             run_id = str(body.get("run_id") or "")
             return cancel_run(db, run_id)

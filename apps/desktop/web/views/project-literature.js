@@ -11,7 +11,7 @@
 
   function html() {
     return `<section class="card project-literature" id="projectLiterature" style="margin-top:12px">
-      <div class="sch-head"><div><h3>项目文献 <span class="pill" id="plCount"></span></h3><p class="hint">与工作流共享题录；从情报日报、原文链接或 Zotero 添加文献，统一管理。</p></div>
+      <div class="sch-head"><div><h3>项目文献 <span class="pill" id="plCount"></span></h3><p class="hint">下载的 PDF 先进入项目暂存目录。只有点击“写入 Zotero”并确认后，才交给 Zotero 附件管理插件。</p></div>
         <div class="pl-tools"><button class="btn btn-primary" id="spZoteroBtn">从 Zotero 选择文献</button><button class="btn ghost" id="plLinkImport">链接 / DOI 导入</button><button class="btn ghost" id="plIntelligence">从情报日报选取</button><button class="btn ghost" id="plSync">同步与来源</button><button class="btn ghost" id="spToLib">打开知识库</button></div></div>
       <div class="pl-tools"><input class="control" type="search" id="plSearch" aria-label="搜索项目文献" placeholder="搜索标题、作者、DOI 或 Zotero Key"><select class="control" id="plFilter" aria-label="筛选项目文献"><option value="all">全部文献</option><option value="zotero">已关联 Zotero</option><option value="pdf">有 PDF</option><option value="metadata">仅题录</option></select><button class="btn ghost" id="plRefresh">刷新</button></div>
       <div class="pl-tools"><label><input type="checkbox" id="plSelectAll"> 勾选当前筛选下的 Zotero 文献</label><span class="hint" id="plSelected">已选 0 篇</span><button class="btn ghost" id="plRemove" disabled>移除所选项目关联</button><button class="btn ghost" id="plHistory">恢复关联 / 操作记录</button><button class="btn ghost" id="plConnection">Zotero 连接设置</button></div>
@@ -51,7 +51,10 @@
       const visible=filtered(), available=new Set(rows.map(r=>r.zotero_key).filter(Boolean));
       for(const key of selected) if(!available.has(key)) selected.delete(key);
       $('plCount').textContent=`${rows.length} 篇`;
-      $('plList').innerHTML=visible.map(r=>`<article class="pl-row" data-pl-id="${h(r.id)}"><input type="checkbox" data-pl-key="${h(r.zotero_key)}" aria-label="选择 ${h(r.title||r.filename)}" ${r.zotero_key?'':'disabled'} ${selected.has(r.zotero_key)?'checked':''} title="${r.zotero_key?'选择项目关联':'关联 Zotero 后可批量移除该关联'}"><div class="pl-main"><h4>${h(r.title||r.filename||'未命名')}</h4><p>${h(r.authors||'作者未识别')}${r.year?' · '+h(r.year):''}${r.doi?' · DOI '+h(r.doi):''}</p><span class="pill">${r.has_pdf?'有 PDF':'题录'}</span> ${r.zotero_key?`<span class="pill">Zotero · ${h(r.zotero_key)}</span>`:''}<div class="es-badges" data-journal="${h(r.journal||r.title||'')}" style="margin-top:6px"></div></div><div class="pl-actions">${LiteratureImport.safeLink(r.url||r.doi&&"https://doi.org/"+r.doi)?`<a class="btn ghost" href="${h(LiteratureImport.safeLink(r.url||"https://doi.org/"+r.doi))}" target="_blank" rel="noopener noreferrer">查看原文 ↗</a>`:""}${r.result_id?'<button class="btn ghost" data-pl-edit>编辑题录</button>':''}${r.has_pdf&&r.paper_id?'<button class="btn ghost" data-pl-read>阅读 PDF</button>':''}</div></article>`).join('') || `<p class="hint">${rows.length?'没有匹配的文献，请调整筛选。':'项目暂无文献。可从情报日报、链接 / DOI 或 Zotero 添加题录。'}</p>`;
+      $('plList').innerHTML=visible.map(r=>{
+        const zoteroStatus=r.zotero_status==='imported'?'<span class="pill">已写入 Zotero</span>':r.zotero_status==='failed'?`<span class="pill">Zotero 待重试${r.zotero_error?`：${h(r.zotero_error)}`:''}</span>`:(r.has_pdf&&r.result_id&&r.zotero_status==='staged'&&!r.zotero_key?'<span class="pill">暂存待写入 Zotero</span>':'');
+        const canImport=!!(r.result_id&&r.has_pdf&&['staged','failed'].includes(r.zotero_status)&&(!r.zotero_key||r.zotero_status==='failed'));
+        return `<article class="pl-row" data-pl-id="${h(r.id)}"><input type="checkbox" data-pl-key="${h(r.zotero_key)}" aria-label="选择 ${h(r.title||r.filename)}" ${r.zotero_key?'':'disabled'} ${selected.has(r.zotero_key)?'checked':''} title="${r.zotero_key?'选择项目关联':'关联 Zotero 后可批量移除该关联'}"><div class="pl-main"><h4>${h(r.title||r.filename||'未命名')}</h4><p>${h(r.authors||'作者未识别')}${r.year?' · '+h(r.year):''}${r.doi?' · DOI '+h(r.doi):''}</p><span class="pill">${r.has_pdf?'有 PDF':'题录'}</span> ${r.zotero_key?`<span class="pill">Zotero · ${h(r.zotero_key)}</span>`:''}${zoteroStatus}<div class="es-badges" data-journal="${h(r.journal||r.title||'')}" style="margin-top:6px"></div></div><div class="pl-actions">${LiteratureImport.safeLink(r.url||r.doi&&"https://doi.org/"+r.doi)?`<a class="btn ghost" href="${h(LiteratureImport.safeLink(r.url||"https://doi.org/"+r.doi))}" target="_blank" rel="noopener noreferrer">查看原文 ↗</a>`:""}${r.result_id?'<button class="btn ghost" data-pl-edit>编辑题录</button>':''}${r.has_pdf&&r.paper_id?'<button class="btn ghost" data-pl-read>阅读 PDF</button>':''}${canImport?`<button class="btn ghost" data-pl-stage-import>${r.zotero_status==='failed'?'重试写入 Zotero':'写入 Zotero'}</button>`:''}</div></article>`;}).join('') || `<p class="hint">${rows.length?'没有匹配的文献，请调整筛选。':'项目暂无文献。可从情报日报、链接 / DOI 或 Zotero 添加题录。'}</p>`;
       $('plList').querySelectorAll('[data-pl-key]').forEach(el=>el.onchange=()=>{el.checked?selected.add(el.dataset.plKey):selected.delete(el.dataset.plKey);updateSelection();});
       $('plList').querySelectorAll('[data-pl-edit]').forEach(el=>el.onclick=()=>{
         if(saving) return;
@@ -64,6 +67,18 @@
         if(window.ProjectWorkspace?.active()) await ProjectWorkspace.openPaper(row);
         else await api('/api/paper/open?id='+encodeURIComponent(row.paper_id));
         message('已在本机阅读器打开 PDF。');
+      }));
+      $('plList').querySelectorAll('[data-pl-stage-import]').forEach(el=>el.onclick=()=>run(el,async()=>{
+        const row=rows.find(r=>r.id===el.closest('[data-pl-id]').dataset.plId);
+        if(!row?.result_id) throw new Error('\u8fd9\u6761\u6682\u5b58\u6587\u732e\u7f3a\u5c11\u68c0\u7d22\u8bb0\u5f55');
+        const plan=await api('/api/zotero/web/staged/plan',{task_id:project,result_ids:[row.result_id],attachment_mode:'plugin'});
+        if(plan.conflicts?.length) throw new Error(plan.conflicts.map(item=>item.reason||'Zotero \u5339\u914d\u51b2\u7a81').join('\n'));
+        if(!plan.actions?.length) throw new Error('\u6ca1\u6709\u53ef\u5199\u5165\u7684\u6682\u5b58\u6587\u732e');
+        if(!await uiConfirm(`\u5c06\u201c${row.title||row.filename}\u201d\u5199\u5165 Zotero\uff0c\u5e76\u7531\u9644\u4ef6\u7ba1\u7406\u63d2\u4ef6\u63a5\u7ba1 PDF\u3002\u662f\u5426\u7ee7\u7eed\uff1f`)) return;
+        const result=await api('/api/zotero/web/staged/apply',{task_id:project,plan_token:plan.plan_token,confirm:true});
+        if(result.failed?.length) throw new Error(result.failed.map(item=>item.error||'\u5199\u5165\u5931\u8d25').join('\n'));
+        message('\u5df2\u5199\u5165 Zotero\uff0c\u6682\u5b58 PDF \u4ecd\u4fdd\u7559\u3002');
+        await refresh();
       }));
       $('plList').querySelectorAll('[data-pl-id]').forEach(el=>{
         const row=rows.find(r=>r.id===el.dataset.plId);

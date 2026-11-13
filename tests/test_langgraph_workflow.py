@@ -32,9 +32,14 @@ class TestLangGraphWorkflow(unittest.TestCase):
         topo = g.get_topology()
         self.assertEqual(len(topo), 4)
         self.assertEqual(topo[0]["id"], "problem_formulation")
+        self.assertEqual(topo[0]["step"], "idea")
+        self.assertEqual(topo[0]["execution_mode"], "assistant")
         self.assertEqual(topo[1]["id"], "literature_gap")
+        self.assertEqual(topo[1]["step"], "search")
         self.assertEqual(topo[2]["id"], "methodology_design")
+        self.assertEqual(topo[2]["execution_mode"], "team")
         self.assertEqual(topo[3]["id"], "proposal_synthesis")
+        self.assertEqual(topo[3]["step"], "write")
 
     def test_graph_start_and_review(self):
         with workflow.WorkflowDB(self.db_path) as db:

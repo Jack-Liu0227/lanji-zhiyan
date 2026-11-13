@@ -533,3 +533,44 @@ async function requireModelKey() {
   if (go){setSec='models';openTab("settings");}
   return false;
 }
+
+/* ==================== 界面缩放 (Ctrl + 滚轮 / 快捷键) ==================== */
+let uiZoomLevel = parseFloat(localStorage.getItem("rw-ui-zoom") || "1");
+if (isNaN(uiZoomLevel) || uiZoomLevel < 0.5 || uiZoomLevel > 3.0) uiZoomLevel = 1;
+
+function setUiZoom(newZoom, showFeedback = true) {
+  const clamped = Math.min(2.5, Math.max(0.6, Math.round(newZoom * 100) / 100));
+  uiZoomLevel = clamped;
+  document.documentElement.style.zoom = String(uiZoomLevel);
+  localStorage.setItem("rw-ui-zoom", String(uiZoomLevel));
+  if (showFeedback && typeof uiNotify === "function") {
+    uiNotify(`界面缩放：${Math.round(uiZoomLevel * 100)}%`, { timeout: 1200 });
+  }
+}
+
+if (uiZoomLevel !== 1) {
+  document.documentElement.style.zoom = String(uiZoomLevel);
+}
+
+window.addEventListener("wheel", (e) => {
+  if (e.ctrlKey || e.metaKey) {
+    e.preventDefault();
+    const step = e.deltaY < 0 ? 0.05 : -0.05;
+    setUiZoom(uiZoomLevel + step);
+  }
+}, { passive: false });
+
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey) {
+    if (e.key === "=" || e.key === "+" || e.code === "NumpadAdd" || e.code === "Equal") {
+      e.preventDefault();
+      setUiZoom(uiZoomLevel + 0.1);
+    } else if (e.key === "-" || e.key === "_" || e.code === "NumpadSubtract" || e.code === "Minus") {
+      e.preventDefault();
+      setUiZoom(uiZoomLevel - 0.1);
+    } else if (e.key === "0" || e.code === "Numpad0" || e.code === "Digit0") {
+      e.preventDefault();
+      setUiZoom(1.0);
+    }
+  }
+});

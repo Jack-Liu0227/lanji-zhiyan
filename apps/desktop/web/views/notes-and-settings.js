@@ -1878,7 +1878,27 @@ function bindSwatches(host){
 }
 let setSec = "theme";                    // 设置左列分区（照工作流中间可选栏）
 let setMeta = null;                      // /api/settings/meta 缓存：tool 在 S.tools，skill / MCP 在这
-const SET_SECS = [["theme", "🎨", "主题色"], ["perm", "🛡", "权限"], ["models", "🔌", "模型列表"], ["tools", "🧰", "Tool"], ["skills", "⚡", "Skill"], ["mcp", "🔗", "MCP"]];
+let setUpdate = null;
+const SET_SECS = [["theme", "🎨", "主题色"], ["perm", "🛡", "权限"], ["models", "🔌", "模型列表"], ["tools", "🧰", "Tool"], ["skills", "⚡", "Skill"], ["mcp", "🔗", "MCP"], ["about", "ⓘ", "版本与更新"]];
+const formatUpdateSize = bytes => {
+  const n = Number(bytes || 0);
+  if (!(n > 0)) return "";
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+};
+async function loadAppUpdate(force = false){
+  if (setUpdate?.loading && !force) return;
+  setUpdate = { ...(setUpdate || {}), loading: true, error: "", available: false };
+  render();
+  try {
+    const local = await api("/api/app/version");
+    setUpdate = { ...setUpdate, ...local, loading: true };
+    setUpdate = await api("/api/app/update/check");
+  } catch(e) {
+    setUpdate = { ...(setUpdate || {}), loading: false, error: e.message };
+  }
+  render();
+}
 function setPanel(){
   if(setSec === "theme") return `<div class="card"><h3>主题色</h3>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -1913,6 +1933,22 @@ function setPanel(){
   }
   if(setSec === "models") return `<div class="card"><h3>模型列表</h3>
       <div class="hint">可选模型、凭据、默认模型都在这里设置（原来侧栏的「模型」页）。</div></div><div id="set-models"></div>`;
+  if(setSec === "about") {
+    const u = setUpdate || {};
+    const status = u.loading ? "正在检查官方版本…" : (u.error || u.message || "点击“检查更新”获取最新版本");
+    const available = !!u.available && !!u.supported && !u.installing;
+    const updateLabel = u.installing ? "正在启动安装…" : (u.available ? "下载并安装更新" : (u.error ? "暂不可用" : "已是最新版本"));
+    const notes = u.notes ? `<div class="hint" style="white-space:pre-wrap;line-height:1.7;margin-top:12px">${esc(u.notes)}</div>` : "";
+    return `<div class="card"><div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap">
+      <div><p class="inst-label">APPLICATION</p><h3>版本与更新</h3><p class="hint">应用会从官方发布源检查并下载更新，无需打开 GitHub。</p></div>
+      <button class="btn ghost" id="app-update-check" ${u.loading ? "disabled" : ""}>检查更新</button></div>
+      <div class="ag-row" style="margin-top:16px;align-items:center;flex-wrap:wrap"><span>当前版本</span><strong>v${esc(u.current_version || "读取中")}</strong>${u.latest_version ? `<span class="hint">最新版本 v${esc(u.latest_version)}</span>` : ""}</div>
+      <p class="hint" role="status" aria-live="polite" style="margin-top:10px">${esc(status)}</p>
+      ${u.published_at ? `<p class="hint">发布时间：${esc(fmtDate(u.published_at))}${u.asset_size ? ` · 安装包 ${esc(formatUpdateSize(u.asset_size))}` : ""}</p>` : ""}
+      ${notes}
+      <div style="display:flex;gap:8px;align-items:center;margin-top:16px;flex-wrap:wrap"><button class="btn btn-primary" id="app-update-install" ${available ? "" : "disabled"}>${updateLabel}</button>${!u.supported && u.current_version ? `<span class="hint">源码运行模式只能查看版本，不能自动安装。</span>` : ""}</div>
+    </div>`;
+  }
   if(setSec === "tools") return `<div class="card"><h3>Agent 可用工具 <span class="pill">${(S.tools||[]).length}</span></h3>
       <table><tr><th>工具</th><th>说明</th></tr>${(S.tools||[]).map(t=>`<tr><td><code>${esc(t.name)}</code></td><td class="muted">${esc(t.description)}</td></tr>`).join("")}</table></div>
     <div class="card"><h3>边界</h3><ul class="hint"><li>只下载开放获取全文，不绕付费墙。</li><li>候选证据必须带页码与原文，对不上的会被拒收。</li><li>模型产出（审查/撰写）是草稿，不是结论。</li><li>数据只在本地 <code>data/research.sqlite3</code>。</li></ul></div>`;
@@ -1959,6 +1995,23 @@ function renderSettings(m){
   if(setSec === "models"){
     $("set-models").innerHTML = `<div class="card"><h3>模型</h3><div class="hint">可选模型、凭据、默认模型都在这里设置（原侧栏「模型」页）。</div></div>`;
     renderModels($("set-models"));      // 复用原面板
+  }
+  if(setSec === "about"){
+    if(!setUpdate) loadAppUpdate();
+    const check = $("app-update-check");
+    if(check) check.onclick = () => loadAppUpdate(true);
+    const install = $("app-update-install");
+    if(install) install.onclick = async () => {
+      if(!setUpdate?.available || !setUpdate?.supported || !confirm("将下载官方安装包并重启应用，是否继续？")) return;
+      setUpdate = {...setUpdate, installing:true}; render();
+      try {
+        const result = await api("/api/app/update/install", {});
+        setUpdate = {...setUpdate, ...result, installing:false, message:result.message || "安装程序已启动，应用将自动重启"};
+        render();
+      } catch(e) {
+        setUpdate = {...setUpdate, installing:false, error:e.message}; render();
+      }
+    };
   }
   if((setSec === "skills" || setSec === "mcp") && !setMeta){
     api("/api/settings/meta").then(r=>{ setMeta = r; render(); }).catch(e=>{ setMeta = {__err:e.message}; render(); });

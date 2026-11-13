@@ -118,7 +118,9 @@ def refresh_task(db, task):
             path = folder / f"{schedule._safe_name(sched['name'])[:60]}-{run['id'][:8]}.md"
             asset_service.atomic_write_text(path, header + text + '\n')
             asset = asset_service.register_file(db, path, project_id=sched['project_id'], kind='schedule_output', source='schedule', run_id=tracked_id,
-                body=header + text, metadata={'schedule_id': sched['id'], 'schedule_run_id': run['id'], 'project_task_id': task['id']})
+                body=header + text, metadata={'schedule_id': sched['id'], 'schedule_run_id': run['id'], 'project_task_id': task['id'],
+                    'task_run_id': attempt['id'], 'delivery_id': task['accepted_delivery_id'],
+                    'publication_hash': asset_service.sha256_file(path)})
             for source_id in assets:
                 asset_service.link(db, asset['id'], 'derived_from', source_id)
             note = schedule.archive_note(db, sched, run, header + text + '\n', asset)
@@ -207,8 +209,11 @@ def refresh(db, run_id):
             folder = schedule.output_dir_for(db, sched)
             path = folder / f"{schedule._safe_name(sched['name'])}-{run['id'][:8]}.md"
             asset_service.atomic_write_text(path, text)
+            delivery_ids = [row['accepted_delivery_id'] for row in db.db.execute(
+                "SELECT accepted_delivery_id FROM project_tasks WHERE workflow_run_id=? AND status='delivered' AND accepted_delivery_id<>'' ORDER BY rowid", (run_id,))]
             asset = asset_service.register_file(db, path, project_id=sched['project_id'], kind='schedule_output',
-                source='schedule', run_id=run_id, body=text, metadata={'schedule_id': sched['id'], 'schedule_run_id': run['id']})
+                source='schedule', run_id=run_id, body=text, metadata={'schedule_id': sched['id'], 'schedule_run_id': run['id'],
+                    'workflow_run_id': run_id, 'delivery_ids': delivery_ids, 'publication_hash': asset_service.sha256_file(path)})
             for node in delivered:
                 for output in node['output_assets']:
                     asset_service.link(db, asset['id'], 'derived_from', output)

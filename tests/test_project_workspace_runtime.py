@@ -1,5 +1,7 @@
 """Project-owned workspace behavior in a real isolated desktop server and Edge."""
 from pathlib import Path
+import http.server
+import threading
 import unittest
 from tests.test_web_runtime import workspace_section
 
@@ -79,7 +81,7 @@ class ProjectWorkspaceRuntimeTest(unittest.TestCase):
             self.page.locator('#pwAsk').fill('PROJECT_DISCUSSION_ONE')
             self.page.locator('#pwAsk').press('Control+Enter')
             self.page.wait_for_function("document.querySelector('#pwMessages').textContent.includes('PROJECT_TASK_REAL_OUTPUT')")
-            self.page.wait_for_function("document.querySelector('#pwSend').getAttribute('aria-label')==='发送'")
+            self.page.wait_for_function("!document.querySelector('#pwSend').classList.contains('stop')")
             first = self.page.locator('[data-pw-chat]').first.get_attribute('data-pw-chat')
             self.page.locator('#pwAsk').fill('DRAFT_FIRST_CHAT')
             self.page.locator('#pwNewChat').click()
@@ -154,9 +156,12 @@ class ProjectWorkspaceRuntimeTest(unittest.TestCase):
         with tasks_runtime.TaskModelFixture() as model:
             self.use_model(model.url)
             self.page.locator('#pwMessages [data-pw-start]').click()
-            self.page.locator('#pwMessages [data-pw-output]').last.wait_for(timeout=30000)
-            self.page.locator('#pwMessages [data-pw-output]').last.click()
-            self.page.locator('#pwApprove').click()
+            self.poll_json('/api/project-tasks?project_id='+self.pid,lambda data:data['tasks'][0]['status']=='awaiting_review')
+            # A manually prepared node keeps its task controls; the result
+            # workbench is opened only by an Agent-started workflow.
+            self.page.locator('#pwMessages [data-execution-detail]').click()
+            self.page.locator('#pwResource [data-wnw-title]').wait_for()
+            self.page.locator('#pwResource [data-wnw-approve]').click()
             self.poll_json('/api/project-tasks?project_id='+self.pid,lambda d:d['tasks'][0]['status']=='delivered')
         self.assertEqual(self.errors, [])
 
@@ -296,6 +301,38 @@ class ProjectWorkspaceRuntimeTest(unittest.TestCase):
             self.page.evaluate('r=>openTab(r)',old)
             self.page.wait_for_function("route()==='workspace'")
             self.assertEqual(self.page.evaluate("tabs.filter(t=>['space','workflow','notes','workspace'].includes(t.route)).length"),1)
+        self.assertEqual(self.errors,[])
+
+
+    def test_failed_submitted_input_is_not_restored_or_duplicated(self):
+        self.seed()
+        class FailingModel:
+            def __enter__(fixture):
+                class Handler(http.server.BaseHTTPRequestHandler):
+                    def log_message(self,*_args): pass
+                    def do_POST(self):
+                        self.rfile.read(int(self.headers['Content-Length']))
+                        self.send_response(503);self.send_header('Content-Type','application/json');self.end_headers()
+                        self.wfile.write(b'{"error":"TEMPORARY_PROVIDER_FAILURE"}')
+                fixture.server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
+                threading.Thread(target=fixture.server.serve_forever,daemon=True).start()
+                fixture.url=f'http://127.0.0.1:{fixture.server.server_address[1]}/v1'
+                return fixture
+            def __exit__(fixture,*_args):
+                fixture.server.shutdown();fixture.server.server_close()
+        with FailingModel() as model:
+            self.use_model(model.url)
+            self.page.locator('#pwAsk').fill('FAILED_INPUT_SHOULD_APPEAR_ONCE')
+            self.page.locator('#pwSend').click()
+            self.page.wait_for_function("document.querySelector('#pwError').textContent.length > 0")
+            self.page.wait_for_function("!document.querySelector('#pwSend').classList.contains('stop')")
+            self.page.wait_for_function("document.querySelector('#pwSend').getAttribute('aria-label')==='发送'")
+            self.assertEqual(self.page.locator('#pwAsk').input_value(),'')
+            visible=self.page.locator('#pwMessages').inner_text()
+            self.assertEqual(visible.count('FAILED_INPUT_SHOULD_APPEAR_ONCE'),1)
+            chat=self.page.locator('[data-pw-chat][aria-current="true"]').get_attribute('data-pw-chat')
+            records=self.page.request.get(self.url+'api/chat?id='+chat).json()['messages']
+            self.assertEqual(sum(message.get('role')=='user' and 'FAILED_INPUT_SHOULD_APPEAR_ONCE' in message.get('content','') for message in records),1)
         self.assertEqual(self.errors,[])
 
 

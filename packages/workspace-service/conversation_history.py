@@ -39,6 +39,17 @@ def _busy(db,kind,row):
 def _publish_change(db,kind,row,action):
     if kind=='chat' and row.get('task_id'):
         import execution_board
+        binding=None
+        if str(row.get('id','')).startswith('execution-'):
+            import execution_conversations
+            binding=execution_conversations.by_chat(db,row['id'])
+            if binding and db.db.execute("SELECT 1 FROM sqlite_master WHERE name='execution_board_hidden'").fetchone():
+                item_kind='task' if binding['kind']=='task' else 'conversation'
+                item_id=binding['entity_id'] if item_kind=='task' else row['id']
+                if action in ('trash','archive'):
+                    db.db.execute('INSERT OR IGNORE INTO execution_board_hidden(project_id,item_kind,item_id,deleted_at) VALUES (?,?,?,?)',(row['task_id'],item_kind,item_id,datetime.now(timezone.utc).isoformat()))
+                elif action in ('restore','unarchive','purge'):
+                    db.db.execute('DELETE FROM execution_board_hidden WHERE project_id=? AND item_kind=? AND item_id=?',(row['task_id'],item_kind,item_id))
         execution_board.publish(db,row['task_id'],'conversation_'+action,task_id=row['id'],source='conversation',activity='会话记录已更新')
         db.db.commit()
 
@@ -92,7 +103,7 @@ def route(method,path,body,query,db):
     kind=str(body.get('kind') or q('kind','chat'));project=str(body.get('project_id') or q('project_id'));team_id=str(body.get('team_id') or q('team_id'))
     if method=='POST':return command(db,kind,str(body.get('id') or ''),str(body.get('action') or ''),title=body.get('title',''),project_id=project,team_id=team_id)
     if kind=='chat':
-        rows=[dict(row) for row in db.db.execute("SELECT * FROM chats WHERE channel='conversation' "+('AND task_id=? ' if project else '')+'ORDER BY pinned_at DESC,updated_at DESC',([project] if project else []))]
+        rows=[dict(row) for row in db.db.execute("SELECT * FROM chats WHERE channel='conversation' AND id NOT LIKE 'execution-%' "+('AND task_id=? ' if project else '')+'ORDER BY pinned_at DESC,updated_at DESC',([project] if project else []))]
     elif kind=='team':
         if not team_id or not db.team(team_id):raise ValueError('请选择有效团队')
         rows=[_flags(db,'team',row[0]) for row in db.db.execute('SELECT id FROM team_sessions WHERE team_id=? ORDER BY updated_at DESC',(team_id,))]

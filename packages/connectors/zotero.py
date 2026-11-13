@@ -10,9 +10,9 @@ Zotero 接入约定（
   · 只允许 loopback（非 127.0.0.1/localhost 直接报错）；
   · 能力探测：/connector/ping 看「起没起」，/api/users/0/items 看「读不读得了」，
     没探测成功就不显示「已连接」，中文说清原因（未启动 / 版本太老 / 超时）；
-  · 本模块以**只读**为主。Zotero 10+ 另有一条本机写入通道（建分类 / 写条目 / 挂链接文件），
-    必须先用 zotero_local_authorize 拿到用户在弹窗里授予的 key（「始终允许」才可复用），
-    文件始终留在项目文件夹（linked_file），不上传、不进 Zotero storage。
+  · 本模块以**只读**为主。普通本机写入（建分类 / 写条目 / 挂链接文件）必须先用
+    zotero_local_authorize 拿到用户在弹窗里授予的 key（「始终允许」才可复用）。
+    暂存文献的显式导入另走 import_pdf：使用 imported_file 和 Local API 三阶段上传，交给 Zotero 附件管理。
 
 Zotero 7+ 的接口：
   GET /api/users/0/items?format=json&limit=&start=&q=
@@ -22,6 +22,7 @@ Zotero 7+ 的接口：
 from __future__ import annotations
 
 import glob
+import hashlib
 import html
 import json
 import os
@@ -43,10 +44,18 @@ PING_TIMEOUT = 2
 READ_TIMEOUT = 8
 MAX_LIMIT = 100
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
+KEY = re.compile(r"^[A-Z0-9]{8}$")
 
 
 class ZoteroError(RuntimeError):
     """带中文人话的失败原因（前端直接显示）。"""
+
+
+def _key(value: str) -> str:
+    """Validate a Zotero item or collection key before putting it in a URL."""
+    if not KEY.fullmatch(str(value or "")):
+        raise ValueError("Zotero Key 应为 8 位大写字母或数字")
+    return str(value)
 
 
 # --------------------------------------------------------------------------- #
@@ -854,6 +863,121 @@ def link_pdf(db: Any, item_key: str, pdf: str, title: str = "PDF") -> dict:
                   "contentType": "application/pdf"}
     created = _results(_write(db, "/users/0/items", [attachment]), "挂链接文件")
     return {"key": str(created.get("key") or ""), "parentItem": item_key, "path": str(path.resolve())}
+
+
+def _md5_file(path: Path) -> str:
+    digest = hashlib.md5()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _local_request(db: Any, path: str, method: str = "POST", body: bytes | None = None,
+                   content_type: str = "application/x-www-form-urlencoded",
+                   extra_headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], Any]:
+    """Authenticated local API request used by Zotero's three-phase file upload."""
+    if not str(path).startswith("/"):
+        raise ZoteroError("Zotero Local API path must start with a slash")
+    data = store.read(db, LOCAL_SERVICE)
+    for attempt in (0, 1):
+        if not data.get("key"):
+            fresh = _authorize(db)
+            data = {"key": securestore.protect(fresh["key"]), "server_id": fresh["server_id"]}
+        headers = {"Zotero-API-Version": API_VERSION,
+                   "Zotero-Server-ID": str(data.get("server_id") or ""),
+                   "Zotero-API-Key": securestore.unprotect(data["key"])}
+        if body is not None:
+            headers["Content-Type"] = content_type
+        headers.update(extra_headers or {})
+        request = urllib.request.Request(_base() + "/api" + path, data=body, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=READ_TIMEOUT) as response:
+                payload = response.read()
+                parsed = json.loads(payload.decode("utf-8", "replace")) if payload else {}
+                return response.status, {k.lower(): v for k, v in response.headers.items()}, parsed
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401 and attempt == 0:
+                store.write(db, LOCAL_SERVICE, {})
+                data = {}
+                continue
+            detail = exc.read().decode("utf-8", "replace")[:300]
+            raise ZoteroError("Zotero Local API write failed: HTTP %s (%s)" % (exc.code, detail)) from exc
+    raise ZoteroError("Zotero Local API write failed: authorization unavailable")
+
+
+def _upload_bytes(url: str, payload: bytes, content_type: str = "application/octet-stream") -> None:
+    request = urllib.request.Request(url, data=payload, method="POST",
+                                     headers={"Content-Type": content_type or "application/octet-stream"})
+    try:
+        with urllib.request.urlopen(request, timeout=READ_TIMEOUT) as response:
+            if response.status not in (200, 201, 204):
+                raise ZoteroError("Zotero file upload failed: HTTP %s" % response.status)
+            response.read()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        raise ZoteroError("Zotero file upload failed: HTTP %s (%s)" % (exc.code, detail)) from exc
+
+
+def _children(item_key: str) -> list[dict[str, Any]]:
+    _, _, body = _get(_api_url(_base(), f"/users/0/items/{urllib.parse.quote(item_key)}/children"))
+    return body if isinstance(body, list) else []
+
+
+def import_pdf(db: Any, item_key: str, pdf: str, title: str = "PDF") -> dict[str, Any]:
+    """Import a project PDF as a Zotero stored-file attachment.
+
+    This is intentionally separate from ``link_pdf``: imported files are
+    owned by Zotero and can be organized by an attachment-management plugin.
+    """
+    item_key = str(item_key or "").strip()
+    path = Path(str(pdf or "")).expanduser().resolve()
+    if not item_key:
+        raise ValueError("missing Zotero item key")
+    _key(item_key)
+    if not path.is_file() or path.suffix.lower() != ".pdf":
+        raise ValueError("PDF does not exist: %s" % path)
+    if store.read(db, "zotero_web").get("transport") not in (None, "local"):
+        raise ZoteroError("PDF import requires the local Zotero API; switch Zotero transport to local")
+    md5 = _md5_file(path)
+    filename = path.name
+    attachment = None
+    for child in _children(item_key):
+        data = child.get("data") or {}
+        if data.get("itemType") != "attachment" or data.get("linkMode") != "imported_file":
+            continue
+        if str(data.get("md5") or "").lower() == md5.lower():
+            return {"key": str(child.get("key") or data.get("key") or ""), "parentItem": item_key,
+                    "path": str(path), "mode": "imported_file", "md5": md5, "reused": True}
+        if not attachment and str(data.get("filename") or "") == filename:
+            attachment = child
+    if attachment:
+        attachment_key = str(attachment.get("key") or (attachment.get("data") or {}).get("key") or "")
+    else:
+        created = _results(_write(db, "/users/0/items", [{
+            "itemType": "attachment", "parentItem": item_key, "linkMode": "imported_file",
+            "title": str(title or filename), "filename": filename,
+            "contentType": "application/pdf", "charset": "", "tags": [], "relations": {},
+        }]), "create imported-file attachment")
+        attachment_key = str(created.get("key") or "")
+    if not attachment_key:
+        raise ZoteroError("Zotero did not return an attachment key")
+    fields = urllib.parse.urlencode({"md5": md5, "filename": filename,
+                                     "filesize": str(path.stat().st_size),
+                                     "mtime": str(int(path.stat().st_mtime * 1000))}).encode()
+    _, _, auth = _local_request(db, f"/users/0/items/{urllib.parse.quote(attachment_key)}/file",
+                                body=fields, extra_headers={"If-None-Match": "*"})
+    if not auth.get("exists"):
+        upload_url = str(auth.get("url") or "")
+        upload_key = str(auth.get("uploadKey") or "")
+        if not upload_url or not upload_key:
+            raise ZoteroError("Zotero did not return a file upload URL")
+        _upload_bytes(upload_url, path.read_bytes(), str(auth.get("contentType") or "application/octet-stream"))
+        register = urllib.parse.urlencode({"upload": upload_key}).encode()
+        _local_request(db, f"/users/0/items/{urllib.parse.quote(attachment_key)}/file",
+                       body=register, extra_headers={"If-None-Match": "*"})
+    return {"key": attachment_key, "parentItem": item_key, "path": str(path),
+            "mode": "imported_file", "md5": md5, "reused": bool(attachment)}
 
 
 def bibtex_for(key: str = "", doi: str = "", title: str = "", base: str | None = None) -> dict[str, Any]:

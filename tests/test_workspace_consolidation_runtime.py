@@ -1,12 +1,58 @@
 """User paths through the consolidated workspace and native Agent controls."""
+import http.server
+import json
 from pathlib import Path
+import threading
 import unittest
+from unittest.mock import patch
 
 import workflow
 from tests import test_web_runtime as web
 from tests import test_project_workspace_runtime as workspace
 from tests import test_project_tasks_runtime as task_runtime
 from tests.test_workspace_graph_runtime import TrajectoryModelFixture
+
+
+class SearchWorkflowModelFixture:
+    """Call the real search tool while keeping external search sources deterministic."""
+
+    def __enter__(self):
+        self.calls = []
+        fixture = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_POST(self):
+                payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                messages = payload['messages']
+                available = {tool['function']['name'] for tool in payload.get('tools', [])}
+                searched = any(message.get('role') == 'tool'
+                               and message.get('name') == 'paper_search' for message in messages)
+                call = 'paper_search' in available and not searched
+                if call:
+                    fixture.calls.append('paper_search')
+                    delta = {'tool_calls': [{'index': 0, 'id': 'workflow-paper-search', 'type': 'function',
+                        'function': {'name': 'paper_search', 'arguments': json.dumps({
+                            'query': 'evidence research report', 'sources': ['crossref'], 'rows': 1})}}]}
+                else:
+                    delta = {'content': '# Search results\n\nThe deterministic search completed.'}
+                value = {'choices': [{'delta': delta, 'finish_reason': 'tool_calls' if call else 'stop'}]}
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                self.wfile.write(('data: ' + json.dumps(value) + '\n\ndata: [DONE]\n\n').encode())
+                self.wfile.flush()
+
+        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f'http://127.0.0.1:{self.server.server_address[1]}/v1'
+        return self
+
+    def __exit__(self, *_args):
+        self.server.shutdown()
+        self.server.server_close()
 
 
 @unittest.skipUnless(web.sync_playwright and web.EDGE,'Requires Playwright and Edge')
@@ -95,7 +141,12 @@ class WorkspaceConsolidationRuntimeTest(unittest.TestCase):
 
     def test_agent_graph_entry_starts_the_same_project_workflow(self):
         self.seed()
-        with task_runtime.TaskModelFixture() as model:
+        import workflow_stages
+        with patch.object(workflow_stages, 'search', return_value=[{
+                    'source': 'crossref', 'title': 'Evidence research report fixture',
+                    'authors': 'Test Author', 'year': '2025', 'doi': '', 'url': 'https://example.test/paper',
+                    'pdf_url': '', 'abstract': 'A deterministic evidence research report result.', 'citations': 0,
+                }]), SearchWorkflowModelFixture() as model:
             self.use_model(model.url)
             response=self.page.request.post(self.url+'api/langgraph/start',data={
                 'project_id':self.pid,'graph_type':'literature_study','goal':'Read evidence and deliver a report'})
@@ -105,6 +156,7 @@ class WorkspaceConsolidationRuntimeTest(unittest.TestCase):
                 lambda data:(data.get('run') or {}).get('status') in ('awaiting_review','failed'))['run']
             self.assertEqual(saved['id'],started['id'])
             self.assertEqual(saved['status'],'awaiting_review',saved)
+            self.assertEqual(model.calls,['paper_search'])
             self.page.evaluate("ProjectWorkspace.showResource('workflow')")
             self.page.locator('#pwWorkflowChoice').wait_for()
             self.assertEqual(self.page.locator('#pwWorkflowChoice').input_value(),saved['layout']['id'])

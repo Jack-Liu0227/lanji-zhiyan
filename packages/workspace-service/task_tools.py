@@ -4,7 +4,7 @@ from __future__ import annotations
 import project_tasks as tasks
 
 
-NAMES = {"task_create", "task_start", "task_status", "task_cancel", "workflow_templates", "workflow_prepare", "workflow_start", "workflow_status", "workflow_cancel"}
+NAMES = {"task_create", "task_start", "task_handoff", "task_status", "task_cancel", "workflow_templates", "workflow_prepare", "workflow_start", "workflow_status", "workflow_cancel"}
 
 
 def workflow_result(db, run):
@@ -14,7 +14,9 @@ def workflow_result(db, run):
     pending = [review_target(task) for task in tasks.list_tasks(db, run['project_id'], workflow_run_id=run['id'])
                if task['status'] == 'awaiting_review']
     return {'navigation': {'project_id': run['project_id'], 'workflow_run_id': run['id']},
-            'review_targets': pending, 'run': run}
+            'review_targets': pending,
+            'result_targets': [task['node_result'] for task in tasks.list_tasks(db, run['project_id'], workflow_run_id=run['id']) if task['node_result'].get('available')],
+            'run': run}
 
 
 def call(db, project_id, name, args):
@@ -39,9 +41,15 @@ def call(db, project_id, name, args):
         if plan_id and not plan: raise ValueError('计划不属于当前项目')
         fields = ("title", "goal", "executor_binding_id", "member_id", "inputs", "output_contract", "dependencies")
         spec = {k: args[k] for k in fields if k in args}
+        coordinator = (parent or {}).get('metadata', {}).get('_team_orchestration')
+        request_key = str(args.get('request_key') or '')
+        if coordinator:
+            spec.setdefault('executor_binding_id', coordinator['binding_id'])
+            spec.setdefault('inputs', parent['inputs'])
+            request_key = 'team:' + parent['id'] + ':' + request_key if request_key else ''
         if plan and plan['acceptance']: spec['goal'] = str(spec.get('goal') or plan['description'] or plan['title'])+'\n\n计划验收要求：\n'+plan['acceptance']
         task = tasks.create(db, {**spec, "project_id": project_id},
-                            authority=authority, request_key=str(args.get("request_key") or ""))
+                            authority=authority, request_key=request_key)
         if plan_id:
             import execution_board
             execution_board.link_plan(db, project_id, plan_id, task['id'])
@@ -66,16 +74,41 @@ def call(db, project_id, name, args):
         if parent and task["id"] != parent["id"] and task["parent_task_id"] != parent["id"]:
             raise ValueError("只能操作当前任务及其直接子任务")
         if name == "task_start":
+            if task['metadata'].get('_team_worker') and any(tasks.get(db, key)['status'] != 'delivered' for key in task['dependencies']):
+                return {'task': task, 'waiting_dependencies': True}
             run = tasks.start(db, task_id, authority=authority, request_key=str(args.get("request_key") or ""))
             if task["workflow_run_id"] and not task["parent_task_id"]:
                 engine.kick(db.path, task["workflow_run_id"])
             else:
                 worker.kick(db.path, run["id"])
             return {"task": tasks.get(db, task_id), "run": run}
+        if name == "task_handoff":
+            result = tasks.handoff(db, task_id, str(args.get('target_member_id') or ''), str(args.get('reason') or ''), authority=authority)
+            worker.kick(db.path, result['target_run_id'])
+            raise __import__('execution').Handoff(result)
         if name == "task_cancel":
             task = tasks.cancel(db, task_id, authority=authority)
         return {"task": task}
     run_id = str(args.get("id") or "")
+    if parent and parent['metadata'].get('_team_orchestration') and name in ('workflow_prepare', 'workflow_start', 'workflow_status', 'workflow_cancel'):
+        import workflow_node_workbench
+        run_id = str(parent['metadata'].get('_team_workflow_run_id') or parent.get('workflow_run_id') or args.get('id') or '')
+        if name == 'workflow_prepare':
+            run = workflow_tasks.prepare(db, project_id, str(args.get('goal') or parent['goal']),
+                str(args.get('request_key') or 'team-workflow:' + parent['id']), str(args.get('template_id') or ''), inputs=args.get('inputs'))
+            metadata = {**parent['metadata'], '_team_workflow_run_id': run['id']}
+            db.db.execute('UPDATE project_tasks SET metadata=?,updated_at=? WHERE id=?', (tasks._json(metadata), tasks._now(), parent['id']))
+            db.db.commit()
+            return {**workflow_result(db, engine.detail(db, run['id'])), 'started_by_team_task': parent['id']}
+        if not run_id:
+            raise ValueError('请先准备团队工作流')
+        run = engine.detail(db, run_id)
+        if name == 'workflow_start':
+            workflow_node_workbench.mark_agent_started(db, run)
+            engine.kick(db.path, run['id'])
+        elif name == 'workflow_cancel':
+            run = workflow_tasks.cancel(db, run['id'], authority=authority)
+        return {**workflow_result(db, engine.detail(db, run['id'])), 'started_by_team_task': parent['id']}
     if parent:
         if name == "workflow_prepare" or not parent["workflow_run_id"] or (run_id and run_id != parent["workflow_run_id"]):
             raise ValueError("当前任务只能查询或停止所属工作流，不能创建其他实例")
@@ -88,6 +121,8 @@ def call(db, project_id, name, args):
         if run["project_id"] != project_id:
             raise ValueError("工作流不属于当前项目")
         if name == "workflow_start":
+            import workflow_node_workbench
+            workflow_node_workbench.mark_agent_started(db, run)
             engine.kick(db.path, run["id"])
         return workflow_result(db, engine.detail(db, run["id"]))
     run = engine.detail(db, run_id) if run_id else engine.latest(db, project_id)

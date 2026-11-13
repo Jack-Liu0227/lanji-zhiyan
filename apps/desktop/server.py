@@ -108,6 +108,7 @@ from handlers.starmap import StarmapRoutes          # do_GET 的路由按域分�
 from handlers.core import CoreRoutes
 from handlers.wf_routes import WorkflowRoutes
 from handlers.misc import MiscRoutes
+from handlers.update import UpdateRoutes
 from run_manager import RunManager
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
@@ -574,7 +575,7 @@ class Server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
-class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPRequestHandler):
+class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoutes, BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *args: Any) -> None:  # 静默
@@ -1000,7 +1001,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
             if self._mail_route("GET", path, q, None):
                 return
             # ---- 各域路由（handlers/*）：命中即返回 ----
-            for fn in (self._r_starmap, self._r_core, self._r_workflow, self._r_misc):
+            for fn in (self._r_starmap, self._r_core, self._r_workflow, self._r_misc, self._r_update):
                 r = fn(path, q)
                 if r is not None or self._responded:
                     return r
@@ -1083,6 +1084,8 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
             return
         if self._mail_route("POST", path, q, data):
             return
+        if path == "/api/app/update/install":
+            return self._p_update(path, data, q)
         if path == "/api/vault/status":            # 看板上的状态写回笔记 frontmatter
             try:
                 out = vault.set_status(str(data.get("vault") or ""), str(data.get("path") or ""),
@@ -1934,6 +1937,22 @@ def _start_grant_helper():
                     elif self.path == "/close":
                         result = _win("close")
                         ok = "error" not in result
+                    elif self.path == "/update":
+                        # The web server may run at Low integrity.  Start the
+                        # installer in this Medium-integrity host process so
+                        # it can replace the application directory safely.
+                        installer = Path(str(data.get("installer") or "")).resolve()
+                        install_dir = Path(str(data.get("install_dir") or "")).resolve()
+                        cache = Path(paths.CACHE).resolve()
+                        active_dir = Path(sys.executable).resolve().parent
+                        if (installer.suffix.lower() == ".exe" and installer.is_file()
+                                and installer.is_relative_to(cache)
+                                and install_dir == active_dir):
+                            import app_update
+                            app_update.start_installer(
+                                installer, install_dir=install_dir,
+                                create_shortcut=bool(data.get("create_shortcut", True)))
+                            ok = True
                     elif self.path == "/app":           # 外部 GUI 程序：名字白名单，路径宿主自己解
                         if data.get("name") == "zotero":
                             import zotero

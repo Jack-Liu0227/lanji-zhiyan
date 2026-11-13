@@ -528,6 +528,10 @@ def start_auto(db_path):
 def route(method: str, path: str, body: dict, query: dict, db: Any) -> dict | None:
     if not path.startswith("/api/zotero/web/"):
         return None
+    import zotero_staged
+    staged = zotero_staged.route(method, path, body, query, db)
+    if staged is not None:
+        return staged
     import zotero_links
     result = zotero_links.route(method, path, body, query, db)
     if result is not None:

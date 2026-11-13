@@ -36,3 +36,17 @@ sketches/
 # 本地计划与浏览器诊断记录
 /[Pp]lan/
 /.playwright-mcp/
+# 临时截图、日志与任务记录
+node-workbench-*.png
+.codex-tasks/
+tools/.codex-tasks/
+*.log
+.coverage
+htmlcov/
+
+# 编辑器、系统与临时缓存
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.tmp

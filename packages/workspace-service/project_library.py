@@ -100,11 +100,16 @@ def items(db, project_id):
                 queue.get(r, {}).get("saved_path") == p["source_path"] for r in row["result_ids"])]
             pid = matches[0]["id"] if len(matches) == 1 else ""
         paper = papers.get(pid, {})
+        queued = next((queue.get(r, {}) for r in row["result_ids"] if r in queue), {})
         used.add(pid)
         result.append({**paper, **row, "paper_id": pid, "source_path": paper.get("source_path", ""),
                        "has_pdf": bool(paper and Path(paper["source_path"]).is_file()),
-                       "zotero_key": next((zotero[r] for r in row["result_ids"] if r in zotero), "")})
+                       "zotero_key": next((zotero[r] for r in row["result_ids"] if r in zotero), "") or queued.get("zotero_key", ""),
+                       "zotero_status": queued.get("zotero_status", ""),
+                       "zotero_attachment_key": queued.get("zotero_attachment_key", ""),
+                       "zotero_error": queued.get("zotero_error", "")})
     result.extend({**p, "paper_id": p["id"], "result_id": "", "result_ids": [], "zotero_key": "",
+                   "zotero_status": "", "zotero_attachment_key": "", "zotero_error": "",
                    "has_pdf": Path(p["source_path"]).is_file()} for pid, p in papers.items() if pid not in used)
     return result
 

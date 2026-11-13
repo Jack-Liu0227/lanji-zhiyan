@@ -36,9 +36,9 @@ description: 在览籍智研中按科研目标自动立项，装配专家、团�
 
 需要处理 Zotero 附件时，读取 [references/zotero.md](references/zotero.md)，应用内可通过 `skill_read` 的 `resource` 参数读取。
 
-使用 `zotero_search` / `zotero_item` 查题录，再用 `zotero_import_pdf` 把指定条目的 PDF 复制到当前项目。对返回的项目副本开展精读、提取和加工。原始附件、链接路径、Zotero 数据目录和 `zotero.sqlite` 均不可直接修改、重命名、移动或删除。
+使用 `zotero_search` / `zotero_item` 查题录，再用 `zotero_import_pdf` 把指定条目的 PDF 复制到当前项目。对返回的项目副本开展精读、提取和加工。Agent 使用 `paper_download` 下载的 OA PDF 只进入项目暂存目录，不会自动写入 Zotero。原始附件、链接路径、Zotero 数据目录和 `zotero.sqlite` 均不可直接修改、重命名、移动或删除。
 
-需要写回 Zotero 时使用现有 Web API 连接器及其预览、版本冲突检查。执行受应用权限控制；不要把 `confirm=true` 当作用户授权，也不通过修改本地文件替代 API 写回。
+需要把项目暂存文献写回 Zotero 时，先调用 `zotero_staged_import` 生成预览，向用户展示匹配和附件处理方式；只有用户确认后才在 Full Access 下执行。执行受应用权限控制；不要把 `confirm=true` 当作用户授权，也不通过修改本地文件替代 API 写回。附件由 `imported_file` 流程交给 Zotero 附件管理插件，暂存 PDF 不自动删除。
 
 ## 交付
 

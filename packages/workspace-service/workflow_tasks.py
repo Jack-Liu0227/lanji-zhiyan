@@ -27,7 +27,7 @@ def _executor(db, project_id, layout, raw, selected=None):
         effective = {**effective, **selected}
     if raw.get('executor_binding_id'):
         executor=bindings.resolve(db,project_id,raw['executor_binding_id'],member_id=(selected or {}).get('member_id',raw.get('member_id','')))
-    elif selected or any(raw.get(key) for key in ('assistant_id','team_id','execution_mode')) or saved.get("source") != "user":
+    elif selected or any(raw.get(key) for key in ('assistant_id','team_id','member_id','executor_binding_id')) or saved.get("source") != "user":
         import file_handoff
         # Keep contradictory legacy executor fields an error instead of selecting a different person.
         choices = file_handoff.actors(db, project_id, effective)
@@ -100,6 +100,8 @@ def compile_run(db, run):
             inputs = [{"relative": Path(source["path"]).resolve().relative_to(root).as_posix(), "sha256": source["sha256"]}]
             inputs.extend({"relative": Path(f["path"]).resolve().relative_to(root).as_posix(), "sha256": f["sha256"]} for f in source.get("related_inputs", []))
         scope = {"kind": "workflow", "allowed_binding_ids": allowed}
+        if node.get('manual_review_required'):
+            scope['manual_review_required'] = True
         if members:
             # Team-wide nodes can dispatch to their own configured members only.
             members_for_flow = set(members)
@@ -270,6 +272,65 @@ def _record_attempt(db, run, nid, task, task_run, snapshot):
         tasks.link_origin(db, task["id"], "team_task", old["id"], task_run["id"])
 
 
+def _sync_workflow_node(db, run, task, task_run=None):
+    """Project canonical task progress back to the LangGraph node row."""
+    attempt = task_run or task.get("latest_run") or {}
+    attempt_id = attempt.get("id")
+    origin = next((item for item in task.get("origins", [])
+                   if item.get("kind") == "workflow_node" and
+                   (not attempt_id or item.get("task_run_id") == attempt_id)), None)
+    if not origin:
+        origin = next((item for item in task.get("origins", []) if item.get("kind") == "workflow_node"), None)
+    if not origin:
+        return
+    status = {"ready": "queued", "queued": "queued", "running": "running",
+              "awaiting_review": "awaiting_review", "delivered": "delivered",
+              "blocked": "blocked", "failed": "failed", "cancelled": "cancelled",
+              "interrupted": "interrupted"}.get(task.get("status"), task.get("status", "queued"))
+    snapshot = attempt.get("output_snapshot") or {}
+    assets = [item.get("asset_id") or item.get("id") for item in task.get("outputs", [])
+              if isinstance(item, dict) and (item.get("asset_id") or item.get("id"))]
+    existing = db.db.execute("SELECT checkpoint FROM workflow_nodes WHERE id=?", (origin["legacy_id"],)).fetchone()
+    checkpoint = {}
+    if existing and existing["checkpoint"]:
+        try:
+            checkpoint = json.loads(existing["checkpoint"])
+        except (TypeError, ValueError):
+            checkpoint = {}
+    checkpoint.update(attempt.get("checkpoint") or {})
+    checkpoint.update(canonical_task_id=task["id"], canonical_run_id=attempt.get("id", ""))
+    if snapshot:
+        checkpoint.setdefault("output", snapshot)
+    decisions = task.get("deliveries") or []
+    if decisions:
+        decision = decisions[-1]
+        checkpoint.update(delivery=decision, delivery_source=decision.get("source", ""),
+                         feedback=decision.get("feedback", ""))
+    ended_at = attempt.get("ended_at", "") or (task.get("updated_at", "") if status in
+                                                   ("delivered", "awaiting_review", "blocked", "failed", "cancelled") else "")
+    error = attempt.get("error", "") or (run.get("error", "") if status in ("failed", "cancelled") else "")
+    db.db.execute("UPDATE workflow_nodes SET status=?,checkpoint=?,output_assets=?,error=?,ended_at=? WHERE id=?",
+                  (status, json.dumps(checkpoint, ensure_ascii=False, default=str),
+                   json.dumps(assets, ensure_ascii=False), error[:2000], ended_at, origin["legacy_id"]))
+    db.db.execute("UPDATE workflow_runs SET current_node=? WHERE id=?", (origin["legacy_id"], run["id"]))
+    row = db.db.execute("SELECT settings FROM workflow_executions WHERE run_id=?", (run["id"],)).fetchone()
+    if row:
+        settings = json.loads(row["settings"] or "{}")
+        settings["current_node_id"] = task.get("workflow_node_id", "")
+        db.db.execute("UPDATE workflow_executions SET settings=?,updated_at=? WHERE run_id=?",
+                      (json.dumps(settings, ensure_ascii=False), tasks._now(), run["id"]))
+    db.db.commit()
+
+
+def _accepted_history(task):
+    delivery = next(item for item in task['deliveries'] if item['id'] == task['accepted_delivery_id'])
+    output = delivery['output_versions']
+    return {'task_id': task['id'], 'node_id': task['workflow_node_id'], 'delivery_id': delivery['id'],
+            'output_revision': task['latest_run']['checkpoint'].get('output_revision', 0),
+            'content': output.get('content', ''), 'outputs': output.get('files', []),
+            'feedback': delivery.get('feedback', '')}
+
+
 def advance(db, run_id, cancel_check=None):
     import workflow_execution as engine
     import run_service
@@ -296,16 +357,20 @@ def advance(db, run_id, cancel_check=None):
                 if task["status"] == "delivered":
                     _record_attempt(db, run, nid, task, task["latest_run"], task["latest_run"]["checkpoint"].get("input") or {})
                     tasks._validate_versions(db, task, task["latest_run"])
+                    _sync_workflow_node(db, run, task, task["latest_run"])
                     return {"status": "delivered"}
                 if task["status"] == "awaiting_review":
+                    _sync_workflow_node(db, run, task, task.get("latest_run"))
                     engine._status(db, run_id, "awaiting_review")
                     return {"status": engine.detail(db, run_id)["status"]}
                 node = task["metadata"]["node_config"]
+                run["settings"]["current_node_id"] = nid
+                _save(db, run)
                 if run["settings"].get("legacy_stage_compat"):
                     snapshot = engine._snapshot(db, run, node)
                 else:
                     snapshot = {"goal": run["settings"].get("goal", ""), "history": [
-                        {"task_id": t["id"], "node_id": t["workflow_node_id"], "outputs": t["outputs"], "deliveries": t["deliveries"]}
+                        _accepted_history(t)
                         for t in tasks.list_tasks(db, run["project_id"], workflow_run_id=run_id) if t["status"] == "delivered"],
                         "memory": db.memory_block(run["project_id"]), "input_assets": [], "file_input": run["settings"].get("file_input")}
                 metadata = {**task["metadata"], "upstream_context": snapshot}
@@ -315,10 +380,12 @@ def advance(db, run_id, cancel_check=None):
                 _record_attempt(db, run, nid, tasks.get(db, task_id), task_run, snapshot)
                 task = worker.execute(db, task_run["id"], cancel_check)
                 task = tasks.get(db, task_id)
+                _sync_workflow_node(db, run, task, task.get("latest_run"))
                 if task["status"] != "delivered":
                     status = task["status"] if task["status"] in ("awaiting_review", "blocked", "cancelled", "running", "queued") else "failed"
                     engine._status(db, run_id, status, (task["latest_run"] or {}).get("error", ""))
                     return {"status": engine.detail(db, run_id)["status"]}
+            _sync_workflow_node(db, run, task, task.get("latest_run"))
             return {"status": "delivered"}
         from workflow_checkpoint import drive
         result = drive(db, run, execute_node)
@@ -326,17 +393,23 @@ def advance(db, run_id, cancel_check=None):
             return engine.detail(db, run_id)
         engine._status(db, run_id, "succeeded")
     except Exception as exc:
-        engine._status(db, run_id, "cancelled" if isinstance(exc, execution.Cancelled) else "failed", str(exc))
+        engine._status(db, run_id, "cancelled" if isinstance(exc, execution.Cancelled) else "failed", worker._error_detail(exc))
     return engine.detail(db, run_id)
 
 
-def review(db, run_id, node_id, approved, feedback="",reviewed_output_version=None):
+def review(db, run_id, node_id, approved, feedback="",reviewed_output_version=None, reviewed_run_id=''):
     import workflow_execution as engine
     run = compile_run(db, engine.detail(db, run_id))
     task = tasks.find_origin(db, "workflow_node", node_id)
     if not task or task["workflow_run_id"] != run_id or run["status"] != "awaiting_review":
         raise ValueError("该节点已审查或不是当前待审查节点")
-    tasks.review(db, task["id"], approved=approved, feedback=feedback, authority=tasks.CommandContext.ui(run["project_id"]),reviewed_output_version=reviewed_output_version)
+    origin = next((item for item in task['origins'] if item['kind'] == 'workflow_node' and item['legacy_id'] == node_id), None)
+    if not origin or origin['task_run_id'] != task['latest_run_id'] or (reviewed_run_id and reviewed_run_id != origin['task_run_id']):
+        raise ValueError('该节点已有新的尝试，请重新打开当前产物后核查')
+    tasks.review(db, task["id"], approved=approved, feedback=feedback, authority=tasks.CommandContext.ui(run["project_id"]),
+                 reviewed_run_id=origin['task_run_id'], reviewed_output_version=reviewed_output_version)
+    reviewed = tasks.get(db, task["id"])
+    _sync_workflow_node(db, run, reviewed, reviewed.get("latest_run"))
     engine._status(db, run_id, "queued" if approved else "blocked", "" if approved else "人工审查已退回，请按修改意见重试节点")
     return engine.detail(db, run_id)
 

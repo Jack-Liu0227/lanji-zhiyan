@@ -102,6 +102,11 @@ def validate_definition(data: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(review, bool):
             raise ValueError("review_required 必须是布尔值，默认需要人工审查")
         config = {"review_required": review}
+        manual = raw.get('manual_review_required', False)
+        if not isinstance(manual, bool):
+            raise ValueError('manual_review_required 必须是布尔值')
+        if manual:
+            config.update(manual_review_required=True, review_required=True)
         kind = raw.get('node_kind', 'executor')
         if kind not in ('executor', 'tool', 'workflow'):
             raise ValueError('节点类型须为执行者、固定工具或子工作流')
@@ -215,7 +220,9 @@ def resolve_node(db: Any, project_id: str, layout_id: str, node: dict, *, materi
         actor=project_bindings.resolve(db,project_id,grant['id'] if grant else 'global:team:'+node['team_id'],member_id=node.get('member_id',''),materialize=materialize)
         return {**node,'team_id':actor['team_id'],'member_id':actor['requested_member_id'],'assistant_id':node.get('assistant_id') or '', 'execution_mode':'team'}
     from workflow_catalog import LEGACY_TEAM_WORKFLOWS, LEGACY_TEAM_STAGES, LEGACY_MEMBER_STAGES
-    if any(node.get(k) for k in ("execution_mode", "assistant_id", "team_id", "member_id")):
+    # execution_mode is a role hint, not an executor identity. A project role
+    # binding must still be resolved when only the mode is present.
+    if any(node.get(k) for k in ("assistant_id", "team_id", "member_id")):
         return node
     if layout_id not in LEGACY_TEAM_WORKFLOWS:
         return node

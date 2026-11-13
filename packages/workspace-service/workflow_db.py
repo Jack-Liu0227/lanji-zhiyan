@@ -322,6 +322,12 @@ class WorkflowDB(ResearchDB):
                           task_id TEXT NOT NULL, result_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
                           path TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
                           PRIMARY KEY (task_id, result_id))""")
+                    self.db.execute("""CREATE TABLE IF NOT EXISTS zotero_staging (
+                          task_id TEXT NOT NULL, result_id TEXT NOT NULL,
+                          zotero_status TEXT NOT NULL DEFAULT 'staged', zotero_key TEXT NOT NULL DEFAULT '',
+                          zotero_attachment_key TEXT NOT NULL DEFAULT '', zotero_error TEXT NOT NULL DEFAULT '',
+                          zotero_updated_at TEXT NOT NULL DEFAULT '',
+                          PRIMARY KEY (task_id, result_id))""")
                     # 团队（Leader + 成员 + 派活队列 + 运行事件）
                     self.db.execute("""CREATE TABLE IF NOT EXISTS assistants (
               id TEXT PRIMARY KEY, source TEXT NOT NULL DEFAULT 'user', name TEXT NOT NULL,
@@ -727,28 +733,88 @@ class WorkflowDB(ResearchDB):
     def enqueue(self, task_id: str, result_ids: list[str]) -> int:
         """按本次勾选重建队列（上一批的勾选记录清掉），状态先置 queued。"""
         self.db.execute("DELETE FROM dl_queue WHERE task_id=?", (task_id,))
+        self.db.execute("DELETE FROM zotero_staging WHERE task_id=?", (task_id,))
         for rid in result_ids:
-            self.db.execute("INSERT OR REPLACE INTO dl_queue VALUES (?,?,?,?,?,?)",
-                            (task_id, rid, "queued", "", "", now()))
+            self.db.execute("""INSERT OR REPLACE INTO dl_queue
+                (task_id,result_id,status,path,error,updated_at)
+                VALUES (?,?,?,?,?,?)""", (task_id, rid, "queued", "", "", now()))
         self.db.commit()
         return len(result_ids)
 
     def set_queue(self, task_id: str, result_id: str, status: str, path: str = "", error: str = "") -> None:
-        self.db.execute("INSERT OR REPLACE INTO dl_queue VALUES (?,?,?,?,?,?)",
-                        (task_id, result_id, status, path, error, now()))
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(dl_queue)")}
+        if "zotero_status" not in columns:
+            self.db.execute("DELETE FROM zotero_staging WHERE task_id=? AND result_id=?", (task_id, result_id))
+        self.db.execute("""INSERT OR REPLACE INTO dl_queue
+            (task_id,result_id,status,path,error,updated_at)
+            VALUES (?,?,?,?,?,?)""", (task_id, result_id, status, path, error, now()))
+        self.db.commit()
+
+    def set_zotero_stage(self, task_id: str, result_id: str, status: str,
+                         zotero_key: str = "", attachment_key: str = "", error: str = "") -> None:
+        """Update the Zotero staging state without changing the download path."""
+        stamp = now()
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(dl_queue)")}
+        if "zotero_status" in columns:  # compatibility with databases created before 035
+            existing = self.db.execute(
+                "SELECT status,path,error FROM dl_queue WHERE task_id=? AND result_id=?",
+                (task_id, result_id),
+            ).fetchone()
+            queue_status = existing["status"] if existing else "queued"
+            queue_path = existing["path"] if existing else ""
+            queue_error = existing["error"] if existing else ""
+            self.db.execute("""INSERT INTO dl_queue
+                (task_id,result_id,status,path,error,updated_at,zotero_status,zotero_key,
+                 zotero_attachment_key,zotero_error,zotero_updated_at)
+                VALUES (?,?,?,?,?, ?,?,?,?,?,?)
+                ON CONFLICT(task_id,result_id) DO UPDATE SET
+                  zotero_status=excluded.zotero_status,
+                  zotero_key=excluded.zotero_key,
+                  zotero_attachment_key=excluded.zotero_attachment_key,
+                  zotero_error=excluded.zotero_error,
+                  zotero_updated_at=excluded.zotero_updated_at""",
+                            (task_id, result_id, queue_status, queue_path, queue_error, stamp,
+                             status, zotero_key, attachment_key, error, stamp))
+        else:
+            self.db.execute("""INSERT INTO zotero_staging
+                (task_id,result_id,zotero_status,zotero_key,zotero_attachment_key,zotero_error,zotero_updated_at)
+                VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(task_id,result_id) DO UPDATE SET
+                  zotero_status=excluded.zotero_status,
+                  zotero_key=excluded.zotero_key,
+                  zotero_attachment_key=excluded.zotero_attachment_key,
+                  zotero_error=excluded.zotero_error,
+                  zotero_updated_at=excluded.zotero_updated_at""",
+                            (task_id, result_id, status, zotero_key, attachment_key, error, stamp))
         self.db.commit()
 
     def queue(self, task_id: str) -> list[dict[str, Any]]:
         """队列 + 卡片字段（和论文搜索的卡片同源，前端好复用同一套卡片）。"""
-        rows = [dict(r) for r in self.db.execute(
-            "SELECT * FROM dl_queue WHERE task_id=? ORDER BY updated_at", (task_id,))]
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(dl_queue)")}
+        if "zotero_status" in columns:  # compatibility with databases created before 035
+            sql = "SELECT * FROM dl_queue WHERE task_id=? ORDER BY updated_at"
+        else:
+            sql = """SELECT q.*, COALESCE(z.zotero_status, 'staged') AS zotero_status,
+                     COALESCE(z.zotero_key, '') AS zotero_key,
+                     COALESCE(z.zotero_attachment_key, '') AS zotero_attachment_key,
+                     COALESCE(z.zotero_error, '') AS zotero_error,
+                     COALESCE(z.zotero_updated_at, '') AS zotero_updated_at
+                     FROM dl_queue q LEFT JOIN zotero_staging z
+                       ON z.task_id=q.task_id AND z.result_id=q.result_id
+                     WHERE q.task_id=? ORDER BY q.updated_at"""
+        rows = [dict(r) for r in self.db.execute(sql, (task_id,))]
         out = []
         for r in rows:
             try:
                 item = self.result(r["result_id"])
             except KeyError:
                 continue
-            item.update({"status": r["status"], "saved_path": r["path"], "error": r["error"]})
+            item.update({"status": r["status"], "saved_path": r["path"], "error": r["error"],
+                         "zotero_status": r.get("zotero_status", "staged"),
+                         "zotero_key": r.get("zotero_key", ""),
+                         "zotero_attachment_key": r.get("zotero_attachment_key", ""),
+                         "zotero_error": r.get("zotero_error", ""),
+                         "zotero_updated_at": r.get("zotero_updated_at", "")})
             out.append(item)
         return out
 
@@ -1248,7 +1314,7 @@ class WorkflowDB(ResearchDB):
         tables_to_clean = (
             "papers", "artifacts", "runs", "calendar_events", "notes", "steps",
             "search_cache", "chat", "paper_graph", "kb_graph", "project_memory",
-            "md_notes", "dl_queue", "team_tasks", "team_events",
+            "md_notes", "dl_queue", "zotero_staging", "team_tasks", "team_events",
             "project_workflow_layouts", "zotero_bindings", "zotero_project_sources", "zotero_item_links", "zotero_project_memberships", "zotero_link_batches",
             "project_paper_links",
             "task_attempts", "audit_events", "project_todos", "background_jobs",
@@ -1525,17 +1591,38 @@ class WorkflowDB(ResearchDB):
     def cache_results(self, task_id: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         saved = []
         for it in items:
-            if not it.get("title"):
+            title = (it.get("title") or "").strip()
+            if not title:
                 continue
-            key = (self.db.execute(
-                "SELECT 1 FROM search_cache WHERE task_id=? AND source=? "
-                "AND (lower(trim(doi))=lower(trim(?)) AND trim(doi)!='' OR title=? AND (trim(doi)='' OR trim(?)=''))",
-                (task_id, it.get("source", ""), it.get("doi", ""), it.get("title", ""), it.get("doi", "")),
-            ).fetchone())
-            if key:
+            doi = (it.get("doi") or "").strip().lower()
+            existing = self.db.execute(
+                "SELECT * FROM search_cache WHERE task_id=? "
+                "AND ((lower(trim(doi))=lower(trim(?)) AND trim(doi)!='') "
+                "OR (lower(trim(title))=lower(trim(?)) AND (trim(doi)='' OR trim(?)='')))",
+                (task_id, doi, title, doi),
+            ).fetchone()
+            if existing:
+                row_dict = dict(existing)
+                rid = row_dict["id"]
+                updates = {}
+                if not (row_dict.get("pdf_url") or "").strip() and (it.get("pdf_url") or "").strip():
+                    updates["pdf_url"] = it["pdf_url"].strip()
+                if not (row_dict.get("doi") or "").strip() and doi:
+                    updates["doi"] = doi
+                if len((it.get("abstract") or "").strip()) > len((row_dict.get("abstract") or "").strip()):
+                    updates["abstract"] = it["abstract"].strip()
+                if not (row_dict.get("authors") or "").strip() and (it.get("authors") or "").strip():
+                    updates["authors"] = it["authors"].strip()
+                if not (row_dict.get("year") or "").strip() and (it.get("year") or "").strip():
+                    updates["year"] = str(it["year"]).strip()
+                if updates:
+                    set_clause = ", ".join(f"{k}=?" for k in updates)
+                    self.db.execute(f"UPDATE search_cache SET {set_clause} WHERE id=?", (*updates.values(), rid))
+                    import project_library
+                    project_library.index_record(self, task_id, rid)
                 continue
             rid = uuid.uuid4().hex
-            row = (rid, task_id, it.get("source", ""), it["title"], it.get("authors", ""), it.get("year", ""),
+            row = (rid, task_id, it.get("source", ""), title, it.get("authors", ""), str(it.get("year") or ""),
                    it.get("doi", ""), it.get("url", ""), it.get("pdf_url", ""), it.get("abstract", ""),
                    float(it.get("score") or 0), now())
             self.db.execute(
@@ -1553,19 +1640,34 @@ class WorkflowDB(ResearchDB):
         title = (it.get("title") or "").strip()
         if not title:
             raise ValueError("这条没有标题，跳过")
+        doi = (it.get("doi") or "").strip().lower()
         row = self.db.execute(
-            "SELECT id FROM search_cache WHERE task_id=? AND source=? "
-            "AND (lower(trim(doi))=lower(trim(?)) AND trim(doi)!='' OR ? AND title=? AND (trim(doi)='' OR trim(?)=''))",
-            (task_id, it.get("source", ""), it.get("doi", ""), match_title, title, it.get("doi", "")),
+            "SELECT * FROM search_cache WHERE task_id=? "
+            "AND ((lower(trim(doi))=lower(trim(?)) AND trim(doi)!='') "
+            "OR (? AND lower(trim(title))=lower(trim(?)) AND (trim(doi)='' OR trim(?)='')))",
+            (task_id, doi, match_title, title, doi),
         ).fetchone()
         if row:
-            return row["id"]
+            row_dict = dict(row)
+            rid = row_dict["id"]
+            updates = {}
+            if not (row_dict.get("pdf_url") or "").strip() and (it.get("pdf_url") or "").strip():
+                updates["pdf_url"] = it["pdf_url"].strip()
+            if not (row_dict.get("doi") or "").strip() and doi:
+                updates["doi"] = doi
+            if updates:
+                set_clause = ", ".join(f"{k}=?" for k in updates)
+                self.db.execute(f"UPDATE search_cache SET {set_clause} WHERE id=?", (*updates.values(), rid))
+                self.db.commit()
+                import project_library
+                project_library.index_record(self, task_id, rid)
+            return rid
         rid = uuid.uuid4().hex
         self.db.execute(
             "INSERT INTO search_cache (id,task_id,source,title,authors,year,doi,url,pdf_url,abstract,score,created_at)"
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (rid, task_id, it.get("source", ""), title, it.get("authors", ""), it.get("year", ""),
-             it.get("doi", ""), it.get("url", ""), it.get("pdf_url", ""), it.get("abstract", ""),
+            (rid, task_id, it.get("source", ""), title, it.get("authors", ""), str(it.get("year") or ""),
+             doi, it.get("url", ""), it.get("pdf_url", ""), it.get("abstract", ""),
              float(it.get("score") or 0), now()))
         self.db.commit()
         import project_library

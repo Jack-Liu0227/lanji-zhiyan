@@ -408,36 +408,103 @@ def make_project_tree(base: str | Path, task: dict[str, Any] | None = None) -> l
 
 # ============================ 下载（仅开放获取） ============================
 
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+DOWNLOAD_HEADERS = {
+    "User-Agent": BROWSER_UA,
+    "Accept": "application/pdf,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+}
+
+def _extract_pdf_url_from_html(html_text: str, base_url: str) -> str | None:
+    patterns = [
+        r'<meta\s+[^>]*name=["\'](?:citation_pdf_url|eprints\.document_url)["\'][^>]*content=["\']([^"\']+)["\']',
+        r'<meta\s+[^>]*content=["\']([^"\']+)["\'][^>]*name=["\'](?:citation_pdf_url|eprints\.document_url)["\']',
+        r'<link\s+[^>]*rel=["\']alternate["\'][^>]*type=["\']application/pdf["\'][^>]*href=["\']([^"\']+)["\']',
+        r'<a\s+[^>]*href=["\']([^"\']+\.pdf(?:\?[^"\']*)?)["\']',
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, html_text, re.I)
+        if m:
+            extracted = m.group(1).strip()
+            if extracted and not extracted.startswith("javascript:"):
+                return urllib.parse.urljoin(base_url, extracted)
+    return None
+
+
 def download_pdf(item: dict[str, Any], target_dir: Path | None = None) -> Path:
-    url = (item.get("pdf_url") or "").strip()
-    if not url:
+    raw_url = (item.get("pdf_url") or item.get("url") or "").strip()
+    doi = (item.get("doi") or "").strip()
+    if not raw_url and not doi:
         raise ValueError("这条记录没有开放获取(OA)PDF 链接；1.0 只下载 OA 全文，不绕过付费墙。")
     target_dir = target_dir or PAPERS
     target_dir.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w\-. ]+", "_", item.get("title", "paper"))[:80].strip() or "paper"
     import uuid
     dest = target_dir / f"{safe}-{uuid.uuid4().hex}.pdf"
-    req = urllib.request.Request(url, headers=UA)
+
+    candidates = []
+    if raw_url:
+        if "arxiv.org/abs/" in raw_url:
+            arxiv_id = raw_url.split("/abs/")[-1].split("?")[0].strip("/")
+            candidates.append(f"https://arxiv.org/pdf/{arxiv_id}.pdf")
+            candidates.append(f"https://export.arxiv.org/pdf/{arxiv_id}.pdf")
+        else:
+            candidates.append(raw_url)
+            if "arxiv.org/pdf/" in raw_url and not raw_url.endswith(".pdf"):
+                candidates.append(raw_url + ".pdf")
+            if "arxiv.org" in raw_url and "export.arxiv.org" not in raw_url:
+                candidates.append(raw_url.replace("arxiv.org", "export.arxiv.org"))
+    if doi and not candidates:
+        candidates.append(f"https://doi.org/{doi}")
+
     execution.check()
+    last_err = None
     temporary = None
-    try:
-        with execution.interruptible(open_url, req, timeout=120) as res, \
-                tempfile.NamedTemporaryFile(dir=target_dir, suffix=".part", delete=False) as fh:
-            temporary = Path(fh.name)
-            head = execution.interruptible(res.read, 5)
-            if head[:4] != b"%PDF":
-                raise ValueError(f"目标不是 PDF（返回：{head!r}）")
-            fh.write(head)
-            while True:
-                chunk = execution.interruptible(res.read, 1 << 16)
-                if not chunk:
-                    break
-                execution.check()
-                fh.write(chunk)
-        import fileguard
-        fileguard.before_write(dest, "下载论文")
-        os.replace(temporary, dest)
-    finally:
-        if temporary:
-            temporary.unlink(missing_ok=True)
-    return dest
+
+    for cand_url in candidates:
+        headers = dict(DOWNLOAD_HEADERS)
+        headers["Referer"] = cand_url
+        req = urllib.request.Request(cand_url, headers=headers)
+        try:
+            with execution.interruptible(open_url, req, timeout=60) as res, \
+                    tempfile.NamedTemporaryFile(dir=target_dir, suffix=".part", delete=False) as fh:
+                temporary = Path(fh.name)
+                head = execution.interruptible(res.read, 1024)
+                if head[:4] != b"%PDF":
+                    if b"<!doc" in head.lower() or b"<html" in head.lower():
+                        remainder = execution.interruptible(res.read, 262144)
+                        html_text = (head + remainder).decode("utf-8", "replace")
+                        extracted_pdf = _extract_pdf_url_from_html(html_text, cand_url)
+                        if extracted_pdf and extracted_pdf != cand_url and extracted_pdf not in candidates:
+                            candidates.append(extracted_pdf)
+                    temporary.unlink(missing_ok=True)
+                    temporary = None
+                    last_err = f"目标地址返回非 PDF 网页（{cand_url}）"
+                    continue
+
+                fh.write(head)
+                while True:
+                    chunk = execution.interruptible(res.read, 1 << 16)
+                    if not chunk:
+                        break
+                    execution.check()
+                    fh.write(chunk)
+
+            import fileguard
+            fileguard.before_write(dest, "下载论文")
+            os.replace(temporary, dest)
+            temporary = None
+            return dest
+        except Exception as exc:
+            if temporary:
+                temporary.unlink(missing_ok=True)
+                temporary = None
+            last_err = str(exc)
+            continue
+
+    if temporary:
+        temporary.unlink(missing_ok=True)
+    raise ValueError(f"下载文献失败（403/非PDF）：{last_err or '未找到有效开放获取PDF直链'}。建议在 Zotero 或浏览器中手动下载后导入项目文献库。")

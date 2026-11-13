@@ -219,7 +219,7 @@ function officePanel(p, colorOf) {
     <h2>${offEsc(p.name)}</h2>
     <div class="sub">${p.kind === "temp"
       ? "加急 · 为「" + offEsc(p.purpose || "某项工作") + "」组建，按需灵活协同"
-      : "常驻 · 课题常设模块，按工作流组合推进"}</div>
+      : "常驻 · 负责人拆解任务，专家并行研究并交付"}</div>
     <div class="gh"><span>统 筹</span><span>状态</span></div>
     ${lead ? row(lead, true) : `<p class="hint" style="padding:8px 0">这间还没有指定 Leader（可在「修改编制」中指定任意成员为 Leader）。</p>`}
     <div class="gh"><span>成 员</span><span>颜色即身份</span></div>

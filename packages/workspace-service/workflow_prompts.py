@@ -128,6 +128,13 @@ AGENT_SYSTEM = """你叫「览籍智研」，首页身份是「智研管家」�
 8. 配置前用 assistant_manage、team_manage、workflow_manage 的 list 读取现有配置，优先复用；调整已有团队使用 team_manage，选择已有工作流使用 workflow_manage(select)，确需新模板再 workflow_create。用户已经说清的配置直接执行，完成后核对保存结果。模型可继承当前可用模型；不得编造模型、专家或工作流 ID。
 9. 配置完成与任务执行分开报告。创建或修改团队不等于完成研究，team_assign 返回 queued 只表示排队。"""
 
+ZOTERO_STAGING_RULES = """文献暂存规则：
+- `paper_download` 只把 OA PDF 保存到当前项目的文献暂存目录，不写入 Zotero。
+- 没有收到用户明确的“写入/导入 Zotero”指令前，不得调用 Zotero 写入工具，也不得把下载结果自动同步到 Zotero。
+- 收到写入要求时，先用 `zotero_staged_import` 预览，只有用户确认后才执行写入。
+- Zotero 写入完成后，附件由 Zotero 的 imported_file 流程交给附件管理插件处理。
+"""
+
 _DELEGATE_SYSTEM = ("你是被派活的子 agent：只看得到这条任务本身，看不到父对话的历史。只做这一件事，"
                     "做完给一份不超过 300 字的摘要：结论 + 关键事实/数字 + 产物路径。不要复述任务、不要寒暄。")
 
@@ -343,6 +350,7 @@ TOOL_SPECS = [
         "output_contract": {"type": "object"}, "dependencies": {"type": "array", "items": {"type": "string"}},
         "plan_id": {"type": "string"}, "request_key": {"type": "string"}}, ["goal", "executor_binding_id"]),
     _schema("task_start", "启动当前项目任务，继承用户已授权模式。返回排队并不表示完成。", {"id": {"type": "string"}, "request_key": {"type": "string"}}, ["id"]),
+    _schema("task_handoff", "把当前任务的控制权交给当前团队中的另一位 Agent，并传递当前上下文、证据和转移原因。", {"target_member_id": {"type": "string"}, "reason": {"type": "string"}}, ["target_member_id", "reason"]),
     _schema("task_status", "读取任务状态、项目执行者、输入版本、产物与核查记录。省略 ID 列出当前范围任务。", {"id": {"type": "string"}}),
     _schema("task_cancel", "停止当前范围内的任务并保留已有产物。", {"id": {"type": "string"}}, ["id"]),
     _schema("workflow_templates", "列出当前项目可复用的固定任务工作流及节点配置；选择模板后调用 workflow_prepare。", {}),
@@ -360,7 +368,7 @@ TOOL_SPECS = [
     _schema("paper_search", "在 OpenAlex/Crossref/arXiv 检索论文并入库；结果按「相关度×引用量」排序，一次最多留 100 条。", {
         "query": {"type": "string"}, "sources": {"type": "array", "items": {"type": "string", "enum": ["openalex", "crossref", "arxiv"]}},
         "rows": {"type": "integer", "description": "每源条数(1-50)，默认 30"}}, ["query"]),
-    _schema("paper_download", "下载一条检索结果的开放获取(OA) PDF 并入库；没有 OA 链接会失败。", {"result_id": {"type": "string"}}, ["result_id"]),
+    _schema("paper_download", "只把一条检索结果的开放获取(OA) PDF 下载到当前项目暂存目录；不会写入 Zotero。没有 OA 链接会失败。", {"result_id": {"type": "string"}}, ["result_id"]),
     _schema("paper_read", "把一篇已入库 PDF 逐页精读成中文要点（带 p.页码）。", {"paper_id": {"type": "string"}}, ["paper_id"]),
     _schema("paper_translate", "启动已入库论文的中文翻译或查询进度。返回 running 仅表示已启动，done 且有译文文件才可交付。", {"paper_id": {"type": "string"}, "action": {"type": "string", "enum": ["start", "status"]}, "pages": {"type": "string"}}, ["paper_id"]),
     _schema("notes_compose", "把一条精读笔记整理成带证据表的知识库笔记，可选写入 Obsidian。", {"note_id": {"type": "string"}, "vault": {"type": "string"}}, ["note_id"]),

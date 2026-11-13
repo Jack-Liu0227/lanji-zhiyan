@@ -113,3 +113,4 @@ html[data-theme=light] .ec-workspace {
 
 .ec-run-card{position:relative;padding-right:32px}.ec-run-card>[data-context-trigger]{position:absolute;right:5px;top:8px}.ec-run-card footer{flex-wrap:wrap;gap:7px}.ec-pin{display:inline-block;font-size:10px;color:var(--accent);border:1px solid var(--line);border-radius:4px;padding:1px 4px;margin-right:6px}.ec-plan-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
 .ec-run-card .ec-open-chat{margin-left:auto;color:var(--accent);font-size:11px;padding:3px 0}.ec-run-card:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.ec-run-card.is-selected{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.ec-run-card .ec-open-artifact{margin-left:auto;color:var(--accent);font-size:11px;padding:3px 0;text-align:left}.ec-node-artifacts{display:grid;gap:7px;margin:12px 0}.ec-node-artifacts .ec-open-artifact{width:100%;justify-content:flex-start;color:var(--accent);font-size:11px;text-align:left}

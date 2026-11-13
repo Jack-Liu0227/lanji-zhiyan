@@ -5,6 +5,7 @@
   const statuses = {draft:"已准备",prepared:"已准备",queued:"等待执行",running:"执行中",awaiting_review:"等待人工审查",delivered:"已交付",succeeded:"全部完成",failed:"失败",cancelled:"已停止",blocked:"等待修改",interrupted:"中断待恢复",rejected:"已退回"};
   let dialog = null, currentRun = null, currentProject = "", focusedRun = "", rendered = "", pollBusy = false, calendarRendered = "";
   const feedback = new Map(), versions = new Map(), goalDrafts = new Map(), modeDrafts = new Map();
+  let nodeTasks=new Map();
   const modeOptions=mode=>`<option value="supervised" ${mode!=="full_access"?"selected":""}>人工核查模式</option><option value="full_access" ${mode==="full_access"?"selected":""}>Full access · 自动推进</option>`;
   const style = document.createElement("style");
   style.textContent = `.connected-dialog{width:min(900px,calc(100vw - 28px));max-height:88vh;overflow:auto;border:1px solid var(--line);border-radius:14px;padding:22px;background:var(--bg);color:var(--fg)}.connected-dialog::backdrop{background:#0007}.connected-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.connected-dialog textarea{width:100%;min-height:80px}.connected-node{padding:12px 0;border-bottom:1px solid var(--line)}.connected-node pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;font-size:12px}.connected-node details{margin:8px 0}.connected-status{font-size:12px;color:var(--muted);margin:10px 0}.connected-error{color:var(--err);white-space:pre-wrap}.connected-library{font-size:12px;margin:10px 0;color:var(--muted)}`;
@@ -15,9 +16,10 @@
   function signature(run) { return JSON.stringify(run && [run.id,run.status,run.error,run.current_node,run.settings,run.nodes.map(n=>[n.id,n.status,n.ended_at,n.error,n.checkpoint])]); }
   async function fetchRun() {
     const project=currentProject;
-    const result=await api("/api/workflow/execution?"+(dialog?.open && focusedRun?"id="+encodeURIComponent(focusedRun):"task_id="+encodeURIComponent(project)));
+    const [result,taskData]=await Promise.all([api("/api/workflow/execution?"+(dialog?.open && focusedRun?"id="+encodeURIComponent(focusedRun):"task_id="+encodeURIComponent(project))),api('/api/project-tasks?project_id='+encodeURIComponent(project))]);
     if(project!==currentProject) return;
     currentRun=result.run;
+    nodeTasks=new Map((taskData.tasks||[]).map(task=>[task.id,task]));
     const button=document.getElementById("wfSequenceOpen");
     if(button){
       const txt = button.querySelector(".wf-seq-text") || button;
@@ -37,7 +39,7 @@
       ${run?`<div class="connected-row" style="margin-top:12px"><b>${h(run.layout.name)}</b><span class="pill">${h(statuses[run.status] || run.status)}</span>
         ${["failed","blocked","interrupted"].includes(run.status)?'<button class="btn" data-sequence-resume>从已保存进度继续</button><button class="btn ghost" data-sequence-restart>核对后重新执行当前节点</button>':""}
         ${prepared?'<button class="btn btn-primary" data-sequence-start-prepared>开始已准备的工作流</button>':""}
-        <button class="btn" data-sequence-chat>打开工作流对话</button><button class="btn ghost" data-sequence-project-tasks>查看本项目任务</button>
+        <button class="btn" data-sequence-chat>打开 LangGraph</button><button class="btn ghost" data-sequence-project-tasks>查看任务状态</button>
         ${!["succeeded","cancelled"].includes(run.status)?'<button class="btn ghost" data-sequence-cancel>停止本次运行</button>':""}</div>
         ${active?`<div class="connected-row" style="margin-top:12px"><label class="field"><span>本次运行模式</span><select class="control" data-sequence-run-mode>${modeOptions(mode)}</select></label><button class="btn" data-sequence-mode-apply>应用运行模式</button></div><p class="hint">模式调整作用于本次运行的项目任务；项目范围与专家工具权限保持各自的授权。</p>`:""}
         ${run.error?`<p class="connected-error">${h(run.error)}</p>`:""}
@@ -45,24 +47,28 @@
         ${prepared?`<details open><summary>准备的节点任务</summary>${(run.layout.order || []).map(id=>{const node=run.layout.nodes.find(n=>n.id===id),taskId=run.settings.task_ids?.[id];return `<div class="connected-row" style="margin:8px 0"><span>${h(node?.label || id)}</span>${taskId?`<button class="btn ghost" data-sequence-task="${h(taskId)}">查看任务与执行者</button>`:""}</div>`;}).join("")}</details>`:""}
         ${run.nodes.map(node=>{
           const config=node.acceptance?.config || {}, checkpoint=node.checkpoint || {}, input=checkpoint.input || {}, output=checkpoint.output || {};
+          const task=nodeTasks.get(checkpoint.canonical_task_id||node.canonical_task_id),resultAvailable=WorkflowNodeWorkbench.eligible(task);
           const delivery=checkpoint.delivery || node.delivery || {}, source=delivery.source || checkpoint.delivery_source;
           const deliveryMode=delivery.policy_snapshot?.autonomy_mode || checkpoint.policy_snapshot?.autonomy_mode || run.settings?.policy?.autonomy_mode || run.settings?.autonomy_mode;
           return `<article class="connected-node"><div class="connected-row"><b>${h(config.label || node.stage)}</b><span class="pill">${h(statuses[node.status] || node.status)}</span><small>${h(input.member?.name || (S.assistants || []).find(a=>a.id===input.assistant_id)?.name || input.assistant_id || "")}</small></div>
             <details><summary>输入与记忆 · ${(input.history || []).length} 个前序结果</summary><pre>${h(JSON.stringify({goal:input.goal,upstream:input.handoff,memory:input.memory,history:(input.history || []).map(n=>({step:n.step,delivery_id:n.delivery_id,reply:n.reply,feedback:n.feedback}))},null,2))}</pre></details>
-            <details ${node.status==="awaiting_review"?"open":""}><summary>产物与执行结果</summary><pre>${h(checkpoint.reply || node.error || "正在执行")}</pre><pre>${h(typeof output.content==="string"?output.content:JSON.stringify(output.content || output.items || {},null,2))}</pre>${(output.files || []).map(file=>`<div class="hint">${h(typeof file==="string"?file:file.relative || file.name || file.path || file.asset_id)}</div>`).join("")}</details>
+            <details ${node.status==="awaiting_review"?"open":""}><summary>执行记录</summary><pre>${h(checkpoint.reply || node.error || "正在执行")}</pre>${resultAvailable?`<pre>${h(typeof output.content==="string"?output.content:JSON.stringify(output.content || output.items || {},null,2))}</pre>`:''}</details>
+            ${resultAvailable?`<button class="btn btn-primary" data-sequence-result="${h(task.id)}">查看当前节点产物</button>`:''}
             ${checkpoint.feedback?`<p>人工反馈：${h(checkpoint.feedback)}</p>`:""}
             ${source?`<p class="connected-status" data-sequence-decision-source>${source==="human"?(delivery.decision==="rejected"?"已由人工核查退回":"已由人工核查通过"):source==="policy"?(deliveryMode==="full_access"?"已按 Full access 自动验收":"已按节点配置自动验收"):h(source)}</p>`:""}
             ${checkpoint.canonical_task_id || node.canonical_task_id?`<button class="btn ghost" data-sequence-task="${h(checkpoint.canonical_task_id || node.canonical_task_id)}">打开节点项目任务与交付</button>`:""}
             ${node.status==="awaiting_review" && run.status==="awaiting_review" && run.current_node===node.id?`<label class="field"><span>审查意见，通过时可留空，退回时必填</span><textarea class="control" data-sequence-feedback="${h(node.id)}">${h(feedback.get(node.id) || "")}</textarea></label>
-              <div class="connected-row"><button class="btn btn-primary" data-sequence-approve="${h(node.id)}">通过并继续</button><button class="btn ghost" data-sequence-reject="${h(node.id)}">退回修改</button></div>`:""}</article>`;
+              <div class="connected-row"><button class="btn btn-primary" data-sequence-approve="${h(node.id)}" data-sequence-task-run="${h(checkpoint.canonical_run_id||task?.latest_run_id||'')}" data-sequence-output-version="${Number(checkpoint.output_revision??task?.latest_run?.checkpoint?.output_revision??0)}">通过并继续</button><button class="btn ghost" data-sequence-reject="${h(node.id)}" data-sequence-task-run="${h(checkpoint.canonical_run_id||task?.latest_run_id||'')}" data-sequence-output-version="${Number(checkpoint.output_revision??task?.latest_run?.checkpoint?.output_revision??0)}">退回修改</button></div>`:""}</article>`;
         }).join("")}`:"<p class='hint'>当前项目还没有顺序执行记录。先在工作流设置中选择节点的专家、团队、工具和技能。</p>"}`;
     host.querySelectorAll("[data-sequence-feedback]").forEach(input=>input.oninput=()=>feedback.set(input.dataset.sequenceFeedback,input.value));
     host.querySelector("[data-sequence-goal]")?.addEventListener("input",e=>goalDrafts.set(currentProject,e.target.value));
     host.querySelector("[data-sequence-mode]")?.addEventListener("change",e=>modeDrafts.set(currentProject,e.target.value));
     host.querySelector("[data-sequence-run-mode]")?.addEventListener("change",e=>modeDrafts.set(run.id,e.target.value));
-    host.querySelectorAll("[data-sequence-task]").forEach(button=>button.onclick=()=>ProjectTasks.openTask(button.dataset.sequenceTask,currentProject));
+    const openNode=taskId=>{const task=nodeTasks.get(taskId);dialog.close();if(WorkflowNodeWorkbench.eligible(task))return ProjectWorkspace.openNodeResult(WorkflowNodeWorkbench.availableSelection(task),currentProject,{chatId:run.chat_id});return ProjectWorkspace.openTask(taskId,currentProject,{chatId:run.chat_id});};
+    host.querySelectorAll("[data-sequence-task]").forEach(button=>button.onclick=()=>openNode(button.dataset.sequenceTask));
+    host.querySelectorAll('[data-sequence-result]').forEach(button=>button.onclick=()=>{const task=nodeTasks.get(button.dataset.sequenceResult),project=currentProject;dialog.close();ProjectWorkspace.openNodeResult(WorkflowNodeWorkbench.availableSelection(task),project);});
     host.querySelector("[data-sequence-project-tasks]")?.addEventListener("click",()=>ProjectTasks.open(currentProject));
-    host.querySelector('[data-sequence-chat]')?.addEventListener('click',async()=>{const project=currentProject,id=run.chat_id;dialog.close();await ProjectWorkspace.openConversation(id,project);});
+    host.querySelector('[data-sequence-chat]')?.addEventListener('click',async()=>{const project=currentProject,id=run.id;dialog.close();await ProjectWorkspace.openWorkflowRun(project,id,run.current_node||'');});
     const bind=(selector,action,extra=()=>({}))=>host.querySelectorAll(selector).forEach(button=>button.onclick=async()=>{
       button.disabled=true;
       try {
@@ -79,8 +85,8 @@
     bind("[data-sequence-resume]","resume");
     bind('[data-sequence-restart]','resume',()=>({restart_node:true}));
     bind("[data-sequence-cancel]","cancel");
-    bind("[data-sequence-approve]","review",button=>({node_id:button.dataset.sequenceApprove,approved:true,reviewed_output_version:Number(button.dataset.sequenceOutputVersion||0),feedback:feedback.get(button.dataset.sequenceApprove) || ""}));
-    bind("[data-sequence-reject]","review",button=>({node_id:button.dataset.sequenceReject,approved:false,reviewed_output_version:Number(button.dataset.sequenceOutputVersion||0),feedback:feedback.get(button.dataset.sequenceReject) || ""}));
+    bind("[data-sequence-approve]","review",button=>({node_id:button.dataset.sequenceApprove,approved:true,reviewed_run_id:button.dataset.sequenceTaskRun,reviewed_output_version:Number(button.dataset.sequenceOutputVersion||0),feedback:feedback.get(button.dataset.sequenceApprove) || ""}));
+    bind("[data-sequence-reject]","review",button=>({node_id:button.dataset.sequenceReject,approved:false,reviewed_run_id:button.dataset.sequenceTaskRun,reviewed_output_version:Number(button.dataset.sequenceOutputVersion||0),feedback:feedback.get(button.dataset.sequenceReject) || ""}));
   }
   async function openRun(project,runId="") {
     currentProject=project;

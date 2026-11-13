@@ -33,6 +33,14 @@ def detail(db, run_id):
     return run
 
 
+def public_view(run):
+    if run is None:
+        return None
+    return {**run, 'nodes': [{**node, 'checkpoint': {k: v for k, v in node.get('checkpoint', {}).items()
+                 if k in ('reply', 'phase', 'turn', 'output_revision', 'canonical_task_id', 'canonical_run_id', 'delivery_source')}}
+                 for node in run.get('nodes', [])]}
+
+
 def latest(db, project_id):
     row = db.db.execute("SELECT r.id FROM workflow_runs r JOIN workflow_executions e ON e.run_id=r.id "
                         "WHERE r.project_id=? AND r.workflow='research-sequence' ORDER BY r.rowid DESC LIMIT 1", (project_id,)).fetchone()
@@ -161,9 +169,9 @@ def _tools(db, aid, node, project_id):
             (node.get("tools") is None or s["function"]["name"] in node["tools"])]
 
 
-def review(db, run_id, node_id, approved, feedback="",reviewed_output_version=None):
+def review(db, run_id, node_id, approved, feedback="",reviewed_output_version=None, reviewed_run_id=''):
     import workflow_tasks
-    return workflow_tasks.review(db, run_id, node_id, approved, feedback,reviewed_output_version)
+    return workflow_tasks.review(db, run_id, node_id, approved, feedback,reviewed_output_version, reviewed_run_id)
 
 
 def kick(db_path, run_id):
@@ -208,7 +216,7 @@ def route(method, path, body, query, db):
         return None
     if method == "GET":
         run_id = (query.get("id") or [""])[0]
-        return {"run": detail(db, run_id) if run_id else latest(db, (query.get("task_id") or [""])[0])}
+        return {"run": public_view(detail(db, run_id) if run_id else latest(db, (query.get("task_id") or [""])[0]))}
     import workflow_tasks
     action = path.removeprefix(prefix).strip("/")
     run_id = str(body.get("id") or "")
@@ -233,7 +241,10 @@ def route(method, path, body, query, db):
             if any(body.get(k) and str(body[k]) != run["project_id"] for k in ("task_id", "project_id")):
                 raise ValueError("运行不属于当前项目")
             if action == "review":
-                run = review(db, run_id, str(body.get("node_id") or ""), body.get("approved"), body.get("feedback", ""),body.get('reviewed_output_version'))
+                if not body.get('reviewed_run_id') or body.get('reviewed_output_version') is None:
+                    raise ValueError('请在当前节点产物页核查，并提交对应尝试和修订版本')
+                run = review(db, run_id, str(body.get("node_id") or ""), body.get("approved"), body.get("feedback", ""),
+                             body.get('reviewed_output_version'), str(body['reviewed_run_id']))
                 if run["status"] == "queued":
                     kick(db.path, run_id)
             elif action == "mode":

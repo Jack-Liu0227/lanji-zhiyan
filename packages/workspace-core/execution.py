@@ -11,6 +11,13 @@ class Cancelled(RuntimeError):
     pass
 
 
+class Handoff(Cancelled):
+    """The current agent explicitly transferred control to another agent."""
+    def __init__(self, handoff):
+        self.handoff = handoff
+        super().__init__(handoff.get('message') or 'Agent handoff requested')
+
+
 _cancel = ContextVar("execution_cancel", default=None)
 
 

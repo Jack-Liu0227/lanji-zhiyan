@@ -139,9 +139,22 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
                 configured = []
                 for node in nodes:
                     expert = next(expert for expert in result['experts'] if expert['role_id'] == node['executor_role_id'])
-                    team_node = graph.nodes.get(node['id']) and graph.nodes[node['id']].executor_hint == 'team'
-                    configured.append({**node, 'executor_binding_id': team_grant['id'] if team_node else expert['binding_id'],
-                        'member_id': expert['member_id'] if team_node else '', 'skills': selected})
+                    # Built-in templates carry an executor hint; custom LangGraph
+                    # nodes can override it with execution_mode: assistant|team.
+                    hinted = graph.nodes.get(node['id']).executor_hint if graph.nodes.get(node['id']) else ''
+                    mode = str(node.get('execution_mode') or hinted or 'assistant')
+                    if mode not in ('assistant', 'team'):
+                        raise ValueError('工作流节点 execution_mode 必须是 assistant 或 team')
+                    team_node = mode == 'team'
+                    configured.append({**node, 'execution_mode': mode,
+                        'executor_binding_id': team_grant['id'] if team_node else expert['binding_id'],
+                        # Bind a team node to the expert selected for its role.
+                        # A caller can still override that member explicitly;
+                        # keeping the concrete identity on the frozen layout
+                        # also lets task cards and downstream context show who
+                        # actually owns the node.
+                        'member_id': str(node.get('member_id') or expert.get('member_id') or '') if team_node else '',
+                        'skills': selected})
                 override = project_workflows.save(db, pid, {**(definition or template), 'layout_id': template_id,
                     'name': str(args.get('workflow_name') or result['title'] + '科研流程')[:120],
                     'nodes': configured, 'expected_revision': template['revision'], 'expected_fingerprint': template['fingerprint']})
@@ -158,6 +171,13 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
                 import workflow_execution
                 if not result.get('run_id'):
                     run = workflow_tasks.prepare(db, pid, str(args.get('goal') or idea), key, result['layout_id'])
+                    # Research setup is an explicit, user-visible workflow entry
+                    # point.  Keep that provenance on the run so its node results
+                    # use the same preview/edit/review workbench as Agent-started
+                    # runs, without widening the rule for ordinary workflows or
+                    # scheduled stages.
+                    run['settings']['research_setup'] = True
+                    workflow_tasks._save(db, run)
                     result['run_id'] = run['id'];save()
                 else:
                     run = workflow_execution.detail(db, result['run_id'])

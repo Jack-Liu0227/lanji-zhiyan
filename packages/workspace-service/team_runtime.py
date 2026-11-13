@@ -36,7 +36,9 @@ def snapshot(db, team_id):
         communications.extend({**event,'at':event['created_at']} for event in db.team_events(scope,40))
     communications.sort(key=lambda row:row.get('at',''),reverse=True)
     state=max((m['status'] for m in members.values() if m['status'] not in ('disabled','archived')),key=lambda status:rank.get(status,0),default='idle')
-    return {'members':list(members.values()),'status':state,'communications':communications[:60]}
+    import team_orchestration
+    return {'members':list(members.values()),'status':state,'communications':communications[:60],
+            'orchestration':team_orchestration.state(db, instances)}
 
 
 def agent_event(db, run_id, event):

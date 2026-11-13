@@ -128,7 +128,10 @@ class ConnectedResearchRuntimeTest(unittest.TestCase):
                 self.page.locator("[data-sequence-approve]").wait_for(timeout=8000)
             except Exception:
                 self.fail(json.dumps({'dialog':self.page.locator('dialog.connected-dialog').inner_text(),'errors':self.errors,'state':state},ensure_ascii=False,default=str))
-            self.assertIn("BROWSER_ARTIFACT_outline", self.page.locator("dialog.connected-dialog").inner_text())
+            # This run was started manually; its state dialog must not expose the
+            # Agent-only result workbench. Delivery handoff still uses the real file.
+            self.assertNotIn("BROWSER_ARTIFACT_outline", self.page.locator("dialog.connected-dialog").inner_text())
+            self.assertIn("BROWSER_RESULT_MEMORY_outline", self.page.locator("dialog.connected-dialog").inner_text())
             self.page.locator("[data-sequence-feedback]").fill("BROWSER_HUMAN_FEEDBACK")
             self.page.locator("[data-sequence-approve]").click()
             result = self.poll_json('/api/workflow/execution?task_id=' + pid, lambda d: d['run']['status'] in ('succeeded', 'failed'))['run']

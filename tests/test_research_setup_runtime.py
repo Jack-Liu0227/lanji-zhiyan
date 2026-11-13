@@ -13,14 +13,68 @@ from tests import test_project_workspace_runtime as workspace
 class StewardModelFixture:
     def __enter__(self):
         self.requests=[];requests=self.requests
+        self.responses=[];responses=self.responses
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self,*_args): pass
             def do_POST(self):
                 payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])));requests.append(payload)
                 last=payload['messages'][-1]
                 call=last.get('role')=='user' and 'SETUP_REQUEST' in str(last.get('content'))
-                delta={'tool_calls':[{'index':0,'id':'create-research-project','type':'function','function':{
-                    'name':'project_create_from_idea','arguments':json.dumps({'idea':'Controlled ion transport research','title':'Steward research project','request_key':'steward-browser-setup'})}}]} if call else {'content':'CHAT_SETUP_DONE' if last.get('role')=='tool' else '# SETUP_REAL_OUTPUT\nResearch evidence and limitations.'}
+                system='\n'.join(str(m.get('content') or '') for m in payload['messages'] if m.get('role')=='system')
+                task_prompt=next((str(message.get('content') or '') for message in reversed(payload['messages'])
+                                  if message.get('role')=='user'), '')
+                stage_text=system+'\n'+task_prompt
+                # ``idea_review`` makes a second JSON-only model request. Keep that
+                # response valid so the real stage implementation can persist the
+                # review note instead of turning prose into a fake stage result.
+                if '只返回 JSON' in system:
+                    delta={'content':json.dumps({
+                        'type':'Novel Problem','story':'Controlled ion transport has a testable gap',
+                        'flaws':[],'dims':{'Higher':8,'Faster':7,'Stronger':8,'Cheaper':6,'Broader':7},
+                        'dims_f':{'F1':8,'F2':8,'F3':7,'F4':7,'F5':8},
+                        'dims_evidence':{'F1':'mechanistic contrast'},
+                        'falsifications':[{'risk':'MEDIUM','criticism':'effect may be confounded','defense':'run an orthogonal control'}],
+                        'verdict':'Accept with Revisions','reason':'The gap is concrete and testable.',
+                        'next':['search the controlled-transport literature'],
+                        'improved_idea':'Quantify the transport mechanism under controlled conditions.'
+                    },ensure_ascii=False)}
+                elif call:
+                    delta={'tool_calls':[{'index':0,'id':'create-research-project','type':'function','function':{
+                        'name':'project_create_from_idea','arguments':json.dumps({'idea':'Controlled ion transport research','title':'Steward research project','request_key':'steward-browser-setup'})}}]}
+                elif '执行当前项目任务' in stage_text:
+                    # A node is only considered successful when its stage-specific
+                    # tool leaves a real persisted artifact. The fixture mirrors
+                    # the minimum tool loop used by a real provider.
+                    previous_tools=[call.get('function',{}).get('name') for message in payload['messages']
+                                    for call in (message.get('tool_calls') or [])]
+                    if last.get('role')=='tool' and last.get('name')=='task_create':
+                        created=json.loads(last.get('content') or '{}').get('task') or {}
+                        delta={'tool_calls':[{'index':0,'id':'stage-team-start','type':'function','function':{
+                            'name':'task_start','arguments':json.dumps({'id':created.get('id','')})}}]}
+                    elif any(name in previous_tools for name in ('idea_review','paper_search','doc_write','task_start')):
+                        delta={'content':'# SETUP_REAL_OUTPUT\nResearch evidence and limitations.'}
+                    elif '完成「① 研究问题与科学假设提炼」' in task_prompt:
+                        delta={'tool_calls':[{'index':0,'id':'stage-idea','type':'function','function':{
+                            'name':'idea_review','arguments':json.dumps({'idea':'Controlled ion transport research'})}}]}
+                    elif '完成「② 文献现状与研究空白剖析」' in task_prompt:
+                        delta={'tool_calls':[{'index':0,'id':'stage-search','type':'function','function':{
+                            'name':'paper_search','arguments':json.dumps({'query':'controlled ion transport','sources':['crossref'],'rows':2})}}]}
+                    elif '完成「③ 技术路线与实验方案设计」' in task_prompt:
+                        import re
+                        match=re.search(r'团队名册：(\[.*?\])',system,re.S)
+                        roster=json.loads(match.group(1)) if match else []
+                        worker=next((item for item in roster if item.get('id')), {})
+                        delta={'tool_calls':[{'index':0,'id':'stage-team','type':'function','function':{
+                            'name':'task_create','arguments':json.dumps({'title':'methodology evidence','goal':'Produce a concise evidence-based methodology handoff.','member_id':worker.get('id',''),'request_key':'steward-methodology-child'})}}]}
+                    elif '完成「④ 开题论证总结报告撰写」' in task_prompt:
+                        delta={'tool_calls':[{'index':0,'id':'stage-write','type':'function','function':{
+                            'name':'doc_write','arguments':json.dumps({'markdown':'# SETUP_REAL_OUTPUT\nResearch evidence and limitations.'})}}]}
+                    else:
+                        delta={'content':'# SETUP_REAL_OUTPUT\nResearch evidence and limitations.'}
+                else:
+                    delta={'content':'CHAT_SETUP_DONE' if last.get('role')=='tool' else '# SETUP_REAL_OUTPUT\nResearch evidence and limitations.'}
+                responses.append({'stage_text':stage_text[-1600:],'last_role':last.get('role'),'last_content':str(last.get('content') or '')[:500],
+                    'tools':[item.get('function',{}).get('name') for item in payload.get('tools',[])], 'delta':delta})
                 self.send_response(200);self.send_header('Content-Type','text/event-stream' if payload.get('stream') else 'application/json');self.end_headers()
                 value={'choices':[{'delta':delta,'finish_reason':'tool_calls' if call else 'stop'}]}
                 wire=('data: '+json.dumps(value)+'\n\ndata: [DONE]\n\n') if payload.get('stream') else json.dumps({'choices':[{'message':{'role':'assistant',**delta},'finish_reason':'stop'}]})
@@ -40,6 +94,17 @@ class ResearchSetupRuntimeTest(unittest.TestCase):
     use_model=workspace.ProjectWorkspaceRuntimeTest.use_model
     poll_json=workspace.ProjectWorkspaceRuntimeTest.poll_json
 
+    def poll_setup(self, model, pid, terminal):
+        try:
+            return self.poll_json('/api/workflow/execution?task_id='+pid,
+                lambda data:(data.get('run') or {}).get('status') in terminal,
+                timeout=60)['run']
+        except AssertionError as exc:
+            last=model.requests[-1] if model.requests else {}
+            messages=last.get('messages') or []
+            self.fail(str(exc)+'\nLast model messages: '+json.dumps(messages[-3:],ensure_ascii=False)[:6000]
+                +'\nAvailable tools: '+json.dumps([item.get('function',{}).get('name') for item in last.get('tools',[])],ensure_ascii=False))
+
     def test_global_steward_creates_project_and_real_reviewable_workflow_output(self):
         self.load_page()
         with StewardModelFixture() as model:
@@ -56,11 +121,13 @@ class ResearchSetupRuntimeTest(unittest.TestCase):
                 self.fail('Steward chat did not converge: '+self.page.locator('#msgs').inner_text()+' Last messages: '+json.dumps([request['messages'][-1] for request in model.requests],ensure_ascii=False)[:2500])
             button=self.page.locator('[data-steward-project]');button.wait_for()
             pid=button.get_attribute('data-steward-project')
-            run=self.poll_json('/api/workflow/execution?task_id='+pid,lambda data:(data.get('run') or {}).get('status') in ('awaiting_review','failed'))['run']
+            run=self.poll_setup(model,pid,('awaiting_review','failed'))
             self.assertEqual(run['status'],'awaiting_review',json.dumps({'error':run.get('error'),'nodes':[{'status':node.get('status'),'error':node.get('error'),'checkpoint':str(node.get('checkpoint'))[-1000:]} for node in run['nodes']]},ensure_ascii=False))
             tasks=self.page.request.get(self.url+'api/project-tasks?project_id='+pid).json()['tasks']
             first=next(task for task in tasks if task['status']=='awaiting_review')
-            self.assertIn('SETUP_REAL_OUTPUT',Path(first['outputs'][-1]['path']).read_text(encoding='utf-8'))
+            output=Path(first['outputs'][-1]['path']).read_text(encoding='utf-8')
+            self.assertIn('Controlled ion transport research',output)
+            self.assertIn('Accept with Revisions',output)
             self.assertEqual(len(tasks),4)
             self.assertIn('[Active skill: research-steward]',json.dumps(model.requests[0],ensure_ascii=False))
             button.click()
@@ -86,14 +153,23 @@ class ResearchSetupRuntimeTest(unittest.TestCase):
             self.assertTrue(response.ok,response.text())
             setup=response.json()
             self.assertEqual(setup['project_id'],pid)
-            run=self.poll_json('/api/workflow/execution?task_id='+pid,lambda data:(data.get('run') or {}).get('status') in ('succeeded','failed'))['run']
-            self.assertEqual(run['status'],'succeeded',{'error':run.get('error'),'nodes':[(node['id'],node.get('error')) for node in run['nodes']]})
+            run=self.poll_setup(model,pid,('succeeded','failed'))
+            self.assertEqual(run['status'],'succeeded',{'error':run.get('error'),'nodes':[(node['id'],node.get('error')) for node in run['nodes']], 'responses': model.responses[-12:]})
             tasks=self.page.request.get(self.url+'api/project-tasks?project_id='+pid).json()['tasks']
             self.assertEqual(len(tasks),4)
             self.assertTrue(all(task['status']=='delivered' and task['outputs'] for task in tasks))
             self.assertTrue(any(task.get('member_id') for task in tasks))
+            with workflow.WorkflowDB(self.database_path) as db:
+                has_search_results=bool(db.results(pid))
             for task in tasks:
-                self.assertIn('SETUP_REAL_OUTPUT',Path(task['outputs'][-1]['path']).read_text(encoding='utf-8'))
+                output=Path(task['outputs'][-1]['path']).read_text(encoding='utf-8')
+                stage=task['metadata'].get('stage')
+                if stage=='idea':
+                    self.assertIn('Accept with Revisions',output)
+                elif stage=='search':
+                    self.assertTrue(has_search_results)
+                else:
+                    self.assertIn('SETUP_REAL_OUTPUT',output)
             again=self.page.request.post(self.url+'api/langgraph/create-from-idea',data={
                 'idea':'Analyze transport and deliver the research proposal','project':pid,'request_key':'automatic-setup'}).json()
             self.assertTrue(again['reused'])

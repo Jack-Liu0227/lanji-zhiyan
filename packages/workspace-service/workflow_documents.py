@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,26 @@ if TYPE_CHECKING:
     from workflow import WorkflowDB
 
 DATA, PAPERS, NOTES, OUT = paths.DATA, paths.PAPERS, paths.NOTES, paths.OUT
+
+
+def _guarded_document_write(operation):
+    @wraps(operation)
+    def write(db, task_id, *args, **kwargs):
+        import asset_service
+        import project_tasks
+        with project_tasks._lock:
+            if (getattr(db, 'project_task_context', None) or getattr(db, 'asset_run', None) or
+                    (getattr(db, 'usage_context', {}) or {}).get('run_id')):
+                kind = args[0] if args else kwargs.get('kind', 'outline')
+                path = map_path(db, task_id) if operation.__name__ == 'map_write' else doc_path(db, task_id, kind)
+                if path.is_file():
+                    row = db.db.execute('SELECT * FROM assets WHERE canonical_uri=? AND project_id=?', (str(path.resolve()), task_id)).fetchone()
+                    asset = dict(row) if row else {'id': '', 'project_id': task_id, 'canonical_uri': str(path.resolve()),
+                        'storage': 'file', 'kind': 'document', 'status': 'active', 'metadata': '{}',
+                        'content_hash': asset_service.sha256_file(path)}
+                    asset_service.require_context(db, asset)
+            return operation(db, task_id, *args, **kwargs)
+    return write
 
 
 
@@ -120,6 +141,7 @@ def map_read(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
             "refs": sum(1 for n in nodes if n.get("type") != "section")}
 
 
+@_guarded_document_write
 def map_write(db: "WorkflowDB", task_id: str, data: Any, keep_positions: bool = True) -> dict[str, Any]:
     """整份覆盖写（和 doc_write 同口径）。不合规的节点/边直接丢掉，不报错 —— 模型给脏数据也要能落盘。
 
@@ -402,6 +424,7 @@ def map_sources(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
             "data": list(dict.fromkeys(data))[:60], "map_path": str(map_path(db, task_id))}
 
 
+@_guarded_document_write
 def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str, mode: str = "replace") -> dict[str, Any]:
     """就地覆盖写（他要的就是「修改调整都直接在原文件改」）。
 

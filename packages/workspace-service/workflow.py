@@ -292,7 +292,7 @@ ACTION = {
 from workflow_prompts import (
     TOOL_SPECS, IDEA_TOOLS,
     AGENT_SYSTEM, IDEA_FALLBACK, _DELEGATE_SYSTEM,
-    skill_text
+    skill_text, ZOTERO_STAGING_RULES
 )
 
 
@@ -321,12 +321,16 @@ def idea_system(db: "WorkflowDB", task_id: str) -> str:
 
 
 def _overview(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
+    import asset_service
+    inputs = asset_service.eligibility_index(db, task_id)
     s = db.summary(task_id)
     scoped = bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone())
     return {"任务": s["task"]["title"], "阶段": s["task"]["stage"], "文献": s["papers"], "证据候选": s["evidence"],
             "检索结果": [{"id": r["id"], "title": r["title"][:90], "source": r["source"], "year": r["year"], "oa": bool(r["pdf_url"])} for r in db.results(task_id)[:10]],
-            "文献库": [{"id": p["id"], "name": p["filename"], "pages": p["pages"]} for p in db.papers_of(task_id)[:10]],
-            "笔记": [{"id": n["id"], "title": n["title"]} for n in db.notes(task_id)[:10]],
+            "文献库": [{"id": p["id"], "name": p["filename"], "pages": p["pages"]} for p in db.papers_of(task_id)
+                      if asset_service.legacy_context_available(db, task_id, 'paper', p['id'], index=inputs)][:10],
+            "笔记": [{"id": n["id"], "title": n["title"]} for n in db.notes(task_id)
+                    if asset_service.legacy_context_available(db, task_id, 'note', n['id'], index=inputs)][:10],
             "日历": [{"title": e["title"], "date": e["date"]} for e in db.events()
                      if not scoped or e.get("task_id") == task_id][:10]}
 
@@ -380,6 +384,25 @@ def _knowledge_query(db: "WorkflowDB", task_id: str, query: str, project: str = 
     try:
         import semantic
         out = semantic.hybrid(db, q, project_ids=ids if scoped else None, limit=20)
+        indices = {}
+        def available(hit):
+            import asset_service
+            kind = hit.get('kind')
+            table = {'paper': 'papers', 'note': 'notes', 'md_note': 'md_notes', 'evidence': 'evidence'}.get(kind)
+            if not table:
+                return False
+            if kind == 'evidence':
+                row = db.db.execute('SELECT p.task_id FROM evidence e JOIN papers p ON p.id=e.paper_id WHERE e.id=?', (hit.get('id'),)).fetchone()
+            else:
+                row = db.db.execute('SELECT task_id FROM ' + table + ' WHERE id=?', (hit.get('id'),)).fetchone()
+            if not row:
+                return False
+            project_id = row['task_id'] or ''
+            if project_id not in indices:
+                indices[project_id] = asset_service.eligibility_index(db, project_id)
+            return asset_service.legacy_context_available(db, project_id, kind, hit.get('id'), index=indices[project_id])
+        out['hits'] = [hit for hit in out.get('hits', []) if available(hit)]
+        out['total'] = len(out['hits'])
         if out.get("hits"):
             return _fuse_literal(out, literal)
         reason = out.get("mode") or "empty"
@@ -415,15 +438,21 @@ def _knowledge_query_literal(db: "WorkflowDB", q: str, scope: list[tuple[str, st
     import asset_service
     q = q.lower()
     hits: list[dict[str, Any]] = []
+    indices = {}
     for pid, ptitle in scope:
+        indices[pid] = asset_service.eligibility_index(db, pid)
         for n in db.notes(pid):
             if asset_service.is_instruction_note(db, pid, n["id"], n["markdown"]):
+                continue
+            if not asset_service.legacy_context_available(db, pid, 'note', n['id'], index=indices[pid]):
                 continue
             if q in (n["title"] or "").lower() or q in (n["markdown"] or "").lower():
                 idx = (n["markdown"] or "").lower().find(q)
                 hits.append({"kind": "note", "project": ptitle, "id": n["id"], "title": n["title"],
                              "context": (n["markdown"] or "")[max(0, idx - 120): idx + 240]})
         for e in db.evidence(pid):
+            if not asset_service.legacy_context_available(db, pid, 'evidence', e['id'], index=indices[pid]):
+                continue
             if q in (e["value"] or "").lower() or q in (e["excerpt"] or "").lower() or q in (e["field"] or "").lower():
                 hits.append({"kind": "evidence", "project": ptitle, "field": e["field"], "value": e["value"],
                              "citation": f"{e['filename']} p.{e['page_no']}", "context": e["excerpt"]})
@@ -432,6 +461,11 @@ def _knowledge_query_literal(db: "WorkflowDB", q: str, scope: list[tuple[str, st
         if asset_service.is_instruction_note(db, note.get("task_id"), note["id"], note["content"]):
             continue
         if scoped and note.get("task_id") not in scope_ids:
+            continue
+        project_id = note.get('task_id') or ''
+        if project_id not in indices:
+            indices[project_id] = asset_service.eligibility_index(db, project_id)
+        if not asset_service.legacy_context_available(db, project_id, 'md_note', note['id'], index=indices[project_id]):
             continue
         body = (note.get("content") or "")
         if q in (note.get("title") or "").lower() or q in body.lower():
@@ -543,7 +577,7 @@ _SUB_TOOLS = [t for t in TOOL_SPECS if t.get("function", {}).get("name") in _SUB
 
 
 TOOL_RISK = {
-    "task_create": "workspace_write", "task_start": "workspace_write", "task_status": "read_only", "task_cancel": "workspace_write",
+    "task_create": "workspace_write", "task_start": "workspace_write", "task_handoff": "workspace_write", "task_status": "read_only", "task_cancel": "workspace_write",
     "workflow_prepare": "workspace_write", "workflow_start": "workspace_write", "workflow_status": "read_only", "workflow_cancel": "workspace_write", "workflow_templates": "read_only",
     # Pure reads stay available to read-only assistants.
     "library_overview": "read_only", "knowledge_query": "read_only", "workflow_context_read": "read_only",
@@ -571,6 +605,7 @@ TOOL_RISK = {
     "project_list": "read_only", "skill_read": "read_only",
     "semantic_index": "local_execution",
     "zotero_search": "read_only", "zotero_item": "read_only", "zotero_import_pdf": "workspace_write",
+    "zotero_staged_list": "read_only", "zotero_staged_import": "external_write",
 }
 
 
@@ -586,6 +621,10 @@ def tool_risk(name: str) -> str:
 def enforce_tool_policy(name: str, args: dict[str, Any], permission: str) -> None:
     """Apply policy at the execution boundary, not only by hiding tool schemas."""
     risk = 'workspace_write' if (name == 'project_resources' and args.get('action') == 'index') or (name=='paper_tool' and args.get('tool') in ('convert','caption','image_convert')) else tool_risk(name)
+    # A staged Zotero import is read-only while it is producing its preview.
+    # The actual apply call still requires Full Access and explicit confirmation.
+    if name == "zotero_staged_import" and args.get("dry_run", True) is not False:
+        risk = "read_only"
     action_read = name in {"assistant_manage", "project_task_manage", "schedule_manage", "team_manage", "workflow_manage"} and args.get("action", "list") == "list"
     action_read = action_read or (name == "paper_translate" and args.get("action") == "status")
     connector_read = name in {"mail_accounts", "mail_list", "mail_read", "zotero_collections"}
@@ -691,7 +730,10 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
 def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], scope: str = "",
                emit: Any = None, profile: dict[str, Any] | None = None) -> Any:
     """scope = 当前步骤（''/'idea'/'outline'/'write'/'review'）—— doc_read/doc_write 据此决定动哪个文件。"""
+    import team_orchestration
+    team_orchestration.enforce_tool(db, name, args)
     enforce_project_scope(db, task_id, name, args)
+    import asset_service
     import task_tools
     if name == 'paper_tool':
         import paper_toolbox
@@ -707,8 +749,23 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         if name == 'project_resource_write': return project_resources.write(db, project_id, args)
         if args.get('action') == 'index': return project_resources.index(db, project_id)
         if args.get('action', 'list') != 'list': raise ValueError('action 只支持 list/index')
-        if args.get('asset_id'): return project_resources.read(db, project_id, str(args['asset_id']))
-        return project_resources.catalog(db, project_id, str(args.get('kind') or ''), str(args.get('query') or ''))
+        if args.get('asset_id'):
+            asset = asset_service.get(db, str(args['asset_id']))
+            if not asset or asset['project_id'] != project_id:
+                raise ValueError('资料不属于当前项目')
+            asset_service.require_context(db, asset)
+            return project_resources.read(db, project_id, str(args['asset_id']))
+        listed = project_resources.catalog(db, project_id, str(args.get('kind') or ''), str(args.get('query') or ''), review_status='all')
+        inputs = asset_service.eligibility_index(db, project_id)
+        def available(row):
+            asset = inputs['catalog'].get(row.get('asset_id'))
+            if asset:
+                return asset_service.context_available(db, asset, index=inputs)
+            return not row.get('path') or asset_service.path_context_available(db, project_id, row['path'], index=inputs)
+        listed['items'] = [row for row in listed['items'] if available(row)]
+        listed['counts'] = {kind: sum(row['kind'] == kind for row in listed['items']) for kind in listed['counts']}
+        listed['total'] = len(listed['items'])
+        return listed
     if name in task_tools.NAMES:
         project_id = _team_project(db, task_id, str(args.get("project") or ""))
         return task_tools.call(db, project_id, name, args)
@@ -747,9 +804,27 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         if name.startswith("project_note_"):
             import project_notes
             if name == "project_note_list":
-                return project_notes.dashboard(db, project_id)
+                listed = project_notes.dashboard(db, project_id)
+                inputs = asset_service.eligibility_index(db, project_id)
+                root = project_notes.project_root(db, project_id)
+                listed['items'] = [row for row in listed['items'] if asset_service.path_context_available(db, project_id, root / row['path'], index=inputs)]
+                allowed = {row['path'] for row in listed['items']}
+                def prune(node):
+                    if node.get('type') == 'dir':
+                        return {**node, 'children': [child for child in (prune(c) for c in node.get('children', [])) if child is not None]}
+                    return node if node.get('path') in allowed else None
+                for key in ('tree', 'project_tree', 'notes_tree'):
+                    listed[key] = prune(listed[key])
+                for group in listed['groups']:
+                    group['files'] = [row for row in group['files'] if row['path'] in allowed]
+                    group['count'] = len(group['files'])
+                listed['tags'] = sorted({tag for row in listed['items'] for tag in row.get('tags', [])}, key=str.casefold)
+                listed['total'] = len(listed['items'])
+                return listed
             if name == "project_note_read":
-                return project_notes.read(db, project_id, str(args.get("path") or ""))
+                relative = str(args.get('path') or '')
+                asset_service.require_path_context(db, project_id, project_notes.note_path(db, project_id, relative))
+                return project_notes.read(db, project_id, relative)
             return project_notes.write(db, project_id, str(args.get("path") or ""), str(args.get("content") or ""),
                                        title=args.get("title"), metadata=args.get("metadata"), expected_hash=args.get("expected_hash"))
         if name == "project_task_manage":
@@ -975,13 +1050,19 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         return stage_download(db, task_id, args.get("result_id", ""))
     if name == "download":
         return stage_download(db, task_id, args.get("result_id", ""))
-    if name == "paper_read":
+    if name in ("paper_read", "read"):
+        paper = next((row for row in db.papers_of(task_id) if row['id'] == args.get('paper_id')), None)
+        if paper and paper.get('source_path'):
+            asset_service.require_path_context(db, task_id, paper['source_path'])
         return stage_read(db, task_id, args.get("paper_id", ""))
     if name == "paper_translate":
         import papertran
         pid = str(args.get("paper_id") or "")
         if not any(p["id"] == pid for p in db.papers_of(task_id)):
             raise ValueError("论文不属于当前项目")
+        paper = next(p for p in db.papers_of(task_id) if p['id'] == pid)
+        if paper.get('source_path'):
+            asset_service.require_path_context(db, task_id, paper['source_path'])
         out = db.pdir(task_id, "文献库")
         action = str(args.get("action") or "start")
         if action == "status":
@@ -998,8 +1079,8 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
             if result.get("state") != "done":
                 raise RuntimeError("论文翻译尚未完成：" + str(result.get("msg") or result.get("state")))
         return result
-    if name == "read":
-        return stage_read(db, task_id, args.get("paper_id", ""))
+    if name in ("notes_compose", "notes") and not asset_service.legacy_context_available(db, task_id, 'note', args.get('note_id')):
+        raise ValueError('笔记产物尚未交付，不能作为当前专家的默认依据')
     if name == "notes_compose":
         return stage_notes(db, task_id, args.get("note_id", ""), args.get("vault") or None)
     if name == "notes":
@@ -1009,17 +1090,34 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
     if name == "outline_write":
         return outline_write(db, task_id, args.get("markdown", ""))
     if name == "outline_read":
+        asset_service.require_path_context(db, task_id, doc_path(db, task_id, 'outline'))
         return outline_read(db, task_id)
     if name == "map_write":
         return map_write(db, task_id, args.get("data") or {})
     if name == "map_read":
-        return map_read(db, task_id)
+        asset_service.require_path_context(db, task_id, map_path(db, task_id))
+        result = map_read(db, task_id)
+        inputs = asset_service.eligibility_index(db, task_id)
+        original = (json.loads(Path(result['path']).read_text(encoding='utf-8')) or {}) if result['exists'] and not result['broken'] else {}
+        originals = {node.get('id'): node for node in original.get('nodes', []) if isinstance(node, dict)}
+        for node in result['nodes']:
+            if node.get('type') == 'note' and node.get('ref') and not asset_service.legacy_context_available(db, task_id, 'note', Path(node['ref']).stem, index=inputs):
+                frozen = originals.get(node['id'], {})
+                node.update(label=frozen.get('label', node['label']), detail=frozen.get('detail', ''))
+        return result
     if name == "map_sources":
-        return map_sources(db, task_id)
+        asset_service.require_path_context(db, task_id, doc_path(db, task_id, 'outline'))
+        result = map_sources(db, task_id)
+        inputs = asset_service.eligibility_index(db, task_id)
+        root = db.base_dir(task_id)
+        if root:
+            result['notes'] = [row for row in result['notes'] if asset_service.path_context_available(db, task_id, root / '笔记' / row['name'], index=inputs)]
+        return result
     if name == "doc_write":
         return doc_write(db, task_id, scope or "outline", args.get("markdown", ""),
                          str(args.get("mode") or "replace"))       # append = 逐节写，写完一段左边长一段
     if name == "doc_read":
+        asset_service.require_path_context(db, task_id, doc_path(db, task_id, scope or 'outline'))
         return doc_read(db, task_id, scope or "outline")
     if name == "cite_add":
         return cite_add(db, task_id, args)
@@ -1029,20 +1127,40 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         return cite_bib(db, task_id, args)
     if name == "translate_doc":
         import workflow_runners
+        asset_service.require_path_context(db, task_id, doc_path(db, task_id, 'write'))
         return workflow_runners.translate_doc(db, task_id, str(args.get("style") or "formal"))
     if name == "read_attachment":
+        asset_service.require_path_context(db, task_id, str(args.get('path') or ''))
         return read_attachment(args.get("path", ""), int(args.get("chars") or 8000))
     if name == "file_list":                                   # 项目文件夹：看一层目录
-        return tree_list(db, task_id, str(args.get("rel") or ""))
+        result = tree_list(db, task_id, str(args.get('rel') or ''))
+        inputs = asset_service.eligibility_index(db, task_id)
+        result['rows'] = [row for row in result['rows'] if row['dir'] or asset_service.path_context_available(db, task_id, row['path'], index=inputs)]
+        return result
     if name == "file_hand":                                   # 把文件转到某一步的对话里
+        root = db.base_dir(task_id)
+        if root:
+            asset_service.require_path_context(db, task_id, root / str(args.get('rel') or ''))
         return file_hand(db, task_id, str(args.get("rel") or ""), str(args.get("step") or ""),
                          str(args.get("note") or ""))
     if name == "draft_write":
+        inputs = asset_service.eligibility_index(db, task_id)
+        if any(not asset_service.legacy_context_available(db, task_id, 'note', note['id'], index=inputs) for note in db.notes(task_id)):
+            raise ValueError('项目存在未交付的笔记，请先核查，或在任务中明确选择草稿后再写作')
         return stage_write(db, task_id, args.get("title", ""), args.get("section", "引言"))
     if name == "draft_review":
+        if not args.get('draft'):
+            asset_service.require_path_context(db, task_id, doc_path(db, task_id, 'write'))
         return stage_review(db, task_id, args.get("draft") or compose_draft(db, task_id))
     if name == "format_convert":
         fmt = (args.get("format") or "docx").lower()
+        if fmt == 'tex':
+            from workflow_converters import _newest_tex
+            source = Path(args['source']) if args.get('source') else _newest_tex(db, task_id)
+            if source:
+                asset_service.require_path_context(db, task_id, source)
+        elif fmt in ('pdf', 'latex') or not args.get('markdown'):
+            asset_service.require_path_context(db, task_id, doc_path(db, task_id, 'write'))
         if fmt in ("pdf", "latex", "tex"):        # PDF / LaTeX 走本机 MiKTeX（正文 md→tex→pdf，或直接编现成 .tex）
             return conv_run(db, task_id, fmt, str(args.get("source") or ""),
                            str(args.get("template") or ""), str(args.get("cite_style") or ""))
@@ -1328,7 +1446,7 @@ import run_service
 
 
 @run_service.agent_scope
-def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_steps: int = 24,
+def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_steps: int | None = None,
               system: str | None = None, tools: list[dict[str, Any]] | None = None,
               extra_context: str = "", scope: str = "", publish: bool = True,
               profile: dict[str, Any] | None = None, assistant_id: str = "",
@@ -1354,7 +1472,12 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     for key in ("reasoning", "permission"):
         profile.setdefault(key, cfg[key])
     permission = profile.get("permission", "auto")
-    extra_context += "\n" + str(cfg.get("execution_context") or "")
+    # Do not emit an empty context message. Besides wasting a model turn, an
+    # empty system entry looks like duplicated workflow input to isolated
+    # delegated agents and gets persisted in their request trace.
+    execution_context = str(cfg.get("execution_context") or "").strip()
+    if execution_context:
+        extra_context = (extra_context + "\n" + execution_context).strip()
     aid = cfg["assistant_id"]
     expert_name = cfg.get("assistant_name") or (db.assistant(aid) or {}).get("name") or "执行专家"
     send_event = say
@@ -1399,7 +1522,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     handoff, _, input_assets = workflow_state.handoff(db, bound, scope) if bound and scope in STAGES else ("", "", [])
     if bound and not input_assets:
         input_assets = [a["id"] for a in asset_service.research_assets(db, bound, limit=200)]
-    input_assets = [key for key in input_assets if (asset_service.get(db, key) and not asset_service.is_instruction_asset(asset_service.get(db, key)))]
+    inputs = asset_service.eligibility_index(db, bound or '')
+    input_assets = [key for key in input_assets if key in inputs['catalog'] and asset_service.context_available(db, inputs['catalog'][key], index=inputs)]
     restored_node = db.db.execute("SELECT * FROM workflow_nodes WHERE id=? AND run_id=?",
                                  (resume.get("node_id", ""), tracked_run["id"])).fetchone()
     tracked_node = dict(restored_node) if restored_node else run_service.node_start(db, tracked_run["id"], scope or "agent", inputs=input_assets)
@@ -1421,6 +1545,11 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                                             assistant_id=aid, schedule_id=getattr(db, "template_schedule_id", ""))
     template_event = None
     if snapshot:
+        for item in snapshot.get('input_assets', []):
+            asset = asset_service.get(db, item['asset_id'])
+            if not asset or asset['project_id'] != bound:
+                raise ValueError('模板资料不属于当前项目')
+            asset_service.require_context(db, asset)
         input_assets = list(dict.fromkeys([*input_assets, *(a["asset_id"] for a in snapshot.get("input_assets", []))]))
         db.asset_run["inputs"] = input_assets
         db.db.execute("UPDATE workflow_nodes SET input_assets=? WHERE id=?", (json.dumps(input_assets), tracked_node["id"]))
@@ -1475,8 +1604,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 "这次命中多少条、其中多少条有开放获取全文、入库多少条，然后问一句"
                 "「还要调整检索式吗——加点或减点关键词，或者按年份、期刊、只看开放获取再筛一遍？」"
                 "不许只报个数就结束，也别替用户决定下一步。")
-    if extra_context:
-        ctx += "\n\n" + extra_context
+    ctx += "\n\n" + ZOTERO_STAGING_RULES
     project_dir = str((db.summary(bound or task_id).get("task") or {}).get("base_dir") or "")
     ctx += "\n\n" + capabilities.skill_context(db, aid, project_dir)
     if tools is None:
@@ -1515,7 +1643,12 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                       or t.get("function", {}).get("name") in {"project_list", "zotero_search", "zotero_item", "assistant_manage", "project_task_manage", "schedule_manage", "team_manage", "workflow_manage", "paper_translate"}]
     tool_specs = list({t["function"]["name"]: t for t in tool_specs}.values())
     if tool_allowlist is not None:
-        tool_specs = [t for t in tool_specs if t["function"]["name"] in tool_allowlist]
+        allowed_tools = set(tool_allowlist)
+        if getattr(db, 'workflow_end_to_end', False):
+            # The internal reader is required to recover complete checkpoint
+            # evidence after context compaction, even for a narrow node list.
+            allowed_tools.add('workflow_context_read')
+        tool_specs = [t for t in tool_specs if t["function"]["name"] in allowed_tools]
     allowed_names = {t.get("function", {}).get("name") for t in tool_specs}
     integration_names = {t.get("function", {}).get("name") for t in agent_integrations.tool_specs()}
     messages: list[dict[str, Any]] = [
@@ -1523,8 +1656,12 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         {"role": "system", "content": ctx},
         *history, {"role": "user", "content": text + ("\n\n【本次使用的提示词模板：" + snapshot["title"] + "】\n" + snapshot["rendered"] if snapshot else "")},
     ]
+    if extra_context:
+        messages.insert(2, {"role": "system", "content": "【当前节点输入与前置交付】\n" + extra_context})
     if resume.get("messages"):
         messages = resume["messages"]
+        if extra_context and not any(str(m.get("content", "")).startswith("【当前节点输入与前置交付】") for m in messages):
+            messages.insert(2, {"role": "system", "content": "【当前节点输入与前置交付】\n" + extra_context})
     elif image_ids or image_inputs:
         import image_tools
         import account_providers
@@ -1543,7 +1680,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     pending_calls = resume.get("pending_calls") or []
 
     save_checkpoint(phase="tools_ready" if pending_calls else "model", messages=messages, turn=first_turn, workflow_run_id=tracked_run["id"], node_id=tracked_node["id"])
-    for turn in range(first_turn, first_turn + max_steps):
+    import itertools
+    turns = itertools.count(first_turn) if max_steps is None else range(first_turn, first_turn + max_steps)
+    for turn in turns:
         if cancel_check and cancel_check():
             run_service.finish_node(db, tracked_node["id"], "failed", error="运行已中断")
             run_service.finish(db, tracked_run["id"], "failed", error="运行已中断")
@@ -1563,9 +1702,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             resuming_tools = bool(pending_calls)
             if getattr(db, 'workflow_end_to_end', False):
                 import workflow_context
-                model_messages = workflow_context.bounded_messages(messages)
-                if model_messages is not messages and 'workflow_context_read' not in allowed_names:
-                    raise ValueError('长上下文需要分页读取，请在节点允许的工具中加入 workflow_context_read')
+                model_messages = workflow_context.bounded_messages(messages,
+                    run_id=getattr(db, 'workflow_context_run_id', ''), node_id=getattr(db, 'workflow_context_node_id', ''))
             else:
                 model_messages = messages
             if not resuming_tools:say({'type':'model_request','id':reasoning_id,'round':turn,'model':profile.get('model',''),'permission':permission})

@@ -18,7 +18,9 @@ def search_project_space(db: Any, task_id: str, query: str) -> dict[str, Any]:
         return {"q": query, "papers": [], "notes": [], "evidence": []}
 
     conn = _conn(db)
-    asset_hits = asset_service.search(db, query, project_id=task_id, limit=90)
+    inputs = asset_service.eligibility_index(db, task_id)
+    asset_hits = [asset for asset in asset_service.search(db, query, project_id=task_id, limit=90)
+                  if asset_service.context_available(db, asset, index=inputs)]
 
     def metadata(item: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -67,6 +69,8 @@ def search_project_space(db: Any, task_id: str, query: str) -> dict[str, Any]:
     paper_ids = {str(item.get("id")) for item in matched_papers}
     paper_rows = db.papers_of(task_id) if hasattr(db, "papers_of") else []
     for p in paper_rows:
+        if not asset_service.legacy_context_available(db, task_id, 'paper', p.get('id'), index=inputs):
+            continue
         title = str(p.get("title") or p.get("filename") or "")
         authors = str(p.get("authors") or "")
         doi = str(p.get("doi") or "")
@@ -87,6 +91,8 @@ def search_project_space(db: Any, task_id: str, query: str) -> dict[str, Any]:
         for nid, title, content, updated_at in rows:
             if asset_service.is_instruction_note(db, task_id, nid, content):
                 continue
+            if not asset_service.legacy_context_available(db, task_id, 'md_note', nid, index=inputs):
+                continue
             full = f"{title or ''} {content or ''}".lower()
             if q not in full or str(nid) in note_ids:
                 continue
@@ -102,6 +108,8 @@ def search_project_space(db: Any, task_id: str, query: str) -> dict[str, Any]:
         for n in (db.notes(task_id) if hasattr(db, "notes") else []):
             title, content = str(n.get("title") or ""), str(n.get("content") or n.get("markdown") or "")
             if asset_service.is_instruction_note(db, task_id, n.get("id"), content):
+                continue
+            if not asset_service.legacy_context_available(db, task_id, 'note', n.get('id'), index=inputs):
                 continue
             if q not in f"{title} {content}".lower() or str(n.get("id")) in note_ids:
                 continue
@@ -119,6 +127,8 @@ def search_project_space(db: Any, task_id: str, query: str) -> dict[str, Any]:
             quote = str(field(e, "quote") or field(e, "excerpt") or "")
             claim = str(field(e, "claim") or field(e, "value") or "")
             eid = field(e, "id")
+            if not asset_service.legacy_context_available(db, task_id, 'evidence', eid, index=inputs):
+                continue
             if q not in f"{quote} {claim}".lower() or str(eid) in evidence_ids:
                 continue
             matched_evidence.append({"id": eid, "paper_id": field(e, "paper_id"),

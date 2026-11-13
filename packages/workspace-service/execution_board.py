@@ -53,12 +53,18 @@ def events(db, project_id, after=0, *, task_id='', run_id='', limit=200, latest=
     return {'events':rows, 'cursor':rows[-1]['id'] if rows else int(after)}
 
 
-def snapshot(db, project_id):
+def snapshot(db, project_id, *, include_deleted=False):
     project_tasks._project(db, project_id)
     cursor=db.db.execute('SELECT COALESCE(MAX(id),0) FROM execution_board_events WHERE project_id=?',(project_id,)).fetchone()[0]
     rows=[]
     hidden={(row['item_kind'],row['item_id']):row['deleted_at'] for row in db.db.execute('SELECT * FROM execution_board_hidden WHERE project_id=?',(project_id,))}
-    for row in db.db.execute("SELECT t.*,c.id AS chat_id,c.title AS conversation_title FROM project_tasks t JOIN execution_conversations x ON x.kind='task' AND x.entity_id=t.id JOIN chats c ON c.id=x.chat_id AND c.deleted_at='' WHERE t.project_id=? AND t.workflow_run_id='' ORDER BY t.updated_at DESC LIMIT 300", (project_id,)):
+    hidden_task_filter = '' if include_deleted else " AND NOT EXISTS (SELECT 1 FROM execution_board_hidden h WHERE h.project_id=t.project_id AND h.item_kind='task' AND h.item_id=t.id)"
+    task_chat_filter = " AND c.deleted_at=''"
+    # Execution projections are internal status records; their hidden chat
+    # rows must not make a task disappear from the status board. The
+    # include_deleted flag only restores board-hidden records, not chats that
+    # were deleted from conversation history.
+    for row in db.db.execute("SELECT t.*,c.id AS chat_id,c.title AS conversation_title FROM project_tasks t JOIN execution_conversations x ON x.kind='task' AND x.entity_id=t.id JOIN chats c ON c.id=x.chat_id" + task_chat_filter + " WHERE t.project_id=? AND t.workflow_run_id=''" + hidden_task_filter + " ORDER BY t.updated_at DESC LIMIT 300", (project_id,)):
         task=dict(row);run=project_tasks.get_run(db,task['latest_run_id']) if task['latest_run_id'] else {}
         actor=run.get('executor_snapshot',{})
         if not actor:
@@ -77,24 +83,33 @@ def snapshot(db, project_id):
             'assistant_name':assistant.get('name',''),'model_id':actor.get('runtime_config',{}).get('model_id',''),
             'executor_kind':grant['kind'] if grant else actor.get('kind',''), 'activity':latest['activity'] if latest else '',
             'updated_at':task['updated_at'],'error':run.get('error') or meta.get('_start_error',''),'plans':[r[0] for r in db.db.execute('SELECT plan_id FROM plan_task_links WHERE task_id=?',(task['id'],))]})
-    for row in db.db.execute("SELECT t.*,c.title,c.channel,c.task_id AS project_id FROM tasks t JOIN chats c ON c.id=t.owner_id WHERE c.task_id=? AND c.deleted_at='' AND t.kind='agent_run' AND NOT EXISTS (SELECT 1 FROM execution_conversations x WHERE x.chat_id=c.id) AND t.id=(SELECT r.id FROM tasks r WHERE r.owner_id=c.id AND r.kind='agent_run' ORDER BY CASE r.status WHEN 'running' THEN 0 WHEN 'pending' THEN 1 WHEN 'suspended' THEN 2 ELSE 3 END,r.rowid DESC LIMIT 1) ORDER BY t.updated_at DESC LIMIT 100",(project_id,)):
+    legacy_chat_filter = " AND c.deleted_at=''"
+    for row in db.db.execute("SELECT t.*,c.title,c.channel,c.task_id AS project_id,c.deleted_at AS chat_deleted_at FROM tasks t JOIN chats c ON c.id=t.owner_id WHERE c.task_id=?" + legacy_chat_filter + " AND t.kind='agent_run' AND NOT EXISTS (SELECT 1 FROM execution_conversations x WHERE x.chat_id=c.id) AND t.id=(SELECT r.id FROM tasks r WHERE r.owner_id=c.id AND r.kind='agent_run' ORDER BY CASE r.status WHEN 'running' THEN 0 WHEN 'pending' THEN 1 WHEN 'suspended' THEN 2 ELSE 3 END,r.rowid DESC LIMIT 1) ORDER BY t.updated_at DESC LIMIT 100",(project_id,)):
         request=json.loads(row['checkpoint'] or '{}').get('request',{})
         cfg=request.get('_runtime_snapshot',{})
         assistant=db.assistant(cfg.get('assistant_id','builtin-steward')) or {}
         latest=db.db.execute('SELECT kind,payload FROM run_events WHERE run_id=? AND kind NOT LIKE ? ORDER BY event_id DESC LIMIT 1',(row['id'],'%_delta')).fetchone()
         event=json.loads(latest['payload']) if latest else {}
         rows.append({'id':row['owner_id'],'kind':'conversation','channel':row['channel'],'chat_id':row['owner_id'],'project_id':project_id,
-            'deleted_at':hidden.get(('conversation',row['owner_id']),''),
+            'deleted_at':hidden.get(('conversation',row['owner_id']),row['chat_deleted_at'] or ''),
             'title':row['title'],'status':execution_status.normalize(row['status']),
             'run_id':row['id'],'assistant_name':assistant.get('name',''),'model_id':cfg.get('model_id',''),
             'activity':event.get('name') or (latest['kind'] if latest else ''),'updated_at':row['updated_at'],
             'error':event.get('message','') if row['status']=='failed' else '', 'attempt':1})
-    for row in db.db.execute("SELECT r.*,x.chat_id,c.title,c.updated_at FROM workflow_runs r JOIN execution_conversations x ON x.kind='workflow' AND x.entity_id=r.id JOIN chats c ON c.id=x.chat_id WHERE x.project_id=? AND c.deleted_at='' ORDER BY c.updated_at DESC LIMIT 100",(project_id,)):
+    hidden_conversation_filter = '' if include_deleted else " AND NOT EXISTS (SELECT 1 FROM execution_board_hidden h WHERE h.project_id=x.project_id AND h.item_kind='conversation' AND h.item_id=x.chat_id)"
+    workflow_chat_filter = " AND c.deleted_at=''"
+    for row in db.db.execute("SELECT r.*,x.chat_id,c.title,c.updated_at,c.deleted_at AS chat_deleted_at FROM workflow_runs r JOIN execution_conversations x ON x.kind='workflow' AND x.entity_id=r.id JOIN chats c ON c.id=x.chat_id WHERE x.project_id=?" + workflow_chat_filter + hidden_conversation_filter + " ORDER BY c.updated_at DESC LIMIT 100",(project_id,)):
+        workflow_nodes=[]
+        for child in project_tasks.list_tasks(db, project_id, workflow_run_id=row['id']):
+            result=child.get('node_result') or {}
+            if result.get('available'):
+                workflow_nodes.append(result)
         rows.append({'id':row['chat_id'],'chat_id':row['chat_id'],'kind':'conversation','execution_kind':'workflow',
                      'project_id':project_id,'title':row['title'],'workflow_run_id':row['id'],'run_id':row['id'],
                      'status':{'succeeded':'completed'}.get(row['status'],row['status']),'assistant_name':'工作流',
                      'activity':row['current_node'],'updated_at':row['updated_at'],'error':row['error'],
-                     'deleted_at':hidden.get(('conversation',row['chat_id']),'')})
+                     'deleted_at':hidden.get(('conversation',row['chat_id']),row['chat_deleted_at'] or ''),
+                     'workflow_nodes':workflow_nodes})
     for item in rows:
         kind='workflow' if item.get('execution_kind')=='workflow' else item['kind']
         item.update(execution_status.project(db,item['chat_id'],item['status'],kind=kind,run_id=item['run_id']))
@@ -109,12 +124,12 @@ def snapshot(db, project_id):
     return {'project_id':project_id,'items':rows,'cursor':cursor}
 
 
-def snapshot_all(db):
+def snapshot_all(db, *, include_deleted=False):
     projects=[{'id':row['id'],'title':row['title']} for row in db.tasks()]
     cursor=db.db.execute('SELECT COALESCE(MAX(id),0) FROM execution_board_events').fetchone()[0]
     items=[]
     for project in projects:
-        items.extend(dict(row, project_name=project['title']) for row in snapshot(db,project['id'])['items'])
+        items.extend(dict(row, project_name=project['title']) for row in snapshot(db,project['id'],include_deleted=include_deleted)['items'])
     items.sort(key=lambda row:(bool(row.get('pinned')),row['updated_at']),reverse=True)
     return {'project_id':'','projects':projects,'items':items,'cursor':cursor}
 
@@ -131,9 +146,14 @@ def visibility(db, project_id, action, items):
         if kind=='task':
             row=db.db.execute('SELECT id,metadata FROM project_tasks WHERE id=? AND project_id=?',(identifier,project_id)).fetchone()
         elif kind=='conversation':
-            row=db.db.execute("SELECT id FROM chats WHERE id=? AND task_id=? AND deleted_at=''",(identifier,project_id)).fetchone()
+            row=db.db.execute("SELECT id FROM chats WHERE id=? AND task_id=?",(identifier,project_id)).fetchone()
             if not row:
                 row=db.db.execute("SELECT c.id FROM tasks t JOIN chats c ON c.id=t.owner_id WHERE t.id=? AND t.kind='agent_run' AND c.task_id=? AND c.deleted_at=''",(identifier,project_id)).fetchone()
+            if not row:
+                import execution_conversations
+                binding=execution_conversations.by_chat(db,identifier)
+                if binding and binding.get('project_id')==project_id:
+                    row={'id':identifier}
             if row:identifier=row['id']
         else:raise ValueError('看板记录类型无效')
         if not row:raise ValueError('记录已删除或不属于当前项目，请刷新看板')
@@ -167,11 +187,12 @@ def route(method,path,body,query,db):
     if not path.startswith('/api/execution-board'): return None
     def q(key,default=''): return (query.get(key) or [default])[0]
     project_id=str(body.get('project_id') or q('project_id'))
+    include_deleted=q('include_deleted')=='1'
     if method=='GET' and q('all_projects')=='1' and not project_id:
-        if path=='/api/execution-board': return snapshot_all(db)
+        if path=='/api/execution-board': return snapshot_all(db,include_deleted=include_deleted)
         if path=='/api/execution-board/events': return events(db,'',q('after',0),all_projects=True)
     project_tasks._project(db,project_id)
-    if method=='GET' and path=='/api/execution-board': return snapshot(db,project_id)
+    if method=='GET' and path=='/api/execution-board': return snapshot(db,project_id,include_deleted=include_deleted)
     if method=='POST' and path=='/api/execution-board/visibility': return visibility(db,project_id,str(body.get('action') or ''),body.get('items'))
     if method=='GET' and path.endswith('/events'): return events(db,project_id,q('after',0),task_id=q('task_id'),run_id=q('run_id'),limit=q('limit',200),latest=q('latest')=='1')
     if method=='POST' and path.endswith('/link-plan'): return {'task':link_plan(db,project_id,str(body.get('plan_id') or ''),str(body.get('task_id') or ''))}

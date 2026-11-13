@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 REASONING = ("auto", "none", "minimal", "low", "medium", "high", "xhigh")
 PERMISSIONS = ("auto", "read_only", "workspace_write", "full_access")
-READ_TOOLS = frozenset(("library_overview", "knowledge_query", "calendar_list", "outline_read", "map_read", "map_sources", "doc_read", "cite_read", "read_attachment", "skill_read", "mail_accounts", "mail_list", "mail_read", "zotero_collections", "project_note_list", "project_note_read"))
+READ_TOOLS = frozenset(("library_overview", "knowledge_query", "calendar_list", "outline_read", "map_read", "map_sources", "doc_read", "cite_read", "read_attachment", "skill_read", "mail_accounts", "mail_list", "mail_read", "zotero_collections", "zotero_staged_list", "zotero_staged_import", "project_note_list", "project_note_read"))
 READ_TOOLS = READ_TOOLS | {"prompt_template_search", "prompt_template_read", "prompt_template_render", "workflow_context_read", "graph_workflow_status", "workflow_templates", "workflow_status", "task_status"}
 
 

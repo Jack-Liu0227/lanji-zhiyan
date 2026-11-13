@@ -11,7 +11,7 @@ const WorkspaceTrajectory=(()=>{
       else if(kind==='tool_result'){const row=pending.find(row=>row.status==='pending'&&(data.id?row.callId===data.id:row.name===data.name));if(row)Object.assign(row,{status:data.ok?'success':'failed',duration:data.duration_ms,output:data.result??data.summary,summary:data.summary,path:data.path});else rows.push({key:'result:'+event.event_id,kind:'tool',name:data.name,status:data.ok?'success':'failed',output:data.result??data.summary,duration:data.duration_ms,at:event.created_at});}
       else if(kind==='reasoning_done'&&data.content){rows.push({key:'reasoning:'+event.event_id,kind:'reasoning',name:'思考摘要',status:'done',output:data.content,duration:data.duration_ms,at:event.created_at});}
       else if(kind==='assistant'){rows.push({key:'assistant:'+event.event_id,kind:'assistant',name:'专家回复',status:'done',output:data.content,at:event.created_at});}
-      else if(['error','cancelled','sub','team','template_used','done'].includes(kind)){rows.push({key:kind+':'+event.event_id,kind,name:{error:'运行错误',cancelled:'停止运行',done:'本轮结束',sub:'子调用',team:'团队协作',template_used:'应用模板'}[kind],status:kind==='error'?'failed':kind==='cancelled'?'cancelled':'done',output:data,at:event.created_at});}
+      else if(['error','cancelled','sub','team','template_used','done'].includes(kind)){const detail=kind==='error'?(data.message||data.detail||data.error||data.summary||data.output?.message||data.result?.message||'运行失败'):'';rows.push({key:kind+':'+event.event_id,kind,name:kind==='error'?'运行错误 · '+detail:({cancelled:'停止运行',done:'本轮结束',sub:'子调度',team:'团队协作',template_used:'应用模板'}[kind]||kind),status:kind==='error'?'failed':kind==='cancelled'?'cancelled':'done',summary:detail||data.summary||'',output:data,at:event.created_at});}
     }
     if(['done','failed','cancelled','interrupted'].includes(status))rows.filter(row=>row.status==='pending').forEach(row=>row.status='interrupted');
     return rows;
@@ -47,6 +47,7 @@ const WorkspaceTrajectory=(()=>{
       const data=await api('/api/agent-settings/trajectory/events?chat_id='+encodeURIComponent(options.chatId)+'&project_id='+encodeURIComponent(options.projectId)+'&run_id='+encodeURIComponent(id)+'&after='+(reset?0:after));
       if(!current()||ticket!==request||id!==runId)return;
       events=reset?data.events:[...events,...data.events.filter(row=>!events.some(old=>old.event_id===row.event_id))];after=data.next_after;hasMore=data.has_more;
+      if(!selected){const firstError=records(events,data.status).find(row=>row.kind==='error');if(firstError)selected=firstError.key;}
       const mark=JSON.stringify([id,data.status,events]);if(mark!==signature){signature=mark;render();}
     }
     async function refresh(){

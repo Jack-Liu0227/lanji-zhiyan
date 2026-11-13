@@ -18,6 +18,38 @@ _executing = set()
 _MISSING = object()
 
 
+def _accepted_upstream(db, project_id, dependencies):
+    root = Path(db.base_dir(project_id)).resolve()
+    accepted = []
+    for dependency in dependencies or []:
+        files = sorted(dependency.get('outputs') or [], key=lambda item: (
+            item.get('revision_source') != 'human',
+            (item.get('name') or Path(item.get('path', '')).name) not in ('result.md', 'reviewed-result.json'),
+            item.get('name') or ''))
+        outputs = []
+        for item in files:
+            path = Path(item.get('path', '')).resolve()
+            if path.suffix.lower() not in {'.md', '.markdown', '.txt', '.json', '.csv', '.tex'}:
+                continue
+            if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
+                continue
+            if tasks._hash(path) != item.get('content_hash', item.get('sha256')):
+                raise ValueError('Accepted upstream output changed; review the upstream node again')
+            outputs.append({'name': item.get('name') or path.name,
+                            'revision_source': item.get('revision_source', ''),
+                            'content': path.read_text(encoding='utf-8')})
+        if outputs:
+            accepted.append({'task_id': dependency.get('task_id', ''),
+                             'delivery_id': dependency.get('delivery_id', ''), 'outputs': outputs})
+    return accepted
+
+
+def is_active(db_path, run_id):
+    key = (str(Path(db_path).resolve()), run_id)
+    with _lock:
+        return key in _workers or key in _executing
+
+
 def request_cancel(run_id):
     with _lock:
         for (_, key), event in _workers.items():
@@ -43,10 +75,21 @@ def _tools(db, task, run, node):
         specs = [*workflow.TOOL_SPECS, *agent_integrations.tool_specs(),
                  *capabilities.capability_tool_specs(db, executor["assistant_id"], str(db.base_dir(task["project_id"]) or ""))]
     forbidden = {"delegate", "team_manage", "workflow_create", "schedule_manage", "assistant_manage"}
+    # Context pagination is an internal, read-only capability for end-to-end
+    # workflow nodes. Generic project/team tasks keep their explicitly selected
+    # tool surface unchanged.
+    context_reader = "workflow_context_read"
+    workflow_node = bool(task.get("workflow_run_id") or task.get("metadata", {}).get("workflow_node"))
     allowlist = _allowlists(executor.get("tools"), task["scope"].get("tools"), node.get("tools"))
+    effective_allowlist = None if allowlist is None else set(allowlist) | ({context_reader} if workflow_node else set())
     specs = [s for s in specs if s["function"]["name"] not in forbidden and
-             (allowlist is None or s["function"]["name"] in allowlist)]
-    return list({s["function"]["name"]: s for s in specs}.values()), allowlist
+             (effective_allowlist is None or s["function"]["name"] in effective_allowlist)]
+    if workflow_node and not any(s["function"]["name"] == context_reader for s in specs):
+        fallback = next((s for s in workflow.TOOL_SPECS if s["function"]["name"] == context_reader), None)
+        if fallback:
+            specs.append(fallback)
+    import team_orchestration
+    return team_orchestration.tools(task, list({s["function"]["name"]: s for s in specs}.values())), allowlist
 
 
 def _freeze_file(db, task, run, source, folder, index):
@@ -146,8 +189,19 @@ def _outputs(db, task, run, out, capture, *, folder=None):
     asset = asset_service.register_file(db, report, project_id=task["project_id"], kind="task_output", title=task["title"],
         source="project_task", run_id=run["id"], body=text, metadata={"project_task_id": task["id"], "task_run_id": run["id"]})
     files.append({"asset_id": asset["id"], "path": str(report), "content_hash": tasks._hash(report), "sha256": tasks._hash(report), "name": "result.md", "relative": report.relative_to(root).as_posix()})
-    return {"files": files, "content": content, "reply": reply,
+    output = {"files": files, "content": content, "reply": reply,
             "original_versions": [{"path": item["original_path"], "sha256": item["content_hash"]} for item in files if item.get("original_path")]}
+    if task['metadata'].get('stage') == 'convert':
+        import workflow_export_revision
+        output['export_source'] = workflow_export_revision.source(db, task, {**run, 'output_snapshot': output})
+    return output
+
+
+def _error_detail(exc):
+    message=str(exc).strip()
+    if not message or message.casefold() in {'error','failed','execution failed'}:
+        return f"{type(exc).__name__}: {message or '未提供错误详情'}"
+    return message
 
 
 def execute(db, task_run_id, cancel_check=None):
@@ -225,6 +279,10 @@ def execute(db, task_run_id, cancel_check=None):
                        "task_goal": task["goal"], "task_inputs": {k: v for k, v in run["input_snapshot"].items() if k != "execution_context"},
                        "assistant_id": executor["assistant_id"], "member": member, "skills": skills,
                        "model_id": (model or {}).get("id", ""), "tool_permission": cfg["permission"]}
+            context['accepted_upstream'] = _accepted_upstream(
+                db, task['project_id'], run['input_snapshot'].get('dependencies', []))
+            if metadata.get('_handoff_context'):
+                context['handoff_context'] = metadata['_handoff_context']
             if metadata.get("legacy_stage_compat") and not context.get("upstream_hash"):
                 import workflow_execution
                 upstream = workflow_execution._snapshot(db, workflow_execution.detail(db, owner["run_id"]), node)
@@ -238,8 +296,9 @@ def execute(db, task_run_id, cancel_check=None):
             if owner:
                 import workflow_context
                 context_text = workflow_context.prompt(context, owner["run_id"], db.workflow_context_node_id)
-                if ("已节选" in context_text or "超出本次输入预算" in context_text) and not any(s["function"]["name"] == "workflow_context_read" for s in specs):
-                    raise ValueError("上下文需要分页读取，请在本节点允许的工具中加入 workflow_context_read")
+                # Large handoffs are compacted for the model, while the complete
+                # checkpoint remains addressable through workflow_context_read.
+                # Never fail the node merely because the handoff was compacted.
             else:
                 context_text = json.dumps(context, ensure_ascii=False, default=str)
             if member and member.get("prompt"):
@@ -252,6 +311,9 @@ def execute(db, task_run_id, cancel_check=None):
             purpose = node.get("label") or task["title"]
             prompt = node.get("prompt") or task["goal"]
             system = "执行当前项目任务「" + purpose + "」。依据版本化输入完成目标，使用工具保存实际产物；需要派生工作时只能使用当前任务允许的执行者和范围。"
+            import team_orchestration
+            system += team_orchestration.prompt(task, run)
+            max_steps = None
             def board_emit(event):
                 import execution_conversations
                 execution_conversations.record(db,task,run,event)
@@ -266,24 +328,27 @@ def execute(db, task_run_id, cancel_check=None):
                 profile=db.runtime_model,
                 extra_context=context_text, assistant_id=executor["assistant_id"], member=member,
                 step=stage if known_stage else "", scope=stage if known_stage else "task:" + task["id"],
-                publish=bool(metadata.get("legacy_stage_compat")), max_steps=int(node.get("max_steps") or 40),
+                publish=bool(metadata.get("legacy_stage_compat")), max_steps=max_steps,
                 cancel_check=check, tool_allowlist=allowlist,
                 image_inputs=[item for item in run['input_snapshot'].get('assets',[]) if item.get('path')
                     and (asset_service.get(db,item.get('asset_id','')) or {}).get('source')=='image_upload'])
             execution.check()
             capture = None
-            if known_stage:
+            current = tasks.get(db, task['id'])
+            waiting_for_team = bool(task['metadata'].get('_team_orchestration')) and (
+                any(child['status'] != 'delivered' for child in current['children']) or team_orchestration.needs_aggregation(current, run))
+            if known_stage and not waiting_for_team:
                 import workflow_state
                 capture = workflow_state.capture(db, task["project_id"], stage)
                 if not capture["valid"]:
-                    raise ValueError("节点未生成完整产物，请检查工具记录并重试")
-            output = _outputs(db, task, run, out or {}, capture)
+                    raise ValueError("节点未生成完整产物，请检查工具记录并重试；已保存文件仍可在产物页面预览")
+            output = _outputs(db, {**task, 'output_contract': {}} if waiting_for_team else task, run, out or {}, capture)
             checkpoint = {"input": context, "reply": (out or {}).get("reply", ""),
                           "output": capture or output, "agent_run_id": (out or {}).get("run_id", "")}
             execution.check()
             return tasks.complete(db, run["id"], {"reply": checkpoint["reply"], "output_snapshot": output, "checkpoint": checkpoint})
     except Exception as exc:
-        return tasks.fail(db, run["id"], str(exc), cancelled=isinstance(exc, execution.Cancelled) or check())
+        return tasks.fail(db, run["id"], _error_detail(exc), cancelled=isinstance(exc, execution.Cancelled) or check())
     finally:
         with _lock:
             _executing.discard(execution_key)
@@ -315,10 +380,14 @@ def kick(db_path, task_run_id):
                     workflow_tasks._record_attempt(db, workflow_execution.detail(db, queued_task["workflow_run_id"]),
                         queued_task["workflow_node_id"], queued_task, queued_run,
                         queued_run["checkpoint"].get("input") or queued_run["input_snapshot"].get("execution_context", {}).get("upstream_context") or {})
-                task = execute(db, task_run_id, signal.is_set)
-                if task["status"] == "delivered" and task["workflow_run_id"] and not task["parent_task_id"]:
+                import team_orchestration
+                with team_orchestration.slot(db_path, queued_task, signal.is_set):
+                    task = execute(db, task_run_id, signal.is_set)
+                if task["status"] in ('delivered', 'awaiting_review') and task["workflow_run_id"] and not task["parent_task_id"]:
                     import workflow_execution
                     workflow_execution.kick(db_path, task["workflow_run_id"])
+        except execution.Cancelled:
+            pass
         finally:
             with _lock:
                 _workers.pop(key, None)
@@ -330,6 +399,8 @@ def recover(db_path):
     """Mark abandoned attempts, preserving checkpoints; never restart models on read."""
     import workflow
     with workflow.WorkflowDB(db_path) as db:
+        import task_output_versions
+        task_output_versions.recover(db)
         for row in db.db.execute("SELECT id FROM project_task_runs WHERE status IN ('queued','running')").fetchall():
             with _lock:
                 key = (str(Path(db_path).resolve()), row["id"])

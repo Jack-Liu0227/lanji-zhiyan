@@ -11,6 +11,8 @@ import project_workflows
 import research_setup
 import workflow
 import workflow_execution
+import workflow_layout
+import workflow_tasks
 
 
 class ResearchSetupTest(unittest.TestCase):
@@ -58,6 +60,49 @@ class ResearchSetupTest(unittest.TestCase):
         self.assertEqual(node['skills'], ['lab-method'])
         self.assertEqual(node['prompt'], 'Use the lab method')
         with self.assertRaises(PermissionError): workflow._tool_impl('project_create_from_idea', self.db, pid, {**args, 'project': self.db.create_task('Other')})
+
+    def test_custom_langgraph_nodes_can_bind_an_expert_or_a_team(self):
+        pid = self.db.create_task('Mixed actor workflow')
+        args = {
+            'idea': 'Compare two evidence streams with a team review',
+            'project': pid,
+            'auto_start_graph': False,
+            'experts': [
+                {'role_id': 'solo', 'name': 'Solo evidence expert'},
+                {'role_id': 'collab', 'name': 'Collaboration specialist'},
+            ],
+            'workflow': {
+                'nodes': [
+                    {'id': 'solo-node', 'step': 'search', 'label': 'Solo search',
+                     'executor_role_id': 'solo', 'execution_mode': 'assistant'},
+                    {'id': 'team-node', 'step': 'task', 'label': 'Team synthesis',
+                     'executor_role_id': 'collab', 'execution_mode': 'team'},
+                ],
+                'edges': [{'source': 'solo-node', 'target': 'team-node'}],
+            },
+        }
+        result = workflow._tool_impl('project_create_from_idea', self.db, pid, args)
+        layout = project_workflows.current(self.db, pid)
+        nodes = {node['id']: node for node in layout['nodes']}
+        self.assertEqual(nodes['solo-node']['execution_mode'], 'assistant')
+        self.assertEqual(nodes['team-node']['execution_mode'], 'team')
+        solo = workflow_layout.resolve_node(self.db, pid, layout['id'], nodes['solo-node'], materialize=False)
+        team = workflow_layout.resolve_node(self.db, pid, layout['id'], nodes['team-node'], materialize=False)
+        self.assertEqual(solo['execution_mode'], 'assistant')
+        self.assertTrue(solo['assistant_id'])
+        self.assertFalse(solo.get('team_id'))
+        self.assertEqual(team['execution_mode'], 'team')
+        self.assertTrue(team['team_id'])
+        self.assertFalse(team.get('assistant_id'))
+        self.assertEqual(result['status'], 'configured')
+        run = workflow_tasks.prepare(self.db, pid, 'Compare two evidence streams', 'mixed-actors', layout['id'])
+        prepared = {task['workflow_node_id']: task for task in project_tasks.list_tasks(self.db, pid, workflow_run_id=run['id'])}
+        prepared_solo = project_bindings.resolve(self.db, pid, prepared['solo-node']['executor_binding_id'],
+                                                 member_id=prepared['solo-node'].get('member_id', ''), materialize=False)
+        prepared_team = project_bindings.resolve(self.db, pid, prepared['team-node']['executor_binding_id'],
+                                                 member_id=prepared['team-node'].get('member_id', ''), materialize=False)
+        self.assertEqual(prepared_solo['kind'], 'assistant')
+        self.assertEqual(prepared_team['kind'], 'team')
 
     def test_failed_setup_resumes_existing_objects_and_configuration_conflicts_fail(self):
         args = {'idea': 'Recover interrupted research setup', 'request_key': 'recover', 'auto_start_graph': False}

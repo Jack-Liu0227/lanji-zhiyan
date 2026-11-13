@@ -40,7 +40,8 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[st
         import project_resources
         project_id = str(body.get('project_id') or (query.get('project_id') or [''])[0])
         if method == 'GET' and path == '/api/project/resources':
-            return project_resources.catalog(db, project_id, (query.get('kind') or [''])[0], (query.get('q') or [''])[0])
+            return project_resources.catalog(db, project_id, (query.get('kind') or [''])[0], (query.get('q') or [''])[0],
+                                             review_status=(query.get('review_status') or [''])[0])
         if method == 'POST' and path == '/api/project/resources/index':
             return project_resources.index(db, project_id)
         if method == 'POST' and path == '/api/project/resources/write':

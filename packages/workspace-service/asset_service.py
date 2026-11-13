@@ -6,6 +6,7 @@ large or user-editable content stays in the existing project files.
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import mimetypes
 import os
@@ -128,9 +129,260 @@ def is_instruction_asset(asset):
     return False
 
 
-def research_assets(db, project_id, limit=200):
+def eligibility_index(db, project_id):
+    """Read one project once when classifying a resource list or automatic input set."""
+    conn = _conn(db)
+    index = {"tasks": {}, "runs": {}, "deliveries": {}, "assets": {}, "paths": {}, "agent_workflows": set(),
+             "catalog": {}, "source_paths": {}, "legacy": {}, "workflow_tasks": {}}
+    for row in conn.execute("SELECT * FROM assets WHERE project_id=?", (project_id,)):
+        asset = dict(row)
+        index["catalog"][asset["id"]] = asset
+        if asset["storage"] == "file":
+            index["source_paths"][_path_key(asset["canonical_uri"])] = asset
+        if asset["status"] == "active":
+            metadata = _metadata(asset["metadata"])
+            for value in {str(metadata[key]) for key in ("legacy_id", "paper_id", "evidence_id", "result_id") if metadata.get(key)}:
+                index["legacy"].setdefault((asset["kind"], value), []).append(asset)
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='project_tasks'").fetchone():
+        return index
+    for row in conn.execute("SELECT id,title,status,latest_run_id,accepted_delivery_id,workflow_run_id,workflow_node_id,parent_task_id "
+                            "FROM project_tasks WHERE project_id=?", (project_id,)):
+        index["tasks"][row["id"]] = dict(row)
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='workflow_executions'").fetchone():
+        for row in conn.execute("SELECT e.run_id,e.settings FROM workflow_executions e JOIN workflow_runs r ON r.id=e.run_id "
+                                "WHERE r.project_id=?", (project_id,)):
+            settings = _metadata(row["settings"])
+            if settings.get("agent_invocation", {}).get("source") == "agent_tool":
+                index["agent_workflows"].add(row["run_id"])
+                index["workflow_tasks"][row["run_id"]] = settings.get("task_ids", {})
+    for row in conn.execute("SELECT d.id,d.task_id,d.task_run_id,d.decision,d.output_versions FROM project_task_deliveries d "
+                            "JOIN project_tasks t ON t.id=d.task_id WHERE t.project_id=?", (project_id,)):
+        index["deliveries"][row["id"]] = dict(row)
+    for row in conn.execute("SELECT r.id,r.task_id,r.status,r.output_snapshot,r.checkpoint,r.input_snapshot FROM project_task_runs r "
+                            "JOIN project_tasks t ON t.id=r.task_id WHERE t.project_id=? ORDER BY r.rowid", (project_id,)):
+        run = dict(row)
+        run["output_snapshot"] = _metadata(run["output_snapshot"])
+        run["checkpoint"] = _metadata(run["checkpoint"])
+        run["input_snapshot"] = _metadata(run["input_snapshot"])
+        index["runs"][run["id"]] = run
+        for output in run["output_snapshot"].get("files", []):
+            if not isinstance(output, dict):
+                continue
+            reference = {"task_id": run["task_id"], "task_run_id": run["id"], "file": output}
+            if output.get("asset_id"):
+                index["assets"].setdefault(output["asset_id"], []).append(reference)
+            for key in ("path", "original_path"):
+                if output.get(key):
+                    index["paths"].setdefault(_path_key(output[key]), []).append(reference)
+    return index
+
+
+def _path_key(path):
+    return os.path.normcase(str(Path(path).resolve()))
+
+
+def eligibility(db, asset, *, index=None):
+    """Derive publication state from canonical attempts and accepted deliveries."""
+    metadata = _metadata(asset.get("metadata"))
+    uri = asset.get("canonical_uri", "")
+    path_key = _path_key(uri) if asset.get("storage") == "file" and uri else ""
+    index = index if index is not None else eligibility_index(db, asset.get("project_id", ""))
+    references = index["assets"].get(asset.get("id"), []) or index["paths"].get(path_key, [])
+    task_id = metadata.get("project_task_id", "")
+    run_id = metadata.get("task_run_id", "")
+    if task_id and references:
+        references = [r for r in references if r["task_id"] == task_id and (not run_id or r["task_run_id"] == run_id)]
+    reference = references[-1] if references else None
+    if reference:
+        task_id, run_id = reference["task_id"], reference["task_run_id"]
+    controlled = bool(task_id or run_id or reference or metadata.get("delivery_ids") or
+                      asset.get("kind") in ("task_output", "schedule_output") or
+                      (asset.get("storage") == "file" and ".tasks" in Path(uri).parts))
+    result = {"controlled": controlled, "consumable": False, "review_status": "unverified" if controlled else "source",
+              "task_id": task_id, "task_run_id": run_id, "output_revision": 0, "delivery_id": "",
+              "workflow_run_id": metadata.get("workflow_run_id", ""), "workflow_node_id": "", "node_result": None, "expected_hash": ""}
+    if not controlled:
+        result["consumable"] = asset.get("status") == "active"
+        return result
+    task = index["tasks"].get(task_id)
+    run = index["runs"].get(run_id or (task or {}).get("latest_run_id"))
+    if not task or not run:
+        # A workflow archive is explicitly published only after every node is delivered.
+        delivery_ids = metadata.get("delivery_ids") or []
+        if delivery_ids and all(_current_delivery(index, key) for key in delivery_ids):
+            result.update(review_status="delivered", delivery_id=delivery_ids[-1],
+                          expected_hash=metadata.get("publication_hash", ""))
+        return _check_eligibility_hash(asset, result)
+    run_id = run["id"]
+    result.update(task_run_id=run_id, output_revision=run["checkpoint"].get("output_revision", 0),
+                  workflow_run_id=task["workflow_run_id"], workflow_node_id=task["workflow_node_id"])
+    if (task["workflow_run_id"] in index["agent_workflows"] and not task["parent_task_id"] and
+            index["workflow_tasks"].get(task["workflow_run_id"], {}).get(task["workflow_node_id"]) == task_id and
+            run["status"] == "succeeded" and run["output_snapshot"].get("files")):
+        result["node_result"] = {"available": True, "project_id": asset["project_id"], "id": task_id, "task_id": task_id,
+                                 "workflow_run_id": task["workflow_run_id"], "workflow_node_id": task["workflow_node_id"],
+                                 "node_id": task["workflow_node_id"], "title": task["title"],
+                                 "task_run_id": run_id, "output_revision": result["output_revision"]}
+    if task["latest_run_id"] != run_id:
+        result["review_status"] = "superseded"
+    elif run["status"] != "succeeded":
+        result["review_status"] = run["status"]
+    elif not reference and not metadata.get("delivery_id"):
+        result["review_status"] = "superseded"
+    elif task["status"] == "delivered" and _current_delivery(index, task["accepted_delivery_id"]):
+        result.update(review_status="delivered", delivery_id=task["accepted_delivery_id"])
+    elif task["status"] == "blocked":
+        rejected = any(d["task_run_id"] == run_id and d["decision"] == "rejected" for d in index["deliveries"].values())
+        result["review_status"] = "rejected" if rejected else "blocked"
+    else:
+        result["review_status"] = task["status"]
+    if reference:
+        result["expected_hash"] = reference["file"].get("content_hash", reference["file"].get("sha256", ""))
+    elif metadata.get("delivery_id") == result["delivery_id"]:
+        result["expected_hash"] = metadata.get("publication_hash", "")
+    if result["review_status"] == "superseded" and not reference and result["node_result"]:
+        revision = metadata.get("revision", metadata.get("output_revision", 0))
+        revision = revision if isinstance(revision, int) and not isinstance(revision, bool) and revision >= 0 else 0
+        result["output_revision"] = revision
+        result["node_result"]["output_revision"] = revision
+    return _check_eligibility_hash(asset, result)
+
+
+def _current_delivery(index, delivery_id):
+    delivery = index["deliveries"].get(delivery_id)
+    task = index["tasks"].get((delivery or {}).get("task_id"))
+    return bool(delivery and task and delivery["decision"] == "approved" and task["status"] == "delivered" and
+                task["accepted_delivery_id"] == delivery_id and task["latest_run_id"] == delivery["task_run_id"])
+
+
+def _check_eligibility_hash(asset, result):
+    if result["review_status"] == "delivered":
+        expected = result["expected_hash"]
+        matches = bool(expected and expected == asset.get("content_hash"))
+        if matches and asset.get("storage") == "file":
+            path = Path(asset["canonical_uri"])
+            try:
+                matches = path.is_file() and sha256_file(path) == expected
+            except OSError:
+                matches = False
+        if not matches:
+            result["review_status"] = "modified"
+        else:
+            result["consumable"] = asset.get("status") == "active"
+    return result
+
+
+def require_input(db, asset, allow_draft=False, *, index=None):
+    """Validate an explicit input without committing the caller's transaction."""
+    result = eligibility(db, asset, index=index)
+    if asset.get("status") != "active" or is_instruction_asset(asset):
+        raise ValueError("输入资料不可用或属于指令模板")
+    if result["controlled"] and not result["consumable"] and not allow_draft:
+        raise ValueError("任务产物尚未交付或版本已被替代，请选择已交付版本；使用草稿需要明确选择")
+    if result["controlled"] and result["consumable"] and asset.get("storage") == "file":
+        path = Path(asset["canonical_uri"])
+        if not path.is_file() or sha256_file(path) != result["expected_hash"]:
+            raise ValueError("已交付资料的工作文件已变化，请重新核查后再采用")
+    return {**result, "draft_selected": bool(allow_draft and result["controlled"] and not result["consumable"])}
+
+
+def require_context(db, asset, *, index=None):
+    """Read published sources, the active task's own files, or explicitly frozen inputs."""
+    index = index if index is not None else eligibility_index(db, asset.get("project_id", ""))
+    result = eligibility(db, asset, index=index)
+    if asset.get("status") != "active" or is_instruction_asset(asset):
+        raise ValueError("资料不可用或属于指令模板")
+    if result["consumable"]:
+        return result
+    context = getattr(db, "project_task_context", None)
+    task_id = getattr(context, "parent_task_id", "")
+    task = index["tasks"].get(task_id) if getattr(context, "project_id", "") == asset.get("project_id") else None
+    run = index["runs"].get((task or {}).get("latest_run_id"))
+    if task and run:
+        if result["task_id"] == task_id and result["task_run_id"] == run["id"]:
+            return {**result, "context_basis": "own_attempt"}
+        if asset.get("storage") == "file":
+            path = Path(asset["canonical_uri"])
+            digest = sha256_file(path) if path.is_file() else ""
+        else:
+            digest = virtual_snapshot(db, asset)["content_hash"]
+        frozen = run["input_snapshot"]
+        for item in frozen.get("assets", []):
+            expected = item.get("content_hash", item.get("sha256", ""))
+            by_asset = item.get("allow_draft") is True and item.get("asset_id") == asset.get("id")
+            by_copy = item.get("path") and asset.get("storage") == "file" and _path_key(item["path"]) == _path_key(asset["canonical_uri"])
+            if expected and digest == expected and (by_asset or by_copy):
+                return {**result, "context_basis": "frozen_input"}
+        base = frozen.get("base_output") or {}
+        authorization = base.get("draft_authorization") or {}
+        base_run_id = frozen.get("base_run_id", base.get("base_run_id"))
+        base_revision = frozen.get("base_revision", base.get("base_revision"))
+        authorized = (authorization.get("source") == "human_rework" and authorization.get("task_id") == task_id and
+                      authorization.get("task_run_id") == base_run_id and authorization.get("output_revision") == base_revision)
+        if authorized:
+            if asset.get('storage') == 'file':
+                for item in base.get('original_versions', []):
+                    if (item.get('path') and _path_key(item['path']) == _path_key(asset['canonical_uri']) and
+                            digest == item.get('sha256') and result['task_id'] == task_id and result['task_run_id'] == base_run_id):
+                        return {**result, 'context_basis': 'human_rework_working_copy'}
+            for item in base.get("files", []):
+                by_asset = item.get("asset_id") and item["asset_id"] == asset.get("id")
+                by_copy = asset.get("storage") == "file" and any(item.get(key) and _path_key(item[key]) == _path_key(asset["canonical_uri"])
+                                                                               for key in ("path", "original_path"))
+                if digest and digest == item.get("content_hash", item.get("sha256")) and (by_asset or by_copy):
+                    return {**result, "context_basis": "human_rework"}
+    raise ValueError("该资料属于未交付、退回或已替代的任务产物，不能作为当前专家的默认依据")
+
+
+def context_available(db, asset, *, index=None):
+    try:
+        require_context(db, asset, index=index)
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def path_asset(db, project_id, path, *, index=None):
+    index = index if index is not None else eligibility_index(db, project_id)
+    source = Path(path).resolve()
+    asset = index["source_paths"].get(_path_key(source))
+    if asset:
+        return asset
+    row = _conn(db).execute("SELECT * FROM assets WHERE canonical_uri=?", (str(source),)).fetchone()
+    if row:
+        return dict(row)
+    controlled = _path_key(source) in index["paths"] or ".tasks" in source.parts
+    return {"id": "", "project_id": project_id, "kind": "file", "storage": "file", "status": "active",
+            "canonical_uri": str(source), "metadata": {}, "content_hash": sha256_file(source) if controlled and source.is_file() else ""}
+
+
+def require_path_context(db, project_id, path, *, index=None):
+    index = index if index is not None else eligibility_index(db, project_id)
+    asset = path_asset(db, project_id, path, index=index)
+    if asset.get("project_id") != project_id:
+        index = eligibility_index(db, asset.get("project_id", ""))
+    return require_context(db, asset, index=index)
+
+
+def path_context_available(db, project_id, path, *, index=None):
+    try:
+        require_path_context(db, project_id, path, index=index)
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def legacy_context_available(db, project_id, kind, legacy_id, *, index=None):
+    index = index if index is not None else eligibility_index(db, project_id)
+    kind = "note" if kind in ("md_note", "big-note", "proj", "md") else kind
+    return all(context_available(db, asset, index=index) for asset in index["legacy"].get((kind, str(legacy_id)), []))
+
+
+def research_assets(db, project_id, limit=200, *, allow_draft=False):
+    index = eligibility_index(db, project_id)
     return [a for a in list_assets(db, project_id, limit=1000)
-            if a["project_id"] == project_id and a["status"] == "active" and not is_instruction_asset(a)][:limit]
+            if a["project_id"] == project_id and a["status"] == "active" and not is_instruction_asset(a)
+            and (allow_draft or eligibility(db, a, index=index)["consumable"])][:limit]
 
 
 def is_instruction_note(db, project_id, note_id, content):
@@ -149,6 +401,10 @@ def register(db, *, project_id: str = "", kind: str, title: str = "", canonical_
     conn = _conn(db)
     stamp = _now(db)
     asset_id = "asset-" + uuid.uuid4().hex
+    previous = conn.execute("SELECT content_hash FROM assets WHERE canonical_uri=?", (canonical_uri,)).fetchone()
+    payload = {"title": title or "", "metadata": _metadata(metadata), "body": body or ""}
+    if storage != "file":
+        content_hash = sha256_bytes(_json(payload).encode("utf-8"))
     conn.execute("""INSERT INTO assets
         (id,project_id,kind,title,canonical_uri,storage,mime,content_hash,source,metadata,created_at,updated_at)
         VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
@@ -163,7 +419,22 @@ def register(db, *, project_id: str = "", kind: str, title: str = "", canonical_
     asset = dict(row)
     _fts_upsert(conn, asset, body)
     conn.commit()
+    if storage != "file":
+        content_uri = "data:application/json;base64," + base64.b64encode(_json(payload).encode("utf-8")).decode("ascii")
+        add_revision(db, asset["id"], content_uri, content_hash, created_by=source,
+                     message="virtual content snapshot", force=bool(previous and previous["content_hash"] != content_hash))
+        asset = get(db, asset["id"]) or asset
     return asset
+
+
+def virtual_snapshot(db, asset):
+    """Freeze real non-file content, including legacy assets with an empty stored hash."""
+    if asset.get("storage") == "file":
+        raise ValueError("文件资产请使用文件快照")
+    row = _conn(db).execute("SELECT body FROM asset_fts WHERE asset_id=? LIMIT 1", (asset["id"],)).fetchone()
+    payload = {"title": asset.get("title", ""), "metadata": _metadata(asset.get("metadata")), "body": row["body"] if row else ""}
+    return {**payload, "content_hash": sha256_bytes(_json(payload).encode("utf-8")),
+            "revision_id": asset.get("current_revision_id", "")}
 
 
 def register_file(db, path: str | Path, *, project_id: str = "", kind: str = "document",
@@ -178,6 +449,12 @@ def register_file(db, path: str | Path, *, project_id: str = "", kind: str = "do
         raise FileNotFoundError(target)
     existing = _conn(db).execute("SELECT content_hash,metadata FROM assets WHERE canonical_uri=?", (str(target),)).fetchone()
     metadata = {**(_metadata(existing["metadata"]) if existing else {}), **(metadata or {})}
+    task_context = getattr(db, "project_task_context", None)
+    task_id = getattr(task_context, "parent_task_id", "")
+    if task_id:
+        task = _conn(db).execute("SELECT latest_run_id FROM project_tasks WHERE id=? AND project_id=?", (task_id, project_id)).fetchone()
+        if task and task["latest_run_id"]:
+            metadata.update(project_task_id=task_id, task_run_id=task["latest_run_id"])
     if kind == "note":
         import note_catalog
         raw = target.read_text(encoding="utf-8")
@@ -328,15 +605,9 @@ def _virtual_asset(db, *, project_id: str, kind: str, legacy_id: str, title: str
                    uri_prefix: str = "") -> dict[str, Any]:
     """Index a legacy SQLite row without inventing a filesystem mirror."""
     uri = f"db://{uri_prefix or kind}/{legacy_id}"
-    old = _conn(db).execute("SELECT content_hash FROM assets WHERE canonical_uri=?", (uri,)).fetchone()
-    digest = sha256_bytes((body or "").encode("utf-8")) if body else ""
     merged = {"legacy_id": legacy_id, **(metadata or {})}
-    asset = register(db, project_id=project_id, kind=kind, title=title,
-                     canonical_uri=uri, storage="sqlite", source="legacy_rebuild",
-                     content_hash=digest, metadata=merged, body=body)
-    add_revision(db, asset["id"], uri, digest, created_by="legacy_rebuild",
-                 message="legacy index rebuild", force=bool(old and old["content_hash"] != digest))
-    return get(db, asset["id"]) or asset
+    return register(db, project_id=project_id, kind=kind, title=title,
+                    canonical_uri=uri, storage="sqlite", source="legacy_rebuild", metadata=merged, body=body)
 
 
 def _legacy_note_asset(db, row: dict[str, Any], project_id: str, table: str) -> dict[str, Any]:

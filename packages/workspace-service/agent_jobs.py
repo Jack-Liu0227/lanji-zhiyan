@@ -65,6 +65,9 @@ def start(db_path, request: dict, step: str = "", *, resume_id: str = ""):
         if not resume_id and not saved_request:
             import workspace_chat
             request['_runtime_snapshot']=workspace_chat.snapshot(db,tid,request)
+            if request.get('_node_discussion'):
+                request['_runtime_snapshot']['permission'] = 'read_only'
+                request['_runtime_snapshot']['tools'] = request.get('_node_discussion_tools') or []
         request["idempotency_key"] = str(request.get("idempotency_key") or uuid.uuid4().hex)
         run = manager.create_run(tid, request["idempotency_key"], db)
         if resume_id:

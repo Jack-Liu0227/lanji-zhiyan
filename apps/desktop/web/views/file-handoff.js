@@ -30,7 +30,7 @@ const FileHandoff = (() => {
       const relative=flow?row.dataset.rel:row.dataset.treePath || row.querySelector('[data-pn-file]')?.dataset.pnFile;
       if(relative) return {project_id:flow?(row.dataset.projectId || curTask):mdDashProject,relative};
     }
-    if(element?.closest('.fl-col') && flSel && uiRouteIs("workflow") && document.getElementById("flHand")?.disabled===false) return {project_id:curTask,relative:flSel};
+    if(element?.closest('.fl-col') && flSel && document.getElementById("flHand")?.disabled===false) return {project_id:curTask,relative:flSel};
     return null;
   }
   function dirty(ref){
@@ -44,6 +44,13 @@ const FileHandoff = (() => {
     if(!ref?.project_id || !ref.relative){ uiNotify("请先选择项目中的文件"); return; }
     if(uiRouteIs("workflow") && ref.project_id!==curTask){uiNotify("项目已切换，请重新选择文件。");return;}
     ref={project_id:ref.project_id,relative:ref.relative};
+    const workspace=document.querySelector('.project-workspace');
+    if(preferred==='project' && workspace && workspace.dataset.surface!=='flow' && window.ProjectTasks){
+      try{
+        await saveInput(ref);
+        return ProjectTasks.compose(ref.project_id,{title:ref.relative.split(/[\\/]/).at(-1),goal:'',inputs:[{relative:ref.relative}],metadata:{source:'file_handoff'},quick:true});
+      }catch(error){uiNotify(error.message);return;}
+    }
     const activeProject=curTask;
     const el=dialog("交给当前工作流"), body=el.querySelector("[data-body]"), error=el.querySelector("[data-error]");
     const draftKey="rw-handoff-draft:"+ref.project_id+":"+ref.relative;
@@ -230,8 +237,11 @@ const FileHandoff = (() => {
     body.querySelector("[data-start]").onclick=()=>submit(true);
     await refresh();
   }
-  function showRecord(initial){
-    if(initial.canonical_task_id && window.ProjectTasks) return ProjectTasks.openTask(initial.canonical_task_id,initial.project_id);
+  async function showRecord(initial){
+    if(initial.canonical_task_id && window.ProjectTasks){
+      try{const data=await api('/api/project-tasks/detail?project_id='+encodeURIComponent(initial.project_id)+'&id='+encodeURIComponent(initial.canonical_task_id));if(WorkflowNodeWorkbench.eligible(data.task))return ProjectWorkspace.openNodeResult(WorkflowNodeWorkbench.availableSelection(data.task),initial.project_id);}catch{}
+      return ProjectTasks.openTask(initial.canonical_task_id,initial.project_id);
+    }
     const el=dialog("节点文件任务与回执"), body=el.querySelector("[data-body]"), error=el.querySelector("[data-error]");
     let record=initial, signature="", busy=false, feedback="";
     function draw(){
@@ -259,7 +269,7 @@ const FileHandoff = (() => {
         try{
           if(action==="start") record=(await api("/api/handoff/start",{id:record.id})).handoff;
           else {
-            await api("/api/workflow/execution/"+(["approve","reject"].includes(action)?"review":action),{id:run.id,node_id:node?.id,approved:action==="approve",feedback});
+            await api("/api/workflow/execution/"+(["approve","reject"].includes(action)?"review":action),{id:run.id,node_id:node?.id,approved:action==="approve",feedback,reviewed_run_id:node?.checkpoint?.canonical_run_id||'',reviewed_output_version:node?.checkpoint?.output_revision||0});
             record=(await api("/api/handoff/detail?id="+encodeURIComponent(record.id))).handoff;
           }
           signature="";draw();

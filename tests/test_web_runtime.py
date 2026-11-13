@@ -19,7 +19,10 @@ except ImportError:
     sync_playwright = None
 
 
-ROOT = Path(__file__).resolve().parents[1]
+# The test suite lives under ``tools/tests`` while the desktop entry point is
+# rooted at the repository.  Resolve the repository root so browser tests start
+# the same app that users run through tools/start.bat.
+ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'apps/desktop/server.py').is_file())
 EDGE = next(
     (path for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"))
      if base and (path := Path(base) / "Microsoft/Edge/Application/msedge.exe").is_file()),

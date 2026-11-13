@@ -20,13 +20,17 @@ def category(path, kind='', metadata=None):
     if metadata.get('category_id') == 'experiment_analysis' or any(p in ('实验', '实验记录', '实验数据') for p in parts): return 'experiment'
     if '论文正文' in parts or kind == 'manuscript': return 'manuscript'
     if kind == 'note' or '笔记' in parts: return 'note'
-    if kind in ('report', 'output') or any(p in ('阶段产物', '定时任务', '.tasks') for p in parts): return 'output'
+    if kind in ('report', 'output', 'task_output', 'schedule_output') or any(p in ('阶段产物', '定时任务', '.tasks') for p in parts): return 'output'
     return 'file'
 
 
-def catalog(db, project_id, kind='', query=''):
+def catalog(db, project_id, kind='', query='', *, review_status=''):
     root = project_notes.project_root(db, project_id)
     if kind and kind not in KINDS: raise ValueError('资料类型无效')
+    states = {'all', 'source', 'awaiting_review', 'delivered', 'rejected', 'superseded', 'modified',
+              'unverified', 'blocked', 'queued', 'running', 'failed', 'interrupted', 'cancelled'}
+    if review_status and review_status not in states: raise ValueError('核查状态无效')
+    eligibility_index = asset_service.eligibility_index(db, project_id)
     rows = {}
     for row in db.db.execute('SELECT * FROM assets WHERE project_id=? ORDER BY updated_at DESC', (project_id,)):
         asset = dict(row)
@@ -42,6 +46,7 @@ def catalog(db, project_id, kind='', query=''):
                 'revision_id': asset['current_revision_id'], 'source': asset['source'],
                 'metadata': metadata, 'exists': path.is_file() if path else False,
                 'read_only': relative.startswith('.tasks/') or bool(path and not relative)}
+        item.update(asset_service.eligibility(db, asset, index=eligibility_index))
         rows[str(path) if path else asset['canonical_uri']] = item
     # Disk Markdown is visible even before the user explicitly rebuilds the index.
     for note in project_notes.dashboard(db, project_id)['items']:
@@ -62,6 +67,22 @@ def catalog(db, project_id, kind='', query=''):
                      'metadata': {**previous.get('metadata', {}), 'doi': paper.get('doi', ''), 'result_id': paper.get('result_id', '')}}
     physical_papers = {item.get('paper_id') for item in rows.values() if item.get('path') and item.get('paper_id')}
     values = [item for item in rows.values() if not (item['kind'] == 'literature' and not item.get('path') and item.get('paper_id') in physical_papers)]
+    for item in values:
+        if 'review_status' in item:
+            continue
+        uri = item.get('path', '')
+        digest = item.get('content_hash', '')
+        if uri and asset_service._path_key(uri) in eligibility_index['paths'] and Path(uri).is_file():
+            digest = asset_service.sha256_file(uri)
+        item.update(asset_service.eligibility(db, {'id': item['id'], 'project_id': project_id,
+            'kind': item['kind'], 'storage': 'file' if uri else 'virtual', 'canonical_uri': uri,
+            'metadata': item.get('metadata', {}), 'content_hash': digest, 'status': 'active'}, index=eligibility_index))
+    # "交付产物" means accepted output. Drafts remain available through an explicit status filter.
+    if kind == 'output' and not review_status:
+        values = [item for item in values if item['kind'] != 'output' or
+                  item['review_status'] == 'delivered' and item['consumable']]
+    elif review_status and review_status != 'all':
+        values = [item for item in values if item['review_status'] == review_status]
     counts = {key: sum(item['kind'] == key for item in values) for key in KINDS}
     needle = query.casefold().strip()
     values = [item for item in values if (not kind or item['kind'] == kind) and

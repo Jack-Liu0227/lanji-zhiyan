@@ -135,6 +135,25 @@ class ExecutionConversationsTest(unittest.TestCase):
         self.assertEqual(rows[0]['chat_id'],run['chat_id'])
         self.assertEqual(rows[0]['execution_kind'],'workflow')
 
+    def test_workflow_hides_internal_failed_node_input_from_overview_conversation(self):
+        import workflow_layout
+        import workflow_tasks
+        workflow_layout.ensure_schema(self.db)
+        template=workflow_layout.save_layout(self.db,{'name':'Failed input visibility','nodes':[
+            {'id':'first','step':'task','label':'First expert','executor_binding_id':self.binding['id']}],
+            'edges':[]})['layout']
+        run=workflow_tasks.prepare(self.db,self.pid,'Workflow goal','workflow-failed-input',template['id'])
+        child=tasks.list_tasks(self.db,self.pid,workflow_run_id=run['id'])[0]
+        started=tasks.start(self.db,child['id'],authority=self.ui)
+        tasks.fail(self.db,started['id'],'PROVIDER_FAILURE')
+        self.db.add_message(run['chat_id'],'user',child['goal'])
+        self.db.add_message(run['chat_id'],'user',child['goal']+'\n【当前项目明确引用的材料】\ninternal context')
+        self.db.add_message(run['chat_id'],'user','A real follow-up question')
+        data=conversations.read(self.db,run['chat_id'],self.pid)
+        user_content=[item['content'] for item in data['messages'] if item['role']=='user']
+        self.assertEqual(user_content,['Workflow goal','A real follow-up question'])
+        self.assertIn('PROVIDER_FAILURE',json.dumps(data,ensure_ascii=False))
+
     def test_upgrade_backfills_legacy_tasks_without_losing_results(self):
         import migrations
         task=self.create();run=tasks.start(self.db,task['id'],authority=self.ui)

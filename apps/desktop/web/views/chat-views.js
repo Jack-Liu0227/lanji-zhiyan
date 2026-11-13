@@ -1,4 +1,13 @@
 /* ============================== 页面 ============================== */
+const chatMessageKey=value=>String(value??'').replace(/\s+/g,' ').trim();
+const chatUserInputKey=value=>{
+  const normalized=chatMessageKey(value);
+  for(const marker of ['【当前项目明确引用的材料】','【@上下文】','【用户明确使用的提示词模板：','【用户选择的材料】','【@提及的上下文】']){
+    const index=normalized.indexOf(marker);
+    if(index>0)return normalized.slice(0,index).trim();
+  }
+  return normalized;
+};
 function render(){
   const retired=tabs.find(tab=>tab.id===activeTab);
   if(retired?.route==='schedules'){
@@ -142,6 +151,8 @@ async function renderTeam(m){
   const inTeam = new Set(picks.map(x=>x.assistant_id));
   const pool = (S.assistants||[]).filter(a=>a.enabled!==0 && !inTeam.has(a.id));
   const run = D.running;
+  const orchestration = D.orchestration;
+  const coordination = D.coordination || {};
   const tr = D.transcript||[];
   let lastUser = -1; tr.forEach((r,i)=>{ if(r.role==="user") lastUser = i; });
   const spoken = new Set(tr.slice(lastUser+1).map(r=>r.sender).filter(Boolean));   // 这一轮里已经说过话的成员
@@ -199,7 +210,9 @@ async function renderTeam(m){
         </label>
       </div>
       <div class="tc-top-acts">
-        ${run?`<span class="pill ok">${esc(run.phase||"接力推进中")} · 第 ${run.turn||0}/${run.total||6} 轮</span><button class="btn ghost" id="tcStop">停止</button>`:`<span class="pill">团队就绪</span>`}
+        <span class="pill ${run?'ok':''}">${esc(orchestration?.phase || run?.phase || '负责人调度 · 团队就绪')}</span>${run?'<button class="btn ghost" id="tcStop">停止</button>':''}
+        ${orchestration?'<button class="btn" id="tcExecution">任务与产物</button>':''}
+        ${orchestration?.workflow?'<button class="btn" id="tcWorkflow">查看工作流</button>':''}
         <button class="btn ghost" id="tcRefresh" title="刷新状态">刷新</button>
         <button class="btn ghost" id="tcConfig" title="在设置中管理团队和专家成员">⚙️ 团队配置</button>
       </div>
@@ -219,21 +232,23 @@ async function renderTeam(m){
         </span>`;
       }).join("")}
       ${!picks.length ? `<span class="hint" style="margin:0 4px">当前团队暂无专家，点击右上方「⚙️ 团队配置」添加专家成员</span>` : ""}
-      ${run ? `<span class="tc-strip-phase">🏃 ${esc(run.current || "")} 正在分析输出…</span>` : ""}
+      ${orchestration ? `<span class="tc-strip-phase">成员执行中 ${orchestration.counts.running||0} · 已交付 ${orchestration.counts.delivered||0} / ${orchestration.children.length}</span>` : ''}
     </div>
 
     <!-- 主对话区域：全宽无侧栏沉浸式对话框 -->
     <section class="tc-panel tc-chat-main tc-chat-full">
       <div class="tc-tl" id="tcChat">
         ${tr.length ? tr.map(bubble).join("")
-          : `<div class="tc-empty">🧭 团队协作对话框已就绪。<br>在此输入研究目标（例如：「帮我挑一个钠电正极掺杂方向，产出文献候选与实验对比表」），Leader 将统筹团队专职专家接力推进。<br><small class="hint">需要增减专家成员或调整模型权限？随时点击右上角「⚙️ 团队配置」。</small></div>`}
+          : `<div class="tc-empty">团队协作已就绪。<br>输入研究目标，负责人会拆解任务，安排专家并行检索与分析，再汇总证据和产物。<br><small class="hint">每队最多 ${coordination.max_parallel||3} 个成员任务同时执行，最终产物按项目模式核查。可在「团队配置」中调整成员与模型。</small></div>`}
       </div>
       <details class="usage-card"><summary>团队通信与交付 · ${(D.communications||[]).length} 条</summary>${(D.communications||[]).map(item=>`<article><small>${esc(item.at||"")} · ${esc(item.sender||item.kind||"")}</small><pre style="white-space:pre-wrap">${esc(item.text||"")}</pre></article>`).join("")||"暂无通信记录"}</details>
+      ${orchestration?.children.length?`<details class="usage-card" open><summary>专家任务与交接 · ${orchestration.children.length} 项</summary>${orchestration.children.map(child=>`<article><span>${esc(child.title)} · ${esc(OFFICE_CN[child.status]||({ready:'等待依赖',delivered:'已交付',cancelled:'已停止',interrupted:'已中断'})[child.status]||child.status)}</span> <button class="btn ghost" data-tc-task="${esc(child.id)}">查看任务与证据</button></article>`).join('')}</details>`:''}
+      ${orchestration?.handoffs?.length?`<details class="usage-card"><summary>Agent 控制权交接 · ${orchestration.handoffs.length} 次</summary>${orchestration.handoffs.map(item=>`<article><span>${esc(item.source_member_id)} → ${esc(item.target_member_id)} · ${esc(item.status)}</span><pre style="white-space:pre-wrap">${esc(item.reason||"")}</pre></article>`).join("")}</details>`:""}
       <div class="tc-composer">
         <textarea class="control" id="tcSay" data-draft-key="${esc(draftKey)}" rows="3" placeholder="给团队下达研究目标或追问…（Enter 发送，Shift+Enter 换行）">${esc(savedDraft)}</textarea>
         <div class="tc-composer-actions">
-          <span class="hint">${run ? `正在接力推进：${esc(run.current||"")}` : "Enter 发送 / Shift+Enter 换行 · 团队串行接力协作"}</span>
-          <button class="btn btn-primary" id="tcSend">${run ? "继续追问 / 补充指令" : "发送并让团队推进"}</button>
+          <span class="hint">${run ? '当前任务进行中，可先编辑下一项研究目标；处理或停止当前任务后发送' : 'Enter 发送 / Shift+Enter 换行 · 负责人拆解，专家并行，交付后汇总'}</span>
+          <button class="btn btn-primary" id="tcSend">${run ? '当前任务进行中' : '发送并让团队推进'}</button>
         </div>
       </div>
     </section>
@@ -280,10 +295,13 @@ async function renderTeam(m){
   const st = $("tcStop");
   if(st) st.onclick = async ()=>{ try{ await api("/api/team/chat/stop", {scope:teamScope}); }catch(e){ uiNotify(e.message); } setTimeout(()=>{ teamData=null; render(); }, 600); };
   const rf = $("tcRefresh"); if(rf) rf.onclick = ()=>{ teamData=null; render(); };
+  if($('tcExecution'))$('tcExecution').onclick=()=>ProjectWorkspace.openTask(orchestration.task_id, D.team?.project_id||curTask);
+  if($('tcWorkflow')&&orchestration.workflow.chat_id)$('tcWorkflow').onclick=()=>ProjectWorkspace.openConversation(orchestration.workflow.chat_id,D.team?.project_id||curTask);
+  m.querySelectorAll('[data-tc-task]').forEach(button=>button.onclick=()=>ProjectWorkspace.openTask(button.dataset.tcTask,D.team?.project_id||curTask));
   const say = async ()=>{
     const t = $("tcSay"); const text = (t.value||"").trim();
-    if(!text||teamSending.has(draftKey)) return;
-    if(!picks.length) return uiNotify("先在「设置 / 团队配置」中添加专家成员。");
+    if(!text||run||teamSending.has(draftKey)) return;
+    if(!leader) return uiNotify("先在「团队配置」中指定负责人。");
     const submitted=t.value;rememberTeamDraft(draftKey,submitted);teamSending.add(draftKey);$("tcSend").disabled=true;
     try{
       await api("/api/team/chat/say", {scope, text});
@@ -292,7 +310,7 @@ async function renderTeam(m){
     }catch(e){uiNotify("发送失败："+e.message);}
     finally{teamSending.delete(draftKey);if($("tcSay")?.dataset.draftKey===draftKey&&$("tcSend"))$("tcSend").disabled=false;}
   };
-  if($("tcSend")){$("tcSend").onclick = say;$("tcSend").disabled=teamSending.has(draftKey);}
+  if($("tcSend")){$("tcSend").onclick = say;$("tcSend").disabled=!!run||teamSending.has(draftKey);}
   if($("tcSay"))$("tcSay").oninput=()=>rememberTeamDraft(draftKey,$("tcSay").value);
   if($("tcSay")) $("tcSay").onkeydown = (e)=>{ if(e.key==="Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && e.keyCode!==229 && !e.repeat){ e.preventDefault(); say(); } };
   clearTimeout(teamTick);                                   // 有轮次在跑就每 2s 刷新一次群
@@ -778,8 +796,17 @@ async function loadChat(){
       const box=$("msgs");
       if(box){
         box.innerHTML="";
-        activeAgentBase.forEach(m=>appendOne(box,{...m,type:m.role,replay:true,at:m.created_at}));
-        activeAgentEvents.forEach(ev=>appendOne(box,ev));
+        const seenUsers=new Set(activeAgentBase.filter(item=>item.role==='user').map(item=>chatUserInputKey(item.content)).filter(Boolean));
+        activeAgentBase.forEach(m=>{
+          const events=Array.isArray(m.events)?m.events.filter(ev=>{
+            if(ev.type!=='user')return true;
+            const key=chatUserInputKey(ev.content);if(!key)return true;
+            if(seenUsers.has(key))return false;
+            seenUsers.add(key);return true;
+          }):m.events;
+          appendOne(box,{...m,events,type:m.role,replay:true,at:m.created_at});
+        });
+        activeAgentEvents.forEach(ev=>{const normalized=chatUserInputKey(ev.content);if(ev.type==='user'&&seenUsers.has(normalized))return;if(ev.type==='user'&&normalized)seenUsers.add(normalized);appendOne(box,ev);});
       }
       return;
     }
@@ -794,7 +821,16 @@ async function loadChat(){
       box.innerHTML = asEmpty(); bindChips();
     } else {
       box.innerHTML="";
-      S.chat.forEach(m=>appendOne(box,{...m,type:m.role,replay:true,at:m.created_at}));
+      const seenUsers=new Set();S.chat.forEach(m=>{
+        const normalized=chatUserInputKey(m.content);if(m.role==='user'&&normalized&&seenUsers.has(normalized))return;if(m.role==='user'&&normalized)seenUsers.add(normalized);
+        const events=Array.isArray(m.events)?m.events.filter(ev=>{
+          if(ev.type!=='user')return true;
+          const key=chatUserInputKey(ev.content);if(!key)return true;
+          if(seenUsers.has(key))return false;
+          seenUsers.add(key);return true;
+        }):m.events;
+        appendOne(box,{...m,events,type:m.role,replay:true,at:m.created_at});
+      });
     }
     box.scrollTop = box.scrollHeight;
     loadAgentMeta();
@@ -891,9 +927,12 @@ function appendOne(box,ev,who){
     const toolKey=[ev.id,ev.round,ev.sub].join(':');
     if(ev.id&&[...box.querySelectorAll('.tool-card')].some(node=>node.dataset.toolKey===toolKey&&!node.dataset.complete))return;
     el.className="tool-card"; el.id="tc"+(seq++); el.dataset.callId=ev.id||"";el.dataset.toolKey=toolKey;el.dataset.toolName=ev.name||'';el.dataset.round=String(ev.round??'');
+    const inputContent=JSON.stringify(ev.args||{},null,2);
     el.innerHTML=`<details><summary><span class="disclosure-arrow">›</span><span class="tool-name">工具调用 · ${esc(ev.name)}</span>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}
       <span class="tool-detail">调用中…</span><span class="tool-dur">进行中</span></summary>
-      <div class="tool-body"><p class="tool-blk">输入参数</p><pre>${esc(JSON.stringify(ev.args||{},null,2))}</pre><div class="tool-output"></div></div></details>`;
+      <div class="tool-body"><div class="tool-blk-row"><span class="tool-blk">输入参数</span><button type="button" class="tool-copy-btn" title="复制输入参数">复制</button></div><pre>${esc(inputContent)}</pre><div class="tool-output"></div></div></details>`;
+    const copyIn=el.querySelector(".tool-copy-btn");
+    if(copyIn) copyIn.onclick=e=>{e.stopPropagation();navigator.clipboard.writeText(inputContent).then(()=>{copyIn.textContent='已复制';setTimeout(()=>copyIn.textContent='复制',1500);});};
     box.appendChild(el); box.scrollTop=box.scrollHeight; return;
   }
   else if(ev.type==="tool_result"){
@@ -904,7 +943,12 @@ function appendOne(box,ev,who){
       const d=card.querySelector(".tool-detail"); if(d) d.textContent=ev.summary||"";
       const u=card.querySelector(".tool-dur"); if(u) u.textContent=(ev.ok?"完成":"失败")+(ev.duration_ms!=null?' · '+(ev.duration_ms/1000).toFixed(1)+' 秒':'');
       const b=card.querySelector(".tool-output");
-      if(b)b.innerHTML=`<p class="tool-blk">执行结果</p><pre>${esc(ev.result==null?ev.summary||'':typeof ev.result==='string'?ev.result:JSON.stringify(ev.result,null,2))}</pre>`;
+      const outputContent=ev.result==null?ev.summary||'':typeof ev.result==='string'?ev.result:JSON.stringify(ev.result,null,2);
+      if(b){
+        b.innerHTML=`<div class="tool-blk-row"><span class="tool-blk">执行结果</span><button type="button" class="tool-copy-btn" title="复制执行结果">复制</button></div><pre>${esc(outputContent)}</pre>`;
+        const copyOut=b.querySelector(".tool-copy-btn");
+        if(copyOut) copyOut.onclick=e=>{e.stopPropagation();navigator.clipboard.writeText(outputContent).then(()=>{copyOut.textContent='已复制';setTimeout(()=>copyOut.textContent='复制',1500);});};
+      }
       if(ev.ok&&ev.navigation)WorkflowReview.mount(card,ev.navigation);
       if(ev.ok&&ev.name==='project_create_from_idea'&&ev.result?.workspace?.project_id){
         const button=document.createElement('button');button.type='button';button.className='btn ghost';button.dataset.stewardProject=ev.result.workspace.project_id;button.textContent='进入项目工作区 ↗';
@@ -1102,7 +1146,12 @@ async function followChatRun(run){
   await refreshState(false);
   if(route() === "agent"){
     await loadChat();
-    if(error && agentView === "conversation" && curChat === run.request.task_id && $("msgs")) appendOne($("msgs"),{type:"error",message:error});
+    const persistedFailure=(S.chat||[]).some(message=>message.role==="assistant" &&
+      (message.run_id===run.runId || ["failed","interrupted"].includes(message.status) ||
+       (String(message.content||"").startsWith("\u6267\u884c\u5931\u8d25\uff1a") || String(message.content||"").startsWith("Execution failed:"))));
+    if(error && !persistedFailure && agentView === "conversation" && curChat === run.request.task_id && $("msgs")){
+      appendOne($("msgs"),{type:"error",message:error});
+    }
   }
 }
 async function cancelAgentRun(){

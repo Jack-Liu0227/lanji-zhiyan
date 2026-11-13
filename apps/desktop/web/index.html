@@ -9,6 +9,8 @@
 document.title = "览籍智研 · v" + (new URLSearchParams(location.search).get("v") || "dev");
 /* 主题在首帧前就定好：以前等 refreshState 回来才套 rw-theme，浅色用户会先看到一帧深色页再翻白（同样算闪一下） */
 document.documentElement.dataset.theme = localStorage.getItem("rw-theme") || "dark";
+const savedZoom = localStorage.getItem("rw-ui-zoom");
+if (savedZoom && !isNaN(parseFloat(savedZoom))) document.documentElement.style.zoom = savedZoom;
 </script>
 <link rel="stylesheet" href="/css/app.css">
 <link rel="stylesheet" href="/css/interactions.css">
@@ -177,6 +179,8 @@ document.documentElement.dataset.theme = localStorage.getItem("rw-theme") || "da
 <script src="/views/project-workflow-graph.js"></script>
 <script src="/views/project-output-review.js"></script>
 <script src="/views/workflow-review.js"></script>
+<link rel="stylesheet" href="/views/workflow-node-workbench.css">
+<script src="/views/workflow-node-workbench.js"></script>
 <script src="/views/project-workspace.js"></script>
 <script src="/views/project-resources.js"></script>
 </body>

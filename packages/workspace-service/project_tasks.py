@@ -106,6 +106,49 @@ def get_run(db, run_id):
     return _decode(row, _RUN_JSON)
 
 
+def handoff(db, task_id, target_member_id, reason, *, authority):
+    """Transfer the current task run to another authorized team member."""
+    import project_bindings
+    task = _task(db, task_id)
+    _authority(authority, task['project_id'])
+    if authority.parent_task_id and authority.parent_task_id != task_id:
+        raise ValueError('只能转移当前 Agent 正在执行的任务')
+    run = get_run(db, task['latest_run_id']) if task['latest_run_id'] else None
+    if not run or run['status'] not in ('queued', 'running'):
+        raise ValueError('当前任务没有可转移的运行')
+    target_member_id = str(target_member_id or '').strip()
+    reason = str(reason or '').strip()[:4000]
+    if not target_member_id or not reason:
+        raise ValueError('handoff 必须包含目标成员和转移原因')
+    executor = project_bindings.resolve(db, task['project_id'], task['executor_binding_id'], member_id=task['member_id'])
+    if not executor.get('team_id'):
+        raise ValueError('只有团队任务支持 Agent 之间的控制权转移')
+    if task['scope'].get('allowed_member_ids') is not None and target_member_id not in task['scope']['allowed_member_ids']:
+        raise ValueError('目标成员不在当前任务授权范围内')
+    target = project_bindings.resolve(db, task['project_id'], task['executor_binding_id'], member_id=target_member_id)
+    if target['member_id'] == executor.get('member_id'):
+        raise ValueError('目标成员必须不同于当前 Agent')
+    handoff_id = 'ah-' + uuid.uuid4().hex
+    context = {'goal': task['goal'], 'input': run['input_snapshot'], 'checkpoint': run['checkpoint'],
+               'source_executor': run['executor_snapshot'], 'reason': reason}
+    now = _now()
+    with _lock, _atomic(db):
+        db.db.execute('INSERT INTO agent_handoffs(id,task_id,source_run_id,source_member_id,target_member_id,reason,context_snapshot,created_at) VALUES (?,?,?,?,?,?,?,?)',
+                      (handoff_id, task_id, run['id'], executor.get('member_id',''), target_member_id, reason, _json(context), now))
+        checkpoint = {**run['checkpoint'], 'handoff_id': handoff_id, 'handoff_reason': reason, 'handoff_target_member_id': target_member_id}
+        db.db.execute("UPDATE project_task_runs SET status='cancelled',checkpoint=?,error=?,ended_at=? WHERE id=? AND status IN ('queued','running')",
+                      (_json(checkpoint), '控制权已转交给团队成员', now, run['id']))
+        metadata = {**task['metadata'], '_handoff_context': context, '_handoff_id': handoff_id}
+        db.db.execute("UPDATE project_tasks SET member_id=?,metadata=?,status='ready',version=version+1,updated_at=? WHERE id=?",
+                      (target_member_id, _json(metadata), now, task_id))
+        _event(db, task_id, 'handoff_requested', {'handoff_id': handoff_id, 'from_member_id': executor.get('member_id',''), 'target_member_id': target_member_id, 'reason': reason}, run['id'])
+    target_run = start(db, task_id, authority=CommandContext.system(task['project_id'], authority.parent_task_id or task_id), request_key='handoff:' + handoff_id)
+    with _atomic(db):
+        db.db.execute('UPDATE agent_handoffs SET target_run_id=?,status=? WHERE id=?', (target_run['id'], 'running', handoff_id))
+    return {'handoff_id': handoff_id, 'task_id': task_id, 'target_run_id': target_run['id'], 'target_member_id': target_member_id,
+            'message': '控制权已转交，目标成员将从当前任务上下文继续。'}
+
+
 def get(db, task_id, *, project_id=""):
     task = _task(db, task_id)
     if project_id and task["project_id"] != project_id:
@@ -120,7 +163,30 @@ def get(db, task_id, *, project_id=""):
     task["children"] = [_decode(r, _TASK_JSON) for r in db.db.execute("SELECT * FROM project_tasks WHERE parent_task_id=? ORDER BY created_at,id", (task_id,))]
     task["origins"] = [dict(r) for r in db.db.execute("SELECT * FROM project_task_origins WHERE task_id=?", (task_id,))]
     task["events"] = [_decode(r, ("data",)) for r in db.db.execute("SELECT * FROM project_task_events WHERE task_id=? ORDER BY rowid", (task_id,))]
+    import workflow_node_workbench
+    task['node_result'] = workflow_node_workbench.target(db, task, task.get('latest_run'))
     return task
+
+
+def public_view(task):
+    """Keep model transcripts in durable checkpoints, out of UI polling payloads."""
+    def inputs(value):
+        return {**value, 'assets': [{k: v for k, v in asset.items() if k not in ('text', 'content', 'body')}
+                                  for asset in value.get('assets', [])],
+                'execution_context': {'node_config': value.get('execution_context', {}).get('node_config', {})}}
+    def run_view(run):
+        if not run:
+            return run
+        checkpoint = run.get('checkpoint', {})
+        return {**run, 'input_snapshot': inputs(run.get('input_snapshot', {})),
+                'executor_snapshot': {k: v for k, v in run.get('executor_snapshot', {}).items()
+                                      if k not in ('runtime_config', 'tools', 'skills')},
+                'checkpoint': {k: v for k, v in checkpoint.items()
+                               if k in ('reply', 'phase', 'turn', 'output_revision', 'waiting_children', 'resumed_from', 'restart_approved')}}
+    return {**task, 'metadata': {k: v for k, v in task.get('metadata', {}).items() if k != 'upstream_context'},
+            'latest_run': run_view(task.get('latest_run')),
+            'runs': [run_view(run) for run in task.get('runs', [])],
+            'children': [public_view(child) for child in task.get('children', [])]}
 
 
 def list_tasks(db, project_id, *, workflow_run_id="", parent_task_id="", state=""):
@@ -156,15 +222,28 @@ def _notify(db, task_id, *, reconcile=False):
         import schedule_workflow
         callbacks.append(("schedule", lambda: (schedule_workflow.refresh_task if reconcile else schedule_workflow.task_changed)(db, task)))
     for name, callback in callbacks:
-        try:
-            callback()
-        except Exception as exc:
-            db.db.rollback()
+        previous = db.db.execute("SELECT kind FROM project_task_events WHERE task_id=? AND kind IN ('projection_error','projection_recovered') AND json_extract(data,'$.adapter')=? ORDER BY rowid DESC LIMIT 1", (task_id, name)).fetchone()
+        failure = None
+        for attempt in range(2):
+            try:
+                callback()
+                if attempt or (previous and previous['kind'] == 'projection_error'):
+                    with _atomic(db):
+                        _event(db, task_id, 'projection_recovered', {'adapter': name}, task['latest_run_id'])
+                failure = None
+                break
+            except Exception as exc:
+                db.db.rollback()
+                failure = exc
+        if failure is not None:
             with _atomic(db):
-                _event(db, task_id, "projection_error", {"adapter": name, "error": str(exc)[:2000]}, task["latest_run_id"])
+                _event(db, task_id, "projection_error", {"adapter": name, "error": str(failure)[:2000]}, task["latest_run_id"])
     import execution_board
     with db.db:
         execution_board.refresh_plans(db, task_id)
+    if task['metadata'].get('_team_orchestration') or task['metadata'].get('_team_worker'):
+        import team_orchestration
+        team_orchestration.changed(db, get(db, task_id))
 
 
 def _wake_parent(db, task):
@@ -343,6 +422,7 @@ def create(db, spec, *, authority, request_key=""):
         raise ValueError("子任务不能更换父任务")
     scope = dict(spec.get("scope") or {})
     flow, node = str(spec.get("workflow_run_id") or ""), str(spec.get("workflow_node_id") or "")
+    parent = None
     if parent_id:
         parent = _task(db, parent_id)
         if parent["project_id"] != project_id:
@@ -355,6 +435,8 @@ def create(db, spec, *, authority, request_key=""):
                 if field in scope and inherited[field] is not None and (scope[field] is None or not set(scope[field]).issubset(inherited[field])):
                     raise ValueError("子任务不能扩大父任务授权范围")
                 scope.setdefault(field, inherited[field])
+        if manual_review_required(parent, get_run(db, parent['latest_run_id']) if parent['latest_run_id'] else None):
+            scope['manual_review_required'] = True
         if parent["workflow_run_id"]:
             if flow and flow != parent["workflow_run_id"]:
                 raise ValueError("子任务不能切换工作流")
@@ -382,6 +464,14 @@ def create(db, spec, *, authority, request_key=""):
         if _task(db, dependency)["project_id"] != project_id:
             raise ValueError("依赖任务不属于当前项目")
     metadata = {k: v for k, v in (spec.get("metadata") or {}).items() if not k.startswith("_")}
+    import team_orchestration
+    team_orchestration.configure(db, executor, parent, scope, metadata)
+    if metadata.get('_team_worker') and not scope.get('manual_review_required'):
+        review_required = False
+    if any(isinstance(item, dict) and item.get('allow_draft') for item in inputs):
+        if authority.source != 'ui':
+            raise ValueError('使用待审草稿须由用户明确选择')
+        metadata['_draft_inputs_authorized'] = True
     clean = {"project_id": project_id, "title": str(spec.get("title") or goal[:100]), "goal": goal,
              "executor_binding_id": binding_id, "member_id": member_id, "inputs": inputs,
              "output_contract": contract, "review_required": review_required, "parent_task_id": parent_id,
@@ -431,6 +521,8 @@ def _snapshot_inputs(db, task, run_id):
             raise ValueError("输入资产不属于当前项目")
         if asset and asset_service.is_instruction_asset(asset):
             raise ValueError("指令资产不能作为研究资料输入")
+        allow_draft = item.get('allow_draft') is True and task['metadata'].get('_draft_inputs_authorized') is True
+        qualification = asset_service.require_input(db, asset, allow_draft=allow_draft) if asset else None
         if relative:
             if Path(relative).is_absolute() or PureWindowsPath(relative).drive:
                 raise ValueError("输入文件须为项目相对路径")
@@ -438,17 +530,23 @@ def _snapshot_inputs(db, task, run_id):
         elif asset and asset.get("storage") == "file":
             source = Path(asset["canonical_uri"]).resolve()
         elif asset:
-            digest = asset.get("content_hash", "")
+            frozen = asset_service.virtual_snapshot(db, asset)
+            digest = frozen['content_hash']
             if item.get("content_hash") and item["content_hash"] != digest:
                 raise ValueError("输入资产版本已变化")
-            assets.append({"asset_id": asset_id, "content_hash": digest})
+            assets.append({'asset_id': asset_id, **frozen, 'allow_draft': allow_draft, 'qualification': qualification})
             continue
         else:
             raise ValueError("输入须引用项目资产或相对文件")
         if not source.is_file() or (relative and not source.is_relative_to(root)):
             raise ValueError("输入文件不存在或超出项目范围")
         digest = _hash(source)
-        expected = item.get("content_hash") or item.get("sha256")
+        if not asset:
+            source_asset = db.db.execute('SELECT * FROM assets WHERE canonical_uri=? AND project_id=?', (str(source), task['project_id'])).fetchone()
+            source_asset = dict(source_asset) if source_asset else {'id': '', 'project_id': task['project_id'],
+                'canonical_uri': str(source), 'storage': 'file', 'status': 'active', 'content_hash': digest, 'metadata': '{}', 'kind': 'file'}
+            qualification = asset_service.require_input(db, source_asset, allow_draft=allow_draft)
+        expected = item.get("content_hash") or item.get("sha256") or (qualification or {}).get('expected_hash')
         if expected and expected != digest:
             raise ValueError("输入文件版本已变化，请重新准备任务")
         destination = folder / (str(index) + "-" + source.name)
@@ -459,7 +557,8 @@ def _snapshot_inputs(db, task, run_id):
         if _hash(destination) != digest:
             raise ValueError("复制输入时文件发生变化")
         assets.append({"asset_id": asset_id, "path": str(destination), "original_path": str(source),
-                       "relative": source.relative_to(root).as_posix() if source.is_relative_to(root) else "", "content_hash": digest, "sha256": digest})
+                       "relative": source.relative_to(root).as_posix() if source.is_relative_to(root) else "", "content_hash": digest, "sha256": digest,
+                       'allow_draft': allow_draft, 'qualification': qualification})
     dependencies = []
     for key in task["dependencies"]:
         dependency = get(db, key)
@@ -496,7 +595,8 @@ def _policy(db, task, authority, mode=None):
         raise ValueError("专家不能自行升级为 Full access")
     source = "user" if mode and authority.source == "ui" else (override or {}).get("source") or ("parent" if parent_mode else previous.get("source") or "project")
     return {"autonomy_mode": selected, "source": source,
-            "actor_id": authority.actor_id if authority.source == "ui" and (mode or override) else previous.get("actor_id", ""), "review_required": task["review_required"]}
+            "actor_id": authority.actor_id if authority.source == "ui" and (mode or override) else previous.get("actor_id", ""), "review_required": task["review_required"],
+            'manual_review_required': manual_review_required(task)}
 
 
 def _resume_identity(task, inputs, executor):
@@ -596,6 +696,11 @@ def claim(db, run_id, worker_id="worker"):
             return None
         if _task(db, run["task_id"])["status"] == "cancelled":
             return None
+        worker = _task(db, run['task_id'])['metadata'].get('_team_worker')
+        if worker:
+            count = db.db.execute("SELECT COUNT(*) FROM project_task_runs r JOIN project_tasks t ON t.id=r.task_id WHERE r.status='running' AND json_extract(t.metadata,'$._team_worker.team_id')=?", (worker['team_id'],)).fetchone()[0]
+            if count >= worker['max_parallel']:
+                return None
         changed = db.db.execute("UPDATE project_task_runs SET status='running' WHERE id=? AND status='queued'", (run_id,))
         if not changed.rowcount:
             return None
@@ -617,6 +722,12 @@ def _effective_policy(task, run):
     policy = dict(run["policy_snapshot"])
     policy.update(task["metadata"].get("_autonomy_override") or {})
     return policy
+
+
+def manual_review_required(task, run=None):
+    return bool(task.get('scope', {}).get('manual_review_required') or
+                task.get('metadata', {}).get('node_config', {}).get('manual_review_required') or
+                (run or {}).get('policy_snapshot', {}).get('manual_review_required'))
 
 
 def _validate_contract(contract, output):
@@ -695,8 +806,13 @@ def _validate_versions(db, task, run, *, outputs=True):
                 raise ValueError("任务输入快照已变化")
         elif item.get("asset_id"):
             asset = asset_service.get(db, item["asset_id"])
-            if not asset or asset.get("content_hash") != item["content_hash"]:
+            if not asset or asset_service.virtual_snapshot(db, asset)['content_hash'] != item["content_hash"]:
                 raise ValueError("任务输入资产版本已变化")
+    for item in run['input_snapshot'].get('base_output', {}).get('files', []):
+        path = Path(item.get('path', '')).resolve()
+        digest = item.get('content_hash') or item.get('sha256')
+        if not digest or not path.is_relative_to(_root(db, task['project_id'])) or not path.is_file() or _hash(path) != digest:
+            raise ValueError('专家修改所用的基准产物快照已变化，请重新准备修改')
     for dependency in [*run["input_snapshot"].get("dependencies", []), *run["input_snapshot"].get("children", [])]:
         current = _task(db, dependency["task_id"])
         if current["status"] != "delivered" or current["accepted_delivery_id"] != dependency["delivery_id"]:
@@ -739,21 +855,26 @@ def complete(db, run_id, result):
     output = result.get("output_snapshot", result.get("output", {}))
     checkpoint = {**run["checkpoint"], **result.get("checkpoint", {}), "reply": result.get("reply", "")}
     checkpoint.setdefault("output", output)
-    waiting = any(child["status"] != "delivered" for child in get(db, task["id"])["children"])
+    import team_orchestration
+    current_task = get(db, task['id'])
+    waiting = any(child["status"] != "delivered" for child in current_task["children"]) or team_orchestration.needs_aggregation(current_task, run)
     checkpoint["waiting_children"] = waiting
     candidate = {**run, "output_snapshot": output, "checkpoint": checkpoint}
-    _validate_versions(db, task, candidate)
+    _validate_versions(db, task, candidate, outputs=not (waiting and task['metadata'].get('_team_orchestration')))
     policy = _effective_policy(task, run)
     with _lock, _atomic(db):
         current = get_run(db, run_id)
         if current["status"] not in ("queued", "running") or _task(db, task["id"])["status"] == "cancelled":
             return get(db, task["id"])
-        waiting = bool(db.db.execute("SELECT 1 FROM project_tasks WHERE parent_task_id=? AND status<>'delivered' LIMIT 1", (task["id"],)).fetchone())
+        import team_orchestration
+        waiting = bool(db.db.execute("SELECT 1 FROM project_tasks WHERE parent_task_id=? AND status<>'delivered' LIMIT 1", (task["id"],)).fetchone()) or team_orchestration.needs_aggregation(get(db, task['id']), run)
         checkpoint["waiting_children"] = waiting
         db.db.execute("UPDATE project_task_runs SET status='succeeded',checkpoint=?,output_snapshot=?,ended_at=? WHERE id=?", (_json(checkpoint), _json(output), _now(), run_id))
         db.db.execute("UPDATE project_tasks SET status=?,version=version+1,updated_at=? WHERE id=?", ("blocked" if waiting else "awaiting_review", _now(), task["id"]))
+        import task_output_versions
+        task_output_versions.remember(db, task, {**candidate, 'status': 'succeeded'}, commit=False)
         _event(db, task["id"], "waiting_children" if waiting else "output_ready", {}, run_id)
-        if not waiting and (not task["review_required"] or policy["autonomy_mode"] == "full_access"):
+        if not waiting and not manual_review_required(task, candidate) and (not task["review_required"] or policy["autonomy_mode"] == "full_access"):
             _decision(db, task, candidate, approved=True, source="policy", actor_id="", feedback="", request_key="policy:" + run_id)
     _notify(db, task["id"])
     value = get(db, task["id"])
@@ -797,6 +918,77 @@ def review(db, task_id, *, approved, feedback="", authority, request_key="", rev
     value = get(db, task_id)
     _wake_parent(db, value)
     return value
+
+
+def rework(db, task_id, *, authority, base, instruction, request_key, selection=None, tool_args=None):
+    """Reject a reviewed candidate and create its replacement in one transaction."""
+    import project_task_execution
+    instruction = str(instruction or '').strip()
+    if not instruction or len(instruction) > 20000 or not request_key or len(request_key) > 200:
+        raise ValueError('请填写修改要求并提供有效的请求标识')
+    payload = {'base': base, 'instruction': instruction, 'selection': selection, 'tool_args': tool_args}
+    digest = _digest(payload)
+    with _lock:
+        task = _task(db, task_id)
+        _authority(authority, task['project_id'], human=True)
+        old = db.db.execute('SELECT * FROM project_task_rework_requests WHERE task_id=? AND request_key=?', (task_id, request_key)).fetchone()
+        if old:
+            if old['request_digest'] != digest:
+                raise ValueError('该请求标识已用于另一份修改要求')
+            return get_run(db, old['new_run_id'])
+        run = get_run(db, task['latest_run_id']) if task['latest_run_id'] else None
+        if (not run or run['status'] != 'succeeded' or task['status'] not in ('awaiting_review', 'blocked') or
+                base.get('task_run_id') != run['id'] or base.get('task_version') != task['version'] or
+                base.get('output_revision') != run['checkpoint'].get('output_revision', 0) or
+                base.get('output_digest') != _digest(run['output_snapshot'])):
+            raise ValueError('节点产物或任务状态已变化，请重新打开当前结果后修改')
+        if any(child['status'] != 'delivered' for child in get(db, task_id)['children']):
+            raise ValueError('请先完成节点的派生任务')
+        _validate_versions(db, task, run)
+        run_id = _id('ptr-')
+        snapshot = _snapshot_inputs(db, task, run_id)
+        frozen_base = json.loads(_json(run['output_snapshot']))
+        frozen_base['draft_authorization'] = {'source': 'human_rework', 'task_id': task_id,
+                                               'task_run_id': run['id'], 'output_revision': base['output_revision']}
+        folder = _root(db, task['project_id'], writable=True) / '.tasks' / task_id / run_id / 'inputs' / 'base'
+        for index, item in enumerate(frozen_base.get('files', [])):
+            source = Path(item['path'])
+            folder.mkdir(parents=True, exist_ok=True)
+            destination = folder / (str(index) + '-' + source.name)
+            shutil.copyfile(source, destination)
+            if _hash(destination) != item.get('content_hash', item.get('sha256')):
+                raise ValueError('固定修改基准时产物发生变化')
+            item.update(path=str(destination), original_path=str(source))
+        snapshot.update(feedback=instruction, base_output=frozen_base, base_run_id=run['id'],
+                        base_revision=base['output_revision'], selection=selection or {})
+        context = snapshot['execution_context']
+        if tool_args is not None:
+            node = context.get('node_config') or {}
+            if node.get('node_kind') != 'tool' or not isinstance(tool_args, dict) or len(_json(tool_args)) > 100000:
+                raise ValueError('仅固定工具节点可修改有效的工具参数')
+            node = {**node, 'tool_args': tool_args}
+            project_task_execution.validate_fixed_tool(db, task['project_id'], node, run['executor_snapshot'])
+            context['node_config'] = node
+        policy = {**_effective_policy(task, run), 'manual_review_required': True,
+                  'source': 'user_rework', 'actor_id': authority.actor_id}
+        with _atomic(db):
+            current = _task(db, task_id)
+            if current['version'] != task['version'] or current['latest_run_id'] != run['id']:
+                raise ValueError('节点在准备修改时已更新，请保留要求并重新打开结果')
+            if current['status'] == 'awaiting_review':
+                _decision(db, current, run, approved=False, source='human', actor_id=authority.actor_id,
+                          feedback=instruction, request_key='rework:' + request_key)
+            attempt = db.db.execute('SELECT COALESCE(MAX(attempt),0)+1 FROM project_task_runs WHERE task_id=?', (task_id,)).fetchone()[0]
+            db.db.execute("INSERT INTO project_task_runs(id,task_id,attempt,status,request_key,policy_snapshot,input_snapshot,executor_snapshot,checkpoint,started_at) VALUES (?,?,?,'queued',?,?,?,?,?,?)",
+                          (run_id, task_id, attempt, 'rework:' + request_key, _json(policy), _json(snapshot),
+                           _json(run['executor_snapshot']), _json({'rework_of': run['id'], 'base_revision': base['output_revision']}), _now()))
+            db.db.execute("UPDATE project_tasks SET status='queued',latest_run_id=?,accepted_delivery_id='',version=version+1,updated_at=? WHERE id=?",
+                          (run_id, _now(), task_id))
+            db.db.execute('INSERT INTO project_task_rework_requests VALUES (?,?,?,?,?,?,?)',
+                          (task_id, request_key, digest, run['id'], base['output_revision'], run_id, _now()))
+            _event(db, task_id, 'rework_queued', {'base_run_id': run['id'], 'base_revision': base['output_revision'], 'instruction': instruction}, run_id)
+    _notify(db, task_id)
+    return get_run(db, run_id)
 
 
 def fail(db, run_id, error, *, cancelled=False):
@@ -857,7 +1049,7 @@ def set_mode(db, task_id, mode, *, authority):
         db.db.execute("UPDATE project_tasks SET metadata=?,version=version+1,updated_at=? WHERE id=?", (_json(metadata), _now(), task_id))
         _event(db, task_id, "policy_changed", {"autonomy_mode": mode, "actor_id": authority.actor_id}, task["latest_run_id"])
     task = _task(db, task_id)
-    if task["status"] == "awaiting_review" and mode == "full_access":
+    if task["status"] == "awaiting_review" and mode == "full_access" and not manual_review_required(task, get_run(db, task['latest_run_id'])):
         run = get_run(db, task["latest_run_id"])
         _validate_versions(db, task, run)
         with _lock, _atomic(db):

@@ -30,7 +30,8 @@ def expand(db, project_id, layout, ancestors=()):
                           'executor_binding_id': executor['binding_id'],
                           'member_id': executor.get('requested_member_id', ''),
                           'tools': allowed,
-                          'review_required': item['review_required'] or (node['review_required'] and item['id'] in exits)})
+                          'review_required': item['review_required'] or (node['review_required'] and item['id'] in exits),
+                          'manual_review_required': bool(item.get('manual_review_required') or (node.get('manual_review_required') and item['id'] in exits))})
         edges.extend({'source': names[edge['source']], 'target': names[edge['target']]} for edge in child['edges'])
         order.extend(names[item] for item in child['order'])
         endpoints[nid] = ([names[item] for item in entries], [names[item] for item in exits])

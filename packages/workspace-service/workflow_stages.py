@@ -119,8 +119,14 @@ def stage_download(db: WorkflowDB, task_id: str, result_id: str) -> dict[str, An
     import execution
     execution.check()
     paper = db.ingest_pdf(task_id, path)
+    actual_path = Path(paper.get("source_path", str(path)))
+    if actual_path.resolve() != path.resolve() and path.is_file():
+        path.unlink(missing_ok=True)
+        path = actual_path
     import project_library
     project_library.link_pdf(db, task_id, result_id, paper["id"])
+    # Downloading is a staging operation.  It must never write to Zotero.
+    db.set_queue(task_id, result_id, "downloaded", str(path), "")
     db.log_step(task_id, "download", "done", f"已入库 {paper['filename']}（{len(paper['pages'])} 页）")
     return {"paper": paper, "pdf_path": str(path)}
 
@@ -216,6 +222,7 @@ def stage_zotero_import(db: WorkflowDB, task_id: str, collection: str = "",
             manual += 1
             continue
         db.set_queue(task_id, rid, "downloaded", path, "")
+        db.set_zotero_stage(task_id, rid, "external", zotero_key=it["key"])
         done += 1
     if done:
         try:

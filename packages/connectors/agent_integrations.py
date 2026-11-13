@@ -27,6 +27,8 @@ def tool_specs() -> list[dict]:
         ("zotero_local_link_pdf", "把项目文件夹里的 PDF 挂到 Zotero 条目上（链接文件，文件不搬走），需 Full Access。", {"key": "string", "pdf": "string", "title": "string"}),
         ("zotero_write", "Write a Zotero item; requires Full Access and key/version for updates", {"item": "object"}),
         ("zotero_sync", "预览或执行项目与绑定Collection的元数据同步；默认只预览，执行需plan_token与确认。", {"task_id": "string", "mode": "string", "dry_run": "boolean", "plan_token": "string", "confirm": "boolean"}),
+        ("zotero_staged_list", "列出当前项目已下载但尚未明确写入 Zotero 的暂存文献；只读。", {}),
+        ("zotero_staged_import", "按用户明确要求，把当前项目暂存 PDF 预览/导入 Zotero；默认只预览，执行需 Full Access、plan_token 和确认。附件使用 Zotero imported_file，交给附件管理插件继续整理。", {"result_ids": "array", "collection": "string", "attachment_mode": "string", "dry_run": "boolean", "plan_token": "string", "confirm": "boolean"}),
     ]
     return [{"type": "function", "function": {"name": name, "description": desc,
              "parameters": {"type": "object", "properties": {k: {"type": v} for k, v in props.items()}, "additionalProperties": False}}}
@@ -34,6 +36,22 @@ def tool_specs() -> list[dict]:
 
 
 def invoke(name: str, db: Any, task_id: str, args: dict, assistant_id: str = "", permission: str = "auto") -> dict:
+    if name == "zotero_staged_list":
+        import zotero_staged
+        return zotero_staged.list_staged(db, task_id)
+    if name == "zotero_staged_import":
+        import zotero_staged
+        result_ids = args.get("result_ids")
+        if result_ids is not None and (not isinstance(result_ids, list) or any(not isinstance(v, str) for v in result_ids)):
+            raise ValueError("result_ids must be a list of strings")
+        if args.get("dry_run", True) is not False:
+            return zotero_staged.plan(db, task_id, result_ids, str(args.get("collection") or ""),
+                                      str(args.get("attachment_mode") or "imported_file"))
+        if permission not in {"full_access", "full-access"}:
+            raise PermissionError("Zotero import requires Full Access")
+        if args.get("confirm") is not True:
+            raise ValueError("Zotero import requires explicit confirmation")
+        return zotero_staged.apply(db, task_id, str(args.get("plan_token") or ""), confirm=True)
     if name in {"zotero_search", "zotero_item", "zotero_import_pdf"}:
         if name == "zotero_search":
             return zotero.items(q=str(args.get("query") or ""), start=int(args.get("start") or 0), limit=int(args.get("limit") or 20))

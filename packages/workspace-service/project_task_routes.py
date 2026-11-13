@@ -40,11 +40,37 @@ def route(method, path, body, query, db):
         import task_management
         return task_management.command(db, project_id, task_id, action, body)
     if method == "GET":
+        if action in ('node-result', 'node-preview', 'node-workspace', 'node-workspace-preview'):
+            import workflow_node_workbench as nodes
+            selection = nodes.Selection(project_id, task_id, q('task_run_id'), int(q('output_revision')) if q('output_revision') else None)
+            if action == 'node-workspace':
+                result = nodes.workspace(db, selection, authority=authority, window_id=q('window_id'), task=task if task_id else None)
+                result.pop('content', None)
+                result.pop('previous_content', None)
+                run_view = result.get('run')
+                if isinstance(run_view, dict):
+                    run_view.pop('output_snapshot', None)
+                task_view = result.get('task')
+                if isinstance(task_view, dict):
+                    run_views = [task_view.get('latest_run'), *(task_view.get('runs') or [])]
+                    for run_view in run_views:
+                        if isinstance(run_view, dict):
+                            run_view.pop('output_snapshot', None)
+                    for child in task_view.get('children') or []:
+                        for run_view in [child.get('latest_run'), *(child.get('runs') or [])]:
+                            if isinstance(run_view, dict):
+                                run_view.pop('output_snapshot', None)
+                return {'result': result}
+            if action == 'node-workspace-preview':
+                return {'preview': nodes.workspace_preview(db, selection, q('artifact_id'), authority=authority, task=task if task_id else None)}
+            if action == 'node-result':
+                return {'result': nodes.read(db, selection, authority=authority, window_id=q('window_id'), task=task if task_id else None)}
+            return {'preview': nodes.preview(db, selection, q('artifact_id'), authority=authority, task=task if task_id else None)}
         if action in ("", "list"):
-            return {"tasks": tasks.list_tasks(db, project_id,
-                workflow_run_id=q("workflow_run_id"), parent_task_id=q("parent_task_id"))}
+            return {"tasks": [tasks.public_view(item) for item in tasks.list_tasks(db, project_id,
+                workflow_run_id=q("workflow_run_id"), parent_task_id=q("parent_task_id"))]}
         if action == "detail":
-            return {"task": tasks.get(db, task_id, project_id=project_id)}
+            return {"task": tasks.public_view(tasks.get(db, task_id, project_id=project_id))}
         if action=='output':
             import project_task_review
             return project_task_review.read(db,task_id,project_id,int(q('output_index') or 0))
@@ -69,6 +95,12 @@ def route(method, path, body, query, db):
             roles = [{**dict(r), "executor_binding_id": r["binding_id"]} for r in rows if r['role_id'] in declared]
             return {"roles": roles, "template": template, "bindings": bindings.list_bindings(db, project_id)}
     elif method == "POST":
+        if action == 'collect-output':
+            import workflow_node_workbench
+            return {'task': tasks.public_view(workflow_node_workbench.collect(db, task_id, body, authority=authority))}
+        if action == 'node-command':
+            import workflow_node_workbench
+            return workflow_node_workbench.command(db, task_id, body, authority=authority)
         if action == "bindings":
             binding = bindings.register(db, project_id, str(body.get("kind") or "assistant"),
                 str(body.get("target_id") or body.get("assistant_id") or body.get("team_id") or ""),
@@ -135,6 +167,9 @@ def route(method, path, body, query, db):
             raise ValueError("不支持的项目任务操作")
         if task.get("workflow_run_id") and task["status"] == "delivered" and not task.get("parent_task_id"):
             import workflow_execution
+            current = workflow_execution.detail(db, task["workflow_run_id"])
+            if current["status"] == "awaiting_review":
+                workflow_execution._status(db, task["workflow_run_id"], "queued")
             workflow_execution.kick(db.path, task["workflow_run_id"])
         return {"task": task}
     raise ValueError("不支持的项目任务请求")

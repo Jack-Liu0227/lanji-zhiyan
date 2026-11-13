@@ -89,6 +89,7 @@ class WorkspaceGraphRuntimeTest(unittest.TestCase):
             self.page.locator('#pwAsk').fill('TOOL_TRACE inspect actual project library')
             self.page.locator('#pwSend').click()
             self.page.wait_for_function("document.querySelector('#pwMessages').textContent.includes('TRACE_FINAL_FROM_HTTP_FIXTURE')")
+            self.page.wait_for_function("document.querySelector('#pwSend')?.getAttribute('aria-label')==='发送'&&!document.querySelector('#pwSend').disabled")
             self.page.locator('#pwTraceView').click()
             row=self.page.locator('[data-wt-record]').filter(has_text='library_overview').first
             row.wait_for();row.click()
@@ -96,11 +97,33 @@ class WorkspaceGraphRuntimeTest(unittest.TestCase):
             self.assertIn('输出结果',self.page.locator('[data-wt-inspector]').inner_text())
             self.assertNotIn('未记录',row.locator('.wt-duration').inner_text())
             self.assertTrue(self.page.locator('#pwAsk').is_hidden())
+            record_key=row.get_attribute('data-wt-record')
+            saved_chat=self.page.evaluate("pid=>JSON.parse(localStorage.getItem('rw-workspace:'+pid)).chatId",self.pid)
+            self.assertTrue(saved_chat)
+            self.assertEqual(self.page.evaluate("localStorage.getItem('rw-task')"),self.pid)
+            self.assertEqual(self.page.evaluate("localStorage.getItem('rw-route')"),'workspace')
             count=len(model.requests);self.screenshot('trajectory-real-tool.png')
-            self.page.reload(wait_until='networkidle')
-            self.page.locator('#pwTraceView').click()
-            self.page.locator('[data-wt-record]').filter(has_text='library_overview').first.wait_for()
-            self.assertEqual(len(model.requests),count)
+            try:
+                self.page.reload(wait_until='networkidle')
+                self.page.wait_for_function("pid=>document.querySelector('#projectWorkspace')?.dataset.projectId===pid&&!!document.querySelector('#pwTraceView')&&S.loaded",arg=self.pid)
+                self.assertEqual(self.page.evaluate("pid=>JSON.parse(localStorage.getItem('rw-workspace:'+pid)).chatId",self.pid),saved_chat)
+                if self.page.locator('#pwTraceView').get_attribute('aria-selected')!='true':
+                    self.page.locator('#pwTraceView').click()
+                replayed=self.page.locator('[data-wt-record]').filter(has_text='library_overview').first
+                replayed.wait_for()
+                self.assertEqual(replayed.get_attribute('data-wt-record'),record_key)
+                replayed.click()
+                self.assertIn('输出结果',self.page.locator('[data-wt-inspector]').inner_text())
+                self.assertEqual(len(model.requests),count)
+            except Exception:
+                import tempfile
+                destination=Path(tempfile.gettempdir())/'lanji-trace-reload-diagnostics'
+                destination.mkdir(parents=True,exist_ok=True)
+                self.page.screenshot(path=str(destination/'trace-reload-failure.png'),full_page=True)
+                diagnostics=self.page.evaluate("pid=>({route:typeof route==='function'?route():null,curTask:typeof curTask==='undefined'?null:curTask,savedRoute:localStorage.getItem('rw-route'),savedProject:localStorage.getItem('rw-task'),savedWorkspace:localStorage.getItem('rw-workspace:'+pid),workspaceProject:document.querySelector('#projectWorkspace')?.dataset.projectId,readyState:document.readyState,main:document.querySelector('#main')?.innerText.slice(0,3000)})",self.pid)
+                diagnostics['page_errors']=self.errors
+                print('Trace reload diagnostics: '+json.dumps(diagnostics,ensure_ascii=True))
+                raise
         self.assertEqual(self.errors,[])
 
     def test_graph_node_editing_and_running_snapshot_are_independent(self):
@@ -133,7 +156,10 @@ class WorkspaceGraphRuntimeTest(unittest.TestCase):
         self.assertEqual(next(node for node in frozen['nodes'] if node['id']=='check')['prompt'],'GRAPH_CHANGED_INSTRUCTION')
         self.page.locator('[data-pwg-mode="run"]').click()
         self.page.locator('[data-wfl-node="check"]').click()
-        self.assertIn('GRAPH_CHANGED_INSTRUCTION',self.page.locator('[data-pwg-inspector]').inner_text())
+        self.assertEqual(self.page.locator('.wnw').count(),0)
+        self.assertIn('Check evidence',self.page.locator('.pwg-node-heading').inner_text())
+        self.assertEqual(self.page.locator('[data-pwg-result]').count(),0)
+        self.assertIn('check',self.page.locator('.pwg-node-heading').inner_text())
         self.assertEqual(self.page.locator('[data-pwg-prompt]').count(),0)
         with workflow.WorkflowDB(self.database_path) as db:
             self.assertEqual(len(workflow_layout._layout(db,layout['id'])['nodes']),2)
@@ -175,25 +201,26 @@ class WorkspaceGraphRuntimeTest(unittest.TestCase):
         with task_runtime.TaskModelFixture() as model:
             self.use_model(model.url)
             self.page.locator('#pwWorkflowRun').click()
-            self.page.locator('[data-sequence-start]').click()
+            import task_tools
+            with workflow.WorkflowDB(self.database_path) as db:
+                task_tools.call(db, self.pid, 'workflow_start', {})
             self.poll_json('/api/workflow/execution?task_id='+self.pid,lambda data:(data.get('run') or {}).get('status')=='awaiting_review')
             self.page.locator('[data-sequence-close]').click()
             self.page.locator('[data-pwg-task]').wait_for()
             self.page.locator('[data-pwg-task]').click()
-            self.page.locator('[data-pw-output-edit]').last.wait_for()
+            self.page.locator('[data-wnw-mode="edit"]').wait_for()
             tasks=self.page.request.get(self.url+'api/project-tasks?project_id='+self.pid).json()['tasks']
             first=next(task for task in tasks if task['workflow_node_id']=='analyze')
             original=Path(first['outputs'][-1]['path']);original_text=original.read_text(encoding='utf-8')
-            self.page.locator('[data-pw-output-edit]').last.click()
-            self.page.locator('[data-por-text]:not(:disabled)').fill('# HUMAN_BROWSER_CORRECTION\nReviewed evidence for downstream node.')
-            self.page.locator('[data-por-reason]').fill('Browser human verification')
-            self.page.locator('[data-por-save]').click()
-            self.page.locator('.output-revision-dialog').wait_for(state='detached')
-            self.page.get_by_text('人工修订 v1 · 核查以当前产物为准',exact=True).wait_for()
+            self.page.locator('[data-wnw-mode="edit"]').click()
+            self.page.locator('[data-wnw-editor]').fill('# HUMAN_BROWSER_CORRECTION\nReviewed evidence for downstream node.')
+            self.page.locator('[data-wnw-reason]').fill('Browser human verification')
+            self.page.locator('[data-wnw-save]').click()
+            self.page.wait_for_function("document.querySelector('[data-wnw-meta]').textContent.includes('修订 v1')")
             self.assertEqual(original.read_text(encoding='utf-8'),original_text)
-            self.page.locator('#pwFeedback').fill('HUMAN_REVIEW_OF_REVISION_ONE')
+            self.page.locator('[data-wnw-feedback]').fill('HUMAN_REVIEW_OF_REVISION_ONE')
             self.screenshot('node-human-revision-review.png')
-            self.page.locator('#pwApprove').click()
+            self.page.locator('[data-wnw-approve]').click()
             data=self.poll_json('/api/project-tasks?project_id='+self.pid,lambda data:any(task['workflow_node_id']=='check' and task['status']=='awaiting_review' for task in data['tasks']))
             first=next(task for task in data['tasks'] if task['workflow_node_id']=='analyze')
             self.assertEqual(first['status'],'delivered')
