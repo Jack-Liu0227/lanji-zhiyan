@@ -451,6 +451,27 @@ def _loop() -> None:
         time.sleep(TICK)
 
 
+
+def archive_note(db, sched: dict, run: dict, content: str, output_asset: dict) -> dict:
+    """One editable project note per schedule attempt, linked to its source."""
+    import asset_service
+    import note_catalog
+    nid = "schedule-" + run["id"]
+    if db.db.execute("SELECT 1 FROM md_notes WHERE id=?", (nid,)).fetchone():
+        return db.md_note(nid)
+    markdown = note_catalog.combine({"source": "schedule",
+        "schedule_id": sched["id"], "schedule_run_id": run["id"],
+        "workflow_run_id": run.get("workflow_run_id", ""), "tags": ["定时任务"]}, content)
+    note = db.save_md_note(nid, sched["name"] + " · " + run["started_at"][:16].replace("T", " "),
+                           markdown, task_id=sched["project_id"])
+    row = db.db.execute("SELECT id FROM assets WHERE canonical_uri=?", (str(Path(note["canonical_path"]).resolve()),)).fetchone()
+    asset = asset_service.get(db, row["id"]) if row else None
+    if asset:
+        asset_service.link(db, asset["id"], "derived_from", output_asset["id"],
+                           {"schedule_id": sched["id"], "schedule_run_id": run["id"]})
+        note["asset_id"] = asset["id"]
+    return note
+
 if __name__ == "__main__":      # 手跑自检：py -3.10 schedule.py
     samples = ["0 9 * * *", "30 8 * * 1-5", "*/15 * * * *", "0 9 1 * *", "0 0 * * 0"]
     for e in samples:

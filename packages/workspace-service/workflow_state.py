@@ -202,3 +202,27 @@ def handoff(db, project_id: str, step: str) -> tuple[str, str, list[str]]:
         records.append({"step": parent, "delivery_id": item["delivery_id"], "delivery": delivery})
         ids.extend(a["id"] for a in delivery.get("assets", []))
     return json.dumps(records, ensure_ascii=False, default=str), digest(records), list(dict.fromkeys(ids))
+
+def node_states(db, project_id: str, layout: dict) -> dict[str, dict]:
+    """Generic and repeated stages use concrete task/node IDs, never a shared stage row."""
+    import project_tasks
+    run_id = ""
+    for row in db.db.execute("SELECT r.id,e.layout_snapshot FROM workflow_runs r JOIN workflow_executions e ON e.run_id=r.id WHERE r.project_id=? ORDER BY r.rowid DESC", (project_id,)):
+        if json.loads(row["layout_snapshot"])["id"] == layout["id"]:
+            run_id = row["id"]
+            break
+    task_rows = {t["workflow_node_id"]: t for t in project_tasks.list_tasks(db, project_id, workflow_run_id=run_id)
+                 if run_id and not t["parent_task_id"]}
+    result = {}
+    for nid in layout["order"]:
+        task = task_rows.get(nid)
+        parents = [e["source"] for e in layout["edges"] if e["target"] == nid]
+        blocked = [p for p in parents if result[p]["status"] != "delivered"]
+        status = (task or {}).get("status", "ready" if not blocked else "waiting")
+        if status == "ready" and blocked:
+            status = "waiting"
+        result[nid] = {"status": status, "summary": ((task or {}).get("latest_run") or {}).get("error", ""),
+            "canonical_task_id": (task or {}).get("id", ""), "delivery_id": (task or {}).get("accepted_delivery_id", ""),
+            "dependencies": parents, "blocked_by": blocked, "delivery": ((task or {}).get("deliveries") or [{}])[-1],
+            "updated_at": (task or {}).get("updated_at", ""), "source": "project_task", "record_id": (task or {}).get("id", "")}
+    return result

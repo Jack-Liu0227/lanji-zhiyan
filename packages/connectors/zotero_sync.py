@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading             # _sync_lock 串行化自动同步与手动导入
 import time
 import urllib.error
 import urllib.request
@@ -294,3 +295,5 @@ def route(method: str, path: str, body: dict, query: dict, db: Any) -> dict | No
             raise ValueError("远端写入需要明确确认")
         return write_item(db, body.get("item") or {})
     return None
+
+_sync_lock = threading.RLock()

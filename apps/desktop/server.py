@@ -105,6 +105,7 @@ import feature_routes
 import easyscholar_routes
 import zotero_mcp_routes
 import module_composition
+import langgraph_workflow        # 项目工作流图（LangGraph）执行与断点恢复
 # handlers/ 是本目录下的包：被 importlib 按文件加载（测试）或从别处 import 时，本目录不一定在 sys.path 上
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -135,6 +136,7 @@ for _module_id, _module in (
     ("zotero-sync", zotero_sync), ("reproduction", reproduction_routes),
     ("easyscholar", easyscholar_routes), ("zotero-mcp", zotero_mcp_routes),
     ("rss", rss_routes), ("literature-import", literature_import_routes),
+    ("langgraph", langgraph_workflow),
     ("project-features-core", feature_routes),
 ):
     API_ROUTES.register(_module_id, _module.route, version="1.0.0", requires=("database",))
@@ -761,9 +763,15 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
         prefixes = (
             "/api/agent-settings", "/api/capabilities", "/api/workflow/layouts", "/api/feishu/", "/api/zotero/web/",
             "/api/projects", "/api/papers/", "/api/chats", "/api/assistants", "/api/teams/", "/api/runs/",
-            "/api/mcp/", "/api/audit/", "/api/modules", "/api/easyscholar/", "/api/zotero/mcp/", "/api/rss/", "/api/library/import", "/api/todos", "/api/kanban", "/api/space/",
+            "/api/mcp/", "/api/audit/", "/api/modules", "/api/easyscholar/", "/api/zotero/mcp/", "/api/rss/", "/api/library/", "/api/todos", "/api/kanban", "/api/space/",
             "/api/assets", "/api/workflow/run", "/api/workflow/runs", "/api/workflow/recover",
             "/api/paper-toolbox",
+            # 2.0 项目工作区：项目任务 / 图流 / 资料库 / 计划 / 产物交接 / 用量
+            "/api/project-tasks", "/api/project/files/", "/api/project/resources",
+            "/api/workflow/execution", "/api/workflow/reviews", "/api/langgraph/",
+            "/api/plans", "/api/execution-board", "/api/execution-conversations",
+            "/api/handoff/", "/api/calendar/linked", "/api/conversation-history",
+            "/api/usage", "/api/message-channels",
         )
         if not path.startswith(prefixes):
             return False
@@ -1407,6 +1415,22 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     with WorkflowDB(DB_PATH) as note_db:
                         return self._json(project_notes.delete(note_db, str(data.get("project_id") or ""),
                                                                str(data.get("path") or "")))
+                if path == "/api/project/note/rename":
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(project_notes.rename(note_db, str(data.get("project_id") or ""),
+                                                               str(data.get("path") or ""),
+                                                               str(data.get("new_name") or "")))
+                if path == "/api/project/note/batch":
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(project_notes.batch_update(note_db, str(data.get("project_id") or ""), data))
+                if path == "/api/project/note-categories":
+                    import note_catalog
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(note_catalog.mutate(note_db, str(data.get("project_id") or ""), data))
+                if path.startswith("/api/prompt-templates/"):
+                    import prompt_templates
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(prompt_templates.route(note_db, path, data))
                 if path == "/api/trans/start":
                     tid = (data.get("task_id") or "").strip()
                     pid = (data.get("id") or "").strip()
@@ -1576,16 +1600,30 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     actual_base = str(db.base_dir(tid) or "")
                     return self._json({"task_id": tid, "base_dir": actual_base,
                                        "dirs": made or [name for name, _ in workflow.PROJ_DIRS]})
+                if path == "/api/task/update":
+                    tid = str(data.get("id") or "")
+                    title = str(data.get("title") or "").strip()
+                    if not title or len(title) > 200:
+                        raise ValueError("项目标题须为 1 至 200 个字符")
+                    existing = db.db.execute("SELECT updated_at FROM research_tasks WHERE id=?", (tid,)).fetchone()
+                    if not existing:
+                        raise ValueError("项目不存在")
+                    if data.get("expected_updated_at") and existing["updated_at"] != data["expected_updated_at"]:
+                        raise ValueError("项目已更新，请重新打开后编辑")
+                    with db.db:
+                        db.db.execute("UPDATE research_tasks SET title=?,question=?,material_system=?,updated_at=? WHERE id=?",
+                            (title, str(data.get("question") or "")[:20000], str(data.get("material_system") or "")[:2000], workflow.now(), tid))
+                    return self._json({"task": db.summary(tid)["task"]})
                 if path == "/api/task/delete":
                     return self._json(db.delete_task(data.get("id", "")))
                 if path == "/api/task/papergraph/build":          # 论文星图：点「生成」才编译一次，结果落库
                     return self._json(db.build_paper_graph(data.get("id", "")))
                 if path == "/api/chat/create":
-                    return self._json({"chat": db.chat(db.create_chat(data.get("title", "")))})
+                    return self._json({"chat": db.chat(db.create_chat(data.get("title", ""), task_id=data.get("task_id", "")))})
                 if path == "/api/chat/delete":
                     cid = data.get("id", "")
-                    db.clear_messages(cid)
-                    return self._json(db.delete_chat(cid))
+                    import conversation_history
+                    return self._json(conversation_history.command(db, 'chat', cid, 'trash'))
                 if path == "/api/step/done":                  # 三栏页「确认交付」：把这一步记成已完成
                     tid = str(data.get("task_id") or "")
                     step = str(data.get("step") or "")
@@ -1641,9 +1679,9 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                 if path == "/api/chat/rename":               # 对话改名（点标题原地改）
                     b = data or {}
                     with WorkflowDB(DB_PATH) as db:
-                        db.db.execute("UPDATE chats SET title=?, updated_at=? WHERE id=?",
-                                      ((b.get("title") or "").strip()[:120] or "新对话", workflow.now(), b.get("id", "")))
-                        db.db.commit()
+                        import conversation_history
+                        conversation_history.command(db, 'chat', b.get('id', ''), 'rename',
+                                                     title=(b.get('title') or '').strip()[:120] or '新对话')
                     return self._json({"ok": True})
                 if path == "/api/chat/outdir":
                     cid = data.get("id", "")

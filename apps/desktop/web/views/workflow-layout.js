@@ -58,6 +58,7 @@
     return `<div class="wfl-graph-scroll"><svg class="wfl-graph-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="工作流节点及依赖状态图"><defs><marker id="wfl-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M 0 0 L 7 3.5 L 0 7 z" fill="var(--muted)"/></marker></defs>${paths}${nodes}</svg></div>`;
   }
 
+  window.WorkflowGraph={render:graph};   // 项目工作区的 LangGraph 图流复用这张 SVG 渲染
   if(!SET_SECS.some(section=>section[0]==="workflows")) SET_SECS.push(["workflows","🔀","工作流"]);
   const originalSettings = renderSettings;
   renderSettings = function(m){

@@ -33,17 +33,19 @@ class ProjectIntegrationTest(unittest.TestCase):
             self.root = db.base_dir(self.project_id)
 
     def test_existing_markdown_is_browsable_and_paths_stay_inside_project(self):
-        path = self.root / "笔记" / "文献矩阵" / "已有.md"
-        path.write_text("# 已有\n\n证据", encoding="utf-8")
+        # 2.0 的笔记分类是五类（研究规划/文献研究/实验分析/写作投稿/提示词模板），旧分类目录落「未分类」
+        folder = self.root / "笔记" / "研究规划"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "已有.md").write_text("# 已有 证据", encoding="utf-8")
         custom = self.root / "笔记" / "旧分类"
         custom.mkdir()
         (custom / "历史.md").write_text("# 历史", encoding="utf-8")
         with workflow.WorkflowDB(self.db_path) as db:
             board = project_notes.dashboard(db, self.project_id)
-            group = next(g for g in board["groups"] if g["name"] == "文献矩阵")
+            group = next(g for g in board["groups"] if g["name"] == "研究规划")
             self.assertEqual(group["count"], 1)
-            self.assertEqual(next(g for g in board["groups"] if g["name"] == "旧分类")["count"], 1)
-            self.assertEqual(project_notes.read(db, self.project_id, group["files"][0]["path"])["content"], "# 已有\n\n证据")
+            self.assertEqual(next(g for g in board["groups"] if g["name"] == "旧分类")["count"], 1)   # 未知目录自成一组
+            self.assertEqual(project_notes.read(db, self.project_id, group["files"][0]["path"])["content"], "# 已有 证据")
             project_notes.write(db, self.project_id, "笔记/旧分类/历史.md", "# 更新")
             self.assertEqual((custom / "历史.md").read_text(encoding="utf-8"), "# 更新")
             with self.assertRaises(ValueError):
@@ -69,14 +71,14 @@ class ProjectIntegrationTest(unittest.TestCase):
     def test_empty_notebook_exposes_a_usable_category_path(self):
         with workflow.WorkflowDB(self.db_path) as db:
             board = project_notes.dashboard(db, self.project_id)
-            category = next(g for g in board["groups"] if g["name"] == "研究计划")
+            category = next(g for g in board["groups"] if g["name"] == "研究规划")
             self.assertEqual(category["count"], 0)
             relative = category["path"] + "/first.md"
             project_notes.write(db, self.project_id, relative, "created from empty dashboard")
             self.assertEqual(project_notes.read(db, self.project_id, relative)["content"],
                              "created from empty dashboard")
             with self.assertRaisesRegex(ValueError, "笔记/"):
-                project_notes.write(db, self.project_id, "研究计划/second.md", "invalid prefix")
+                project_notes.write(db, self.project_id, "研究规划/second.md", "invalid prefix")
 
     def test_tool_limit_reply_preserves_actual_successes_and_failures(self):
         relative = "笔记/研究计划/last-step.md"

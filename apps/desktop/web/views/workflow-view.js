@@ -1607,7 +1607,7 @@ async function renderWorkflow(m){
     selEl.onchange = (e) => {
       const targetId = e.target.value;
       if(targetId === "__new__"){
-        openTab("tasks");
+        openTab("workspace");
         return;
       }
       if(targetId && targetId !== curTask){

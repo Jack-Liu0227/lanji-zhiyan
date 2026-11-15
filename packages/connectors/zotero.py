@@ -28,6 +28,7 @@ import os
 import re
 import subprocess
 import sys
+import threading            # zotero_links/zotero_sources 用它做串行锁
 import time
 import urllib.error
 import urllib.parse
@@ -877,6 +878,68 @@ def bibtex_for(key: str = "", doi: str = "", title: str = "", base: str | None =
     return {"found": bool(text.strip()), "key": item_key, "title": info.get("title", ""),
             "doi": info.get("doi", ""), "bibtex": text.strip()}
 
+
+
+def _key(value: str) -> str:
+    """Validate a Zotero item or collection key before putting it in a URL."""
+    if not KEY.fullmatch(str(value or "")):
+        raise ValueError("Zotero Key 应为 8 位大写字母或数字")
+    return str(value)
+
+def import_pdf(db: Any, item_key: str, pdf: str, title: str = "PDF") -> dict[str, Any]:
+    """Import a project PDF as a Zotero stored-file attachment.
+
+    This is intentionally separate from ``link_pdf``: imported files are
+    owned by Zotero and can be organized by an attachment-management plugin.
+    """
+    item_key = str(item_key or "").strip()
+    path = Path(str(pdf or "")).expanduser().resolve()
+    if not item_key:
+        raise ValueError("missing Zotero item key")
+    _key(item_key)
+    if not path.is_file() or path.suffix.lower() != ".pdf":
+        raise ValueError("PDF does not exist: %s" % path)
+    if store.read(db, "zotero_web").get("transport") not in (None, "local"):
+        raise ZoteroError("PDF import requires the local Zotero API; switch Zotero transport to local")
+    md5 = _md5_file(path)
+    filename = path.name
+    attachment = None
+    for child in _children(item_key):
+        data = child.get("data") or {}
+        if data.get("itemType") != "attachment" or data.get("linkMode") != "imported_file":
+            continue
+        if str(data.get("md5") or "").lower() == md5.lower():
+            return {"key": str(child.get("key") or data.get("key") or ""), "parentItem": item_key,
+                    "path": str(path), "mode": "imported_file", "md5": md5, "reused": True}
+        if not attachment and str(data.get("filename") or "") == filename:
+            attachment = child
+    if attachment:
+        attachment_key = str(attachment.get("key") or (attachment.get("data") or {}).get("key") or "")
+    else:
+        created = _results(_write(db, "/users/0/items", [{
+            "itemType": "attachment", "parentItem": item_key, "linkMode": "imported_file",
+            "title": str(title or filename), "filename": filename,
+            "contentType": "application/pdf", "charset": "", "tags": [], "relations": {},
+        }]), "create imported-file attachment")
+        attachment_key = str(created.get("key") or "")
+    if not attachment_key:
+        raise ZoteroError("Zotero did not return an attachment key")
+    fields = urllib.parse.urlencode({"md5": md5, "filename": filename,
+                                     "filesize": str(path.stat().st_size),
+                                     "mtime": str(int(path.stat().st_mtime * 1000))}).encode()
+    _, _, auth = _local_request(db, f"/users/0/items/{urllib.parse.quote(attachment_key)}/file",
+                                body=fields, extra_headers={"If-None-Match": "*"})
+    if not auth.get("exists"):
+        upload_url = str(auth.get("url") or "")
+        upload_key = str(auth.get("uploadKey") or "")
+        if not upload_url or not upload_key:
+            raise ZoteroError("Zotero did not return a file upload URL")
+        _upload_bytes(upload_url, path.read_bytes(), str(auth.get("contentType") or "application/octet-stream"))
+        register = urllib.parse.urlencode({"upload": upload_key}).encode()
+        _local_request(db, f"/users/0/items/{urllib.parse.quote(attachment_key)}/file",
+                       body=register, extra_headers={"If-None-Match": "*"})
+    return {"key": attachment_key, "parentItem": item_key, "path": str(path),
+            "mode": "imported_file", "md5": md5, "reused": bool(attachment)}
 
 if __name__ == "__main__":                                        # 手跑自检：python zotero.py [base]
     import sys

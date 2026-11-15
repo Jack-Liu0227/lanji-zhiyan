@@ -143,8 +143,7 @@ const NAV = [
     {id:"assistants",label:"专家",ico:"👨‍🔬"},
     {id:"team",label:"团队",ico:"👥"},
     {id:"calendar",label:"日历",ico:"📅"},
-    {id:"tasks",label:"项目管理",ico:"📁"},
-    {id:"space",label:"项目空间",ico:"🧭"}]},
+    {id:"workspace",label:"项目空间",ico:"🧭"}]},
   {g:"solo",items:[
     {id:"library",label:"知识库",ico:"📚"},
     {id:"workflow",label:"科研平台",ico:"🔬"},
@@ -155,8 +154,23 @@ const NAV = [
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {assistants:"专家",team:"团队",agent:"智研管家",calendar:"日历",tasks:"项目管理",workflow:"科研平台",toolbox:"论文工具箱",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
+const TITLES = {assistants:"专家",team:"团队",agent:"智研管家",calendar:"日历",tasks:"项目管理",workflow:"科研平台",toolbox:"论文工具箱",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",workspace:"项目空间", space:"项目空间",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
+
+/* 2.0 项目工作区用这两个判断当前路由 / 切换前落草稿（项目工作区自己接管了子视图） */
+function uiRouteIs(kind){
+  return route()===kind || (route()==="workspace" && !!window.ProjectWorkspace?.hasSurface(kind));
+}
+
+async function uiNavigate(action){
+  const workspace=window.ProjectWorkspace?.active();
+  if(workspace && !await ProjectWorkspace.flush()) return;
+  if(!workspace && typeof mdProj !== "undefined" && mdProj && document.getElementById("mdSource")?.getClientRects().length){
+    if(!await pnSaveCurrent()){ uiNotify("笔记保存失败，请重试保存后再切换页面。"); return; }
+  }
+  return action();
+}
+
 
 function openTab(r, title){
   if(r === "notes"){
@@ -320,6 +334,26 @@ function uiNotify(text, ms = 3400) {
   uiNotify._t = setTimeout(() => box.remove(), ms);
 }
                      // 全站 uiNotify(...) 一次性接到居中卡片（同步，不打断流程）
+
+const uiModalOrigins = new WeakMap();
+function uiOpenModal(modal, initial){
+  if(!modal) return;
+  if(modal.classList.contains("hidden")) uiModalOrigins.set(modal, document.activeElement);
+  modal.setAttribute("role", "dialog");
+  modal.setAttribute("aria-modal", "true");
+  if(!modal.hasAttribute("aria-label") && !modal.hasAttribute("aria-labelledby"))
+    modal.setAttribute("aria-label", modal.querySelector("h3")?.textContent || "操作面板");
+  modal.classList.remove("hidden");
+  (initial || modal.querySelector("button, input, [tabindex]"))?.focus();
+}
+function uiCloseModal(modal){
+  if(!modal) return;
+  modal.classList.add("hidden");
+  const origin = uiModalOrigins.get(modal);
+  uiModalOrigins.delete(modal);
+  if(origin?.isConnected) origin.focus();
+  else document.querySelector('#tabsbar [aria-selected="true"]')?.focus();
+}
 
 function uiConfirm(text, opts = {}) {
   return new Promise(resolve => {

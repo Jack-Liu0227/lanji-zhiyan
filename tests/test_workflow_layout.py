@@ -50,7 +50,7 @@ class WorkflowLayoutTest(unittest.TestCase):
         invalid = []
         data = self.definition(); data["nodes"][0]["step"] = "shell"; invalid.append(data)
         data = self.definition(); data["nodes"][1]["id"] = "a"; invalid.append(data)
-        data = self.definition(); data["nodes"][1]["step"] = "search"; invalid.append(data)
+        # 2.0 起同一个 step 可以出现在多个节点（并行分支），不再算非法；见 project_workflows
         data = self.definition(); data["edges"].append({"source": "missing", "target": "a"}); invalid.append(data)
         data = self.definition(); data["edges"].append({"source": "c", "target": "a"}); invalid.append(data)
         data = self.definition(); data["order"] = ["c", "a", "b"]; invalid.append(data)

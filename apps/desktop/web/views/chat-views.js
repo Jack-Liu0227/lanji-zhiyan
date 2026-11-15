@@ -8,11 +8,11 @@ function render(){
   else if(r==="workflow") renderWorkflow(m);
   else if(r==="toolbox") { m.classList.add("sp-fill"); PaperToolbox.render(m); }
   else if(r==="tasks") renderTasks(m);
-  else if(r==="space") renderSpace(m);
+  else if(r==="workspace") ProjectWorkspace.render(m);
   else if(r==="calendar") renderCalendar(m);
   else if(r==="mail") renderMail(m);
   else if(r==="library") renderStar(m);                        // 知识星图整页（项目 → 文献/笔记/知识点/候选/工作流）
-  else if(r==="notes") { spTab = "notes"; renderSpace(m); }
+  else if(r==="notes") { spTab = "notes"; ProjectWorkspace.render(m); }
   else if(r==="intel") renderIntel(m);
   else if(r==="assistants") renderAssistants(m);
   else if(r==="team") renderTeam(m);
@@ -32,7 +32,7 @@ function needTask(){
     curTask = null;
     localStorage.removeItem("rw-task");
   }
-  if(!curTask) return `<div class="card"><h3>当前暂无项目</h3><div class="hint">工作流与文献均可绑定到独立项目上。你可以点击下方按钮新建项目，也可以在「项目」页自由管理。</div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn btn-primary" onclick="openTab('tasks')">＋ 新建项目</button></div></div>`;
+  if(!curTask) return `<div class="card"><h3>当前暂无项目</h3><div class="hint">工作流与文献均可绑定到独立项目上。你可以点击下方按钮新建项目，也可以在「项目」页自由管理。</div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn btn-primary" onclick="openTab('workspace')">＋ 新建项目</button></div></div>`;
   return "";
 }
 

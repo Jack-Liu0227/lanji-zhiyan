@@ -782,7 +782,7 @@ function spBind(d){
     const t = d.task||{};
     if(!await uiConfirm(`删除项目「${t.title||""}」？\n它的文献、证据、笔记、会话、日程、步骤都会一起删掉，不可撤销。`)) return;
     try{ await api("/api/task/delete", {id: curTask}); }catch(e){ return uiNotify("删除失败："+e.message); }
-    curTask = null; localStorage.removeItem("rw-task"); await refreshState(false); openTab("tasks");
+    curTask = null; localStorage.removeItem("rw-task"); await refreshState(false); openTab("workspace");
   };
 
   // ---------- 进度与计划：直接嵌看板（四列拖拽 / 十步管道 / 排期） ----------

@@ -245,7 +245,7 @@ async function renderTeamOffice(m) {
     m.classList.add("tof-fill");
     m.innerHTML = `<div class="tof-empty"><b>团队挂在项目上</b>
       <p>先去「项目」建一个项目，团队和办公室都会跟着项目走。</p>
-      <button class="btn btn-primary" onclick="openTab('tasks')">去建项目</button></div>`;
+      <button class="btn btn-primary" onclick="openTab('workspace')">去建项目</button></div>`;
     return;
   }
   m.classList.add("tof-fill");
