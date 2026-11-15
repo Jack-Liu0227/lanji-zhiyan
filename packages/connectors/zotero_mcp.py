@@ -1,8 +1,7 @@
 """Zotero MCP 服务（stdio）：给 agent 用的 Zotero 读 + 写工具。
 
-读：Zotero 本机 Local API（127.0.0.1:23119，只读、无需 key、不起网）。
-写：Zotero Web API（需 key；先取环境变量 ZOTERO_API_KEY / ZOTERO_LIBRARY_ID /
-    ZOTERO_LIBRARY_TYPE，没有就取程序「设置」里已经存的那份，不重复填）。
+默认读写本机 Zotero Local API；写入复用本机授权，无需云端 API Key。
+显式设置 ZOTERO_API_KEY 时兼容 Web API。
 不碰 zotero.sqlite，不改本机库内文件。
 
     python zotero_mcp.py        # stdin/stdout 走 JSON-RPC；日志只写 stderr
@@ -30,7 +29,7 @@ PROTOCOL = "2024-11-05"
 
 
 class _DB:
-    """给 zotero_sync 用的最小 db 壳：只读程序里那条 zotero_web 配置。"""
+    """复用应用的连接配置和加密本机授权，每次调用结束关闭连接。"""
 
     def __init__(self) -> None:
         import paths
@@ -38,26 +37,43 @@ class _DB:
         self.db.row_factory = sqlite3.Row
 
 
-def _write_config() -> dict[str, Any]:
+def _write_config(db) -> dict[str, Any]:
     key = os.environ.get("ZOTERO_API_KEY", "")
     if key:
-        return {"api_key": key, "library_type": os.environ.get("ZOTERO_LIBRARY_TYPE", "user"),
+        kind = os.environ.get("ZOTERO_LIBRARY_TYPE", "users")
+        return {"api_key": key, "library_type": {'user': 'users', 'group': 'groups'}.get(kind, kind),
                 "library_id": os.environ.get("ZOTERO_LIBRARY_ID", "")}
+    return zotero_sync.config(db)
+
+
+def _request(path, method='GET', payload=None):
+    db = _DB()
     try:
-        return zotero_sync.config(_DB())
-    except Exception:
-        return {}
+        return zotero_sync.request(_write_config(db), path, method, payload)
+    finally:
+        db.db.close()
 
 
 # ---------------------------------------------------------------- 工具
 
 def tool_status(_: dict) -> dict:
     out = {"local": zotero.status()}
-    cfg = _write_config()
-    out["writable"] = bool(cfg.get("api_key"))
-    out["write_hint"] = "" if out["writable"] else (
-        "写入需要 Zotero Web API key：在 https://www.zotero.org/settings/keys/new 生成后，"
-        "填到本 MCP 服务的 env ZOTERO_API_KEY（Library ID 填 ZOTERO_LIBRARY_ID）。")
+    db = _DB()
+    try:
+        cfg = _write_config(db)
+        local = cfg.get('transport') == 'local'
+        out['transport'] = 'local' if local else 'web'
+        out['authorization'] = zotero.local_write_state(db) if local else {}
+        if local:
+            try:
+                zotero._server_id(zotero._base())
+                out['writable'], out['write_hint'] = True, '本机写入；首次使用时由 Zotero 授权，之后复用。'
+            except zotero.ZoteroError as exc:
+                out['writable'], out['write_hint'] = False, str(exc)
+        else:
+            out['writable'], out['write_hint'] = bool(cfg.get('api_key')), '使用显式配置的 Web API'
+    finally:
+        db.db.close()
     return out
 
 
@@ -80,7 +96,6 @@ def tool_pdf(a: dict) -> dict:
 
 
 def tool_create_item(a: dict) -> dict:
-    cfg = _write_config()
     item = dict(a.get("item") or {})
     if not item.get("title"):
         raise ValueError("写入条目至少要给 title")
@@ -89,16 +104,26 @@ def tool_create_item(a: dict) -> dict:
     item.pop("version", None)
     if a.get("collection"):
         item["collections"] = [str(a["collection"])]
-    return {"ok": True, "item": zotero_sync._saved(zotero_sync.request(cfg, "/items", "POST", [item]))}
+    return {"ok": True, "item": zotero_sync._saved(_request("/items", "POST", [item]))}
 
 
 def tool_create_note(a: dict) -> dict:
-    cfg = _write_config()
     if not (a.get("parent_key") or "").strip():
         raise ValueError("写笔记要指定 parent_key（条目 key）")
     note = {"itemType": "note", "parentItem": a["parent_key"], "note": a.get("note") or "",
             "tags": [{"tag": str(t)} for t in (a.get("tags") or [])]}
-    return {"ok": True, "item": zotero_sync._saved(zotero_sync.request(cfg, "/items", "POST", [note]))}
+    return {"ok": True, "item": zotero_sync._saved(_request("/items", "POST", [note]))}
+
+
+def tool_update_item(a: dict) -> dict:
+    key = str(a.get('key') or '')
+    if not zotero_sync.KEY.fullmatch(key):
+        raise ValueError('无效的 Zotero 条目 Key')
+    current = _request('/items/' + key)
+    if int(a.get('version', -1)) != current['version']:
+        raise ValueError('条目版本已变更，请重新读取后确认修改')
+    data = {**current['data'], **(a.get('fields') or {}), 'key': key, 'version': current['version']}
+    return {'ok': True, 'item': zotero_sync._saved(_request('/items', 'POST', [data]))}
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -119,16 +144,20 @@ TOOLS: list[dict[str, Any]] = [
      "description": "这条论文在本机的 PDF 绝对路径（找不到返回 found=false）。",
      "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}},
     {"name": "zotero_create_item", "run": tool_create_item,
-     "description": "往 Zotero 写入一条文献（Web API，需要 key）。",
+     "description": "往 Zotero 写入一条文献（默认本机写入，自动复用本机授权）。",
      "inputSchema": {"type": "object", "properties": {
          "item": {"type": "object", "description": "Zotero item 字段，至少 title；可带 DOI/creators/date/publicationTitle/abstractNote"},
          "collection": {"type": "string", "description": "放进哪个分类 key（可空）"}}, "required": ["item"]}},
     {"name": "zotero_create_note", "run": tool_create_note,
-     "description": "给已有条目挂一条笔记（Web API，需要 key）。",
+     "description": "给已有条目挂一条笔记（默认本机写入，自动复用本机授权）。",
      "inputSchema": {"type": "object", "properties": {
          "parent_key": {"type": "string"},
          "note": {"type": "string", "description": "笔记正文，HTML 或纯文本"},
          "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["parent_key", "note"]}},
+    {"name": "zotero_update_item", "run": tool_update_item,
+     "description": "修改 Zotero 条目的指定字段（含 tags/collections），保留其余字段；必须提供读取时的版本。",
+     "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}, "version": {"type": "integer"},
+         "fields": {"type": "object"}}, "required": ["key", "version", "fields"]}},
 ]
 
 

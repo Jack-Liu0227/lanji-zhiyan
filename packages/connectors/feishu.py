@@ -59,7 +59,7 @@ def config(db: Any, assistant_id: str) -> dict:
 def save(db: Any, body: dict) -> dict:
     aid = str(body.get("assistant_id") or "")
     if aid and not db.assistant(aid):
-        raise ValueError("助手不存在")
+        raise ValueError("专家不存在")
     allowed = {"app_id", "app_secret", "redirect_uri", "scopes", "receive_id", "receive_id_type",
                "webhook", "signing_secret", "enabled", "inbound_enabled", "project_id", "allowed_sender"}
     old = config(db, aid)
@@ -232,7 +232,7 @@ def _registration_clear_current(db: Any, aid: str, session_id: str) -> None:
 def registration_begin(db: Any, aid: str, body: dict | None = None) -> dict:
     """Open an assistant-scoped PersonalAgent device authorization session."""
     if not aid or not db.assistant(aid):
-        raise ValueError("助手不存在")
+        raise ValueError("专家不存在")
     body = body or {}
     requested_region = str(body.get("region") or body.get("tenant") or "feishu").strip().lower()
     if requested_region not in {"feishu", "lark", "international", "overseas"}:
@@ -284,7 +284,7 @@ def registration_begin(db: Any, aid: str, body: dict | None = None) -> dict:
 
 def registration_poll(db: Any, aid: str, session_id: str = "") -> dict:
     if not aid or not db.assistant(aid):
-        raise ValueError("助手不存在")
+        raise ValueError("专家不存在")
     session = store.read(db, REGISTRATION_SERVICE, aid)
     if not session or session.get("assistant_id") != aid:
         raise ValueError("没有进行中的飞书扫码绑定")
@@ -351,7 +351,7 @@ def registration_poll(db: Any, aid: str, session_id: str = "") -> dict:
 
 def registration_cancel(db: Any, aid: str, session_id: str = "") -> dict:
     if not aid or not db.assistant(aid):
-        raise ValueError("助手不存在")
+        raise ValueError("专家不存在")
     session = store.read(db, REGISTRATION_SERVICE, aid)
     if not session or not session_id or not secrets.compare_digest(str(session.get("session_id") or ""), str(session_id)):
         raise ValueError("飞书扫码绑定会话无效或已替换")
@@ -367,7 +367,7 @@ def send(db: Any, aid: str, text: str, receive_id: str = "", receive_id_type: st
          force_app: bool = False) -> dict:
     data = config(db, aid)
     if not data.get("enabled"):
-        raise ValueError("该助手的飞书机器人未启用")
+        raise ValueError("该专家的飞书机器人未启用")
     if not str(text).strip():
         raise ValueError("消息不能为空")
     if data.get("webhook") and not force_app:
@@ -397,7 +397,188 @@ def send(db: Any, aid: str, text: str, receive_id: str = "", receive_id_type: st
         raise ValueError("飞书未返回机器人租户令牌")
     result = request("/im/v1/messages?receive_id_type=" + urllib.parse.quote(receive_id_type or data.get("receive_id_type") or "open_id"),
                      {"receive_id": recipient, "msg_type": "text", "content": json.dumps({"text": text}, ensure_ascii=False)}, token, api=api)
-    return {"ok": True, "message_id": (result.get("data") or {}).get("message_id", "")}
+    message_id = (result.get("data") or {}).get("message_id")
+    if not message_id:
+        raise ValueError("飞书未返回消息 ID，发送结果未确认；请先检查会话，避免重复发送")
+    return {"ok": True, "message_id": message_id}
+
+
+_BRIDGE_LOCK = threading.Lock()
+_BRIDGE: dict[str, str] = {"status": "stopped", "assistant_id": "", "error": ""}
+_INBOUND_LOCK = threading.Lock()
+
+
+def _reaction_request(db: Any, aid: str, message_id: str, reaction_id: str = "") -> dict:
+    data = config(db, aid)
+    api = "https://open.larksuite.com/open-apis" if data.get("registration_region") == "lark" else API
+    tenant = request("/auth/v3/tenant_access_token/internal",
+                     {"app_id": data["app_id"], "app_secret": data["app_secret"]}, api=api, timeout=8)
+    token = tenant.get("tenant_access_token")
+    if not token:
+        raise ValueError("飞书未返回机器人租户令牌")
+    path = "/im/v1/messages/" + urllib.parse.quote(message_id, safe="") + "/reactions"
+    if reaction_id:
+        return request(path + "/" + urllib.parse.quote(reaction_id, safe=""), token=token,
+                       api=api, method="DELETE", timeout=8)
+    return request(path, {"reaction_type": {"emoji_type": "Typing"}}, token=token, api=api, timeout=8)
+
+
+def start_typing(db: Any, aid: str, message_id: str) -> str:
+    result = _reaction_request(db, aid, message_id)
+    reaction_id = str((result.get("data") or {}).get("reaction_id") or "")
+    if not reaction_id:
+        raise ValueError("飞书未返回 Typing 动态表情 ID")
+    return reaction_id
+
+
+def stop_typing(db: Any, aid: str, message_id: str, reaction_id: str) -> None:
+    _reaction_request(db, aid, message_id, reaction_id)
+
+
+def bridge_status() -> dict[str, str]:
+    with _BRIDGE_LOCK:
+        return dict(_BRIDGE)
+
+
+def handle_inbound(db_path: Any, aid: str, payload: dict) -> dict:
+    with _INBOUND_LOCK:
+        return _handle_inbound_unlocked(db_path, aid, payload)
+
+
+def _handle_inbound_unlocked(db_path: Any, aid: str, payload: dict) -> dict:
+    """Accept one text event from an allowed sender and run it in a project chat."""
+    import workflow
+
+    event = payload.get("event") or payload
+    message = event.get("message") or {}
+    sender = event.get("sender") or {}
+    sender_id = (sender.get("sender_id") or {}).get("open_id") or ""
+    message_id = str(message.get("message_id") or "")
+    chat_id = str(message.get("chat_id") or "")
+    if not message_id or not chat_id or message.get("message_type") != "text":
+        return {"accepted": False, "reason": "unsupported_message"}
+    try:
+        content = json.loads(message.get("content") or "{}")
+    except ValueError:
+        return {"accepted": False, "reason": "invalid_content"}
+    prompt = re.sub(r"<at\s+[^>]*>.*?</at>", "", str(content.get("text") or "")).strip()
+    if not prompt or len(prompt) > 12000:
+        return {"accepted": False, "reason": "invalid_prompt"}
+    with workflow.WorkflowDB(db_path) as db:
+        cfg = config(db, aid)
+        allowed = str(cfg.get("allowed_sender") or
+                      (cfg.get("receive_id") if cfg.get("receive_id_type") == "open_id" else ""))
+        assistant = db.assistant(aid)
+        if not assistant or not assistant.get("enabled") or not cfg.get("enabled") or not cfg.get("inbound_enabled") or not allowed or sender_id != allowed:
+            return {"accepted": False, "reason": "sender_not_allowed"}
+        project_id = str(cfg.get("project_id") or "")
+        if not db.base_dir(project_id):
+            return {"accepted": False, "reason": "project_unavailable"}
+        db.db.execute("""CREATE TABLE IF NOT EXISTS feishu_inbox (
+            message_id TEXT PRIMARY KEY, assistant_id TEXT NOT NULL, chat_id TEXT NOT NULL,
+            local_chat_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, created_at TEXT NOT NULL)""")
+        columns = {r["name"] for r in db.db.execute("PRAGMA table_info(feishu_inbox)")}
+        for column in ("typing_reaction_id", "typing_error", "reply_message_id"):
+            if column not in columns:
+                db.db.execute(f"ALTER TABLE feishu_inbox ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+        db.db.execute("""CREATE TABLE IF NOT EXISTS feishu_chat_map (
+            assistant_id TEXT NOT NULL, chat_id TEXT NOT NULL, local_chat_id TEXT NOT NULL,
+            PRIMARY KEY (assistant_id,chat_id))""")
+        seen = db.db.execute("SELECT 1 FROM feishu_inbox WHERE message_id=?", (message_id,)).fetchone()
+        if seen:
+            return {"accepted": False, "reason": "duplicate"}
+        row = db.db.execute("SELECT local_chat_id FROM feishu_chat_map WHERE assistant_id=? AND chat_id=?",
+                            (aid, chat_id)).fetchone()
+        previous = db.db.execute("SELECT task_id FROM chats WHERE id=?", (row["local_chat_id"],)).fetchone() if row else None
+        reuse = previous and previous["task_id"] == project_id
+        local_chat_id = row["local_chat_id"] if reuse else db.create_chat("飞书 · " + chat_id[-8:])
+        if not reuse:
+            db.bind_chat(local_chat_id, project_id)
+            db.set_chat_assistant(local_chat_id, aid)
+            db.db.execute("INSERT OR REPLACE INTO feishu_chat_map VALUES (?,?,?)", (aid, chat_id, local_chat_id))
+        db.db.execute("INSERT INTO feishu_inbox (message_id,assistant_id,chat_id,local_chat_id,status,created_at) VALUES (?,?,?,?,?,?)",
+                      (message_id, aid, chat_id, local_chat_id, "running", workflow.now()))
+        db.db.commit()
+        typing_id = ""
+        try:
+            try:
+                typing_id = start_typing(db, aid, message_id)
+                db.db.execute("UPDATE feishu_inbox SET typing_reaction_id=? WHERE message_id=?", (typing_id, message_id))
+                db.db.commit()
+            except Exception as exc:
+                db.db.execute("UPDATE feishu_inbox SET typing_error=? WHERE message_id=?", (str(exc)[:200], message_id))
+                db.db.commit()
+            result = workflow.run_agent(db, local_chat_id, prompt, assistant_id=aid)
+            reply = str(result.get("reply") or "任务已完成")[:4000]
+            sent = send(db, aid, reply, chat_id, receive_id_type="chat_id", force_app=True)
+            reply_id = str(sent.get("message_id") or "") if isinstance(sent, dict) else ""
+            db.db.execute("UPDATE feishu_inbox SET status='completed',reply_message_id=? WHERE message_id=?", (reply_id, message_id))
+            db.db.commit()
+            return {"accepted": True, "local_chat_id": local_chat_id}
+        except Exception as exc:
+            db.db.execute("UPDATE feishu_inbox SET status='failed' WHERE message_id=?", (message_id,))
+            db.db.commit()
+            try:
+                send(db, aid, f"任务执行失败（{type(exc).__name__}）。请在智研管家的运行记录中查看详情。",
+                     chat_id, receive_id_type="chat_id", force_app=True)
+            except Exception:
+                pass
+            raise
+        finally:
+            if typing_id:
+                try:
+                    stop_typing(db, aid, message_id, typing_id)
+                    db.db.execute("UPDATE feishu_inbox SET typing_reaction_id='' WHERE message_id=?", (message_id,))
+                    db.db.commit()
+                except Exception as exc:
+                    db.db.execute("UPDATE feishu_inbox SET typing_error=? WHERE message_id=?", (str(exc)[:200], message_id))
+                    db.db.commit()
+
+
+def start_bridge(db_path: Any) -> dict[str, str]:
+    """Use Feishu's local WebSocket client; no public callback port is needed."""
+    import workflow
+
+    with _BRIDGE_LOCK:
+        if _BRIDGE["status"] in {"starting", "running"}:
+            return dict(_BRIDGE)
+        with workflow.WorkflowDB(db_path) as db:
+            rows = [(a["id"], a["enabled"], config(db, a["id"])) for a in db.assistants()]
+        selected = next(((aid, cfg) for aid, enabled, cfg in rows if enabled
+                         and cfg.get("enabled") and cfg.get("inbound_enabled")
+                         and cfg.get("app_id") and cfg.get("app_secret")), None)
+        if not selected:
+            return dict(_BRIDGE)
+        aid, cfg = selected
+        try:
+            import lark_oapi as lark
+        except ImportError:
+            _BRIDGE.update(status="dependency_missing", assistant_id=aid, error="请安装 lark-oapi")
+            return dict(_BRIDGE)
+        _BRIDGE.update(status="starting", assistant_id=aid, error="")
+
+    def on_message(data: Any) -> None:
+        try:
+            payload = json.loads(lark.JSON.marshal(data))
+        except (TypeError, ValueError):
+            return
+        threading.Thread(target=handle_inbound, args=(db_path, aid, payload),
+                         daemon=True, name="feishu-inbound").start()
+
+    def worker() -> None:
+        try:
+            handler = lark.EventDispatcherHandler.builder("", "").register_p2_im_message_receive_v1(on_message).build()
+            domain = lark.LARK_DOMAIN if cfg.get("registration_region") == "lark" else lark.FEISHU_DOMAIN
+            client = lark.ws.Client(cfg["app_id"], cfg["app_secret"], event_handler=handler, domain=domain)
+            with _BRIDGE_LOCK:
+                _BRIDGE["status"] = "running"
+            client.start()
+        except Exception as exc:
+            with _BRIDGE_LOCK:
+                _BRIDGE.update(status="error", error=f"{type(exc).__name__}: {exc}"[:160])
+
+    threading.Thread(target=worker, daemon=True, name="feishu-websocket").start()
+    return bridge_status()
 
 
 _BRIDGE_LOCK = threading.Lock()

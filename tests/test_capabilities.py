@@ -43,7 +43,7 @@ for line in sys.stdin:
 
 class CapabilityTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.base = Path(self.tmp.name)
         self.home = self.base / "home"
         self.project = self.base / "project"

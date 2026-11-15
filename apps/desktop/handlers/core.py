@@ -10,6 +10,8 @@ from typing import Any
 import os
 import subprocess
 import sys
+import time
+import workflow_layout
 
 import service_settings as kv_store      # 轻量 KV：权限模式这类开关
 from workflow import STAGES, STAGE_LABEL, WorkflowDB, litgraph
@@ -67,7 +69,8 @@ class CoreRoutes:
                         task["stage_now"] = db.stage_now(tid, task.get("stage") or "")
                         return self._json({
                             "task": task, "summary": s, "steps": db.steps(tid),
-                            "stage_map": db.stage_map(tid), "results": db.results(tid),
+                            "stage_map": db.stage_map(tid), "workflow": workflow_layout.state(db, tid),
+                            "results": db.results(tid),
                             "notes": [{k: n[k] for k in ("id", "title", "created_at")} for n in db.notes(tid)],
                             "papers": s["papers"], "evidence": s["evidence"],
                             "paper_list": db.papers_of(tid),

@@ -21,7 +21,7 @@ from workflow_converters import file_hand, tree_list
 
 class FilesPanelTest(unittest.TestCase):
     def setUp(self):
-        td = tempfile.TemporaryDirectory(prefix="rw-files-")
+        td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-files-")
         self.addCleanup(td.cleanup)
         self.root = Path(td.name)
         self.old_db = paths.DB_PATH
@@ -68,7 +68,7 @@ class FilesPanelTest(unittest.TestCase):
 
     def test_hand_writes_into_that_step_scope_only(self):
         got = file_hand(self.db, self.tid, "论文正文/正文.md", "write", "按台账补第 4 条引用")
-        self.assertEqual(got["who"], "写作助手")
+        self.assertEqual(got["who"], "写作专家")
         msgs = self.db.messages(self.tid, "write")
         self.assertEqual(len(msgs), 1)
         self.assertIn("论文正文/正文.md", msgs[0]["content"])

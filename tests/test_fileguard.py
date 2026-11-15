@@ -19,7 +19,7 @@ import workflow
 
 class GuardTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
         self._snap, self._audit = fileguard.SNAP, fileguard.AUDIT   # 别写到真 data/
@@ -105,7 +105,7 @@ class KeyHostTest(unittest.TestCase):
     """key 与域名绑定：换了接口域名就不许拿旧 key 发。"""
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.db = workflow.WorkflowDB(Path(self.tmp.name) / "k.sqlite3")
         self.addCleanup(self.db.close)

@@ -681,6 +681,9 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", templat
                 raise RuntimeError(got.get("error") or "编译没出 PDF")
         out = folder / f"{safe}.pdf"
         shutil.copy2(pdf, out)
+        import asset_service
+        asset_service.register_file(db, out, project_id=task_id, kind="export", source="format_convert",
+                                    metadata={"source_path": str(src_tex), "format": fmt})
         db.log_step(task_id, "convert", "done", f"导出 {out.name}")
         return {"path": str(out), "name": out.name, "format": fmt, "size": out.stat().st_size,
                 "pdf": True, "source": str(src_tex), "passes": passes, "bibtex": bib_note}
@@ -774,6 +777,9 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", templat
         shutil.copy2(made, out)
     else:
         raise ValueError(f"不支持的格式：{fmt}（可用 {'/'.join(CONV_FORMATS)}）")
+    import asset_service
+    asset_service.register_file(db, out, project_id=task_id, kind="export", source="format_convert",
+                                body=md, metadata={"source_path": str(src), "format": fmt})
     db.log_step(task_id, "convert", "done", f"导出 {out.name}")
     res = {"path": str(out), "name": out.name, "format": fmt, "size": out.stat().st_size,
            "pdf": fmt == "latex", "source": str(src),
@@ -873,7 +879,7 @@ def docx_to_pdf(src: Path) -> Path | None:
 
 
 def open_convert(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
-    """审查交付 → 格式转换接手：**只抛第一个问题**（图），后面两件由格式助手在对话里依次问，
+    """审查交付 → 格式转换接手：**只抛第一个问题**（图），后面两件由格式专家在对话里依次问，
     这样右栏是一问一答的对话，不是一口气砸三段。"""
     body = doc_read(db, task_id, "write")["markdown"]
     slots = re.findall(r"\[图位\s*(\d+)\]", body)
@@ -894,7 +900,7 @@ def open_convert(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
 
 
 def convert_system(db: "WorkflowDB", task_id: str) -> str:
-    """格式助手（格式转换这一步）的 system：三件事**一次只问一件**，问完全按模板编译。"""
+    """格式专家（格式转换这一步）的 system：三件事**一次只问一件**，问完全按模板编译。"""
     task = db.summary(task_id)["task"]
     figs = fig_list(db, task_id)["files"]
     tpl_lines = chr(10).join(f"- `{k}`：{v['name']} —— {v['note']}" + (f"（来源 {v['repo']}）" if v["repo"] else "")
@@ -902,7 +908,7 @@ def convert_system(db: "WorkflowDB", task_id: str) -> str:
     style_lines = chr(10).join(f"- `{k}`：{label}" + ("（本机没这个 bst，会退 plain）" if not _kpsewhich(bst + ".bst") else "")
                                for k, (bst, label) in CITE_STYLES.items())
     return (
-        "你是「览籍智研」里「格式转换」这一步的格式助手，用中文工作，站在排版工的位置。" + chr(10) + chr(10) +
+        "你是「览籍智研」里「格式转换」这一步的格式专家，用中文工作，站在排版工的位置。" + chr(10) + chr(10) +
         f"项目《{task['title']}》，你只做一件事：把「论文正文/正文.md」按用户要的格式与期刊模板导成成品，"
         "放进「最终产物」。" + chr(10) + chr(10) +
         "**开场必须依次问四件事，一次只问一件，拿到回答再问下一件**（不要一口气问完，也不要自己替用户定）：" + chr(10) +
@@ -922,9 +928,9 @@ def convert_system(db: "WorkflowDB", task_id: str) -> str:
 
 # ============================ 项目文件夹（三栏页第 11 项：看 / 预览 / 交给某一步）============================
 SKIP_NAMES = {"_work", "_parts", "_tex", "__pycache__", ".obsidian", ".git", ".agents", "node_modules"}
-HAND_STEPS = {"idea": "创新点审查助手", "search": "文献检索助手", "download": "入库助手",
-              "notes": "翻译助手", "outline": "框架助手", "map": "谱系助手",
-              "write": "写作助手", "review": "审查助手", "entrans": "中译英助手", "convert": "格式助手"}
+HAND_STEPS = {"idea": "创新点审查专家", "search": "文献检索专家", "download": "入库专家",
+              "notes": "翻译专家", "outline": "框架专家", "map": "谱系专家",
+              "write": "写作专家", "review": "审查专家", "entrans": "中译英专家", "convert": "格式专家"}
 
 
 def _fsize(n: int) -> str:
@@ -977,7 +983,7 @@ def tree_list(db: "WorkflowDB", task_id: str, rel: str = "") -> dict[str, Any]:
 
 
 def file_hand(db: "WorkflowDB", task_id: str, rel: str, step: str, note: str = "") -> dict[str, Any]:
-    """把项目里的一个文件转到某一步的对话里（scope=step）—— 那一步的助手下次开口就带着它。
+    """把项目里的一个文件转到某一步的对话里（scope=step）—— 那一步的专家下次开口就带着它。
     只写一条消息，不触发那一步跑模型（用户自己走到那一步时才会读到）。"""
     base = db.base_dir(task_id)
     if not base:
@@ -990,13 +996,13 @@ def file_hand(db: "WorkflowDB", task_id: str, rel: str, step: str, note: str = "
     if not p.is_relative_to(root) or not p.exists():
         raise ValueError("文件不在这项目里：" + (rel or ""))
     size = sum(c.stat().st_size for c in p.iterdir() if c.is_file()) if p.is_dir() else p.stat().st_size
-    msg = f"【文件管理助手转来】{p.relative_to(root).as_posix()}（{_fsize(size)}）" + (f"\n{note}" if note else "")
+    msg = f"【文件管理专家转来】{p.relative_to(root).as_posix()}（{_fsize(size)}）" + (f"\n{note}" if note else "")
     db.add_message(task_id, "user", msg, scope=step, sender="files")
     return {"ok": True, "step": step, "who": who, "name": p.name, "path": str(p), "size": size}
 
 
 def files_system(db: "WorkflowDB", task_id: str) -> str:
-    """文件管理助手（项目文件夹这一栏）的 system：整夹随便看，只读为主，要动手就交给对应那一步。"""
+    """文件管理专家（项目文件夹这一栏）的 system：整夹随便看，只读为主，要动手就交给对应那一步。"""
     task = db.summary(task_id)["task"]
     base = db.base_dir(task_id)
     try:
@@ -1006,12 +1012,12 @@ def files_system(db: "WorkflowDB", task_id: str) -> str:
     except Exception as exc:
         lines = f"（读不到目录：{exc}）"
     return (
-        "你是「览籍智研」三栏页「项目文件夹」这一栏的文件管理助手，用中文工作。" + chr(10) +
+        "你是「览籍智研」三栏页「项目文件夹」这一栏的文件管理专家，用中文工作。" + chr(10) +
         f"项目《{task['title']}》，文件夹 {base or '（这个项目还没设项目位置）'}。" + chr(10) + chr(10) +
         "用户会把文件拖进对话框、或在左边点选文件来问你。你要做的是：说清这是什么文件、里面有什么、"
         "和项目里别的文件对不对得上（比如正文和引用台账、图和图注）。" + chr(10) +
         "- 读内容用 read_attachment（自动认 md/txt/pdf/docx）；看目录/找文件用 file_list（rel 相对项目根）。" + chr(10) +
-        "- 用户说「交给 X 助手」→ 调 file_hand（rel + step + note），然后一句话说清转给了谁、那一步会拿它干什么。" +
+        "- 用户说「交给 X 专家」→ 调 file_hand（rel + step + note），然后一句话说清转给了谁、那一步会拿它干什么。" +
         "step 取值：" + "、".join(f"{k}={v}" for k, v in HAND_STEPS.items()) + "。" + chr(10) +
         "- 只读为主：改内容、挪位置、删除，都要用户明确说了才做，做之前先用一句话复述一遍。" + chr(10) +
         "- 不编造文件里没有的内容；找不到就说找不到，并列出你到底看了哪几个路径。" + chr(10) + chr(10) +
@@ -1130,7 +1136,7 @@ def _safe_path(path: str, extra_roots: list[Path] | None = None) -> Path:
 
 # ============================ 中译英（中文 markdown → 英文 markdown，左右对照）============================
 EN_STEP = "entrans"
-EN_LIMIT = 1800                                        # 每片多少字送去翻（太大容易截断）
+EN_LIMIT = 1000                                        # 每片多少字送去翻（太大容易截断）
 
 
 def en_chunks(md: str, limit: int = EN_LIMIT) -> list[str]:
@@ -1170,9 +1176,13 @@ EN_SYSTEM = EN_SYSTEM_STYLES["formal"] + (
 )
 
 
+EN_WORKERS = 24         # 翻译分片并发数：片小、并发高，墙钟≈最慢那一片（实测单次 17–50s，纯看接口抖动）
+
+
 def en_translate(profile: dict[str, Any], md: str, style: str = "formal") -> dict[str, Any]:
     """分片并发翻（顺序保持），返回 {text, chunks, ms}。"""
     from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
     chunks = en_chunks(md)
     if not chunks:
         return {"text": "", "chunks": 0, "ms": 0}
@@ -1188,14 +1198,29 @@ def en_translate(profile: dict[str, Any], md: str, style: str = "formal") -> dic
 
     from workflow import chat                          # chat 住在 workflow.py，反向 import 会成环
 
-    def one(piece: str) -> str:
+    def one(piece: str, budget: int = 4096) -> str:
+        """翻一段。空回不许直接算失败（推理模型的思维链会吃满额度）：
+        先翻倍预算重来一次，还空就把这段劈成两半各翻一次 —— 一片空不该毁掉整篇 3 万字。"""
         out = chat(profile, [{"role": "system", "content": sys_prompt},
-                             {"role": "user", "content": piece}], temperature=0.1, max_tokens=4096)
+                             {"role": "user", "content": piece}], temperature=0.1, max_tokens=budget)
         out = re.sub(r"^```(?:markdown|md)?\s*\n|```\s*$", "", (out or "").strip()).strip()
-        return out
+        if out:
+            return out
+        if budget < 8192:
+            return one(piece, 8192)
+        if len(piece) > 600:
+            cut = piece.rfind("\n", 0, len(piece) // 2) or (len(piece) // 2)
+            head = one(piece[:cut], 4096)
+            tail = one(piece[cut:], 4096)
+            return (head + "\n\n" + tail).strip()
+        return ""
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        parts = list(pool.map(one, chunks))
+    with ThreadPoolExecutor(max_workers=EN_WORKERS) as pool:
+        futures = [pool.submit(copy_context().run, one, piece) for piece in chunks]
+        parts = [future.result() for future in futures]
+    missing = [str(i + 1) for i, part in enumerate(parts) if not part.strip()]
+    if missing:
+        raise RuntimeError("翻译分片返回空内容（第 " + "、".join(missing) + " 段），原译文保留，请重试")
     return {"text": "\n\n".join(p for p in parts if p), "chunks": len(chunks),
             "ms": int((time.time() - t0) * 1000), "style": style}
 
@@ -1204,7 +1229,16 @@ def en_state(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     """默认拿「正文.md」当源；同时把上次译好的 <名字>_en.md 读回来。"""
     src = doc_path(db, task_id, "write")
     res = src.with_name(src.stem + "_en.md")
-    return {"source_path": str(src), "source_text": src.read_text(encoding="utf-8", errors="replace") if src.is_file() else "",
+    import service_settings
+    saved = service_settings.read(db, "translation:" + task_id)
+    if saved.get("result_path"):
+        candidate = Path(saved["result_path"]).resolve()
+        if candidate.parent == src.parent.resolve():
+            res = candidate
+    source = src.read_text(encoding="utf-8", errors="replace") if src.is_file() else ""
+    if saved.get("custom_source"):
+        source = saved.get("source_text", "")
+    return {"source_path": str(src), "source_text": source,
             "result_path": str(res), "result_text": res.read_text(encoding="utf-8", errors="replace") if res.is_file() else "",
             "source_exists": src.is_file(), "result_exists": res.is_file()}
 
@@ -1224,7 +1258,15 @@ def en_run(db: "WorkflowDB", task_id: str, text: str, name: str = "", style: str
     folder.mkdir(parents=True, exist_ok=True)
     dest = folder / f"{stem}_en.md"
     fileguard.before_write(dest, "中译英覆盖")
-    dest.write_text(out["text"] + "\n", encoding="utf-8", newline="\n")
+    if not out["text"].strip():
+        raise RuntimeError("模型没有返回译文，原译文保留，请重试")
+    import asset_service
+    asset_service.atomic_write_text(dest, out["text"] + "\n")
+    asset_service.register_file(db, dest, project_id=task_id, kind="document", source="translation",
+                                body=out["text"], metadata={"document_kind": "entrans"})
+    import service_settings
+    service_settings.write(db, "translation:" + task_id, {"result_path": str(dest), "source_text": md,
+                           "custom_source": stem != doc_path(db, task_id, "write").stem})
     db.log_step(task_id, "entrans", "done", f"译成 {dest.name}")
     return {"path": str(dest), "name": dest.name, "text": out["text"], "chars": len(out["text"]),
             "sections": len(re.findall(r"(?m)^#{1,6} ", out["text"])), "src_chars": len(md),

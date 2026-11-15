@@ -22,7 +22,7 @@ import workflow
 
 class MemorySystemTest(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="rw-memory-")
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-memory-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.db = workflow.WorkflowDB(self.root / "memory.sqlite3")

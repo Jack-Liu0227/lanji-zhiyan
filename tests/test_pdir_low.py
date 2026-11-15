@@ -21,7 +21,7 @@ from workflow import WorkflowDB                       # noqa: E402
 
 class PdirLowTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.td = tempfile.TemporaryDirectory()
+        self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db = WorkflowDB(Path(self.td.name) / "wb.sqlite3")
         self.tid = self.db.create_task("低完整性", "翻译能写进去吗", "NaNiFeMn")
         self.base = Path(self.td.name) / "proj"

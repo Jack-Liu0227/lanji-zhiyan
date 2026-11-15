@@ -59,7 +59,7 @@ class MarkTest(unittest.TestCase):
 
 class ChainTest(unittest.TestCase):
     def test_真编译一遍带引用的tex(self) -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             d = Path(td)
             (d / "main.tex").write_text(TEX, encoding="utf-8", newline="\n")
             (d / "refs.bib").write_text(BIB, encoding="utf-8")
@@ -134,7 +134,7 @@ class WordCiteTest(unittest.TestCase):
     def test_word里真有编号和参考文献表(self) -> None:
         from docx import Document
         import workflow_docx
-        with tempfile.TemporaryDirectory() as td:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             got = self.wc.doc_cites(None, "t", "# 标题\n\n层状正极在循环中快速衰减{{C1}}。\n")
             md = self.wc.with_references(got["md"], got["refs"])
             dest = Path(td) / "a.docx"

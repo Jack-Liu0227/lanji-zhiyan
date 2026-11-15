@@ -19,7 +19,7 @@ LAUNCHER = ROOT / "tools" / "start.bat"
 @unittest.skipUnless(sys.platform == "win32", "Windows batch launcher")
 class LauncherTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw launch \u79d1\u7814 ")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw launch \u79d1\u7814 ")
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         (self.root / "tools").mkdir()

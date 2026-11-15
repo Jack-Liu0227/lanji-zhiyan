@@ -5,7 +5,7 @@ function ideaPanelHTML(active){
       <div class="ol-head"><b>我的创新点</b><span class="ol-meta" id="iw-mine-state">自动保存</span>
         <span class="ol-spacer"></span>
         <button class="btn ghost" id="iw-save-mine" title="立即保存我修改的创新点">保存</button>
-        <span class="ol-meta">右边助手每轮都读这份文字</span></div>
+        <span class="ol-meta">右边专家每轮都读这份文字</span></div>
       <textarea class="iw-mine" id="iwMine" spellcheck="true"
         placeholder="写清楚：做了什么、和谁不一样、凭什么能成（约束也写上：数据 / 算力 / 时间 / 目标期刊）"></textarea>
     </div>
@@ -23,7 +23,7 @@ function ideaPanelHTML(active){
         <span class="ol-spacer"></span>
         <button class="btn ghost" id="iw-edit-verdict" title="手改判定报告">✎ 手改判定</button>
         <button class="btn ghost hidden" id="iw-save-verdict">保存判定</button>
-        <span class="ol-meta">由右侧「创新点审查助手」产出</span></div>
+        <span class="ol-meta">由右侧「创新点审查专家」产出</span></div>
       <div class="md-render iw-verdict" id="iwVerdict"></div>
       <textarea class="hidden iw-mine" id="iwVerdictSrc" style="min-height:220px;font-family:var(--font-mono);font-size:12.5px"></textarea>
     </div>
@@ -42,7 +42,7 @@ const DOC_UI = {
     hint: "Enter 发送 · 说「更新框架」→ 左边立刻换成新版本（文件就地覆盖）" },
   write: { ico: "✍️", file: "正文", who: "写作",
     sub: "与项目绑定 · 按上一步敲定的框架写正文（走本机 paper-spine / paper-writer）",
-    seed: "按框架搭骨架", pull: "↧ 用这条回复更新正文", post: "/api/write", scope: "write", hl: false, cite: true, quiet: true,
+    seed: "", pull: "↧ 用这条回复更新正文",   /* 「按框架搭骨架」按钮删了：铺骨架改成在对话里确认后由 agent 自己铺（点了会卡死页面） */ post: "/api/write", scope: "write", hl: false, cite: true, quiet: true,
     empty: ["✍️", "这是项目的「论文撰写」", "先确认上一步的框架已经定了；再说清：有没有实验数据/图表、投哪里、篇幅要求。我按框架逐节写，缺数据的地方写「待补」，绝不编数字。"],
     ph: "说要求 / 让它写某一节 / 讨论怎么改…（Enter 发送）",
     hint: "Enter 发送 · 说「更新正文」→ 左边立刻换成新版本（文件就地覆盖）" },
@@ -81,15 +81,22 @@ function docPanelHTML(k, active){
           ${c.seed ? `<button class="btn ghost" id="${k}-seed" title="${c.seed}">${c.seed}</button>` : ""}
           <button class="btn hidden" id="${k}-pull" title="模型不支持工具调用时会把内容写在回复里 —— 点这里把那一段写进文件">${c.pull}</button>
           <button class="btn ghost" id="${k}-diff" title="对比正文变更并双向合并">⇄ 差异对比</button>
-          <button class="btn ghost" id="${k}-edit" title="直接在左边改 markdown">✎ 手改</button>
-          <button class="btn ghost hidden" id="${k}-edit-save">保存</button>
+          <div class="seg-tabs doc-mode-tabs" id="${k}-mode-tabs" role="group" aria-label="文档模式" style="margin-left:6px">
+            <button type="button" class="seg-tab active" data-doc-mode="preview" id="${k}-mode-prev" title="纯预览">👁 预览</button>
+            <button type="button" class="seg-tab" data-doc-mode="edit" id="${k}-mode-edit" title="直接编辑正文（Ctrl+S 保存）">✎ 编辑</button>
+            <button type="button" class="seg-tab" data-doc-mode="split" id="${k}-mode-split" title="双栏实时对照">◫ 双栏</button>
+          </div>
+          <button class="btn ghost hidden" id="${k}-edit" style="display:none"></button>
+          <button class="btn btn-sm hidden" id="${k}-edit-save" title="保存修改 (Ctrl+S)">💾 保存</button>
           <button class="btn ghost hidden" id="${k}-restore" title="恢复自动保存的本地草稿快照">↻ 恢复快照</button>
           ${k === "review" ? `<button class="btn ghost" id="review-rollback" title="回退到上一个审稿意见版本">↩ 回退意见</button>` : ""}
           ${c.cite ? `<button class="btn ghost" id="${k}-cite" title="后台的引用台账：每一处引用的位置 + 文献信息（题名/作者/出处/DOI/页数）">📑 引用台账</button>` : ""}
           <button class="btn ghost" id="${k}-reload" title="从磁盘重新读">↻</button>
         </div>
-        <div class="ol-body md-render" id="${k}-body"></div>
-        <textarea class="ol-src hidden" id="${k}-src" spellcheck="false"></textarea>
+        <div class="ol-body-wrap" id="${k}-body-wrap">
+          <div class="ol-body md-render" id="${k}-body"></div>
+          <textarea class="ol-src hidden" id="${k}-src" spellcheck="false" placeholder="在此编辑文档内容…"></textarea>
+        </div>
         ${c.hl ? `<div class="ol-marks">
           <div class="ol-marks-h"><span id="${k}-marks-n">标注 0 处</span><span class="ol-spacer"></span>
             <button class="btn ghost" id="${k}-marks-send" title="把我的标注作为一条消息发给 agent，让它逐条回应">把标注发给 agent</button>
@@ -123,7 +130,7 @@ function docPanelHTML(k, active){
                 <label class="at-sel" title="这一步用哪个模型档案">🔌<select id="${k}-modpick"><option value="">未配置模型</option>
                   ${S.models.map(mm => `<option value="${mm.id}" ${S.active && mm.id === S.active.id ? "selected" : ""}>${esc(mm.name)}</option>`).join("")}</select></label></div>
               <div class="at-tools-r">
-                <label class="at-sel" title="助手署名">🤖<input id="${k}-assist" placeholder="researcher" value="${esc(assistantKey())}"></label>
+                <label class="at-sel" title="专家署名">🤖<input id="${k}-assist" placeholder="researcher" value="${esc(assistantKey())}"></label>
                 <button class="send-btn" id="${k}-send" title="发送" aria-label="发送">↑</button></div>
             </div>
             <input type="file" id="${k}-filepick" multiple style="display:none">
@@ -162,6 +169,7 @@ function docShow(k, d){
   const cb = docEl(k, "cite"); if(cb) cb.classList.remove("active");
   const body = docEl(k, "body");
   const ta = docEl(k, "src"); if(ta) ta.value = md;
+  if(ta)ta.dataset.savedMarkdown=md;
   if(body){
     body.innerHTML = md.trim() ? renderMarkdown(md)
       : `<div class="ol-empty">${DOC_UI[k].empty[1]} 还没有内容。<br>右边跟 agent 说一句，或点上面「${DOC_UI[k].seed || "让 agent 写"}」。</div>`;
@@ -169,10 +177,21 @@ function docShow(k, d){
   }
   const mb = docEl(k, "meta"); if(mb) mb.textContent = md.trim() ? `${d.sections || 0} 个大标题 · ${d.subs || 0} 个小标题 · ${d.chars || 0} 字` : "";
 }
+function _docStatFromMsgs(msgs){
+  /* 右栏那几个数字必须能「重进这一步还在」：从历史消息里的事件重算，别只靠本次流的累加。
+     之前只累加 st.stat，刷新一下就全归零 —— 看起来就像「token / 工具数 / 产出目录不显示了」。 */
+  const evs = (msgs || []).flatMap(m => m.events || []);
+  return { turns: (msgs || []).filter(m => m.role === "user").length,
+           calls: evs.filter(e => e.type === "tool_call").length,
+           tok: evs.filter(e => e.type === "usage").reduce((n, e) => n + (e.total || 0), 0) };
+}
 function docRestore(k, msgs, out){
   /* 把存下来的对话装回右栏：doc 三步和谱系图那步共用（这里 throw 掉的话右栏一句话不显示，像按钮没反应） */
   const st = docState(k);
   st.msgs = msgs || []; st.out = out || "";
+  const evs0 = (st.msgs || []).flatMap(m => m.events || []);
+  st.stat = _docStatFromMsgs(st.msgs);          // 历史事件重算：轮数 / 工具数 / token
+  st.events = evs0.slice();                     // 工具名与产出目录也从历史里回来
   st.events = st.msgs.flatMap(x => x.events || []);
   st.stat = { turns: st.msgs.filter(x => x.role === "user").length,
               calls: st.events.filter(e => e.type === "tool_call").length,
@@ -180,28 +199,90 @@ function docRestore(k, msgs, out){
   docStats(k); docPaint(k);
 }
 async function docLoad(k){
-  const st = docState(k);
+  const st = docState(k),project=curTask,panel=$("panel-"+k);
   try{
-    const d = await api(`/api/doc/state?id=${encodeURIComponent(curTask)}&step=${encodeURIComponent(k)}`);
+    const d = await api(`/api/doc/state?id=${encodeURIComponent(project)}&step=${encodeURIComponent(k)}`);
+    if(curTask!==project || !panel?.isConnected || $("panel-"+k)!==panel)return;
     st.out = d.out || "";
     docRestore(k, d.messages, d.out);
-    docShow(k, d);
+    const source=docEl(k,'src');
+    if(!source?.getClientRects().length || source.value===(source.dataset.savedMarkdown||''))docShow(k, d);
     if(!st.files) st.files = JSON.parse(localStorage.getItem("rw-marks-" + k + "-" + (curTask || "")) || "[]");
     docPaintMarks(k); docMarks(k);
   }catch(e){ docMsg(k, "读取失败：" + e.message); }
   docPaint(k); docStats(k);
 }
-function docEdit(k, on){
-  docEl(k, "body").classList.toggle("hidden", on);
-  docEl(k, "src").classList.toggle("hidden", !on);
-  docEl(k, "edit").classList.toggle("hidden", on);
-  docEl(k, "edit-save").classList.toggle("hidden", !on);
-  if(on) docEl(k, "src").focus();
+let docLivePoll = null, docLiveSig = "";
+function docLiveStart(k){
+  /* 左边那份正文是后台一段一段写进去的（撰写按谱系图逐节 append，agent 也会边写边落盘）。
+     面板在前台就每 4 秒问一次；字数和「有没有」变了才重画 —— 没变不动，免得把你正在读的滚动位置冲掉。 */
+  if(docLivePoll){ clearInterval(docLivePoll); docLivePoll = null; }
+  docLiveSig = "";
+  docLivePoll = setInterval(async ()=>{
+    const panel = $("panel-" + k);
+    if(!panel || panel.style.display === "none"){
+      clearInterval(docLivePoll); docLivePoll = null; return;
+    }
+    if(!curTask) return;
+    const project=curTask,source=docEl(k,'src');
+    if(source?.getClientRects().length && source.value!==(source.dataset.savedMarkdown||''))return;
+    try{
+      const d = await api(`/api/doc/state?id=${encodeURIComponent(curTask)}&step=${encodeURIComponent(k)}`);
+      if(curTask!==project || !panel.isConnected || $("panel-"+k)!==panel)return;
+      if(source?.getClientRects().length && source.value!==(source.dataset.savedMarkdown||''))return;
+      const sig = (d.exists ? 1 : 0) + ":" + (d.chars || 0);
+      if(sig === docLiveSig) return;
+      docLiveSig = sig;
+      docShow(k, d);
+    }catch(_){}
+  }, 4000);
 }
-async function docSaveEdit(k){
-  try{ docEdit(k, false); docShow(k, await api("/api/doc/save", { task_id: curTask, step: k, markdown: docEl(k, "src").value }));
-       docMsg(k, "已保存到 " + docState(k).path); }
-  catch(e){ docMsg(k, "保存失败：" + e.message); }
+function docApplyMode(k, mode){
+  const body = docEl(k, "body"), src = docEl(k, "src"), saveBtn = docEl(k, "edit-save");
+  const wrap = docEl(k, "body-wrap") || body?.parentElement;
+  if(!body || !src) return;
+  document.querySelectorAll(`#${k}-mode-tabs [data-doc-mode]`).forEach(b => {
+    b.classList.toggle("active", b.dataset.docMode === mode);
+  });
+  if(mode === "preview"){
+    body.classList.remove("hidden");
+    src.classList.add("hidden");
+    if(wrap) wrap.classList.remove("doc-split-wrap");
+    if(saveBtn) saveBtn.classList.add("hidden");
+  } else if(mode === "edit"){
+    body.classList.add("hidden");
+    src.classList.remove("hidden");
+    if(wrap) wrap.classList.remove("doc-split-wrap");
+    if(saveBtn) saveBtn.classList.remove("hidden");
+    src.focus();
+  } else { // split
+    body.classList.remove("hidden");
+    src.classList.remove("hidden");
+    if(wrap) wrap.classList.add("doc-split-wrap");
+    if(saveBtn) saveBtn.classList.remove("hidden");
+    body.innerHTML = renderMarkdown(src.value || "");
+    src.focus();
+  }
+}
+
+function docEdit(k, on){
+  docApplyMode(k, on ? 'edit' : 'preview');
+}
+
+async function docSaveEdit(k, project=curTask){
+  const source=docEl(k,'src');if(!source)return true;
+  const text=source.value;
+  try{
+    const d = await api("/api/doc/save", { task_id: project, step: k, markdown:text });
+    const unchanged=source.value===text;
+    if(curTask===project && source.isConnected && source===docEl(k,'src')){
+      source.dataset.savedMarkdown=d.markdown??text;
+      if(unchanged)docShow(k,d);
+      docMsg(k,unchanged?"已保存到 "+docState(k).path:"还有未保存的修改");
+    }
+    uiNotify("文档已保存");
+    return unchanged;
+  }catch(e){ if(source.isConnected)docMsg(k, "保存失败：" + e.message); uiNotify("保存失败: " + e.message); return false; }
 }
 function docCandidate(text){
   /* 从一条回复里抠出「像成稿」的那段：优先 ``` 代码块，否则从第一个标题行截到结尾（至少 2 个标题）。 */
@@ -301,10 +382,11 @@ function docPenUp(k){
 /* ---------- 右边对话 ---------- */
 function docBind(k, m){
   if(!docEl(k, "msgs")) return;
+  PromptUI.mount(docEl(k,'ask'),`doc:${curTask}:${k}`,curTask);
   m.querySelectorAll("[data-dv]").forEach(b => b.onclick = ()=>{
     const [kk, v] = b.dataset.dv.split("|"); docState(kk).view = v; docPaint(kk); });
   docEl(k, "send").onclick = () => docSend(k);
-  docEl(k, "ask").onkeydown = (e)=>{ if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); docSend(k); } };
+  docEl(k, "ask").onkeydown = (e)=>{ if(e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && e.keyCode!==229 && !e.repeat){ e.preventDefault(); docSend(k); } };
   docEl(k, "ask").oninput = () => docGrow(k);
   docEl(k, "plus").onclick = () => docEl(k, "filepick").click();
   docEl(k, "filepick").onchange = (e)=>{ const fs = [...e.target.files]; e.target.value = ""; docAddFiles(k, fs); };
@@ -353,6 +435,17 @@ function docBind(k, m){
         localStorage.setItem(draftKey, curSrcEl.value);
         if(restoreBtn) restoreBtn.classList.remove("hidden");
       }, 800);
+      const b = docEl(k, "body");
+      if(b && !b.classList.contains("hidden")){
+        b.innerHTML = renderMarkdown(curSrcEl.value || "");
+      }
+    });
+    curSrcEl.addEventListener("keydown", (e) => {
+      if((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")){
+        e.preventDefault();
+        e.stopPropagation();
+        docSaveEdit(k);
+      }
     });
   }
   if(DOC_UI[k].cite) docEl(k, "cite").onclick = ()=>{
@@ -375,6 +468,9 @@ function docBind(k, m){
   if(docEl(k, "reload")) docEl(k, "reload").onclick = ()=>docLoad(k);
   if(docEl(k, "edit")) docEl(k, "edit").onclick = ()=>docEdit(k, true);
   if(docEl(k, "edit-save")) docEl(k, "edit-save").onclick = ()=>docSaveEdit(k);
+  document.querySelectorAll(`#${k}-mode-tabs [data-doc-mode]`).forEach(btn => {
+    btn.onclick = () => docApplyMode(k, btn.dataset.docMode);
+  });
   if(DOC_UI[k].hl){
     docEl(k, "pen").onclick = ()=>docPen(k);
     docEl(k, "penpanel").querySelector(".dw-x").onclick = ()=>docPen(k, false);
@@ -397,6 +493,7 @@ function docBind(k, m){
     }
   }
   wireDrop(docEl(k, "composer")); docSetAtts(k); docGrow(k); docLoad(k);
+  docLiveStart(k);                                   // 左边那份正文跟着后台一段一段长
   docOutsTick();
 }
 let OUTS_TICK = 0;
@@ -491,7 +588,7 @@ async function docSend(k){
   let errMsg = "", final = "", evs = [];
   try{
     const res = await fetch(DOC_UI[k].post, { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ task_id: curTask, message: msg }) });
+      body: JSON.stringify({ task_id: curTask, message: msg, template_ref:PromptUI.ref(`doc:${curTask}:${k}`,curTask) }) });
     if(!res.ok || !res.body) throw new Error("HTTP " + res.status);
     const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = "";
     for(;;){
@@ -547,9 +644,21 @@ let cvCur = { path: "", ext: "" };      // 展示区当前文件
 const FL_TEXT = new Set(["md","markdown","txt","tex","bib","json","py","csv","yaml","yml","log","sh","js","css"]);
 let flRel = "", flSel = "", flRows = [];
 let flTreeCache = {};         // rel -> array of {name, rel, path, dir, ext, size, count, at}
-let flExpanded = new Set();   // set of expanded rel strings
+let flExpanded = (() => {
+  try {
+    const raw = localStorage.getItem("rw-fl-tree-expanded");
+    if(raw) return new Set(JSON.parse(raw));
+  } catch(_) {}
+  return new Set();
+})();
+function flSaveExpanded() {
+  try {
+    localStorage.setItem("rw-fl-tree-expanded", JSON.stringify([...flExpanded]));
+  } catch(_) {}
+}
 let flTreeLoading = new Set();// set of currently loading rel strings
 let flTreeRoot = "";
+let flTreeProject = "", flTreeGeneration = 0;
 
 function flGetIcon(ext){
   ext = String(ext || "").toLowerCase().trim();
@@ -598,44 +707,67 @@ function filesPanelHTML(active){
         <div class="fl-list" id="flList"><p class="fl-empty">读目录…</p></div>
       </aside>
       <div class="fl-col">
-        <div class="fl-h"><b id="flName">选一个文件</b><span class="fl-sub" id="flMeta"></span><span class="fl-sp"></span>
-          <button class="fl-ib" id="flHand" title="交给某一步的助手（先写进右边对话框）">⇢</button>
+        <div class="fl-h">
+          <b id="flName">选一个文件</b>
+          <span class="fl-sub" id="flMeta"></span>
+          <div class="seg-tabs fl-mode-tabs" id="flModeTabs" role="group" aria-label="文件工作区模式" style="margin-left:10px;display:none">
+            <button type="button" class="seg-tab active" data-fl-mode="preview" title="纯预览模式">👁 预览</button>
+            <button type="button" class="seg-tab" data-fl-mode="edit" title="直接编辑正文（Ctrl+S 保存）">✎ 编辑</button>
+            <button type="button" class="seg-tab" data-fl-mode="split" title="双栏实时对照">◫ 双栏</button>
+          </div>
+          <span class="fl-sp"></span>
+          <button class="btn btn-sm" id="flSaveBtn" style="display:none;margin-right:6px" title="保存文件修改 (Ctrl+S)">💾 保存</button>
+          <span class="handoff-row" id="flHandoffPins"></span>
+          <button class="btn btn-sm" id="flHand" disabled title="先选择文件；交接快捷键 Alt+Shift+H">交给…</button>
+          <button class="btn btn-sm" id="flHandoffHistory" disabled title="查看这个文件的交接与回执">交接记录</button>
           <button class="fl-ib" id="flOpen" title="用系统程序打开">↗</button></div>
-        <div class="fl-stage" id="flStage"><div class="fl-empty">左边点一个文件，这里出预览<br>
-          <span>md / txt / tex / json 显示正文，pdf 内嵌，docx 先转 PDF</span></div></div>
+        <div class="fl-stage" id="flStage"><div class="fl-empty">左边点一个文件，这里出预览与编辑<br>
+          <span>md / txt / tex / json 等支持直接在线编辑与实时保存</span></div></div>
       </div>
     </div></section>`;
 }
 
 async function flLoadNode(rel){
   rel = rel || "";
-  if(flTreeLoading.has(rel)) return;
-  flTreeLoading.add(rel);
+  const project=flTreeProject || curTask, generation=flTreeGeneration, loading=flTreeLoading;
+  if(loading.has(rel)) return;
+  loading.add(rel);
   try{
-    const d = await api(`/api/tree?id=${encodeURIComponent(curTask)}&rel=${encodeURIComponent(rel)}`);
+    const d = await api(`/api/tree?id=${encodeURIComponent(project)}&rel=${encodeURIComponent(rel)}`);
+    if(generation!==flTreeGeneration || project!==curTask) return;
     if(d.root) flTreeRoot = d.root;
-    if(d.rows) flTreeCache[rel] = d.rows;
+    if(d.rows) flTreeCache[rel] = d.rows.map(row=>({...row,project_id:project}));
   }catch(e){
     console.error("加载文件夹内容失败", rel, e);
   }finally{
-    flTreeLoading.delete(rel);
-    flFlattenRows();
+    loading.delete(rel);
+    if(generation===flTreeGeneration && project===curTask) flFlattenRows();
   }
 }
 
 async function flInitTree(){
   const list = $("flList"); if(!list) return;
   if(!curTask){ list.innerHTML = `<p class="fl-empty">先选一个项目</p>`; return; }
+  const generation=++flTreeGeneration, project=curTask;
+  if(flTreeProject!==project){flSel="";flTreeRoot="";}
+  flTreeProject=project;flTreeLoading=new Set();
   list.innerHTML = `<p class="fl-empty">读目录…</p>`;
   flTreeCache = {};
-  flExpanded = new Set();
   await flLoadNode("");
+  if(generation!==flTreeGeneration || project!==curTask || !list.isConnected) return;
   const tag = $("flRoot");
   if(tag && flTreeRoot){
     const parts = flTreeRoot.split(/[\\/]/).filter(Boolean);
     tag.textContent = parts.slice(-2).join("/"); tag.title = flTreeRoot;
   }
   flRenderTree();
+  for(const rel of [...flExpanded].sort((a,b)=>a.split('/').length-b.split('/').length)){
+    if(generation!==flTreeGeneration || project!==curTask || !list.isConnected)return;
+    if(!flExpanded.has(rel)||!flFindRow(rel)?.dir||flTreeCache[rel])continue;
+    const pending=flLoadNode(rel);flRenderTree();await pending;
+    if(generation!==flTreeGeneration || project!==curTask || !list.isConnected)return;
+    flRenderTree();
+  }
 }
 
 function flRenderTree(){
@@ -658,7 +790,7 @@ function flRenderTree(){
       if(isDir){
         const isLoading = flTreeLoading.has(r.rel);
         html += `
-          <div class="fl-tree-row dir ${isOpen ? 'open' : ''} ${isSel ? 'on' : ''}" data-rel="${esc(r.rel)}" data-dir="1" style="padding-left:${padLeft}px" title="${esc(r.name)}">
+          <div class="fl-tree-row dir ${isOpen ? 'open' : ''} ${isSel ? 'on' : ''}" data-project-id="${esc(r.project_id)}" data-rel="${esc(r.rel)}" data-dir="1" aria-expanded="${isOpen}" aria-busy="${isLoading}" style="padding-left:${padLeft}px" title="${esc(r.name)}">
             <span class="fl-chevron">${isLoading ? '⌛' : (isOpen ? '▾' : '▸')}</span>
             <span class="fl-folder-ico">${isOpen ? '📂' : '📁'}</span>
             <span class="fl-name">${esc(r.name)}</span>
@@ -673,7 +805,7 @@ function flRenderTree(){
         }
       } else {
         html += `
-          <div class="fl-tree-row file ${isSel ? 'on' : ''}" data-rel="${esc(r.rel)}" data-dir="0" style="padding-left:${padLeft}px" title="${esc(r.name)}">
+          <div class="fl-tree-row file ${isSel ? 'on' : ''}" data-project-id="${esc(r.project_id)}" data-rel="${esc(r.rel)}" data-dir="0" style="padding-left:${padLeft}px" title="${esc(r.name)}">
             <span class="fl-indent-spacer"></span>
             <span class="fl-file-ico">${flGetIcon(r.ext)}</span>
             <span class="fl-name">${esc(r.name)}</span>
@@ -699,9 +831,11 @@ function flBind(){
     if(isDir){
       if(flExpanded.has(rel)){
         flExpanded.delete(rel);
+        flSaveExpanded();
         flRenderTree();
       } else {
         flExpanded.add(rel);
+        flSaveExpanded();
         flRenderTree();
         if(!flTreeCache[rel]){
           await flLoadNode(rel);
@@ -715,42 +849,180 @@ function flBind(){
   };
   const rl = $("flReload"); if(rl) rl.onclick = ()=> flInitTree();
   const hand = $("flHand"); if(hand) hand.onclick = ()=>{
-    const ta = $("wv-ask");
     if(!flSel){ flMsg("先在左边点一个文件"); return; }
-    if(ta){ ta.value = `把 ${flSel} 交给写作助手`; ta.focus(); }
+    FileHandoff.open({project_id:curTask,relative:flSel});
   };
+  const history = $("flHandoffHistory"); if(history) history.onclick=()=>flSel && FileHandoff.history({project_id:curTask,relative:flSel});
   const op = $("flOpen"); if(op) op.onclick = ()=>{
     const r = flFindRow(flSel);
     if(!r){ flMsg("先在左边点一个文件"); return; }
     api("/api/conv/open", { path: r.path }).catch(e => flMsg("打不开：" + e.message));
   };
+  const modeTabs = document.querySelectorAll("#flModeTabs [data-fl-mode]");
+  modeTabs.forEach(btn => {
+    btn.onclick = () => {
+      const ta = $("flEditText");
+      if(ta && flCurrentFile) flCurrentFile.text = ta.value;
+      flCurrentMode = btn.dataset.flMode;
+      localStorage.setItem('rw-fl-mode', flCurrentMode);
+      modeTabs.forEach(b => b.classList.toggle('active', b === btn));
+      flRenderContent();
+    };
+  });
+  const saveBtn = $("flSaveBtn");
+  if(saveBtn) saveBtn.onclick = () => flSaveCurrent();
   flInitTree();
 }
 
+let flCurrentFile = null;
+let flCurrentMode = localStorage.getItem('rw-fl-mode') || 'split';
+
 async function flShow(row){
+  if(row.project_id && row.project_id!==curTask) return;
+  const project = curTask;
   flSel = row.rel;
+  $("flHand").disabled=false;
+  $("flHand").title="交给当前工作流中的节点、团队或专家（Alt+Shift+H）";
+  $("flHandoffHistory").disabled=false;
+  FileHandoff.preview({project_id:project,relative:row.rel});
   document.querySelectorAll("#flList .fl-tree-row").forEach(x => x.classList.toggle("on", x.dataset.rel === flSel));
   if($("flName")) $("flName").textContent = row.name;
   flMsg([flFmtSize(row.size), row.at, row.rel.split("/").slice(0,-1).join("/")].filter(Boolean).join(" · "));
   const stage = $("flStage"); if(!stage) return;
+  const modeTabs = $("flModeTabs");
+  const saveBtn = $("flSaveBtn");
   stage.innerHTML = `<p class="fl-empty">打开中…</p>`;
   const ext = String(row.ext || "").toLowerCase();
+
   if(FL_TEXT.has(ext) || !ext){
     try{
       const d = await api(`/api/conv/read?path=${encodeURIComponent(row.path)}`);
       if(d.error) throw new Error(d.error);
-      stage.innerHTML = `<pre class="fl-doc">${esc((d.text || "") + (d.truncated ? "\n\n…（太长，只预览前一段；完整内容用 ↗ 打开）" : ""))}</pre>`;
-    }catch(e){ stage.innerHTML = `<p class="fl-empty">读不了：${esc(e.message)}</p>`; }
+      if(curTask!==project || flSel!==row.rel || !stage.isConnected) return;
+      flCurrentFile = { row, projectId:project, text: d.text || "", originalText: d.text || "" };
+      if(modeTabs) modeTabs.style.display = "inline-flex";
+      if(saveBtn){
+        saveBtn.style.display = "";
+        saveBtn.textContent = "💾 保存";
+      }
+      flUpdateModeTabs();
+      flRenderContent();
+    }catch(e){
+      if(modeTabs) modeTabs.style.display = "none";
+      if(saveBtn) saveBtn.style.display = "none";
+      stage.innerHTML = `<p class="fl-empty">读不了：${esc(e.message)}</p>`;
+    }
     return;
   }
+
+  // 非文本类文件（图片/PDF等）
+  flCurrentFile = null;
+  if(modeTabs) modeTabs.style.display = "none";
+  if(saveBtn) saveBtn.style.display = "none";
   try{
     const d = await api(`/api/conv/preview?path=${encodeURIComponent(row.path)}`);
     if(d.error) throw new Error(d.error);
+    if(curTask!==project || flSel!==row.rel || !stage.isConnected) return;
     if(d.kind === "image") stage.innerHTML = `<img class="fl-img" src="${d.url}&t=${Date.now()}" alt="${esc(row.name)}">`;
     else if(d.kind === "pdf" || d.kind === "html") stage.innerHTML = `<iframe class="fl-frame" src="${d.url}&t=${Date.now()}"></iframe>`;
     else stage.innerHTML = `<p class="fl-empty">这类文件这里不预览 —— 点右上角 ↗ 用系统程序打开</p>`;
   }catch(e){ stage.innerHTML = `<p class="fl-empty">打不开：${esc(e.message)}</p>`; }
 }
+
+function flUpdateModeTabs(){
+  document.querySelectorAll("#flModeTabs [data-fl-mode]").forEach(b => {
+    b.classList.toggle("active", b.dataset.flMode === flCurrentMode);
+  });
+}
+
+function flRenderContent(){
+  const stage = $("flStage");
+  if(!stage || !flCurrentFile) return;
+  const ext = String(flCurrentFile.row.ext || "").toLowerCase();
+  const isMd = ext === "md" || ext === "markdown";
+
+  if(flCurrentMode === "preview"){
+    if(isMd){
+      stage.innerHTML = `<div class="fl-editor-preview md-render">${renderMarkdown(flCurrentFile.text)}</div>`;
+    } else {
+      stage.innerHTML = `<pre class="fl-doc"><code>${esc(flCurrentFile.text)}</code></pre>`;
+    }
+  } else if(flCurrentMode === "edit"){
+    stage.innerHTML = `<textarea class="fl-editor-textarea" id="flEditText" spellcheck="false" placeholder="在此编辑文件内容…">${esc(flCurrentFile.text)}</textarea>`;
+    const ta = $("flEditText");
+    if(ta){
+      ta.oninput = () => {
+        flCurrentFile.text = ta.value;
+        const btn = $("flSaveBtn");
+        if(btn) btn.textContent = flCurrentFile.text !== flCurrentFile.originalText ? "💾 保存 *" : "💾 保存";
+      };
+      ta.onkeydown = flEditorKeydown;
+    }
+  } else { // split
+    stage.innerHTML = `
+      <div class="fl-editor-split">
+        <div class="fl-split-pane">
+          <textarea class="fl-editor-textarea" id="flEditText" spellcheck="false" placeholder="在此编辑文件内容…">${esc(flCurrentFile.text)}</textarea>
+        </div>
+        <div class="fl-split-divider"></div>
+        <div class="fl-split-pane fl-split-preview md-render" id="flSplitPreview">
+          ${isMd ? renderMarkdown(flCurrentFile.text) : `<pre class="fl-doc"><code>${esc(flCurrentFile.text)}</code></pre>`}
+        </div>
+      </div>`;
+    const ta = $("flEditText"), prev = $("flSplitPreview");
+    if(ta){
+      ta.oninput = () => {
+        flCurrentFile.text = ta.value;
+        if(prev) prev.innerHTML = isMd ? renderMarkdown(ta.value) : `<pre class="fl-doc"><code>${esc(ta.value)}</code></pre>`;
+        const btn = $("flSaveBtn");
+        if(btn) btn.textContent = flCurrentFile.text !== flCurrentFile.originalText ? "💾 保存 *" : "💾 保存";
+      };
+      ta.onkeydown = flEditorKeydown;
+    }
+  }
+}
+
+function flEditorKeydown(e){
+  if((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")){
+    e.preventDefault();
+    e.stopPropagation();
+    flSaveCurrent();
+    return;
+  }
+  if(e.key === "Tab"){
+    e.preventDefault();
+    const start = this.selectionStart, end = this.selectionEnd;
+    this.value = this.value.substring(0, start) + "  " + this.value.substring(end);
+    this.selectionStart = this.selectionEnd = start + 2;
+    this.dispatchEvent(new Event("input"));
+  }
+}
+
+async function flSaveCurrent(){
+  if(!flCurrentFile || !flCurrentFile.row) return false;
+  const file = flCurrentFile;
+  const ta = $("flEditText");
+  if(ta) file.text = ta.value;
+  const savedText = file.text;
+  const btn = $("flSaveBtn");
+  if(btn) btn.textContent = "保存中…";
+  try{
+    const res = await api("/api/conv/save", {
+      path: file.row.path,
+      text: savedText
+    });
+    if(res.error) throw new Error(res.error);
+    file.originalText = savedText;
+    if(btn && flCurrentFile===file) btn.textContent = file.text===savedText ? "💾 保存" : "💾 保存 *";
+    uiNotify(`已保存 ${file.row.name} (${flFmtSize(res.bytes || savedText.length)})`);
+    return file.text===savedText;
+  }catch(e){
+    if(btn) btn.textContent = "💾 保存 *";
+    uiNotify("保存失败: " + e.message);
+    return false;
+  }
+}
+window.flSaveCurrent = flSaveCurrent;
 
 function convPanelHTML(active){
   return `<section class="cv" id="panel-convert"${active ? "" : ' style="display:none"'}>
@@ -776,7 +1048,7 @@ function convPanelHTML(active){
 
 function cvMsg(t, ms){ const el = $("cvMsg"); if(el) el.textContent = t || ""; if(ms) setTimeout(()=>{ if(el && el.textContent === t) el.textContent = ""; }, ms); }
 
-const CV_BLANK = '<div class="cv-ph">未生成<br><span>在右边跟格式助手说清楚要什么（成品格式 + 期刊模板），编好的成品会显示在这里</span></div>';
+const CV_BLANK = '<div class="cv-ph">未生成<br><span>在右边跟格式专家说清楚要什么（成品格式 + 期刊模板），编好的成品会显示在这里</span></div>';
 function cvClearStage(){
   const f = $("cvFrame"), i = $("cvImg"), e = $("cvEmpty"), o = $("cvOpenExt");   // 工具行已删，o 可能不存在
   if(f){ f.classList.add("hidden"); f.src = "about:blank"; }
@@ -1023,8 +1295,19 @@ function enBind(){
 }
 
 /* ---------------- 工作流 ---------------- */
-const STAGE={idea:"🔍 创新点审查",search:"📚 论文搜索",download:"⬇️ 下载精读",notes:"🌐 论文翻译",outline:"🗂 确认大纲",map:"🧩 梳理精读",write:"✍️ 文章撰写",review:"🧐 稿件审查",entrans:"🌍 中译英",convert:"🔄 格式转换"};
-const WF_ORDER=["idea","search","download","notes","outline","map","write","review","entrans","convert"];
+const STAGE={};
+let WF_ORDER=[];
+let wfNodes = {};
+let wfProjectId = "";
+let wfLayoutId = "", wfSelectedNode = "";
+let wfSelectionSave = Promise.resolve();
+function wfApplyCatalog(stages){
+  for(const stage of stages || []){
+    STAGE[stage.id] = `${stage.icon} ${stage.name}`;
+    if(WF_AGENT[stage.id]) Object.assign(WF_AGENT[stage.id],{emoji:stage.icon,name:stage.agent,sub:stage.purpose});
+  }
+  if(!WF_ORDER.length) WF_ORDER=(stages || []).map(stage=>stage.id);
+}
 const PANELS = {
   idea: (a) => typeof ideaPanelHTML === "function" ? ideaPanelHTML(a) : "",
   search: (a) => typeof searchPanelHTML === "function" ? searchPanelHTML(a) : "",
@@ -1040,34 +1323,34 @@ const PANELS = {
 let wfStep=localStorage.getItem("rw-wf-step")||"idea";
 let wfMin=localStorage.getItem("rw-wf-min")==="1";
 let wfAgentCollapsed=localStorage.getItem("rw-wf-agent-collapsed")==="1";
-let wfMsgs=[], wfEvents=[];   // 右栏「本步助手」的历史与事件（统计口径只算这个助手自己）
+let wfMsgs=[], wfEvents=[];   // 右栏「本步专家」的历史与事件（统计口径只算这个专家自己）
 
-/* ==== 三栏工作台：左十步 / 中展示区+确认交付 / 右本步助手 ==== */
-/* 每一步一个助手：emoji + 名字 + 一句话职责 + 聊天挂在哪个 scoped 端点 */
+/* ==== 三栏工作台：左十步 / 中展示区+确认交付 / 右本步专家 ==== */
+/* 每一步一个专家：emoji + 名字 + 一句话职责 + 聊天挂在哪个 scoped 端点 */
 const WF_AGENT = {
-  idea:    {emoji:"🔍", name:"创新点审查助手", sub:"多轮问清约束 → 出正式判定；对话只在这一步", api:"/api/idea",
+  idea:    {emoji:"🔍", name:"创新点审查专家", sub:"多轮问清约束 → 出正式判定；对话只在这一步", api:"/api/idea",
             ph:"说说你的创新点，或回答追问…", hint:"Enter 发送 · 说「出一版判定」→ 结论写进本步产出"},
-  search:  {emoji:"📚", name:"文献检索助手", sub:"检索式、筛选口径、入库都归它管", api:"/api/agent",
+  search:  {emoji:"📚", name:"文献检索专家", sub:"检索式、筛选口径、入库都归它管", api:"/api/agent",
             ph:"说检索式，或让我按目标改筛选…", hint:"Enter 发送 · 说「重跑检索」→ 结果刷新到左边"},
-  download:{emoji:"⬇️", name:"入库助手", sub:"下载队列、OA 直链、手动补全文", api:"/api/agent",
+  download:{emoji:"⬇️", name:"入库专家", sub:"下载队列、OA 直链、手动补全文", api:"/api/agent",
             ph:"说下要下哪批 / 哪篇要手动补…", hint:"Enter 发送 · 说「继续下载」→ 队列接着跑"},
-  notes:   {emoji:"🌐", name:"翻译助手", sub:"翻译口径、术语表、双语对照", api:"/api/agent",
+  notes:   {emoji:"🌐", name:"翻译专家", sub:"翻译口径、术语表、双语对照", api:"/api/agent",
             ph:"说翻译要求（保留排版 / 术语表 / 只译正文）…", hint:"Enter 发送 · 说「重译这段」→ 译文更新"},
-  outline: {emoji:"🗂", name:"框架助手", sub:"大标题 + 小标题 + 一句说明，定稿写进框架.md", api:"/api/outline",
+  outline: {emoji:"🗂", name:"框架专家", sub:"大标题 + 小标题 + 一句说明，定稿写进框架.md", api:"/api/outline",
             ph:"说题目和目标 / 贴导师要求…", hint:"Enter 发送 · 说「更新框架」→ 左边立刻换新版"},
-  map:     {emoji:"🧩", name:"谱系助手", sub:"按大纲把精读结论挂成树，改完立刻重画", api:"/api/map",
+  map:     {emoji:"🧩", name:"谱系专家", sub:"按大纲把精读结论挂成树，改完立刻重画", api:"/api/map",
             ph:"说说怎么改，比如「按大纲建一版谱系图」…", hint:"Enter 发送 · 说「更新谱系」→ 画布立刻换新版"},
-  write:   {emoji:"✍️", name:"写作助手", sub:"按框架逐节写，缺数据写「待补」，不编数字", api:"/api/write",
+  write:   {emoji:"✍️", name:"写作专家", sub:"按框架逐节写，缺数据写「待补」，不编数字", api:"/api/write",
             ph:"说要求 / 让我写某一节…", hint:"Enter 发送 · 说「更新正文」→ 左边立刻换新版"},
-  review:  {emoji:"🧐", name:"审查助手", sub:"以审稿人视角挑问题，先说大思路", api:"/api/review",
+  review:  {emoji:"🧐", name:"审查专家", sub:"以审稿人视角挑问题，先说大思路", api:"/api/review",
             ph:"说「审一遍」或问某处逻辑…", hint:"Enter 发送 · 说「更新正文」→ 左边立刻换新版"},
-  entrans: {emoji:"🌍", name:"中译英助手", sub:"学术口径中译英，术语统一", api:"/api/agent",
+  entrans: {emoji:"🌍", name:"中译英专家", sub:"学术口径中译英，术语统一", api:"/api/agent",
             ph:"说目标期刊口径 / 要不要译图表标题…", hint:"Enter 发送 · 说「开始翻译」→ 译文落进产出"},
-  convert: {emoji:"🔄", name:"格式助手", sub:"转 docx / pdf / tex，样式跟模板走", api:"/api/agent",
+  convert: {emoji:"🔄", name:"格式专家", sub:"转 docx / pdf / tex，样式跟模板走", api:"/api/agent",
             ph:"说导出格式和模板…", hint:"Enter 发送 · 说「导出 docx」→ 文件落进产出"},
-  /* 左栏第 11 项「项目文件夹」的助手：不是一步，不进 WF_ORDER，也不占 steps 表 */
-  files:   {emoji:"📁", name:"文件管理助手", sub:"看 / 找 / 传：问文件内容，说「交给写作助手」就转过去", api:"/api/agent",
-            ph:"问这个文件 / 这个夹，或说「交给写作助手」…", hint:"Enter 发送 · 左边点文件出预览 · 右上 ↗ 用系统程序打开"}
+  /* 左栏第 11 项「项目文件夹」的专家：不是一步，不进 WF_ORDER，也不占 steps 表 */
+  files:   {emoji:"📁", name:"文件管理专家", sub:"看 / 找 / 传：问文件内容，说「交给写作专家」就转过去", api:"/api/agent",
+            ph:"问这个文件 / 这个夹，或说「交给写作专家」…", hint:"Enter 发送 · 左边点文件出预览 · 右上 ↗ 用系统程序打开"}
 };
 /* 这五步的面板本来就自带对话 —— 三栏页里对话统一收到右栏，面板里那份藏掉，避免两个聊天 */
 const WF_OWN_CHAT = new Set(["idea", "map", "outline", "write", "review"]);
@@ -1095,7 +1378,7 @@ function wfAgentHTML(step){
       <div>
         <div style="display:flex;align-items:center;gap:8px">
           <h1>${esc(a.name)}</h1>
-          <select id="wvStepPick" class="at-sel" style="padding:2px 6px;font-size:11.5px;background:var(--bg-hover);color:var(--fg);border:1px solid var(--border);border-radius:4px" title="切换助手并自动跳转工作流">
+          <select id="wvStepPick" class="at-sel" style="padding:2px 6px;font-size:11.5px;background:var(--bg-hover);color:var(--fg);border:1px solid var(--border);border-radius:4px" title="切换专家并自动跳转工作流">
             ${WF_ORDER.map(s => {
               const ag = WF_AGENT[s] || {};
               return `<option value="${s}" ${s === step ? "selected" : ""}>${ag.emoji || ""} ${esc(ag.name || s)}</option>`;
@@ -1108,7 +1391,7 @@ function wfAgentHTML(step){
         <button class="btn ghost" id="wv-history-btn" title="查看对话历史与工作流切换" style="padding:3px 8px;font-size:11.5px">⏱ 历史</button>
         <button class="btn ghost" id="wv-newchat-btn" title="新建这一步的对话" style="padding:3px 8px;font-size:11.5px">＋ 新建</button>
         <span class="wf-mdl" title="这一步用的模型">${esc(mdl)}</span>
-        <button class="btn ghost wf-agent-collapse-btn" id="wv-agent-collapse" title="折叠助手（扩大工作区）" style="padding:3px 7px;font-size:11.5px">▶</button>
+        <button class="btn ghost wf-agent-collapse-btn" id="wv-agent-collapse" title="折叠专家（扩大工作区）" style="padding:3px 8px;font-size:11.5px;display:flex;align-items:center;gap:3px">▶ 折叠</button>
       </div>
     </div>
   </header>
@@ -1133,13 +1416,16 @@ function wfAgentHTML(step){
 }
 
 async function wfAgentPaint(m, step){
+  if(!m || !m.isConnected) return;
+  const paintProject = curTask;
   const host = m.querySelector("#wfAgent"); if(!host) return;
   const a = WF_AGENT[step] || WF_AGENT.idea;
   if(wfAgentCollapsed){
     host.className = "wf-agent collapsed";
-    host.innerHTML = `<button class="wf-agent-expand-btn" id="wv-agent-expand" title="展开${esc(a.name || "智研助手")}">
-      <span>◀</span>
-      <span class="wf-agent-expand-txt">${esc(a.name || "智研助手")}</span>
+    host.innerHTML = `<button class="wf-agent-dock-btn" id="wv-agent-expand" title="展开 ${esc(a.name || "智研专家")}">
+      <span class="wf-dock-chevron">◀</span>
+      <span class="wf-dock-avatar" title="${esc(a.name || "智研专家")}">${a.emoji || "🤖"}</span>
+      <span class="wf-dock-label">专家</span>
     </button>`;
     const exp = host.querySelector("#wv-agent-expand");
     if(exp) exp.onclick = ()=>{
@@ -1150,7 +1436,7 @@ async function wfAgentPaint(m, step){
     return;
   }
   host.className = "wf-agent";
-  // 论文翻译的「笔记模式」：右栏这一列换成阅读笔记窄栏（点「助手模式」再换回来）
+  // 论文翻译的「笔记模式」：右栏这一列换成阅读笔记窄栏（点「专家模式」再换回来）
   if(step === "notes" && window.TR && TR.noteMode && typeof trPaintNoteColumn === "function"){
     trPaintNoteColumn();
     return;
@@ -1192,6 +1478,7 @@ async function wfAgentPaint(m, step){
   wfMsgs = []; wfEvents = [];
   try{
     const d = await api(`/api/step/messages?id=${encodeURIComponent(curTask)}&step=${encodeURIComponent(step)}`);
+    if(curTask !== paintProject || step !== wfStep || !host.isConnected) return;
     wfMsgs = d.messages || [];
   }catch(e){}
   wfEvents = wfMsgs.flatMap(mv => mv.events || []);
@@ -1200,10 +1487,25 @@ async function wfAgentPaint(m, step){
   const tabs = host.querySelectorAll("[data-wv]");
   tabs.forEach(b => b.onclick = ()=>{ wfView = b.dataset.wv; tabs.forEach(x=>x.classList.toggle("on", x===b)); wfPaintMsgs(step); });
   const ta = $("wv-ask"), send = $("wv-send");
+  PromptUI.mount(ta,`step:${curTask}:${step}`,curTask);
   send.onclick = ()=> wfSend(m, step);
-  ta.onkeydown = e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); wfSend(m, step); } };
+  let historyIndex = -1, historyDraft = "";
+  ta.onkeydown = e=>{
+    if(e.isComposing || e.keyCode===229 || e.repeat) return;
+    if(e.key === "Escape" && wfActiveRun(step)){ e.preventDefault(); wfStop(step); return; }
+    if(e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey){ e.preventDefault(); wfSend(m, step); return; }
+    if(["ArrowUp","ArrowDown"].includes(e.key) && !e.shiftKey && !ta.value.includes("\n")){
+      const history = wfMsgs.filter(x=>x.role === "user").map(x=>x.content);
+      if(!history.length) return;
+      if(historyIndex < 0){ historyDraft = ta.value; historyIndex = history.length; }
+      historyIndex = Math.max(0,Math.min(history.length,historyIndex+(e.key === "ArrowUp"?-1:1)));
+      ta.value = historyIndex === history.length ? historyDraft : history[historyIndex]; e.preventDefault();
+    }
+  };
   ta.oninput = ()=>{ ta.style.height="auto"; ta.style.height=Math.min(ta.scrollHeight,120)+"px"; };
   const plus = $("wv-plus"); if(plus) plus.onclick = ()=>{ ta.value += (ta.value?"\n":"") + "（附件：把文件拖到这里或贴路径）"; ta.focus(); };
+  const activeRun = wfRestoreRun(step);
+  if(!activeRun && !wfMsgs.length && step !== "files" && !wfPrevBlocked(step)) wfPlanLoad(step);
 }
 
 const WF_SUGGESTIONS = {
@@ -1253,7 +1555,7 @@ const WF_SUGGESTIONS = {
 };
 
 let wfView = "conversation";
-/* 右栏空态 = 这一步的助手看着上一步的交付现写的「进度同步 + 本步计划」（后端 step_plan 落库，
+/* 右栏空态 = 这一步的专家看着上一步的交付现写的「进度同步 + 本步计划」（后端 step_plan 落库，
    已有就直接读消息，不会重复烧模型）。plan 消息的 events 带 {type:"plan"}，最后一条才挂「同意」。 */
 function wfPlanHTML(step, text, pending){
   const a = WF_AGENT[step] || WF_AGENT.idea;
@@ -1271,11 +1573,9 @@ let wfPlanSeq = 0;
 /* 硬限制：上一步台账里没有 done，这一步就不是流程步 —— 只当独立功能块用，
    不写「已同步进度 + 计划」、不落库、不能点「确认交付」推进流程。 */
 let wfStageMap = {};
-const wfStepName = s => { const t = STAGE[s] || s; return t.slice(t.indexOf(" ") + 1); };
+const wfStepName = s => { const t = STAGE[s] || s; return wfNodes[s]?.label || t.slice(t.indexOf(" ") + 1); };
 function wfPrevBlocked(step){
-  const i = WF_ORDER.indexOf(step); if(i <= 0) return "";
-  const prev = WF_ORDER[i-1];
-  return wfStageMap[prev] === "done" ? "" : prev;
+  return (wfNodes[step]?.blocked_by || [])[0] || "";
 }
 /* 上游没交付 → 右栏空态不是「新会话已就绪」，而是这张卡：这一步只当独立功能块用 */
 function wfBlockedCardHTML(step){
@@ -1298,15 +1598,20 @@ async function wfPlanLoad(step){
   const a = WF_AGENT[step] || WF_AGENT.idea;
   box.innerHTML = `<div class="wf-plan wf-plan-wait"><div class="wf-plan-h"><span class="wf-av">${a.emoji}</span><b>${esc(a.name)}</b></div>
     <p class="wf-plan-sync">正在读上一步的交付，写这一步的计划…</p></div>`;
-  const my = ++wfPlanSeq;
+  const my = ++wfPlanSeq, project = curTask;
   let text = "";
+  let blocked = false;
   try{
     // 没配 Key 就别去敲后端（会静默失败，一直停在「正在读…」）→ 直接落到 WF_PLAN 静态兜底
-    if(hasModelKey()){ const d = await api("/api/step/plan", {task_id:curTask, step}); text = (d && d.text) || ""; }
+    if(hasModelKey()){
+      const d = await api("/api/step/plan", {task_id:project, step});
+      text = (d && d.text) || ""; blocked = !!d?.blocked;
+    }
   }catch(e){}
-  if(my !== wfPlanSeq || wfStep !== step) return;          // 期间换步 / 又发了一轮 → 丢弃这次结果
+  if(my !== wfPlanSeq || wfStep !== step || curTask !== project) return;
   if($("wv-msgs") !== box) return;
-  wfMsgs = [{role:"assistant", content:text, events:[{type:"plan"}], created_at:new Date().toISOString()}];
+  if(blocked) await loadTaskState();
+  wfMsgs = text ? [{role:"assistant", content:text, events:[{type:"plan"}], created_at:new Date().toISOString()}] : [];
   wfPaintMsgs(step);
 }
 function wfPaintMsgs(step){
@@ -1321,7 +1626,7 @@ function wfPaintMsgs(step){
   if(!wfMsgs.length){
     const a = WF_AGENT[step] || WF_AGENT.idea;
     const suggestions = WF_SUGGESTIONS[step] || [
-      { icon: "💬", title: "向助手直接提问", prompt: `关于${a.name}，我想请教…` },
+      { icon: "💬", title: "向专家直接提问", prompt: `关于${a.name}，我想请教…` },
       { icon: "📌", title: "同步当前研究进展", prompt: "同步一下当前项目的研究进度和接下来的计划" }
     ];
     box.innerHTML = `
@@ -1359,7 +1664,7 @@ function wfPaintMsgs(step){
     return;
   }
   box.innerHTML = "";
-  const who = WF_AGENT[step] || WF_AGENT.idea;          // 这一步的助手说话，不是智研管家
+  const who = WF_AGENT[step] || WF_AGENT.idea;          // 这一步的专家说话，不是智研管家
   wfMsgs.forEach((mv, i) => {
     if((mv.events||[]).some(e => e.type === "plan")){
       box.insertAdjacentHTML("beforeend", wfPlanHTML(step, mv.content, i === wfMsgs.length-1));
@@ -1378,7 +1683,7 @@ function wfPaintMsgs(step){
   box.scrollTop = box.scrollHeight;
 }
 function wfPaintStats(){
-  // 口径 = 这个助手自己（本步对话 + 本步事件流）；不显示项目合计，混进别步的数字就定位不到「这一步花了多少」。
+  // 口径 = 这个专家自己（本步对话 + 本步事件流）；不显示项目合计，混进别步的数字就定位不到「这一步花了多少」。
   const turns = wfMsgs.filter(x=>x.role==="user").length;
   const calls = wfEvents.filter(e=>e.type==="tool_call");
   const tok = wfEvents.filter(e=>e.type==="usage").reduce((n,e)=>n+(e.total||0),0);
@@ -1392,71 +1697,149 @@ function wfPaintStats(){
   log("wv-tools", calls.map(e=>e.name), "还没有工具调用");
   log("wv-outs", wfEvents.filter(e=>e.type==="tool_result"&&e.path).map(e=>e.path), "还没有产出");
 }
-async function wfSend(m, step){
-  const ta = $("wv-ask"), btn = $("wv-send"), box = $("wv-msgs");
-  const text = (ta.value||"").trim(); if(!text) return;
-  if(!(await requireModelKey())) return;          // 没配 Key：先提示去设置，不发请求
-  const a = WF_AGENT[step] || WF_AGENT.idea;
-  if(step === "idea" && typeof iwFlush === "function") await iwFlush();   // 上区刚改的字先落库，这一轮就读到最新的
-  ta.value = ""; ta.style.height = "auto";
-  if(box.querySelector(".wf-empty")) box.innerHTML = "";
-  appendOne(box, {type:"user", content:text});
-  wfMsgs.push({role:"user", content:text, events:[]});
-  wfPaintStats();                                  // 轮数当场 +1，不等这一轮跑完
-  btn.disabled = true; btn.textContent = "■";
-  const evs = [];
+const wfRuns = new Map();
+
+const wfRunKey = (project, step) => `${project}:${step}`;
+function wfActiveRun(step = wfStep){ return wfRuns.get(wfRunKey(curTask, step)); }
+function wfVisible(run){ return curTask === run.project && wfStep === run.step && $("wv-msgs"); }
+function wfRunButton(){
+  const button = $("wv-send"); if(!button) return;
+  const run = wfActiveRun();
+  button.disabled = false; button.textContent = run?.status === "running" ? "■" : "↑";
+  button.title = run?.status === "running" ? "停止执行（Esc）" : "发送";
+}
+async function wfStop(step = wfStep){
+  const run = wfActiveRun(step); if(!run || run.status !== "running") return;
   try{
-    const res = await fetch(a.api, {method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({task_id:curTask, message:text, step:step,
-        sel: step === "files" ? ((flRows.find(r => r.rel === flSel) || {}).path || "") : ""})});
-    if(!res.ok || !res.body) throw new Error("HTTP "+res.status);
-    const reader = res.body.getReader(), dec = new TextDecoder();
-    let buf = "", final = "";
-    for(;;){
-      const {value, done} = await reader.read(); if(done) break;
-      buf += dec.decode(value, {stream:true});
-      let i;
-      while((i = buf.indexOf("\n\n")) >= 0){
-        const chunk = buf.slice(0,i); buf = buf.slice(i+2);
-        const line = chunk.split("\n").find(l=>l.startsWith("data: ")); if(!line) continue;
-        let ev; try{ ev = JSON.parse(line.slice(6)); }catch{ continue; }
-        if(ev.type === "done"){ final = ev.content || ""; continue; }
-        if(ev.type === "user") continue;                 // 本地已经先画了，回声不再画、也不进事件流
-        appendOne(box, ev, a); evs.push(ev);
-        // wfEvents 是统计的唯一来源，进来就 push（别攒到这一轮结束）；只在 usage/tool_call/tool_result
-        // 上重画，content 是逐段文本，每段都重画笔工具/产出列表太重。
-        wfEvents.push(ev);
-        if(ev.type === "usage" || ev.type === "tool_call" || ev.type === "tool_result") wfPaintStats();
+    await api("/api/agent/cancel", {idempotency_key:run.key});
+  }catch(e){ uiNotify("停止失败：" + e.message); }
+}
+function wfRemember(run){
+  localStorage.setItem("rw-wf-run:" + wfRunKey(run.project,run.step), JSON.stringify({
+    project:run.project,step:run.step,key:run.key,runId:run.runId,request:run.request,api:run.api
+  }));
+}
+function wfRestoreRun(step){
+  const key = wfRunKey(curTask, step);
+  let run = wfRuns.get(key);
+  if(run && run.status !== "running"){ wfRunButton(); return null; }
+  if(!run){
+    try{
+      const saved = JSON.parse(localStorage.getItem("rw-wf-run:" + key) || "null");
+      if(saved){ run = {...saved,status:"running",cursor:0,events:[]}; wfRuns.set(key,run); wfFollowRun(run); }
+    }catch(e){ localStorage.removeItem("rw-wf-run:" + key); }
+  }
+  if(run){
+    const box = $("wv-msgs"), who = WF_AGENT[step] || WF_AGENT.idea;
+    run.events.forEach(ev=>appendOne(box,ev,who));
+  }
+  wfRunButton();
+  return run;
+}
+async function wfFollowRun(run){
+  await observeAgentRun(run, ev=>{
+    if(["done","user"].includes(ev.type)) return;
+    if(ev.type === "error" && wfVisible(run)) uiNotify(ev.message || "执行失败");
+    run.events.push(ev);
+    const box = wfVisible(run);
+    if(box){ appendOne(box,ev,WF_AGENT[run.step]); wfEvents.push(ev); wfPaintStats(); }
+  },wfRemember,()=>{
+    if(wfVisible(run) && $("wv-send")) $("wv-send").title = "连接中断，正在重连；按 Esc 停止";
+  });
+  localStorage.removeItem("rw-wf-run:" + wfRunKey(run.project,run.step));
+  try{
+    if(wfVisible(run)){
+      await loadTaskState();
+      if(wfVisible(run)){
+        await wfAgentPaint(document.querySelector(".wf-page")?.parentElement,run.step);
+        if(wfVisible(run)){
+          if(run.step === "search") wsLoadState();
+          if(run.step === "idea") iwLoad();          // 判定是这轮跑出来的笔记：左边「判定结果」得跟着重读，不然一直停在空态
+          if(DOC_UI[run.step]) docLoad(run.step);
+          wfPaintFoot();
+        }
       }
     }
-    if(final && !evs.some(e=>e.type==="assistant")){ appendOne(box, {type:"assistant", content:final}, a); evs.push({type:"content", content:final}); }
-  }catch(err){
-    appendOne(box, {type:"error", message:"发送失败：" + err.message});
+  }catch(e){
+    if(wfVisible(run)) uiNotify("执行已结束，刷新状态失败：" + e.message);
   }finally{
-    btn.disabled = false; btn.textContent = "↑";
-    wfMsgs.push({role:"assistant", content:"", events:evs});   // evs 已经逐条进过 wfEvents，别再整份 concat（会双份）
-    wfPaintStats();
-    box.scrollTop = box.scrollHeight;
-    if(step === "search") wsLoadState();      // 助手检索完 → 左边结果立刻回填
-    if(step === "convert") cvLoad();          // 助手导出完 → 左边文件/预览立刻刷新
-    if(step === "files") flLoad(flRel);       // 助手可能刚落了文件 → 目录刷新
-    if(step === "idea" && typeof iwLoad === "function") iwLoad();   // 刚出的判定 → 左边下区刷新
+    if(wfRuns.get(wfRunKey(run.project,run.step)) === run) wfRuns.delete(wfRunKey(run.project,run.step));
   }
 }
+async function wfSend(m, step){
+  if(wfActiveRun(step)?.status === "running") return wfStop(step);
+  const ta = $("wv-ask"), text = (ta.value || "").trim(); if(!text) return;
+  if(!(await requireModelKey())) return;
+  if(step === "idea" && typeof iwFlush === "function") await iwFlush();
+  ++wfPlanSeq;
+  const project = curTask, key = crypto.randomUUID();
+  const historyKey = wfRunKey(project,step);
+  const run = {project,step,key,status:"running",runId:"",cursor:0,events:[],api:WF_AGENT[step].api,
+    request:{task_id:project,message:text,step,idempotency_key:key,template_ref:PromptUI.ref(`step:${project}:${step}`,project),
+      sel:step === "files" ? ((flRows.find(r=>r.rel===flSel)||{}).path||"") : ""}};
+  wfRuns.set(historyKey,run); wfRemember(run);
+  ta.value = ""; ta.style.height = "auto";
+  const box = $("wv-msgs"); if(box.querySelector(".wv-hero,.wf-plan")) box.innerHTML = "";
+  appendOne(box,{type:"user",content:text}); wfMsgs.push({role:"user",content:text,events:[]});
+  wfPaintStats(); wfRunButton(); wfFollowRun(run);
+}
 
-function renderWorkflow(m){
+async function uiGoWorkflowStep(step){
+  return uiNavigate(async()=>{
+    const projectId=curTask;
+    if(!projectId) return uiNotify('请先选择项目。');
+    const button=uiRouteIs('workflow') && wfProjectId===projectId
+      ? [...document.querySelectorAll('.wf-step[data-step]')].find(b=>b.dataset.step===step) : null;
+    if(button){ button.click(); await wfSelectionSave; return; }
+    await wfSelectionSave;
+    const state=await api(`/api/workflow/layouts/state?task_id=${encodeURIComponent(projectId)}`);
+    const node=state.nodes.find(n=>n.step===step);
+    if(!node) throw new Error('当前项目的流程不包含此阶段');
+    if(curTask!==projectId) return;
+    await api('/api/workflow/layouts/select',{task_id:projectId,layout_id:state.layout.id,node_id:node.id});
+    if(curTask!==projectId) return;
+    openTab('workspace');
+    await ProjectWorkspace.showResource('workflow');
+  });
+}
+
+let wfRenderSequence=0;
+async function renderWorkflow(m){
+  if(m.id==='main' && route()==='workspace') return ProjectWorkspace.showResource('workflow');
+  const renderSequence=++wfRenderSequence;
+  const projectId = curTask;
+  let layoutState = null;
+  if(projectId){
+    try{
+      await wfSelectionSave;
+      const state = await api(`/api/workflow/layouts/state?task_id=${encodeURIComponent(projectId)}`);
+      if(renderSequence !== wfRenderSequence || curTask !== projectId || !uiRouteIs("workflow") || !m.isConnected) return;
+      wfNodes = Object.fromEntries(state.nodes.map(n=>[n.step,n]));
+      WF_ORDER = state.nodes.map(n=>n.step);
+      wfApplyCatalog(state.stages);
+      layoutState = state;
+      if(wfProjectId !== projectId || wfLayoutId !== state.layout.id || wfSelectedNode !== state.selected_node){
+        wfStep = state.nodes.find(n=>n.id===state.selected_node)?.step || WF_ORDER[0];
+        wfProjectId = projectId;
+        wfLayoutId = state.layout.id;
+        wfSelectedNode = state.selected_node;
+      }
+    }catch(e){ m.innerHTML = `<div class="none">工作流读取失败：${esc(e.message)}</div>`; return; }
+  }
   m.style.padding = "";        // 清掉别的页面留下的内边距
   const proj = (S.tasks||[]).find(t => t.id === curTask);
   const fPath = (proj && (proj.base_dir || proj.root_dir)) || "";
   const fName = fPath ? (fPath.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || fPath) : "未设置项目目录";
+  const displayFolderName = (proj && (proj.title || proj.name)) ? `${proj.title || proj.name} 工作区` : (fName || "项目文件");
   if(wfStep !== "files" && !WF_ORDER.includes(wfStep)) wfStep = WF_ORDER[0];   // 老 localStorage 存了个不认识的步
+  localStorage.setItem("rw-wf-step", wfStep);
   m.innerHTML = needTask() || `
     <div class="wf-page${wfMin?" min":""}${wfAgentCollapsed?" agent-min":""}" id="wfPage">
       <aside class="wf-rail" id="wfRail">
         <div class="wf-proj" id="wfProjCard" title="点击切换项目">
           <div class="wf-proj-head">
-            <small>当前项目</small>
-            <span class="wf-proj-switch-badge">⇄ 切换项目</span>
+            <small>📁 当前研究工程</small>
+            <span class="wf-proj-switch-badge">⇄ 切换</span>
           </div>
           <div class="wf-proj-body">
             <b class="wf-proj-title" title="${esc(proj?proj.title:'未命名项目')}">${esc(proj?proj.title:"未命名项目")}</b>
@@ -1474,17 +1857,69 @@ function renderWorkflow(m){
             <option value="__new__">＋ 新建/管理项目…</option>
           </select>
         </button>
-        <button class="wf-fold" id="wf-collapse" title="${wfMin?"展开步骤导航":"折叠步骤导航"}">${wfMin ? "›" : "‹ 折叠"}</button>
-        ${WF_ORDER.map(s=>`<button class="wf-step${s===wfStep?" on":""}" data-step="${s}" title="${STAGE[s]}">
-            <span class="wf-ico">${STAGE[s].split(" ")[0]}</span><span class="wf-lbl">${STAGE[s].slice(STAGE[s].indexOf(" ")+1)}</span>
-            <span class="wf-dot"></span></button>`).join("")}
+
+        <div class="wf-control-card"${wfMin?' style="display:none"':""}>
+          <div class="wf-control-header">
+            <span class="wf-control-tag">⚡ 流程编排</span>
+            <select class="control wf-layout-select" id="wfLayoutSelect" aria-label="项目工作流" title="选择当前工作流架构">
+              ${(layoutState?.layouts || []).map(layout=>`<option value="${esc(layout.id)}" ${layout.id===layoutState.layout.id?"selected":""}>${esc(layout.name)}</option>`).join("")}
+            </select>
+          </div>
+          <button type="button" class="wf-seq-btn" id="wfSequenceOpen" title="按顺序自动执行当前项目的完整流程">
+            <span class="wf-seq-icon">▶</span>
+            <span class="wf-seq-text">顺序执行整个工作流</span>
+          </button>
+          <div class="wf-control-actions">
+            <button type="button" class="wf-ctrl-btn" id="wfLayoutSettings" title="自定义工作流节点与流转编排">
+              <span class="wf-ctrl-icon">⚙</span>
+              <span>配置流程</span>
+            </button>
+            <button type="button" class="wf-ctrl-btn" id="wfSyncSettings" title="配置 Zotero 文献库与文献同步">
+              <span class="wf-ctrl-icon">🔄</span>
+              <span>文献同步</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="wf-stepper-header"${wfMin?' style="display:none"':""}>
+          <div class="wf-stepper-label-wrap">
+            <span class="wf-stepper-title">研究阶段</span>
+            <span class="wf-stepper-badge" id="wfStepBadge">${Math.max(1, WF_ORDER.indexOf(wfStep) + 1)} / ${WF_ORDER.length}</span>
+          </div>
+          <button type="button" class="wf-rail-fold-btn" id="wf-collapse" title="折叠导航栏，留出更多工作空间">
+            <span class="wf-fold-arrow">◀</span>
+            <span class="wf-fold-text">折叠</span>
+          </button>
+        </div>
+
+        <button type="button" class="wf-rail-expand-btn" id="wf-expand" title="展开步骤导航栏" ${wfMin?'style="display:flex"':'style="display:none"'}>
+          <span>▶</span>
+        </button>
+
+        <div class="wf-steps-track">
+          ${WF_ORDER.map((s, idx)=>{
+            const isCur = s === wfStep;
+            const isDone = (wfStageMap && wfStageMap[s] === "delivered");
+            const isLock = wfPrevBlocked(s);
+            const stepNum = String(idx + 1).padStart(2, '0');
+            const icon = STAGE[s].split(" ")[0];
+            const name = wfStepName(s);
+            return `<button type="button" class="wf-step ${isCur?'on':''} ${isDone?'done':''} ${isLock?'lock':''}" data-step="${s}" title="${STAGE[s]}">
+              <span class="wf-step-idx">${stepNum}</span>
+              <span class="wf-ico">${icon}</span>
+              <span class="wf-lbl">${esc(name)}</span>
+              ${isLock ? `<span class="wf-step-status lock-ico" title="前置阶段未交付">🔒</span>` : (isDone ? `<span class="wf-step-status done-ico" title="已确认交付">✓</span>` : `<span class="wf-dot"></span>`)}
+            </button>`;
+          }).join("")}
+        </div>
+
         <div class="wf-vsep"></div>
         <div class="wf-file-loc-card${wfStep==="files"?" on":""}" id="wfFileLocCard" title="${esc(fPath ? `项目位置：${fPath}\n点击在右侧查看文件树与即时预览` : '尚未选择项目目录')}">
           <div class="wfl-card-header">
             <div class="wfl-card-icon">📁</div>
             <div class="wfl-card-titles">
-              <span class="wfl-card-tag">项目文件</span>
-              <b class="wfl-card-name">${esc(fName)}</b>
+              <span class="wfl-card-tag">工程工作区</span>
+              <b class="wfl-card-name" title="${esc(displayFolderName)}">${esc(displayFolderName)}</b>
             </div>
             <span class="wfl-card-arrow">➔</span>
           </div>
@@ -1504,6 +1939,21 @@ function renderWorkflow(m){
       <aside class="wf-agent" id="wfAgent"></aside>
     </div>`;
   if(!curTask) return;
+  const layoutBtn = m.querySelector("#wfLayoutSettings");
+  if(layoutBtn) layoutBtn.onclick=()=>{ setSec="workflows"; openTab("settings"); render(); };
+  const syncBtn = m.querySelector("#wfSyncSettings");
+  if(syncBtn) syncBtn.onclick=()=>ProjectLiterature.open(curTask,true);
+  const layoutSelect = m.querySelector("#wfLayoutSelect");
+  if(layoutSelect) layoutSelect.onchange=async event=>{
+    const select=event.target; select.disabled=true;
+    try{
+      await wfSelectionSave;
+      const state=await api("/api/workflow/layouts/select",{task_id:projectId,layout_id:select.value});
+      if(curTask!==projectId || !uiRouteIs("workflow") || !m.isConnected) return;
+      wfStep=state.nodes.find(node=>node.id===state.selected_node)?.step || state.nodes[0].step;
+      await renderWorkflow(m);
+    }catch(error){ select.disabled=false; select.value=layoutState.layout.id; uiNotify("工作流切换失败："+error.message); }
+  };
   const bindProjSelect = (selEl) => {
     if(!selEl) return;
     selEl.onchange = (e) => {
@@ -1524,7 +1974,9 @@ function renderWorkflow(m){
   bindProjSelect(m.querySelector("#wfProjSelect"));
   bindProjSelect(m.querySelector("#wfProjSelectMin"));
   const wfc = m.querySelector("#wf-collapse");
-  if(wfc) wfc.onclick = ()=>{ wfMin=!wfMin; localStorage.setItem("rw-wf-min",wfMin?"1":"0"); renderWorkflow(m); };
+  if(wfc) wfc.onclick = ()=>{ wfMin=true; localStorage.setItem("rw-wf-min","1"); renderWorkflow(m); };
+  const wfe = m.querySelector("#wf-expand");
+  if(wfe) wfe.onclick = ()=>{ wfMin=false; localStorage.setItem("rw-wf-min","0"); renderWorkflow(m); };
   const bindStep = ()=>{
     if(wfStep==="idea") iwBind(m);
     if(wfStep==="search") wsBind(m);
@@ -1538,6 +1990,10 @@ function renderWorkflow(m){
   };
   m.querySelectorAll(".wf-step").forEach(b=>b.onclick=()=>{
     wfStep = b.dataset.step; localStorage.setItem("rw-wf-step", wfStep);
+    wfSelectedNode = wfNodes[wfStep].id;
+    const selection={task_id:projectId,layout_id:layoutState.layout.id,node_id:wfSelectedNode};
+    wfSelectionSave = wfSelectionSave.then(()=>api("/api/workflow/layouts/select",selection))
+      .catch(error=>uiNotify("步骤位置保存失败："+error.message));
     m.querySelectorAll(".wf-step").forEach(x=>x.classList.toggle("on", x.dataset.step===wfStep));
     const locCard = m.querySelector("#wfFileLocCard"); if(locCard) locCard.classList.remove("on");
     WF_ORDER.forEach(s=>{ const p=$("panel-"+s); if(p) { const on = s===wfStep; p.style.display = on ? "" : "none"; } });
@@ -1590,7 +2046,7 @@ function wfPaintFoot(){
   const hint = $("wfFootHint"), pill = $("wfFootPill"), back = $("wfBack"), deliver = $("wfDeliver");
   if(wfStep === "files"){                       // 第 11 项不是一步：不编号、不交付、不给「退回上一步」
     if(pill) pill.textContent = `项目文件夹 · ${flRows.length} 项`;
-    if(hint) hint.textContent = "点文件看预览 · 在右边问它这个文件 · 说「交给写作助手」就转到那一步";
+    if(hint) hint.textContent = "点文件看预览 · 在右边问它这个文件 · 说「交给写作专家」就转到那一步";
     if(back) back.style.display = "none";
     if(deliver) deliver.style.display = "none";
     return;
@@ -1610,12 +2066,15 @@ function wfPaintFoot(){
 }
 function iwBind(m){
   const ta = $("iwMine"); if(!ta) return;
-  let t0 = 0;
+  const project=curTask;let t0 = 0,pending=Promise.resolve();ta.dataset.savedValue='';
   const save = async ()=>{
+    clearTimeout(t0);const text=ta.value;
     const st = $("iw-mine-state"); if(st) st.textContent = "保存中…";
-    try{ await api("/api/idea/input", {task_id: curTask, text: ta.value}); if(st) st.textContent = "已保存"; }
-    catch(e){ if(st) st.textContent = "保存失败：" + e.message; }
+    const work=pending.catch(()=>{}).then(()=>api("/api/idea/input",{task_id:project,text}));pending=work;
+    try{await work;ta.dataset.savedValue=text;if(st)st.textContent=ta.value===text?"已保存":"未保存…";return ta.value===text;}
+    catch(e){if(st)st.textContent="保存失败："+e.message;return false;}
   };
+  ta.projectSave=save;
   ta.oninput = ()=>{ const st = $("iw-mine-state"); if(st) st.textContent = "未保存…";
     clearTimeout(t0); t0 = setTimeout(save, 700); };
   ta.onblur = ()=>{ clearTimeout(t0); save(); };
@@ -1672,7 +2131,7 @@ function iwBind(m){
       if(!body || !src) return;
       const text = src.value;
       try{
-        await api("/api/idea/verdict_save", { task_id: curTask, text: text });
+        await api("/api/idea/verdict_save", { task_id: project, text: text });
         body.dataset.raw = text;
         body.innerHTML = renderMarkdown(text);
         src.classList.add("hidden");
@@ -1687,7 +2146,7 @@ function iwBind(m){
   iwLoad();
 }
 async function iwFlush(){
-  /* 送消息之前先把上区刚改的字落库 —— 右栏助手这一轮就要读到最新的 */
+  /* 送消息之前先把上区刚改的字落库 —— 右栏专家这一轮就要读到最新的 */
   const ta = $("iwMine"); if(!ta || !curTask) return;
   try{ await api("/api/idea/input", {task_id: curTask, text: ta.value}); }catch(_){}
 }
@@ -1695,7 +2154,7 @@ function iwVerdictPaint(v){
   const box = $("iwVerdict"), at = $("iw-verdict-at"); if(!box) return;
   const recCard = $("iwRecCard"), recBody = $("iwRecBody"), recSrc = $("iwRecSrc");
   if(!v || !v.markdown){
-    box.innerHTML = `<p class="ol-empty">还没有判定 —— 在右边跟助手把约束问清，说「出一版判定」，结果落在这里。</p>`;
+    box.innerHTML = `<p class="ol-empty">还没有判定 —— 在右边跟专家把约束问清，说「出一版判定」，结果落在这里。</p>`;
     if(at) at.textContent = "";
     if(recCard) recCard.style.display = "none";
     return;
@@ -1717,10 +2176,13 @@ function iwVerdictPaint(v){
 }
 async function iwLoad(){
   if(!curTask) return;
+  const project=curTask,original=$("iwMine");
   try{
-    const d = await api(`/api/idea/memory?id=${encodeURIComponent(curTask)}`);
+    const d = await api(`/api/idea/memory?id=${encodeURIComponent(project)}`);
+    if(curTask!==project || !original?.isConnected || $("iwMine")!==original)return;
     const ta = $("iwMine");
-    if(ta && document.activeElement !== ta && ta.value !== (d.mine || "")) ta.value = d.mine || "";
+    if(ta && document.activeElement !== ta && ta.value===(ta.dataset.savedValue||'') && ta.value !== (d.mine || "")) ta.value = d.mine || "";
+    if(ta)ta.dataset.savedValue=d.mine||'';
     iwVerdictPaint(d.verdict);
   }catch(e){}
 }
@@ -1765,7 +2227,7 @@ async function showCiteModal(taskId){
     const d = await api(`/api/doc/cite?id=${encodeURIComponent(taskId || curTask)}`);
     const entries = d.matched || [];
     if(!entries.length){
-      body.innerHTML = `<p class="muted" style="text-align:center;padding:30px">正文中暂无已确认引用记录。可以在写作时向助手指定引用文献，或在正文中插入文献锚点。</p>`;
+      body.innerHTML = `<p class="muted" style="text-align:center;padding:30px">正文中暂无已确认引用记录。可以在写作时向专家指定引用文献，或在正文中插入文献锚点。</p>`;
       return;
     }
     const allBibs = entries.map(e => makeBibtex(e)).join("\n\n");
@@ -1828,13 +2290,13 @@ async function showHistoryModal(taskId, currentStep){
       <div class="modal-mask" id="wfHistMask"></div>
       <div class="modal-dialog hist-modal-box">
         <div class="modal-head">
-          <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:6px"><span>⏱</span> 对话历史与助手切换</h3>
+          <h3 style="margin:0;font-size:16px;display:flex;align-items:center;gap:6px"><span>⏱</span> 对话历史与专家切换</h3>
           <button class="modal-close" id="wfHistClose">✕</button>
         </div>
         <div class="hist-tabs">
           <button class="hist-tab-btn on" data-htab="all">全部记录</button>
           <button class="hist-tab-btn" data-htab="workflow">工作流节点 (10)</button>
-          <button class="hist-tab-btn" data-htab="assistant">一级助手</button>
+          <button class="hist-tab-btn" data-htab="assistant">一级专家</button>
         </div>
         <div class="modal-body" id="wfHistBody" style="padding:14px 18px;overflow-y:auto;flex:1">
           <p class="muted">加载中…</p>
@@ -1918,7 +2380,7 @@ async function showHistoryModal(taskId, currentStep){
           });
         }
 
-        // 2. 一级助手分组 (Level 1)
+        // 2. 一级专家分组 (Level 1)
         if(activeTab === "all" || activeTab === "assistant"){
           const asMap = new Map();
           const defaultKey = "builtin-steward";
@@ -1940,7 +2402,7 @@ async function showHistoryModal(taskId, currentStep){
                 type: "assistant",
                 assistant_id: c.assistant_id,
                 emoji: "🤖",
-                title: c.assistant_name || "一级助手",
+                title: c.assistant_name || "一级专家",
                 isCurrent: false,
                 subItems: []
               });
@@ -1950,7 +2412,7 @@ async function showHistoryModal(taskId, currentStep){
               kind: "assistant",
               id: c.id,
               assistant_id: c.assistant_id,
-              title: c.title || "助手对话",
+              title: c.title || "专家对话",
               last_msg: c.last_msg || "暂无最近消息",
               count: c.count || 0,
               updated_at: c.updated_at || "",
@@ -2023,7 +2485,7 @@ async function showHistoryModal(taskId, currentStep){
                     `).join('') : `
                       <div class="hist-empty-sub" data-empty-step="${g.step || ''}" data-empty-kind="${g.type}">
                         <span>尚未建立独立对话</span>
-                        <span style="font-size:11px;color:var(--accent);cursor:pointer">${g.type === 'workflow' ? '点击切换至此节点 ➔' : '点击切换至此助手 ➔'}</span>
+                        <span style="font-size:11px;color:var(--accent);cursor:pointer">${g.type === 'workflow' ? '点击切换至此节点 ➔' : '点击切换至此专家 ➔'}</span>
                       </div>
                     `}
                   </div>
@@ -2160,14 +2622,16 @@ const WS_LABEL = {openalex:"OpenAlex",crossref:"Crossref",arxiv:"arXiv",pubmed:"
 let wsRes=[], wsPage=1, wsRows=20, wsNote="";
 let wsPicked = new Set();                       // 论文搜索里勾选的 result id（进「下载精读」处理）
 let dlPoll = null, dlBusy = false;
+let dlStatPoll = null;                    // 「已下载论文总数」：面板开着就每 5 秒自己刷，不等人点
+let dlTruth = 0;                          // 文献库里真实篇数（/api/task 的 papers）—— 只在进面板/精读收尾时拉，不跟 5 秒轮询走（那接口 770KB）
 let dlSt = null, dlLastQueue = null;      // 最近一次精读状态 / 最近一次队列（进度刻格的事实来源）
-const wsFiltered = ()=> (wsRes||[]).slice();   // 没有手动筛选了：检索条件都交给右栏助手
+const wsFiltered = ()=> (wsRes||[]).slice();   // 没有手动筛选了：检索条件都交给右栏专家
 function searchPanelHTML(active){
   return `<div class="ws" id="panel-search"${active?"":' style="display:none"'}>
     <div class="ws-results">
       <div class="ws-head"><p class="eyebrow">SEARCH / FREE SOURCES</p>
         <h1>联网检索<span id="wsCount" class="hint" style="font-size:12px;font-weight:400"></span></h1>
-        <p class="hint">在右边助手说方向和年份（例：2020–2024 钠电 O3 型 NFM 掺杂），或直接在此输入关键词检索。多源聚合、综合高相关排序并自动关联 easyScholar 期刊分级。</p>
+        <p class="hint">在右边专家说方向和年份（例：2020–2024 钠电 O3 型 NFM 掺杂），或直接在此输入关键词检索。多源聚合、综合高相关排序并自动关联 easyScholar 期刊分级。</p>
         <div class="ws-toolbar">
           <input type="text" id="wsInputQuery" placeholder="输入搜索关键词（支持中英文、方向、体系等）…" />
           <select id="wsSort" title="检索排序方式">
@@ -2211,8 +2675,7 @@ function downloadPanelHTML(active){
       <div class="h">
         <span>待手动下载清单<span class="hint" id="dlN"></span></span>
         <span style="flex:1"></span>
-        <button class="btn ghost" id="dlZoteroColBtn" title="在 Zotero 中新建分类">📁 新建 Zotero 分类</button>
-        <button class="btn" id="dlZoteroImportBtn" title="将已下载文献以项目标签导入 Zotero 并关联 PDF">📥 导入到 Zotero</button>
+        <button class="btn" id="dlZoteroSyncBtn" title="绑定项目分类，统一同步题录和项目标签">Zotero 项目同步</button>
       </div>
       <p class="hint" id="dlTip" style="padding:0 14px 8px">无 OA 直链、或自动下载被挡（403/落地页）的论文都在这里；点击可复制 DOI 去机构库下载。</p>
       <div class="ws-list" id="dlList"></div>
@@ -2223,34 +2686,12 @@ function downloadPanelHTML(active){
 function dlBind(m){
   if(!$("dlList")) return;
   if(dlPoll){ clearInterval(dlPoll); dlPoll=null; }
+  if(dlStatPoll){ clearInterval(dlStatPoll); dlStatPoll=null; }
+  dlStatPoll = setInterval(dlStatsRefresh, 5000);      // 计数自己走：5 秒一次，只刷数字
+  dlTruthRefresh();                                    // 进面板先问一次文献库真篇数
   $("dlRead").onclick = dlRead;
-  const zColBtn = $("dlZoteroColBtn");
-  if(zColBtn){
-    zColBtn.onclick = async ()=>{
-      const name = prompt("请输入新建 Zotero 分类名称：", "项目文献-" + (curTask||""));
-      if(!name || !name.trim()) return;
-      try{
-        await api("/api/zotero/collection/create", { name: name.trim() });
-        uiNotify(`Zotero 分类「${name}」创建成功`);
-      }catch(e){ uiNotify("创建分类失败：" + e.message); }
-    };
-  }
-  const zImportBtn = $("dlZoteroImportBtn");
-  if(zImportBtn){
-    zImportBtn.onclick = async ()=>{
-      if(!confirm("确定要将本项目已下载文献导入 Zotero 并自动打上项目标签吗？")) return;
-      zImportBtn.disabled = true;
-      zImportBtn.textContent = "正在导入…";
-      try{
-        const r = await api("/api/zotero/import_project_papers", { task_id: curTask });
-        uiNotify(`已成功导入 ${r.count || 0} 篇文献至 Zotero！`);
-      }catch(e){ uiNotify("导入 Zotero 失败：" + e.message); }
-      finally{
-        zImportBtn.disabled = false;
-        zImportBtn.textContent = "📥 导入到 Zotero";
-      }
-    };
-  }
+  const zSyncBtn = $("dlZoteroSyncBtn");
+  if(zSyncBtn) zSyncBtn.onclick=()=>ProjectLiterature.open(curTask,true);
   if($("dlList")){
     $("dlList").onclick = (e)=>{
       const c = e.target.closest("[data-copy]"); if(!c) return;
@@ -2281,12 +2722,41 @@ async function dlRefresh(){
   try{ const d = await api("/api/workflow/queue",{task_id:curTask}); dlPaint(d); return d; }
   catch(e){ const t=$("dlTip"); if(t) t.textContent = "读取失败：" + e.message; return null; }
 }
+async function dlStatsRefresh(){
+  /* 只刷「已勾选 / 已下载论文总数 / 手动条数 / 进度格」这几个数字 —— 不重画手动下载清单，
+     否则清单每 5 秒重建一次，鼠标位置和滚动条都会被冲掉。面板不在前台就自己停表。 */
+  const panel = $("panel-download");
+  if(!curTask || !panel || panel.style.display === "none"){
+    if(dlStatPoll){ clearInterval(dlStatPoll); dlStatPoll=null; }
+    return;
+  }
+  try{
+    const d = await api("/api/workflow/queue",{task_id:curTask});
+    dlLastQueue = d;
+    if($("dlSel")) $("dlSel").textContent = d.selected || 0;
+    if($("dlDone")) $("dlDone").textContent = dlDoneText(d.downloaded);
+    if($("dlN")) $("dlN").textContent = (d.manual||[]).length ? ` · ${(d.manual||[]).length}` : "";
+    dlProgPaint();
+  }catch(_){}
+}
+async function dlTruthRefresh(){
+  /* 文献库真篇数 = /api/task 的 papers。/api/task 有 770KB（带全部检索结果），只在这里按需拉一次，
+     绝不放进 5 秒轮询。 */
+  if(!curTask) return dlTruth;
+  try{ const t = await api(`/api/task?id=${encodeURIComponent(curTask)}`); dlTruth = t.papers || 0; }catch(_){}
+  if($("dlDone")) $("dlDone").textContent = dlDoneText(0);
+  return dlTruth;
+}
+function dlDoneText(queueDownloaded){
+  // 三个来源取最大：精读状态里的 total（就是 len(papers)）、刚拉的 papers、下载队列里已下载数
+  return Math.max((dlSt && dlSt.total) || 0, dlTruth || 0, queueDownloaded || 0);
+}
 function dlPaint(d){
   if(!d) return;
   dlLastQueue = d;
   if($("dlLoc")) $("dlLoc").textContent = d.location || "—";
   if($("dlSel")) $("dlSel").textContent = d.selected || 0;
-  if($("dlDone")) $("dlDone").textContent = d.downloaded || 0;
+  if($("dlDone")) $("dlDone").textContent = dlDoneText(d.downloaded);
   dlProgPaint();
   const man = d.manual || [];
   if($("dlN")) $("dlN").textContent = man.length ? ` · ${man.length}` : "";
@@ -2369,6 +2839,7 @@ async function dlReadPoll(){
     if(tip) tip.textContent = st.phase === "running" ? head + " · 正在读 " + (st.current || "") : head;
     if(st.phase === "running") return;
     clearInterval(dlReadTick); dlReadTick = null; dlReadBusy = false;
+    dlTruthRefresh();                                  // 精读收尾：文献库篇数定稿了，重拉一次真数
     if(b2){
       b2.classList.remove("stop");
       b2.textContent = st.phase === "done" ? "精读完了（去看笔记）" : (st.phase === "stopped" ? "已停止" : "精读失败");
@@ -2432,7 +2903,7 @@ async function wsPaint(){
   listEl.innerHTML = slice.length ? slice.map(r=>wsCard(r,"search")).join("")
     : `<div style="display:grid;place-items:center;height:100%;padding:30px 16px;text-align:center">
         <div><p class="hint" style="font-size:13px;margin:0 0 6px">暂无检索结果</p>
-        <p class="hint">在右边助手说方向和年份，或在上方工具条输入关键词，检索完结果会回填到这里；同一个项目里会累积。</p></div></div>`;
+        <p class="hint">在右边专家说方向和年份，或在上方工具条输入关键词，检索完结果会回填到这里；同一个项目里会累积。</p></div></div>`;
   $("wsCount").textContent = all.length ? ` · ${all.length}` : "";
   $("wsNote").textContent = wsNote || (wsRes.length? `项目里累计 ${wsRes.length} 条检索结果` : "");
   wsSyncPick();
@@ -2442,7 +2913,7 @@ async function wsPaint(){
 async function wsLoadState(){
   if(!curTask) return;
   try{ const d = await api(`/api/task?id=${encodeURIComponent(curTask)}`);
-       wsRes = d.results || []; }catch(e){}
+       wsRes = d.library_items ? d.library_items.filter(item=>item.result_id) : d.results || []; }catch(e){}
   wsPaint();
 }
 function wsBind(m){
@@ -2518,8 +2989,11 @@ function wsBind(m){
 }
 
 async function loadTaskState(){
-  try{ const d=await api(`/api/task?id=${encodeURIComponent(curTask)}`);
+  const projectId = curTask;
+  try{ const d=await api(`/api/task?id=${encodeURIComponent(projectId)}`);
+    if(curTask !== projectId) return;
     const sm=d.stage_map||{};
+    if(d.workflow) wfNodes = Object.fromEntries(d.workflow.nodes.map(n=>[n.step,n]));
     wfStageMap = sm;                                   // 硬限制判据：这一步/上一步交付了没
     const dlv = {};                                     // 每一步最近一次交付的产物（steps 已按时间倒序）
     (d.steps||[]).forEach(r=>{ if(r.delivery && r.delivery !== "{}" && !dlv[r.stage]) dlv[r.stage] = r.summary || ""; });
@@ -2527,84 +3001,35 @@ async function loadTaskState(){
     // 左栏十步：已完成的亮、没开始的暗、当前步主色、上游没交付的标 lock（接不上流程）
     document.querySelectorAll(".wf-step[data-step]").forEach(b=>{
       const s=b.dataset.step, st=sm[s], gate=wfPrevBlocked(s);
-      b.classList.toggle("done", !!st && st!=="failed");
-      b.classList.toggle("todo", !st && s!==wfStep);
+      b.classList.toggle("done", st === "delivered");
+      b.classList.toggle("todo", ["ready","waiting"].includes(st) && s!==wfStep);
       b.classList.toggle("lock", !!gate);
+      const statusEl = b.querySelector(".wf-step-status, .wf-dot");
+      if(statusEl){
+        if(gate){
+          statusEl.className = "wf-step-status lock-ico";
+          statusEl.textContent = "🔒";
+          statusEl.title = `上一步「${wfStepName(gate)}」尚未交付`;
+        } else if(st === "delivered"){
+          statusEl.className = "wf-step-status done-ico";
+          statusEl.textContent = "✓";
+          statusEl.title = "已确认交付";
+        } else {
+          statusEl.className = "wf-dot";
+          statusEl.textContent = "";
+          statusEl.title = "";
+        }
+      }
       b.title = gate ? `${STAGE[s]}（上一步「${wfStepName(gate)}」还没交付，先当独立功能块用）`
-              : dlv[s] ? `${STAGE[s]} · 已交付：${dlv[s].slice(0, 80)}` : STAGE[s];
-      if(st==="failed") b.classList.add("fail");
+              : st === "stale" ? `${STAGE[s]} · 产物或上游已变更，请重新确认交付`
+              : st === "succeeded" ? `${STAGE[s]} · 执行完成，等待确认交付`
+              : st === "delivered" && dlv[s] ? `${STAGE[s]} · 已交付：${dlv[s].slice(0, 80)}` : STAGE[s];
+      b.classList.toggle("fail", st === "failed");
     });
   }catch(e){}
 }
 /* ---------------- 项目 ---------------- */
-function renderTasks(m){
-  const kws = t => String(t.material_system || "").split(/[，,、;；]+/).map(s => s.trim()).filter(Boolean)
-    .slice(0, 4).map(s => `<span class="kw">${esc(s)}</span>`).join("");
-  m.innerHTML = `
-    <div class="pj-page">
-      <h1>项目</h1>
-      <div class="sub">每个课题一个托盘 —— 卡片颜色跟着项目走，一眼认出做的是哪摊</div>
-      <div class="card proj-new pj-new"><h3>新建项目</h3>
-        <div class="row">
-          <label><span>项目标题</span>
-            <input type="text" id="t-title" placeholder="例：锂离子正极掺杂研究"></label>
-          <label><span>关键词</span>
-            <input type="text" id="t-kw" placeholder="例：钠离子，层状正极，NFM"></label>
-          <label class="full"><span>研究问题</span>
-            <textarea id="t-q" rows="2" placeholder="一句话说清主线与创新点"></textarea></label>
-          <label class="full"><span>项目位置</span>
-            <div class="pf-dir" id="t-dir-box"><span class="dp" id="t-dir">尚未选择文件夹（可选，选好会自动建好六个子文件夹）</span>
-              <button class="btn" id="t-dir-pick" type="button">＋ 选择文件夹</button></div></label>
-        </div>
-        <div class="pf-actions" style="margin-top:10px"><button class="btn" id="t-go">创建项目</button></div></div>
-    <div class="card pj-sec"><h3>${S.tasks.length} 个项目</h3>${S.tasks.length?
-      `<div class="proj-cards">${S.tasks.map((t, i) => `<div class="proj-row ${t.id===curTask?"cur":""}">
-        <div class="nm">${esc(t.title)}</div>
-        <div class="q">${esc(t.question||"未填研究问题")}</div>
-        <div class="kws">${kws(t)}</div>
-        <div class="meta"><span class="st">${esc(t.stage_now||"—")}</span>
-          <button class="go" data-go="${t.id}">进入 →</button>
-          <span class="tm">${fmtDate(t.updated_at)}</span>
-          <button class="go del" data-del="${t.id}" title="删除项目">删除</button></div></div>`).join("")}
-        <div class="proj-add">＋ 新建项目</div></div>`
-      :`<div class="hint">还没有项目</div>`}</div>
-    </div>`;   // /.pj-page
-  m.querySelectorAll(".proj-row").forEach(r=>r.onclick=()=>{           // 点整行 = 切换当前项目（不动页面）
-    const id=[...r.querySelectorAll("[data-go]")][0]?.dataset.go; if(!id) return;
-    curTask = id; localStorage.setItem("rw-task",curTask); render();
-  });
-  m.querySelectorAll("[data-go]").forEach(b=>b.onclick=(e)=>{          // 进入项目 → 切当前 + 进科研平台（十步工作流）
-    e.stopPropagation(); curTask = b.dataset.go; localStorage.setItem("rw-task",curTask); openTab("workflow");
-  });
-  m.querySelectorAll("[data-del]").forEach(b=>b.onclick=async (e)=>{    // 删除项目（连带数据，先确认）
-    e.stopPropagation();
-    const t = S.tasks.find(x=>x.id===b.dataset.del);
-    if(!await uiConfirm(`删除项目「${t?t.title:""}」？\n它的文献、证据、笔记、会话、日程、步骤都会一起删掉，不可撤销。`)) return;
-    try{ await api("/api/task/delete",{id:b.dataset.del}); }catch(err){ return uiNotify("删除失败："+err.message); }
-    if(curTask===b.dataset.del){ curTask=null; localStorage.removeItem("rw-task"); }
-    await refreshState(false); render();
-  });
-  const addCard = m.querySelector(".proj-add");                    // 「＋ 新建项目」卡 = 把焦点送回上面的表单
-  if(addCard) addCard.onclick = ()=>{ const t = $("t-title"); t.scrollIntoView({block:"center",behavior:"smooth"}); t.focus(); };
-  $("t-dir-pick").onclick = async ()=>{
-    const btn = $("t-dir-pick"); const old = btn.textContent; btn.disabled = true; btn.textContent = "选择中…";
-    try{
-      const r = await api("/api/folder/pick?title=" + encodeURIComponent("选择项目位置") +
-                          "&initial=" + encodeURIComponent(tDir||""), {method:"GET"});
-      if(r && r.dir){ tDir = r.dir; $("t-dir").textContent = tDir; $("t-dir-box").classList.add("set"); }
-    }catch(e){ uiNotify("打开文件夹选择框失败：" + e.message); }
-    btn.disabled = false; btn.textContent = old;
-  };
-  $("t-go").onclick = async ()=>{
-    const title=$("t-title").value.trim(); const question=$("t-q").value.trim();
-    if(!title) return uiNotify("标题必填");
-    const r = await api("/api/task/create",{title,question,material_system:$("t-kw").value.trim(),base_dir:tDir});
-    curTask = r.task_id; localStorage.setItem("rw-task",curTask);
-    tDir = "";
-    await refreshState(false); render();
-    if(r.dirs && r.dirs.length) uiNotify(`项目已创建，并在项目位置里建好：\n${r.dirs.join(" / ")}\n（每个子文件夹里都写了 README.md）`);
-  };
-}
+function renderTasks(){return ProjectManager.open();}
 
 /* ---------------- 日历：版式/类名照 lit（app.js 的 calendarDateInfo/renderCalendar/renderCalDayEvents + index.html 的 home-mid/home-bottom），只多了年/月下拉 ---------------- */
 let calY = new Date().getFullYear(), calM = new Date().getMonth();   // calM 0-11
@@ -2633,6 +3058,14 @@ function calEventsByDate(){
   for(const e of S.events) (map[e.date] = map[e.date] || []).push({type:"mine",label:e.title,id:e.id,done:e.done});
   return map;
 }
+function calendarEntryHTML(e){
+  const project=(S.tasks || []).find(t=>t.id===e.task_id);
+  const status={TODO:"待办",IN_PROGRESS:"执行中",REVIEW:"待验收",DONE:"已完成",scheduled:"已排期",running:"执行中",completed:"已完成",failed:"失败",blocked:"已阻断",canceled:"已取消",cancelled:"已停止",awaiting_review:"待人工审查",delivered:"已审查",rejected:"已退回",succeeded:"已完成"}[e.status] || e.status || "";
+  return `<div class="check-item ${e.done?"done":""}"><input type="checkbox" data-chk="${esc(e.id)}" ${e.done?"checked":""} ${e.linked && !e.can_toggle?'disabled title="请打开来源处理执行或审查"':""}>${e.time?`<span class="check-time">${esc(e.time)}</span>`:""}
+    <span class="check-title">${esc(e.title)}${e.linked?`<small style="display:block;color:var(--muted)">${esc(project?.title || "")} · ${esc(e.source_label)} · ${esc(status)}</small>`:""}</span>
+    ${e.linked?`<button class="btn ghost" data-cal-open="${esc(e.id)}">${e.target_type==="note"?"打开笔记":e.source_type==="workflow_review" && e.is_pending?"审查节点":"打开来源"}</button>`:`<button class="check-del" data-del="${esc(e.id)}" title="删除">✕</button>`}</div>`;
+}
+let calendarSearch='';
 function renderCalendar(m){
   const y = calY, mo = calM, t0 = today();
   const lead = (new Date(y,mo,1).getDay()+6)%7;                       // 周一=0
@@ -2660,10 +3093,10 @@ function renderCalendar(m){
   const yearOpts = Array.from({length:11},(_,i)=>now.getFullYear()-5+i).map(v=>`<option value="${v}" ${v===y?"selected":""}>${v}</option>`).join("");
   const monthOpts = Array.from({length:12},(_,i)=>`<option value="${i}" ${i===mo?"selected":""}>${i+1}月</option>`).join("");
   const doneEvs = S.events.filter(e=>e.done).sort((a,b)=>String(b.created_at||"").localeCompare(String(a.created_at||""))).slice(0,30);
-  const soon = S.events.filter(e=>!e.done && e.date>=t0).sort((a,b)=>a.date.localeCompare(b.date));
+  const soon = S.events.filter(e=>!e.done && e.is_pending!==false && e.date>=t0).sort((a,b)=>a.date.localeCompare(b.date));
   const DAY = 86400000, base = new Date(t0+"T00:00:00").getTime();
 
-  m.innerHTML = `<div class="cal-page">
+  m.innerHTML = `<div class="cal-page"><div class="cal-search"><input type="search" class="control" aria-label="搜索全部日程" placeholder="搜索日程名称、日期或项目…" value="${esc(calendarSearch)}" data-cal-search><div data-cal-search-results aria-live="polite"></div></div>
     <div class="cal-mid">
       <div class="cal-left">
       <div class="card cal-hello">
@@ -2686,6 +3119,7 @@ function renderCalendar(m){
           </div>
         </div>
         <div class="cal-week"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span class="cal-we">六</span><span class="cal-we">日</span></div>
+        <p class="hint" style="padding:0 14px">项目截止日期、下次定时运行、产出笔记和工作流人工审查会自动关联到日历。</p>
         <div class="cal-grid">${grid}</div>
         <div class="cal-day-events"><div class="cal-day-head">📆 ${calSel===t0?"今天 · ":""}${calSel}<span class="side-count">${selEvs.length} 项</span></div></div>
       </div>
@@ -2693,7 +3127,7 @@ function renderCalendar(m){
 
       <div class="card">
         <div class="card-head"><b>☀ 当日工作计划</b><span class="side-count">${calSel}</span></div>
-        <div class="check-list">${dayItems.length ? dayItems.map(e=>`<div class="check-item ${e.done?"done":""}"><input type="checkbox" data-chk="${e.id}" ${e.done?"checked":""}>${e.time?`<span class="check-time">${esc(e.time)}</span>`:""}<span class="check-title">${esc(e.title)}</span><button class="check-del" data-del="${e.id}" title="删除">✕</button></div>`).join("")
+        <div class="check-list">${dayItems.length ? dayItems.map(calendarEntryHTML).join("")
           : `<div class="hint">这一天还没有安排 🎉🎉🎉</div>`}</div>
         <div class="quick-add"><input id="todayInput" class="tb-input" placeholder="＋ 添加任务，回车确认…"><input id="todayTime" class="tb-input quick-time" type="time" title="可选：这条安排的具体时间"><button class="btn" id="btnTodayAdd">添加</button></div>
       </div>
@@ -2702,7 +3136,7 @@ function renderCalendar(m){
     <div class="cal-bottom">
       <div class="card">
         <div class="card-head"><b>📡 任务完成情况</b><span class="side-count">自动生成</span></div>
-        <div class="feed-list">${doneEvs.length ? doneEvs.map(e=>`<div class="feed-item"><span class="feed-ico">✅</span><span class="feed-text">完成任务 [${esc(e.title)}]</span><span class="feed-time">${hhmm(e.created_at)}</span></div>`).join("")
+        <div class="feed-list">${doneEvs.length ? doneEvs.map(e=>`<div class="feed-item"><span class="feed-ico">✅</span><span class="feed-text">完成任务 [${esc(e.title)}]</span>${e.linked?`<button class="btn ghost" data-cal-open="${esc(e.id)}">${e.target_type==="note"?"打开笔记":"打开来源"}</button>`:""}<span class="feed-time">${hhmm(e.created_at)}</span></div>`).join("")
           : `<div class="hint">还没有完成的任务</div>`}</div>
       </div>
       <div class="card">
@@ -2715,6 +3149,15 @@ function renderCalendar(m){
     </div>
   </div>`;
 
+  const search=m.querySelector('[data-cal-search]'),results=m.querySelector('[data-cal-search-results]');
+  const searchEvents=()=>{
+    calendarSearch=search.value;const query=calendarSearch.trim().toLowerCase();results.hidden=!query;
+    if(!query){results.replaceChildren();return;}
+    const matches=S.events.filter(event=>[event.title,event.date,event.project_title,event.kind].join(' ').toLowerCase().includes(query)).slice(0,100);
+    results.innerHTML=matches.length?matches.map(event=>`<button type="button" class="cal-search-result" data-cal-result="${esc(event.id)}"><strong>${esc(event.title)}</strong><span>${esc(event.date)} ${esc(event.time||'')}</span></button>`).join(''):'<p class="hint">没有匹配的日程</p>';
+    results.querySelectorAll('[data-cal-result]').forEach(button=>button.onclick=()=>{const event=S.events.find(item=>item.id===button.dataset.calResult);if(!event)return;calSel=event.date;const d=new Date(event.date+'T00:00:00');calY=d.getFullYear();calM=d.getMonth();calendarSearch='';render();});
+  };
+  search.oninput=searchEvents;searchEvents();
   $("calY").onchange = e=>{ calY = +e.target.value; render(); };
   $("calM").onchange = e=>{ calM = +e.target.value; render(); };
   $("calPrev").onclick = ()=>{ if(--calM<0){calM=11;calY--;} render(); };

@@ -25,7 +25,7 @@ import workflow
 
 class ProjectIntegrationTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.db_path = Path(self.tmp.name) / "research.sqlite3"
         with workflow.WorkflowDB(self.db_path) as db:
@@ -34,6 +34,7 @@ class ProjectIntegrationTest(unittest.TestCase):
 
     def test_existing_markdown_is_browsable_and_paths_stay_inside_project(self):
         path = self.root / "笔记" / "文献矩阵" / "已有.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("# 已有\n\n证据", encoding="utf-8")
         custom = self.root / "笔记" / "旧分类"
         custom.mkdir()
@@ -63,39 +64,50 @@ class ProjectIntegrationTest(unittest.TestCase):
             paths.validate_project_dir(Path.home())
         with self.assertRaises(ValueError):
             paths.validate_project_dir(Path(self.root.anchor))
+        managed = Path(self.tmp.name) / "Zotero"
+        managed.mkdir()
+        (managed / "zotero.sqlite").touch()
         with self.assertRaises(ValueError):
-            paths.validate_project_dir(Path(self.tmp.name) / "Zotero" / "storage")
+            paths.validate_project_dir(managed / "storage")
 
     def test_empty_notebook_exposes_a_usable_category_path(self):
         with workflow.WorkflowDB(self.db_path) as db:
             board = project_notes.dashboard(db, self.project_id)
-            category = next(g for g in board["groups"] if g["name"] == "研究计划")
+            category = next(g for g in board["groups"] if g["name"] == "研究规划")
             self.assertEqual(category["count"], 0)
             relative = category["path"] + "/first.md"
             project_notes.write(db, self.project_id, relative, "created from empty dashboard")
             self.assertEqual(project_notes.read(db, self.project_id, relative)["content"],
                              "created from empty dashboard")
-            with self.assertRaisesRegex(ValueError, "笔记/"):
-                project_notes.write(db, self.project_id, "研究计划/second.md", "invalid prefix")
+            project_notes.write(db, self.project_id, "笔记/研究计划/second.md", "project-relative note")
+            self.assertEqual(project_notes.read(db, self.project_id, "笔记/研究计划/second.md")["content"], "project-relative note")
+            with self.assertRaises(ValueError):
+                project_notes.write(db, self.project_id, "../second.md", "outside project")
 
     def test_tool_limit_reply_preserves_actual_successes_and_failures(self):
         relative = "笔记/研究计划/last-step.md"
         calls = [{"id": str(i), "type": "function", "function": {
             "name": "project_note_write", "arguments": json.dumps({"path": path, "content": "test"})}}
-            for i, path in enumerate(("研究计划/rejected.md", relative))]
+            for i, path in enumerate(("../rejected.md", relative))]
         with workflow.WorkflowDB(self.db_path) as db, patch.object(workflow, "chat_raw", return_value={
                 "content": "", "tool_calls": calls}):
-            result = workflow.run_agent(db, self.project_id, "write test", max_steps=1,
-                                        profile={"permission": "workspace_write"})
-            self.assertIn(relative, result["reply"])
-            self.assertIn("失败", result["reply"])
-            self.assertIn("成功", result["reply"])
-            self.assertIn("尚未完成最终核验", result["reply"])
-            self.assertEqual(db.messages(self.project_id)[-1]["content"], result["reply"])
+            with self.assertRaises(RuntimeError) as failure:
+                workflow.run_agent(db, self.project_id, "write test", max_steps=1,
+                                   profile={"permission": "workspace_write"})
+            reply = str(failure.exception)
+            self.assertIn(relative, reply)
+            self.assertIn("失败", reply)
+            self.assertIn("成功", reply)
+            self.assertIn("尚未完成最终核验", reply)
+            self.assertEqual(db.messages(self.project_id)[-1]["content"], reply)
+            self.assertEqual(db.db.execute("SELECT status FROM workflow_runs ORDER BY started_at DESC LIMIT 1").fetchone()[0], "failed")
         self.assertTrue((self.root / relative).is_file())
         self.assertFalse((self.root / "研究计划/rejected.md").exists())
 
     def test_feishu_cannot_bind_a_legacy_zotero_project_for_writes(self):
+        managed = Path(self.tmp.name) / "Zotero"
+        managed.mkdir()
+        (managed / "zotero.sqlite").touch()
         with workflow.WorkflowDB(self.db_path) as db:
             db.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?",
                           (str(Path(self.tmp.name) / "Zotero/library"), self.project_id))
@@ -118,10 +130,10 @@ class ProjectIntegrationTest(unittest.TestCase):
                                     "output_dir": "笔记/每日推送", "enabled": True})
         with patch.object(workflow, "run_agent", return_value={"reply": "今天的摘要"}) as agent:
             result = schedule.run_once(row, trigger="manual")
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["status"], "completed", result)
         self.assertTrue(Path(result["output_path"]).is_relative_to(self.root))
         self.assertIn("今天的摘要", Path(result["output_path"]).read_text(encoding="utf-8"))
-        self.assertEqual(agent.call_args.kwargs["assistant_id"], "builtin-steward")
+        self.assertEqual(agent.call_args.kwargs["assistant_id"], "builtin-scheduler")
 
     def test_feishu_message_becomes_project_chat_and_duplicate_is_ignored(self):
         with workflow.WorkflowDB(self.db_path) as db:

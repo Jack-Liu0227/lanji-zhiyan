@@ -11,7 +11,7 @@ from run_manager import RunManager
 
 class ReliabilityTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-test-rel-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-test-rel-")
         self.db_path = Path(self.tmp.name) / "test_rel.sqlite3"
         self.db = ResearchDB(self.db_path)
 
@@ -71,7 +71,7 @@ class ReliabilityTest(unittest.TestCase):
 
 class RunManagerTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-test-run-manager-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-test-run-manager-")
         self.db_path = Path(self.tmp.name) / "test_run_manager.sqlite3"
         self.db = ResearchDB(self.db_path)
 

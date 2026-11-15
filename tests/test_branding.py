@@ -20,7 +20,7 @@ class BrandingTest(unittest.TestCase):
         installer = (ROOT / "tools" / "installer.spec").read_text(encoding="utf-8")
         self.assertEqual(spec.count("name='览籍智研'"), 2)
         self.assertNotIn("name='ResearchWorkbench'", spec)
-        self.assertIn("name='览籍智研-安装程序'", installer)
+        self.assertIn("name='览籍智研'", installer)
         installer_py = (ROOT / "tools" / "installer.py").read_text(encoding="utf-8")
         self.assertIn('APP = "览籍智研"', installer_py)
 

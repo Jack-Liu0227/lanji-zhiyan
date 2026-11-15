@@ -1,15 +1,16 @@
 """情报日报：RSS 抓取与解析（纯标准库，RSS 2.0 / RSS 1.0(RDF) / Atom 都吃）。
 
-只做三件事：拿字节 → ElementTree 解析 → 归一成 dict 列表。落库在 workflow.
-WorkflowDB，路由在 server.py。去重按文章 link（全局唯一），所以同一个 URL 换来源
-再加也不会重复入库。
+管理全局订阅配置，抓取与解析来源并调度入库。落库在 workflow.WorkflowDB，
+路由在 server.py。文章按 link 全局去重，删除来源仍保留已入库内容。
 """
 from __future__ import annotations
 
 import email.utils
 import html
 import re
+import threading
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any
@@ -19,8 +20,9 @@ UA = "Mozilla/5.0 (compatible; research-workbench/1.0; +local)"
 TIMEOUT = 12
 MAX_ITEMS = 60                 # 单个源一次最多收 60 条（够看；多的下次刷新还会来）
 SUMMARY_MAX = 400
+_sources_lock = threading.RLock()
 
-# 固定 5 个来源,全都实测能解析;Nature 主刊 rss 实测返回网页,故用 Nature Energy / Materials
+# 内置来源；用户可在设置中添加、编辑或停用。
 DEFAULT_SOURCES = [
     {"url": "https://www.nature.com/nenergy.rss", "title": "Nature Energy", "category": "学术论文"},
     {"url": "https://www.nature.com/nmat.rss", "title": "Nature Materials", "category": "学术论文"},
@@ -122,12 +124,14 @@ def fetch(url: str, timeout: int = TIMEOUT) -> list[dict[str, str]]:
 
 
 def refresh(db: Any) -> dict[str, Any]:
-    """抓固定那 5 个来源并入库（表空就先把默认源补上）。网络并发跑，落库回主线程串行（sqlite 不跨线程写）。"""
+    """抓取已启用来源；网络并发，SQLite 落库在主线程串行完成。"""
     from concurrent.futures import ThreadPoolExecutor
+    import service_settings
 
-    if not db.rss_sources():
-        seed(db)                                       # 来源固定：第一次刷新自动补 DEFAULT_SOURCES
-    srcs = db.rss_sources()
+    with _sources_lock:
+        if not db.rss_sources() and not service_settings.read(db,'rss').get('configured'):
+            seed(db)
+        srcs = [source for source in db.rss_sources() if source['enabled']]
     if not srcs:
         return {"sources": 0, "fetched": 0, "added": 0, "failures": []}
 
@@ -157,7 +161,7 @@ def refresh(db: Any) -> dict[str, Any]:
 
 
 def seed(db: Any) -> int:
-    """补上固定那 5 个来源（URL 已存在的跳过），返回新增个数。"""
+    """补上内置来源（URL 已存在的跳过），保留已有配置。"""
     have = {s["url"] for s in db.rss_sources()}
     n = 0
     for d in DEFAULT_SOURCES:
@@ -165,6 +169,55 @@ def seed(db: Any) -> int:
             db.add_rss_source(d["url"], d["title"], d["category"])
             n += 1
     return n
+
+
+def _source(db: Any, sid: str) -> dict[str, Any]:
+    try:return db.rss_source(sid)
+    except KeyError:raise ValueError('RSS 订阅源不存在') from None
+
+
+def _configured(db: Any) -> None:
+    import service_settings
+    service_settings.write(db,'rss',{**service_settings.read(db,'rss'),'configured':True})
+
+
+def save_source(db: Any, body: dict[str, Any]) -> dict[str, Any]:
+    with _sources_lock:
+        sid=str(body.get('id') or '')
+        old=_source(db,sid) if sid else {}
+        url=str(body.get('url',old.get('url','')) or '').strip()
+        try:
+            parts=urllib.parse.urlsplit(url)
+            valid=parts.scheme in ('http','https') and bool(parts.hostname) and not any(c.isspace() for c in url)
+            parts.port
+        except ValueError:valid=False
+        if not valid or len(url)>8192:raise ValueError('请输入有效的 http:// 或 https:// RSS 地址')
+        url=parts.geturl()
+        title=str(body.get('title',old.get('title','')) or '').strip() or url
+        category=str(body.get('category',old.get('category','学术论文')) or '').strip() or '学术论文'
+        if len(title)>200:raise ValueError('订阅源名称不能超过 200 字符')
+        if len(category)>60:raise ValueError('分类不能超过 60 字符')
+        enabled=body.get('enabled',old.get('enabled',True))
+        if not isinstance(enabled,(bool,int)) or enabled not in (0,1):raise ValueError('启用状态无效')
+        duplicate=db.db.execute('SELECT id FROM rss_sources WHERE url=? AND id<>?',(url,sid)).fetchone()
+        if duplicate and (not old or url!=old['url']):raise ValueError('该 RSS 地址已存在，请编辑已有订阅源')
+        if not sid:sid=db.add_rss_source(url,title,category)['id']
+        db.db.execute('UPDATE rss_sources SET url=?,title=?,category=?,enabled=? WHERE id=?',(url,title,category,int(enabled),sid))
+        db.db.commit();_configured(db)
+        return {'source':db.rss_source(sid)}
+
+
+def delete_source(db: Any, body: dict[str, Any]) -> dict[str, Any]:
+    with _sources_lock:
+        source=_source(db,str(body.get('id') or ''))
+        db.db.execute('DELETE FROM rss_sources WHERE id=?',(source['id'],));db.db.commit();_configured(db)
+        return {'deleted':source['id'],'retained_items':db.rss_count(source_id=source['id'])}
+
+
+def add_defaults(db: Any) -> dict[str, Any]:
+    with _sources_lock:
+        added=seed(db);_configured(db)
+        return {'added':added,'sources':db.rss_sources()}
 
 
 if __name__ == "__main__":                     # 自带小样，不联网也能验解析

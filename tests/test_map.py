@@ -17,7 +17,7 @@ import workflow_documents  # noqa: E402
 
 class MapStepTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = Path(self.tmp.name) / "t.sqlite3"
         os.environ["RESEARCH_WORKBENCH_DB"] = str(self.db_path)
         self.db = workflow.WorkflowDB(self.db_path)
@@ -38,7 +38,7 @@ class MapStepTest(unittest.TestCase):
     def test_step_order_is_ten_with_map_after_outline(self):
         self.assertEqual(len(workflow.STAGES), 10)
         self.assertEqual(workflow.STAGES.index("map"), workflow.STAGES.index("outline") + 1)
-        self.assertEqual(workflow.STAGE_LABEL["map"], "证据链谱系")
+        self.assertEqual(workflow.STAGE_LABEL["map"], "梳理精读")
 
     def test_write_read_roundtrip_and_dirty_data_dropped(self):
         r = workflow.map_write(self.db, self.tid, {
@@ -73,7 +73,7 @@ class MapStepTest(unittest.TestCase):
     def test_sources_list_outline_notes_and_data(self):
         s = workflow.map_sources(self.db, self.tid)
         self.assertEqual(s["sections"], ["1.1 背景", "1.2 现状"])
-        # 笔记给「标题 + id」，不给哈希文件名 —— 助手要能认出挂的是哪一篇
+        # 笔记给「标题 + id」，不给哈希文件名 —— 专家要能认出挂的是哪一篇
         self.assertIn("精读-A", [n["id"] for n in s["notes"]])
         self.assertIn("精读-A.md", [n["title"] for n in s["notes"]])
         self.assertIn("XRD-2026-10.csv", s["data"])

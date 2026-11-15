@@ -12,6 +12,67 @@ import run_service
 
 
 def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[str]], db: Any) -> Any | None:
+    import execution_conversations
+    response=execution_conversations.route(method,path,body,query,db)
+    if response is not None:return response
+    import usage_stats
+    response=usage_stats.route(method,path,body,query,db)
+    if response is not None:return response
+    import message_channels
+    response=message_channels.route(method,path,body,query,db)
+    if response is not None:return response
+    import literature_import
+    response = literature_import.route(method, path, body, query, db)
+    if response is not None: return response
+    import execution_board
+    response = execution_board.route(method, path, body, query, db)
+    if response is not None: return response
+    import paper_toolbox
+    response = paper_toolbox.route(method, path, body, query, db)
+    if response is not None: return response
+    import conversation_history
+    response = conversation_history.route(method, path, body, query, db)
+    if response is not None: return response
+    import research_plans
+    response = research_plans.route(method, path, body, query, db)
+    if response is not None: return response
+    if path.startswith('/api/project/resources'):
+        import project_resources
+        project_id = str(body.get('project_id') or (query.get('project_id') or [''])[0])
+        if method == 'GET' and path == '/api/project/resources':
+            return project_resources.catalog(db, project_id, (query.get('kind') or [''])[0], (query.get('q') or [''])[0],
+                                             review_status=(query.get('review_status') or [''])[0])
+        if method == 'POST' and path == '/api/project/resources/index':
+            return project_resources.index(db, project_id)
+        if method == 'POST' and path == '/api/project/resources/write':
+            return project_resources.write(db, project_id, body)
+    if method == 'POST' and path == '/api/project/files/create':
+        import project_files
+        return project_files.create(db,body)
+    import project_task_routes
+    task_response = project_task_routes.route(method, path, body, query, db)
+    if task_response is not None:
+        return task_response
+    import review_inbox
+    review_response = review_inbox.route(method, path, body, query, db)
+    if review_response is not None:
+        return review_response
+    if method == "GET" and path == "/api/calendar/linked":
+        events = db.events((query.get("month") or [None])[0])
+        project = (query.get("task_id") or [""])[0]
+        return {"events": [e for e in events if not project or e.get("task_id") == project]}
+    import file_handoff
+    handoff_response = file_handoff.route(method, path, body, query, db)
+    if handoff_response is not None:
+        return handoff_response
+    import workflow_execution
+    execution_response = workflow_execution.route(method, path, body, query, db)
+    if execution_response is not None:
+        return execution_response
+    import project_library
+    library_response = project_library.route(method, path, body, query, db)
+    if library_response is not None:
+        return library_response
     # ---------------- 0. Canonical assets and resumable workflow runs ----------------
     if path == "/api/assets" and method == "GET":
         project_id = (query.get("project_id") or [""])[0]
@@ -52,7 +113,8 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[st
                                           idempotency_key=str(body.get("idempotency_key") or ""))}
 
     if path == "/api/workflow/recover" and method == "POST":
-        return {"recovered": run_service.recover_stale(db, int(body.get("max_age_minutes") or 15))}
+        import agent_jobs
+        return agent_jobs.recover(db.path)
 
     # ---------------- 1. easyScholar ----------------
     if path == "/api/easyscholar/config" and method == "GET":
@@ -109,6 +171,7 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[st
             assigned_assistant=str(body.get("assigned_assistant", "")),
             due_date=str(body.get("due_date", "")),
             stage=str(body.get("stage", "")),
+            status=str(body.get("status", "TODO")),
         )
 
     if path == "/api/todos/update" and method == "POST":
@@ -122,6 +185,15 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[st
 
     if path == "/api/todos/import_workflow" and method == "POST":
         return {"created": project_todos.import_workflow_stages_as_todos(db, str(body.get("task_id", "")))}
+
+    if path == "/api/todos/dispatch" and method == "POST":
+        import project_tasks
+        todo = db.db.execute("SELECT task_id FROM project_todos WHERE id=?", (str(body.get("id") or ""),)).fetchone()
+        if not todo:
+            raise ValueError("待办不存在")
+        return {"task": project_todos.dispatch(db, str(body.get("id") or ""),
+                                               reviewer_id=str(body.get("reviewer_id") or ""),
+                                               authority=project_tasks.CommandContext.ui(todo["task_id"]))}
 
     # ---------------- 4. 项目空间搜索与笔记预览 ----------------
     if path == "/api/space/search" and method == "GET":

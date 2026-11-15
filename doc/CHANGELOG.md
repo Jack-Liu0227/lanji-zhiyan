@@ -2,6 +2,51 @@
 
 > 一轮改动一条，给 PR / 交接用。只写「改了什么、影响谁、怎么验」。
 
+## 2026-10-24（1.1.3：打包、安装与启动验收）
+
+- 冻结程序通过 PyInstaller 的 `_MEIPASS` 定位资源，避免误用上级源码目录中的迁移与模型目录。缺少迁移脚本时直接报错，停止创建不完整的数据库。
+- 打包脚本使用同一 Python 环境构建程序与安装器，支持 Python 3.10 及更新版本；新增 `requirements-build.txt`。安装包固定命名为 `览籍智研.exe`，免安装包为 `览籍智研-免安装版.zip`，文件名不带版本号，并生成 SHA256 校验文件。
+- 安装器先验证全部文件、复制到临时目录，再替换现有程序；复制或替换失败保留旧版。重复安装清除过期程序文件，用户数据独立保留。快捷方式使用 Windows 实际桌面目录，安装错误返回非零退出码，支持无人值守安装。
+- 修正中文目录重启判断：只检查目录，避免中文 exe 文件名造成多余重启；不同免安装目录使用独立的目录联接。
+- 验证命令：`tools\build-app.bat --no-pause`。自动验收在源码树外、不含 Python 的 PATH 下进行，检查全新安装、全部迁移、模型目录、HTTP 服务、前端资源、重复安装与数据保留。桌面窗口另通过 CDP 检查原生桥接与全部页面入口。
+
+## 2026-10-24（1.1.2：修「装了但没窗口」—— .NET 认不得中文安装路径）
+
+**问题**：装出来的包双击后没有无边框窗口，只在 Edge 里开个标签页。`data/cache/server-error.log` 里是两层：
+- `Failed to resolve Python.Runtime.Loader.Initialize`（pythonnet 加载 `Python.Runtime.dll`）
+- `FileLoadException ... 尝试从一个网络位置加载程序集`（pywebview 加载 `Microsoft.Web.WebView2.Core.dll`）
+
+根因：`.NET Framework` 侧把**带中文的路径**当成网络位置/沙箱目标拒掉。程序装在 `%LOCALAPPDATA%\览籍智研\app`（中文），源码跑在 `site-packages`（ASCII）所以从来不复现。同一份 exe 复制到纯 ASCII 目录就能起窗，中文目录就起不来 —— 实测对照过。
+
+**修法两条**：
+1. 安装器把**程序**装到纯 ASCII 的 `%LOCALAPPDATA%\LanjiZhiyan\app`，数据根仍是 `%LOCALAPPDATA%\览籍智研`（老数据不动），并清掉数据根下残留的旧 `app/`。
+2. `server.py` 加 junction 兜底：免安装版被解压到中文目录时，启动先在 `%LOCALAPPDATA%\Lanji-run` 建目录联接再从那条路径重启自己（`sys.executable` 与模块 `__file__` 全变 ASCII）；建不出来就照旧退回浏览器。
+
+**验证**：装好后 `MainWindowHandle` 非零且窗口可见（标题 `览籍智研 · v<戳>`），`/`=200、`/api/state`=200；免安装版放在中文目录里也走 junction 重启后出窗。
+
+
+## 2026-10-24（1.1.1：修打包漏 migrations/ —— 装完打开是白屏）
+
+**问题**：1.1 的 Setup/Portable 里没有 `migrations/`。`run_migrations()` 找不到目录就 `return []`，不报错；新机器上 `task_links`、`project_todos` 关联表一类的表建不出来，`/api/state` 直接 500（`OperationalError: no such table: task_links`），浏览器里就是打不开的白屏。从源码跑不触发，因为仓库根就有 `migrations/`。
+
+**做法**：`tools/览籍智研.spec` 的 datas 补一条 `(migrations, 'migrations')` —— 冻结包里迁移脚本落在 exe 同目录，`app_dir()/migrations` 才找得到。
+
+**验证**：重打后清空数据根、起 exe，`/api/state` 200，`research.sqlite3` 里 63+ 表且 `task_links` 存在；老数据根（已应用 010 迁移）照常。
+
+## 2026-10-24（1.1：引用导出成形、笔记树、工作流验收与并发加固）
+
+**引用导出**：PDF / Word / HTML / Markdown 四个出口都带引用 —— PDF 走 `\cite` + 参考文献表（样式可选），其余三出口把 `{{Cn}}` 换成按正文出现顺序编的 `[n]` 并自动接「参考文献」节，台账里查不到的编号保留原标记并在 `cites.missing` 里报出来。著者-出版年制照 GB/T 7714 自带 `.bst` 的实测规则实现（1–3 位全列、≥4 位用「等」、同年加 a/b、文后按著者字顺），PDF 端 AY 样式明确退回数字式并给出说明。
+
+**工作流**：上一步没交付就只是独立功能块（硬闸）；确认交付时把该步产物落库（`steps.delivery`）；工作流验收、任务执行与持久化恢复打通，补上 artifact / 调度 / 数据一致性的审计修复。
+
+**笔记与对话**：笔记支持多级树状目录（新建文件夹、递归展示、删除）并重排了笔记空间布局；历史对话侧栏可折叠，状态存 localStorage。
+
+**数据库**：SQLite 开 WAL、`busy_timeout` 60s、`synchronous=NORMAL`；Schema 初始化加线程锁，`/api/task` 加锁冲突重试 —— 解决多 agent 并发下的 database locked。
+
+**规范化**：各阶段文本统一命名（文献检索、文献入库、文献精读、拟定框架、证据链谱系、论文撰写、AI预审查、学术英译、格式排版）。
+
+**验证**：`tests/` 新增 `test_workflow_coordination / test_workflow_runtime / test_audit_regressions / test_followup_audit / test_agent_jobs` 等；打包后的 exe 起在空闲端口 curl 到 200。
+
 ## 2026-10-23（补上著者-出版年制：不自己定规则，照 GB/T 7714 的实现来）
 
 **问题**：上一版 Word 只有顺序编码（正文 [n]）。著者-年份那套要定「几位作者开始用等、同年怎么加 a/b、文后按什么排」这些细则，不该我拍脑袋。

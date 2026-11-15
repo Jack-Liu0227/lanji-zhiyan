@@ -19,6 +19,14 @@ const sources = [];
 
 const defined = new Set();
 const refs = new Map();
+// Inspect the rendered controls, whose IDs are composed from call-site prefixes.
+const runtimeSource = readFileSync(new URL("views/agent-runtime.js", root), "utf8");
+const runtime = new Function("esc", "S", runtimeSource + "\nreturn AgentRuntime;")(String, {models: []});
+for (const {text} of sources) {
+  for (const match of text.matchAll(/AgentRuntime\.markup\(\s*['"]([A-Za-z0-9_-]+)['"]/g)) {
+    for (const id of runtime.markup(match[1]).matchAll(/id="([^"]+)"/g)) defined.add(id[1]);
+  }
+}
 
 for (const { name, text } of sources) {
   for (const match of text.matchAll(/(?<![-\w])id\s*=\s*["']([A-Za-z0-9_-]+)["']/g)) {

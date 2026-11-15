@@ -36,6 +36,36 @@ class WebFetchTest(unittest.TestCase):
         self.assertEqual(bad, [], "这些 POST 少了 Content-Type: application/json（会被 415 挡掉）：\n" + "\n".join(bad))
 
 
+class NativeWindowCommandsTest(unittest.TestCase):
+    def test_window_commands_prefer_native_bridge_and_fall_back_without_it(self):
+        source = (JS / "app-core.js").read_text(encoding="utf-8")
+        command = re.search(r"function winCommand\(action\)\{.*?\n\}", source, re.S)
+        self.assertIsNotNone(command)
+        result = subprocess.run(["node", "-e", r"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const calls = [];
+const context = vm.createContext({
+  window: {pywebview: {api: {win: action => {calls.push(['native', action]); return {ok: action};}}}},
+  api: (path, body) => {calls.push(['http', path, body]); return Promise.resolve({ok: 'close'});}
+});
+vm.runInContext(require('node:fs').readFileSync(0, 'utf8'), context);
+(async () => {
+  await context.winCommand('close');
+  await context.winCommand('minimize');
+  context.window.pywebview = undefined;
+  await context.winCommand('close');
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls[0], ['native', 'close']);
+  assert.deepEqual(calls[1], ['native', 'minimize']);
+  assert.equal(calls[2][0], 'http');
+  assert.equal(calls[2][1], '/api/win/close');
+  assert.equal(Object.keys(calls[2][2]).length, 0);
+})().catch(error => {console.error(error); process.exitCode = 1;});
+"""], input=command.group(0), text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 class ChatWithoutConversationTest(unittest.TestCase):
     """主界面没有对话就直接发消息：服务端必须现开一条不绑项目的对话。
     以前空 id 一路走到 run_agent 的 db.summary('') → KeyError，整轮发言变成一条红字报错。"""
@@ -45,9 +75,19 @@ class ChatWithoutConversationTest(unittest.TestCase):
         self.chat_js = (JS / "chat-views.js").read_text(encoding="utf-8")
 
     def test_server_creates_chat_when_task_id_is_empty_or_stale(self) -> None:
-        self.assertIn("db.create_chat(\"\")", self.server)
-        self.assertIn("SELECT 1 FROM chats WHERE id=?", self.server)
-        self.assertIn("SELECT 1 FROM research_tasks WHERE id=?", self.server)
+        import agent_jobs
+        import workflow
+        from unittest.mock import patch
+        from run_manager import RunManager
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp, patch.object(RunManager, "_instance", RunManager()), \
+                patch.object(agent_jobs.threading.Thread, "start"):
+            db_path = pathlib.Path(tmp) / "test.sqlite3"
+            for owner in ("", "deleted-chat"):
+                run = agent_jobs.start(db_path, {"task_id": owner, "message": "Hello"})
+                with workflow.WorkflowDB(db_path) as db:
+                    row = db.db.execute("SELECT task_id FROM chats WHERE id=?", (run.task_id,)).fetchone()
+                    self.assertIsNotNone(row)
+                    self.assertEqual(row["task_id"], "")
 
     def test_frontend_no_longer_blocks_send(self) -> None:
         self.assertNotIn('alert("先新建一个对话（左上角 ＋）")', self.chat_js)
@@ -61,7 +101,7 @@ class UploadOriginGateTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         import os, socket, subprocess, tempfile, time
-        cls.tmp = tempfile.TemporaryDirectory(prefix="rw-upload-gate-")
+        cls.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-upload-gate-")
         cls.addClassCleanup(cls.tmp.cleanup)
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))

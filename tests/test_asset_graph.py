@@ -18,7 +18,7 @@ import workflow
 
 class AssetGraphTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-assets-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-assets-")
         self.db = workflow.WorkflowDB(Path(self.tmp.name) / "research.sqlite3")
         self.project = self.db.create_task("资产项目", "问题", "关键词")
 
@@ -29,7 +29,8 @@ class AssetGraphTest(unittest.TestCase):
     def test_note_is_atomic_file_and_asset(self):
         note = self.db.add_note(self.project, "精读", "# 结论\n\n原文 p.1")
         path = Path(note["canonical_path"])
-        self.assertEqual(path.read_text(encoding="utf-8"), "# 结论\n\n原文 p.1")
+        import note_catalog
+        self.assertEqual(note_catalog.split(path.read_text(encoding="utf-8"))[1], "# 结论\n\n原文 p.1")
         assets = asset_service.list_assets(self.db, self.project, "note")
         self.assertEqual(len(assets), 1)
         self.assertEqual(assets[0]["title"], "精读")
@@ -123,8 +124,8 @@ class AssetGraphTest(unittest.TestCase):
         )
         self.db.db.commit()
         self.assertEqual(run_service.recover_stale(self.db, 1), 1)
-        self.assertEqual(run_service.get(self.db, "wrun-stale")["status"], "queued")
-        self.assertEqual(self.db.db.execute("SELECT status FROM workflow_nodes WHERE id='wnode-stale'").fetchone()[0], "queued")
+        self.assertEqual(run_service.get(self.db, "wrun-stale")["status"], "interrupted")
+        self.assertEqual(self.db.db.execute("SELECT status FROM workflow_nodes WHERE id='wnode-stale'").fetchone()[0], "interrupted")
 
     def test_asset_routes(self):
         asset_service.register(self.db, project_id=self.project, kind="note",

@@ -1,21 +1,42 @@
 /* ============================== 页面 ============================== */
+const chatMessageKey=value=>String(value??'').replace(/\s+/g,' ').trim();
+const chatUserInputKey=value=>{
+  const normalized=chatMessageKey(value);
+  for(const marker of ['【当前项目明确引用的材料】','【@上下文】','【用户明确使用的提示词模板：','【用户选择的材料】','【@提及的上下文】']){
+    const index=normalized.indexOf(marker);
+    if(index>0)return normalized.slice(0,index).trim();
+  }
+  return normalized;
+};
 function render(){
+  const retired=tabs.find(tab=>tab.id===activeTab);
+  if(retired?.route==='schedules'){
+    TaskCenter.requestView('automation');
+    retired.route='task-center';retired.title='任务与自动化';
+  }
   renderSidebar(); renderTopbar(); renderTabs(); renderStatus();
+  if(typeof GlobalTodos !== 'undefined') GlobalTodos.syncProjects();
   const r = route(); const m = $("main");
-  m.classList.remove("sp-fill", "tof-fill");
+  m.classList.remove("sp-fill", "tof-fill");m.classList.toggle("agent-fill",r==="agent");
+  m.classList.toggle("pw-fill", r==="workspace");
+  m.classList.toggle('toolbox-fill',r==='toolbox');
+  m.classList.toggle('ec-global-fill',r==='task-center');
   if(!S.loaded) m.innerHTML = `<div class="muted">加载中…</div>`;
   else if(r==="agent") renderAgent(m);
-  else if(r==="workflow") renderWorkflow(m);
+  else if(r==="workspace") return ProjectWorkspace.render(m);
+  else if(r==='task-center') return TaskCenter.renderGlobal(m);
+  else if(r==='usage') return UsageView.render(m);
+  else if(r==='toolbox') return PaperToolbox.render(m);
+  else if(r==="workbench") return renderWorkflow(m);
+  else if(r==="workflow") { if(window.ProjectWorkspace) { ProjectWorkspace.requestRoute("workflow"); return ProjectWorkspace.render(m); } else return renderWorkflow(m); }
   else if(r==="tasks") renderTasks(m);
-  else if(r==="space") renderSpace(m);
+  else if(r==="space" || r==="notes") { if(window.ProjectWorkspace) { ProjectWorkspace.requestRoute("notes"); return ProjectWorkspace.render(m); } else return renderSpace(m); }
   else if(r==="calendar") renderCalendar(m);
   else if(r==="mail") renderMail(m);
-  else if(r==="library") renderStar(m);                        // 知识星图整页（项目 → 文献/笔记/知识点/候选/工作流）
-  else if(r==="notes") { spTab = "notes"; renderSpace(m); }
+  else if(r==="library") renderStar(m);
   else if(r==="intel") renderIntel(m);
   else if(r==="assistants") renderAssistants(m);
   else if(r==="team") renderTeam(m);
-  else if(r==="schedules") renderSchedules(m);
   else if(r==="models") renderModels(m);
   else renderSettings(m);
 }
@@ -35,9 +56,9 @@ function needTask(){
   return "";
 }
 
-/* ---------------- 助手（个人资料 + 编辑器 ----------------
-   我的助手 / 公开助手 两栏；点卡片进编辑器（身份 / 提示词 / 规则 / 默认模型）。
-   公开助手只读，只能「复制为我的」。 ---------------- */
+/* ---------------- 专家（个人资料 + 编辑器 ----------------
+   我的专家 / 公开专家 两栏；点卡片进编辑器（身份 / 提示词 / 规则 / 默认模型）。
+   公开专家只读，只能「复制为我的」。 ---------------- */
 let asView = "all";                       // all | official | mine | edit
 let asEdit = { id:"", source:"user", name:"", avatar:"", description:"", rules:"", prompts:[], model_id:"" };
 
@@ -93,13 +114,18 @@ function asCard(a){
     </div></div>`;
 }
 
-/* ---------------- 团队（成员=助手实例、Leader 恒第一、身份色） ---------------- */
+/* ---------------- 团队（成员=专家实例、Leader 恒第一、身份色） ---------------- */
 let teamScope = localStorage.getItem("rw-team-chat") || "";
 let teamData = null, teamBusy = false, teamTick = null, teamList = null;
+const teamDrafts=new Map(),teamSending=new Set();
+function rememberTeamDraft(key,value){teamDrafts.set(key,value);try{localStorage.setItem(key,value);}catch{}}
 function tcColor(i){ const P=["var(--brand)","#5c9ea4","#b58a5e","#8f7fb5","#7fa06a","#b57f92"]; return P[(i||0)%P.length]; }
 const modelName = (id)=>((S.models||[]).find(x=>x.id===id)||{}).name||"";
+let teamChatRenderSequence=0;
 async function renderTeam(m){
+  const ticket=++teamChatRenderSequence;
   if(!teamList){ try{ teamList = await api("/api/teams"); }catch(e){ teamList = {teams:[], error:e.message}; } }
+  if(ticket!==teamChatRenderSequence || route()!=='team' || !m.isConnected)return;
   const TL = (teamList.teams||[]);
   const curT = TL.find(t=>t.id===teamScope) || null;
   if(!curT){                                            // scope 不合法（老数据/被解散）→ 落到第一个固定团队
@@ -115,27 +141,35 @@ async function renderTeam(m){
     catch(e){ m.innerHTML = `<div class="page-head"><div><p class="inst-label">TEAM</p><h3>团队</h3>
       <p class="hint">开团队群失败：${esc(e.message)}</p></div></div>`; return; }
   }
-  try{ teamData = await api("/api/team/chat?scope=" + encodeURIComponent(teamScope)); }
+  const scope=teamScope;
+  try{ teamData = await api("/api/team/chat?scope=" + encodeURIComponent(scope)); }
   catch(e){ teamData = {error:e.message, members:[], transcript:[]}; }
+  if(ticket!==teamChatRenderSequence || route()!=='team' || teamScope!==scope || !m.isConnected)return;
   const D = teamData || {}, all = D.members||[], leader = all.find(x=>x.role==="leader")||null;
+  const draftKey=`rw-team-draft:${scope}:${D.session?.id||'default'}`;
+  let savedDraft=teamDrafts.get(draftKey);if(savedDraft===undefined){try{savedDraft=localStorage.getItem(draftKey)||'';}catch{savedDraft='';}}
   const ms = all.filter(x=>x.role!=="member"?false:true), picks = all.filter(x=>x.role==="member");
   const inTeam = new Set(picks.map(x=>x.assistant_id));
   const pool = (S.assistants||[]).filter(a=>a.enabled!==0 && !inTeam.has(a.id));
   const run = D.running;
+  const orchestration = D.orchestration;
+  const coordination = D.coordination || {};
   const tr = D.transcript||[];
   let lastUser = -1; tr.forEach((r,i)=>{ if(r.role==="user") lastUser = i; });
   const spoken = new Set(tr.slice(lastUser+1).map(r=>r.sender).filter(Boolean));   // 这一轮里已经说过话的成员
   let seq = 0;
   const bubble = (r)=>{
     const who = r.sender || (r.role==="user" ? "你" : "成员");
-    const mm = picks.find(x=>x.name===who);
+    const mm = all.find(x=>x.name===who);
+    const expert=(S.assistants||[]).find(item=>item.id===mm?.assistant_id);
+    const displayName=r.role==="user"||who==="系统"?who:(r.assistant_name||expert?.name||who);
     const at = esc((r.at||"").replace("T"," ").slice(5,16));
     if(who==="系统") return `<div class="tc-sys"><span class="tc-av">!</span><div class="tc-body"><div class="tc-who"><b>系统</b><span class="tc-at">${at}</span></div><div class="tc-text">${esc(r.content||"")}</div></div></div>`;
     const mine = r.role==="user";
     const n = mine ? 0 : ++seq;
     return `<div class="tc-msg ${mine?"me":"them"}" style="--mc:${mine?"var(--accent)":tcColor(mm&&mm.color)}">
       <span class="tc-av">${mine?"🙋":esc((mm&&mm.name||"?").slice(0,1))}</span>
-      <div class="tc-body"><div class="tc-who"><b>${esc(who)}</b>${n?`<span class="tc-idx">#${n}</span>`:""}<span class="tc-at">${at}</span></div>
+      <div class="tc-body"><div class="tc-who"><b>${esc(displayName)}</b>${displayName!==who?`<span class="tc-at">${esc(who)}</span>`:""}${n?`<span class="tc-idx">#${n}</span>`:""}<span class="tc-at">${at}</span></div>
         <div class="tc-text">${esc(r.content||"")}</div></div></div>`;
   };
   const sessions = D.sessions || [];
@@ -177,7 +211,9 @@ async function renderTeam(m){
         </label>
       </div>
       <div class="tc-top-acts">
-        ${run?`<span class="pill ok">${esc(run.phase||"接力推进中")} · 第 ${run.turn||0}/${run.total||6} 轮</span><button class="btn ghost" id="tcStop">停止</button>`:`<span class="pill">团队就绪</span>`}
+        <span class="pill ${run?'ok':''}">${esc(orchestration?.phase || run?.phase || '负责人调度 · 团队就绪')}</span>${run?'<button class="btn ghost" id="tcStop">停止</button>':''}
+        ${orchestration?'<button class="btn" id="tcExecution">任务与产物</button>':''}
+        ${orchestration?.workflow?'<button class="btn" id="tcWorkflow">查看工作流</button>':''}
         <button class="btn ghost" id="tcRefresh" title="刷新状态">刷新</button>
         <button class="btn ghost" id="tcConfig" title="在设置中管理团队和专家成员">⚙️ 团队配置</button>
       </div>
@@ -186,31 +222,34 @@ async function renderTeam(m){
     <!-- 专家成员与当前接力状态展示横条 -->
     <div class="tc-members-strip">
       <span class="tc-strip-lbl">专家成员：</span>
-      ${leader ? `<span class="tc-member-pill leader" title="团队统筹 Leader"><span class="tc-av-mini">🧭</span><b>${esc(leader.name)}</b><span class="tc-pill-sub">Leader</span></span>` : ""}
+      ${leader ? `<span class="tc-member-pill leader" title="团队统筹 Leader"><span class="tc-av-mini">🧭</span><b>${esc(leader.name)}</b><span class="tc-pill-sub">${esc(OFFICE_CN[leader.status]||leader.status)}</span></span>` : ""}
       ${picks.map(x => {
-        const now = !!(run && run.current === x.name);
+        const now = x.status === "running";
         const done = spoken.has(x.name);
         return `<span class="tc-member-pill ${now ? "now" : (done ? "done" : "")}" style="--mc:${tcColor(x.color)}" title="${esc(x.name)} · ${esc(x.model || "跟随设置")}">
           <span class="tc-av-mini" style="background:var(--mc)">${esc((x.name||"?").slice(0,1))}</span>
           <b>${esc(x.name)}</b>
-          <span class="tc-pill-sub">${now ? "发言中" : (done ? "已发言" : "待命")}</span>
+          <span class="tc-pill-sub">${esc(OFFICE_CN[x.status]||x.status)}</span>
         </span>`;
       }).join("")}
       ${!picks.length ? `<span class="hint" style="margin:0 4px">当前团队暂无专家，点击右上方「⚙️ 团队配置」添加专家成员</span>` : ""}
-      ${run ? `<span class="tc-strip-phase">🏃 ${esc(run.current || "")} 正在分析输出…</span>` : ""}
+      ${orchestration ? `<span class="tc-strip-phase">成员执行中 ${orchestration.counts.running||0} · 已交付 ${orchestration.counts.delivered||0} / ${orchestration.children.length}</span>` : ''}
     </div>
 
     <!-- 主对话区域：全宽无侧栏沉浸式对话框 -->
     <section class="tc-panel tc-chat-main tc-chat-full">
       <div class="tc-tl" id="tcChat">
         ${tr.length ? tr.map(bubble).join("")
-          : `<div class="tc-empty">🧭 团队协作对话框已就绪。<br>在此输入研究目标（例如：「帮我挑一个钠电正极掺杂方向，产出文献候选与实验对比表」），Leader 将统筹团队专职专家接力推进。<br><small class="hint">需要增减专家成员或调整模型权限？随时点击右上角「⚙️ 团队配置」。</small></div>`}
+          : `<div class="tc-empty">团队协作已就绪。<br>输入研究目标，负责人会拆解任务，安排专家并行检索与分析，再汇总证据和产物。<br><small class="hint">每队最多 ${coordination.max_parallel||3} 个成员任务同时执行，最终产物按项目模式核查。可在「团队配置」中调整成员与模型。</small></div>`}
       </div>
+      <details class="usage-card"><summary>团队通信与交付 · ${(D.communications||[]).length} 条</summary>${(D.communications||[]).map(item=>`<article><small>${esc(item.at||"")} · ${esc(item.sender||item.kind||"")}</small><pre style="white-space:pre-wrap">${esc(item.text||"")}</pre></article>`).join("")||"暂无通信记录"}</details>
+      ${orchestration?.children.length?`<details class="usage-card" open><summary>专家任务与交接 · ${orchestration.children.length} 项</summary>${orchestration.children.map(child=>`<article><span>${esc(child.title)} · ${esc(OFFICE_CN[child.status]||({ready:'等待依赖',delivered:'已交付',cancelled:'已停止',interrupted:'已中断'})[child.status]||child.status)}</span> <button class="btn ghost" data-tc-task="${esc(child.id)}">查看任务与证据</button></article>`).join('')}</details>`:''}
+      ${orchestration?.handoffs?.length?`<details class="usage-card"><summary>Agent 控制权交接 · ${orchestration.handoffs.length} 次</summary>${orchestration.handoffs.map(item=>`<article><span>${esc(item.source_member_id)} → ${esc(item.target_member_id)} · ${esc(item.status)}</span><pre style="white-space:pre-wrap">${esc(item.reason||"")}</pre></article>`).join("")}</details>`:""}
       <div class="tc-composer">
-        <textarea class="control" id="tcSay" rows="3" placeholder="给团队下达研究目标或追问…（Enter 发送，Shift+Enter 换行）"></textarea>
+        <textarea class="control" id="tcSay" data-draft-key="${esc(draftKey)}" rows="3" placeholder="给团队下达研究目标或追问…（Enter 发送，Shift+Enter 换行）">${esc(savedDraft)}</textarea>
         <div class="tc-composer-actions">
-          <span class="hint">${run ? `正在接力推进：${esc(run.current||"")}` : "Enter 发送 / Shift+Enter 换行 · 团队串行接力协作"}</span>
-          <button class="btn btn-primary" id="tcSend">${run ? "继续追问 / 补充指令" : "发送并让团队推进"}</button>
+          <span class="hint">${run ? '当前任务进行中，可先编辑下一项研究目标；处理或停止当前任务后发送' : 'Enter 发送 / Shift+Enter 换行 · 负责人拆解，专家并行，交付后汇总'}</span>
+          <button class="btn btn-primary" id="tcSend">${run ? '当前任务进行中' : '发送并让团队推进'}</button>
         </div>
       </div>
     </section>
@@ -248,6 +287,7 @@ async function renderTeam(m){
     }
     teamData = null; render();
   });
+  ConversationHistory.mount(m.querySelector('.tc-hist-list'),{kind:'team',teamId:teamScope,selected:()=>curSess.id,onSelect:async id=>{await api('/api/agent-settings/team-session',{team_id:teamScope,session_id:id});teamData=null;render();},onChanged:()=>{teamData=null;render();}});
   const cfg = $("tcConfig");
   if(cfg) cfg.onclick = ()=>{
     window.__teamMode = "manage";
@@ -256,17 +296,24 @@ async function renderTeam(m){
   const st = $("tcStop");
   if(st) st.onclick = async ()=>{ try{ await api("/api/team/chat/stop", {scope:teamScope}); }catch(e){ uiNotify(e.message); } setTimeout(()=>{ teamData=null; render(); }, 600); };
   const rf = $("tcRefresh"); if(rf) rf.onclick = ()=>{ teamData=null; render(); };
+  if($('tcExecution'))$('tcExecution').onclick=()=>ProjectWorkspace.openTask(orchestration.task_id, D.team?.project_id||curTask);
+  if($('tcWorkflow')&&orchestration.workflow.chat_id)$('tcWorkflow').onclick=()=>ProjectWorkspace.openConversation(orchestration.workflow.chat_id,D.team?.project_id||curTask);
+  m.querySelectorAll('[data-tc-task]').forEach(button=>button.onclick=()=>ProjectWorkspace.openTask(button.dataset.tcTask,D.team?.project_id||curTask));
   const say = async ()=>{
     const t = $("tcSay"); const text = (t.value||"").trim();
-    if(!text) return;
-    if(!picks.length) return uiNotify("先在「设置 / 团队配置」中添加专家成员。");
-    t.value = "";
-    try{ await api("/api/team/chat/say", {scope:teamScope, text}); }
-    catch(e){ return uiNotify("发送失败：" + e.message); }
-    teamData = null; render();
+    if(!text||run||teamSending.has(draftKey)) return;
+    if(!leader) return uiNotify("先在「团队配置」中指定负责人。");
+    const submitted=t.value;rememberTeamDraft(draftKey,submitted);teamSending.add(draftKey);$("tcSend").disabled=true;
+    try{
+      await api("/api/team/chat/say", {scope, text});
+      if(teamDrafts.get(draftKey)===submitted)rememberTeamDraft(draftKey,'');
+      if(route()==='team'&&teamScope===scope){teamData=null;render();}
+    }catch(e){uiNotify("发送失败："+e.message);}
+    finally{teamSending.delete(draftKey);if($("tcSay")?.dataset.draftKey===draftKey&&$("tcSend"))$("tcSend").disabled=false;}
   };
-  if($("tcSend")) $("tcSend").onclick = say;
-  if($("tcSay")) $("tcSay").onkeydown = (e)=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); say(); } };
+  if($("tcSend")){$("tcSend").onclick = say;$("tcSend").disabled=!!run||teamSending.has(draftKey);}
+  if($("tcSay"))$("tcSay").oninput=()=>rememberTeamDraft(draftKey,$("tcSay").value);
+  if($("tcSay")) $("tcSay").onkeydown = (e)=>{ if(e.key==="Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !e.isComposing && e.keyCode!==229 && !e.repeat){ e.preventDefault(); say(); } };
   clearTimeout(teamTick);                                   // 有轮次在跑就每 2s 刷新一次群
   if(run) teamTick = setTimeout(()=>{ if(route()==="team"){ teamData=null; render(); } }, 2000);
 }
@@ -398,13 +445,13 @@ async function deleteAssistant(id, name){
   try{ await api("/api/assistant/delete", {id}); }catch(e){ return uiNotify("删除失败：" + e.message); }
   await refreshState(false); asView = "mine"; render();
 }
-async function useAssistant(id){                       // 用它对话：绑到当前对话（没有就新建一个），切到 Agent 页
+async function useAssistant(id, title = ""){           // 用它对话：每次都开一个新对话窗口（不复用当前会话），切到 Agent 页
   const a = (S.assistants||[]).find(x=>x.id===id);
   if(a && a.enabled === 0){
     try{ await api("/api/assistant/toggle", {id, enabled: 1}); a.enabled = 1; }catch(_){}
   }
-  let cid = curChat;
-  if(!cid){ const r = await api("/api/chat/create", {}); cid = r.id || (r.chat && r.chat.id); }
+  const r = await api("/api/chat/create", {title});
+  const cid = r.id || (r.chat && r.chat.id);
   try{ await api("/api/chat/assistant", {id: cid, assistant_id: id}); }catch(e){ return uiNotify("绑定失败：" + e.message); }
   curChat = cid; localStorage.setItem("rw-chat", cid);
   await refreshState(false); openTab("agent");
@@ -495,7 +542,31 @@ function asEmpty(){                       // 空状态：没绑专家 = 智研�
     ${face}
     <div style="display:flex;flex-direction:column;gap:6px">
       <span style="font-size:16px;font-weight:600">${esc(a?a.name:"智研管家")}</span>
-      <span style="font-size:13px;color:var(--muted)">${esc(project ? `已绑定「${projName(project)||"项目"}」· 使用该项目的资料与记忆，产出保存在项目文件夹。` : (a&&a.description ? a.description : "全局工作台助手 · 不限项目，帮你查资料、排日程、改论文、把活派给专家。直接说你要做什么。"))}</span></div>
+      <span style="font-size:13px;color:var(--muted)">${esc(project ? `已绑定「${projName(project)||"项目"}」· 使用该项目的资料与记忆，产出保存在项目文件夹。` : (a&&a.description ? a.description : "全局智研中枢 · 无项目绑定，调控全域模块与专家团队，支持自然语言意图立项与编排。"))}</span></div>
+    ${!project && (!a || a.id === "builtin-steward") ? `
+      <div class="steward-hub-card" style="text-align:left;width:100%;margin-top:6px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:20px;">⚡</span>
+          <div>
+            <strong style="font-size:13px;color:var(--fg);">全局智研中枢 · 自然语言意图立项与多模块调控</strong>
+            <p style="font-size:11px;color:var(--muted);margin:2px 0 0;">顶层无项目绑定，直接说出研究构想，管家将自动完成项目创建、装配专家团队并启动 LangGraph 状态图流：</p>
+          </div>
+        </div>
+        <div class="steward-hub-chips" style="margin-top:10px;">
+          <div class="steward-hub-chip" data-chip="立项：全固态锂电池界面传输机制探索（自动装配专家团队并启动开题论证图流）">
+            <strong>🔬 全固态电池开题论证</strong>
+            <span>自然语言立项 + 团队装配 + 启动 StateGraph</span>
+          </div>
+          <div class="steward-hub-chip" data-chip="立项：大语言模型长文本推理优化（研读最新文献并输出对比综述）">
+            <strong>📚 大模型推理加速研读</strong>
+            <span>文献精读 + 证据抽取 + 对比综述图流</span>
+          </div>
+          <div class="steward-hub-chip" data-chip="立项：钙钛矿太阳能电池降解机理（配置周更自动化跟踪与人工核查）">
+            <strong>⏰ 钙钛矿降解跟踪</strong>
+            <span>自动化跟踪 + 人工核查检查点</span>
+          </div>
+        </div>
+      </div>` : ''}
     ${ps.length?`<div class="as-chips">${ps.map(p=>`<button class="as-chip" data-chip="${esc(p)}">${esc(p)}</button>`).join("")}</div>`:""}</div>`;
 }
 function bindChips(){
@@ -516,8 +587,8 @@ function renderAgent(m){
         <div class="at-heading"><span class="at-idwrap" id="at-who" title="这个对话绑定的专家（去「专家」页管理）">${faceOf(boundA, 32)}</span>
           <div><h1 id="at-title" class="at-title" title="点击改名">${esc(cur?cur.title:"Hi，今天有什么安排？")}</h1>
           <p id="at-sub">${atSubHTML(cur)}</p></div></div>
-        <button class="at-profile" id="at-profile" title="在「设置」里改模型与权限">
-          <span>⚙</span><b>${esc(S.active? (S.active.name+" · "+S.active.model) : "未选择模型")}</b><em>自动批准</em></button>
+        <button class="at-profile" id="at-profile" title="管理模型服务商">
+          <span>⚙</span><b>${esc(S.active? (S.active.name+" · "+S.active.model) : "未选择模型")}</b><em>模型设置</em></button>
       </header>
       <div class="at-tabs">
         <button class="at-tab ${agentView==="conversation"?"on":""}" data-v="conversation">对话</button>
@@ -536,6 +607,7 @@ function renderAgent(m){
         <div class="atts" id="atts"></div>
         <div class="composer" id="composer">
           <textarea id="ask" rows="1" placeholder="发消息给${esc(boundA?boundA.name:"智研管家")}…（Enter 发送，Shift+Enter 换行）"></textarea>
+          ${AgentRuntime.markup('at',cur||{},'modpick')}
           <div class="at-tools">
             <div class="at-tools-l">
               <div class="plus-wrap">
@@ -556,8 +628,7 @@ function renderAgent(m){
                 ${(S.tasks||[]).map(t=>`<option value="${t.id}" ${cur&&cur.task_id===t.id?"selected":""}>${esc(t.title)}</option>`).join("")}</select></label>
                <button class="at-sel at-outbtn" id="outpick" ${cur&&cur.task_id?"disabled":""} title="${cur&&cur.task_id?"绑定项目后固定写入项目目录":"选择这个对话的产出文件夹"}">📁
                  <span id="outdir-txt">${cur&&cur.task_id?"项目目录 / 其余":esc(cur?outName(cur.out_dir):"默认产出目录")}</span></button>
-              <label class="at-sel" title="这个对话用哪个模型档案">🔌<select id="modpick"><option value="">未配置模型</option>
-                ${S.models.map(mm=>`<option value="${mm.id}" ${S.active&&mm.id===S.active.id?"selected":""}>${esc(mm.name)}</option>`).join("")}</select></label>
+
             </div>
             <div class="at-tools-r">
               <label class="at-sel" title="这个对话用哪个专家（在「专家」页增删改）">${boundA?esc(boundA.avatar||"👨‍🔬"):`<img src="${Q_AV}" alt="" width="16" height="16" style="object-fit:contain;vertical-align:-3px">`}<select id="assist">
@@ -613,9 +684,13 @@ function renderAgent(m){
     render();
   };
   if($("ah-new")) $("ah-new").onclick = async ()=>{
-    const r = await api("/api/chat/create",{title:""});      // 通用助手对话：不绑项目
-    curChat = r.chat.id; localStorage.setItem("rw-chat",curChat);
-    await refreshState(false); render();
+    const button=$("ah-new"),panel=document.querySelector('.at');button.disabled=true;
+    panel.querySelectorAll('select,textarea,button').forEach(control=>control.disabled=true);
+    try{const r = await api("/api/chat/create",{title:""});
+      curChat = r.chat.id; localStorage.setItem("rw-chat",curChat);
+      await refreshState(false);if(route()==='agent')render();
+    }catch(error){uiNotify('新建对话失败：'+error.message);}
+    finally{if(button.isConnected)button.disabled=false;if(panel.isConnected)panel.querySelectorAll('select,textarea,button').forEach(control=>control.disabled=false);}
   };
   const allBox = $("ah-all");
   if(allBox) allBox.onchange = ()=>{ ahSel.clear(); if(allBox.checked) (S.chats||[]).forEach(t=>ahSel.add(t.id)); render(); };
@@ -643,9 +718,15 @@ function renderAgent(m){
     }catch(e){ txt.textContent = old; uiNotify("选择文件夹失败："+e.message); }
     btn.disabled=false;
   };
-  $("modpick").onchange = async (e)=>{ if(!e.target.value) return; await api("/api/models/active",{id:e.target.value}); await refreshState(false); render(); };
+  for(const [id,key] of [['modpick','model_id'],['atReasoning','reasoning'],['atPermission','permission']])$(id).onchange=async event=>{
+    const value=event.target.value;document.querySelectorAll('#atRuntime select').forEach(select=>select.disabled=true);
+    try{if(!curChat){const result=await api('/api/chat/create',{});curChat=result.chat.id;localStorage.setItem('rw-chat',curChat);await refreshState(false);}
+      const chatId=curChat;await AgentRuntime.save(chatId,key,value);if(route()==='agent'&&curChat===chatId)$('atRuntimeHint').textContent='已保存，下次发送生效';
+    }catch(error){uiNotify('会话设置保存失败：'+error.message);}
+    finally{if(route()==='agent')document.querySelectorAll('#atRuntime select').forEach(select=>select.disabled=false);}
+  };
      $("assist").onchange = async (e)=>{
-       if(!curChat){ uiNotify("先新建一个对话，再选助手。"); return; }
+       if(!curChat){ uiNotify("先新建一个对话，再选专家。"); return; }
        try{ await api("/api/chat/assistant", {id:curChat, assistant_id:e.target.value}); }catch(err){ return uiNotify("绑定失败："+err.message); }
        await refreshState(false); render();
      };
@@ -654,20 +735,22 @@ function renderAgent(m){
     const projectId=pb.value;
     pb.disabled=true;
     try{
-      if(!curChat){ const r = await api("/api/chat/create", {}); curChat = r.id || (r.chat&&r.chat.id); localStorage.setItem("rw-chat", curChat); }
-      await api("/api/chat/bind", {id:curChat, task_id:projectId});
+      if(!curChat){ const r = await api("/api/chat/create", {task_id:projectId}); curChat = r.id || (r.chat&&r.chat.id); localStorage.setItem("rw-chat", curChat); }
+      else await api("/api/chat/bind", {id:curChat, task_id:projectId});
     }catch(e){ pb.value=cur?.task_id||""; uiNotify("绑定失败："+e.message); return; }
     finally{ pb.disabled=!!activeAgentRun; }
     await refreshState(false); render();
   };
   // 输入区（我们自己的：＋ 菜单 / 拖放 / 粘贴 / 自动长高）
+   PromptUI.mount($("ask"),`chat:${curChat}`,cur?.task_id||'');
    $("send").onclick = ()=>activeAgentRun ? cancelAgentRun() : send();
    $("send").classList.toggle("stop", !!activeAgentRun);
    $("send").textContent = activeAgentRun ? "■" : "↑";
    if(pb) pb.disabled = !!activeAgentRun;
    $("ask").onkeydown = (e)=>{
-     if(e.key==="Escape" && activeAgentRun){ e.preventDefault(); cancelAgentRun(); return; }
-     if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();return;}
+     if(e.isComposing || e.keyCode===229 || e.repeat) return;
+     if(e.key==="Escape" && activeAgentRun){ e.preventDefault(); e.stopPropagation(); cancelAgentRun(); return; }
+     if(e.key==="Enter"&&!e.shiftKey&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();send();return;}
      if((e.key==="ArrowUp" || e.key==="ArrowDown") && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.isComposing){
        const ta=e.target, atEdge=e.key==="ArrowUp" ? ta.selectionStart===0 : ta.selectionStart===ta.value.length;
        if(!atEdge && agentHistoryIndex<0) return;
@@ -685,6 +768,10 @@ function renderAgent(m){
   $("attmenu").querySelectorAll("[data-a]").forEach(b=>b.onclick=()=>pick(b.dataset.a));
   $("filepick").onchange = (e)=>{ const fs=[...e.target.files]; e.target.value=""; addFiles(fs); };
   wireDrop($("composer"));
+  ConversationHistory.mount(m.querySelector('.ah-list'),{selected:()=>curChat,onSelect:id=>{curChat=id;localStorage.setItem('rw-chat',id);render();},onChanged:()=>{
+    if(curChat&&!(S.chats||[]).some(chat=>chat.id===curChat)){curChat=null;localStorage.removeItem('rw-chat');render();}
+    else{const title=document.getElementById('at-title');if(title)title.textContent=curChatRow()?.title||'智研管家';}
+  }});
   setAtts(); grow();
   if(!curChat){
     $("msgs").innerHTML = asEmpty(); bindChips();
@@ -700,16 +787,27 @@ async function maybeAskPermission(){
    await setPermissionMode("ask");
 }
 async function loadChat(){
+  restoreAgentRun();
   const requestedChat = curChat;
   try{
     const {messages} = await api(`/api/chat?id=${encodeURIComponent(curChat)}`);
     if(curChat!==requestedChat) return;
+    if(agentView==='trajectory'){renderTrajectory($('msgs'));loadAgentMeta();return;}
     if(activeAgentRun && activeAgentChat===curChat){
       const box=$("msgs");
       if(box){
         box.innerHTML="";
-        activeAgentBase.forEach(m=>appendOne(box,{type:m.role,content:m.content,events:m.events,replay:true,at:m.created_at}));
-        activeAgentEvents.forEach(ev=>appendOne(box,ev));
+        const seenUsers=new Set(activeAgentBase.filter(item=>item.role==='user').map(item=>chatUserInputKey(item.content)).filter(Boolean));
+        activeAgentBase.forEach(m=>{
+          const events=Array.isArray(m.events)?m.events.filter(ev=>{
+            if(ev.type!=='user')return true;
+            const key=chatUserInputKey(ev.content);if(!key)return true;
+            if(seenUsers.has(key))return false;
+            seenUsers.add(key);return true;
+          }):m.events;
+          appendOne(box,{...m,events,type:m.role,replay:true,at:m.created_at});
+        });
+        activeAgentEvents.forEach(ev=>{const normalized=chatUserInputKey(ev.content);if(ev.type==='user'&&seenUsers.has(normalized))return;if(ev.type==='user'&&normalized)seenUsers.add(normalized);appendOne(box,ev);});
       }
       return;
     }
@@ -724,29 +822,29 @@ async function loadChat(){
       box.innerHTML = asEmpty(); bindChips();
     } else {
       box.innerHTML="";
-      S.chat.forEach(m=>appendOne(box,{type:m.role,content:m.content,events:m.events,replay:true,at:m.created_at}));
+      const seenUsers=new Set();S.chat.forEach(m=>{
+        const normalized=chatUserInputKey(m.content);if(m.role==='user'&&normalized&&seenUsers.has(normalized))return;if(m.role==='user'&&normalized)seenUsers.add(normalized);
+        const events=Array.isArray(m.events)?m.events.filter(ev=>{
+          if(ev.type!=='user')return true;
+          const key=chatUserInputKey(ev.content);if(!key)return true;
+          if(seenUsers.has(key))return false;
+          seenUsers.add(key);return true;
+        }):m.events;
+        appendOne(box,{...m,events,type:m.role,replay:true,at:m.created_at});
+      });
     }
     box.scrollTop = box.scrollHeight;
     loadAgentMeta();
   }catch(e){}
 }
-function renderTrajectory(box, evs = S.chatEvents){  // 轨迹：把 tool_call / tool_result 配成一条条记录
-  evs = evs || [];
-  const calls = evs.filter(e=>e.type==="tool_call");
-  if(!calls.length){ box.innerHTML = emptyState("🧭","还没有运行轨迹","这段对话还没有发起过 Agent 运行。"); return; }
-  const results = evs.filter(e=>e.type==="tool_result");
-  box.innerHTML = `<div style="display:grid;gap:12px;width:100%">
-    <div class="st-row" style="justify-content:flex-start;gap:14px;height:26px"><span>运行 1</span><span>${calls.length} 次工具调用</span><span>${fmtDate(new Date().toISOString())}</span></div>
-    ${calls.map((c,i)=>{ const r = results.find(r=>c.id && r.id===c.id) || results[i] || {};
-      return `<details class="tool-card ${r.ok===false?"bad":""}">
-        <summary><span>🔧</span><span class="tool-name">#${i+1} ${esc(c.name)}</span>
-          <span class="tool-detail">${esc(r.summary||"")}</span>
-          <span class="tool-dur">${r.ok===false?"失败":(r.summary?"完成":"进行中")}</span></summary>
-        <div class="tool-body"><p class="tool-blk">Input</p><pre>${esc(JSON.stringify(c.args||{},null,2))}</pre>
-          ${r.summary?`<p class="tool-blk">Output</p><pre>${esc(r.summary)}</pre>`:""}</div></details>`;}).join("")}
-  </div>`;
+function renderTrajectory(box){
+  box.classList.add('at-trajectory');const chat=(S.chats||[]).find(row=>row.id===curChat),id=curChat;
+  WorkspaceTrajectory.mount(box,{chatId:id,projectId:chat?.task_id||'',live:()=>route()==='agent'&&curChat===id&&agentView==='trajectory'});
 }
 function appendOne(box,ev,who){
+  if(ev.sender||ev.assistant_name)who={name:ev.sender||ev.assistant_name,emoji:who?.emoji||'🤖'};
+  else if(ev.assistant_id){const expert=(S.assistants||[]).find(item=>item.id===ev.assistant_id);if(expert)who={name:expert.name,emoji:expert.avatar||'🤖'};}
+  if(ev.type==='template_used'){PromptUI.event(box,ev);return;}
   if(ev.type.startsWith("reasoning_")){
     let card=[...box.querySelectorAll(".reasoning-card")].find(n=>n.dataset.reasoningId===ev.id);
     if(ev.type==="reasoning_done" && !ev.content){ if(card) card.remove(); return; }
@@ -763,10 +861,11 @@ function appendOne(box,ev,who){
     box.scrollTop=box.scrollHeight; return;
   }
   if(ev.type==="assistant_delta"){
-    let row=box.querySelector(".msg-assistant.streaming:last-child");
+    let row=[...box.querySelectorAll('.msg-assistant.streaming')].findLast(node=>ev.message_id?node.dataset.messageId===ev.message_id:node.dataset.subId===(ev.sub||''));
     if(!row){
       row=document.createElement("div"); row.className="msg-row msg-assistant streaming";
-      row.innerHTML=`<div class="msg-meta"><span class="msg-ava">🤖</span><strong>智研管家</strong><span class="msg-chip">输出中…</span><button class="msg-copy" title="复制回复">复制</button></div><div class="md"></div>`;
+      row.dataset.messageId=ev.message_id||'';row.dataset.subId=ev.sub||'';
+      row.innerHTML=`<div class="msg-meta"><span class="msg-ava">🤖</span><strong>${esc(who?.name||'执行专家')}</strong><span class="msg-chip">输出中…</span><button class="msg-copy" title="复制回复">复制</button></div><div class="md"></div>`;
       box.appendChild(row);
     }
     row.__content=(row.__content||"")+(ev.content||"");
@@ -779,7 +878,7 @@ function appendOne(box,ev,who){
     // 没有 assistant 事件的老消息（只有 usage / 空回复）照旧走整条渲染，内容不丢。
     const before = box.querySelectorAll(".msg-row.msg-assistant").length;
     ev.events.forEach(e=>appendOne(box,e,who));
-    if((ev.events||[]).some(e=>e.type==="assistant" && e.content===ev.content) && box.querySelectorAll(".msg-row.msg-assistant").length > before) return;
+    if((ev.events||[]).some(e=>e.type==="assistant" && String(e.content||'').trim()===String(ev.content||'').trim()) && box.querySelectorAll(".msg-row.msg-assistant").length > before) return;
   }
   const el=document.createElement("div");
   if(ev.sub) el.style.marginLeft="14px";                 // 子 agent 的行缩进一层
@@ -788,15 +887,18 @@ function appendOne(box,ev,who){
      el.innerHTML=`<div class="msg-meta"><span class="msg-ava">👤</span><strong>你</strong><time>${esc(ev.at?fmtDate(ev.at):clock())}</time><button class="msg-copy" title="复制消息">复制</button></div><p>${esc(ev.content)}</p>`;
   }
   else if(ev.type==="assistant"){
+    if(ev.message_id&&[...box.querySelectorAll('.msg-assistant:not(.streaming)')].some(node=>node.dataset.messageId===ev.message_id))return;
     const cur = (S.chats||[]).find(t=>t.id===curChat);
     const boundA = (S.assistants||[]).find(a=>a.id === ((cur&&cur.assistant_id)||"")) || null;
-    // who = 页面自己指定这一步是谁在答（科研平台十步各有自己的助手）；不给才回落到当前对话绑的专家/管家
+    // who = 页面自己指定这一步是谁在答（科研平台十步各有自己的专家）；不给才回落到当前对话绑的专家/管家
     const avHtml = who ? `<span class="msg-ava">${who.emoji||"🤖"}</span>` : faceOf(boundA, 22, true);
-    const aName = who ? who.name : (boundA ? boundA.name : "智研管家");
-     const streaming=box.querySelector(".msg-assistant.streaming:last-child");
+    const aName = (who ? who.name : (boundA ? boundA.name : "智研管家")).replaceAll('助手','专家');
+    const statusName={queued:'排队中',running:'执行中',failed:'执行失败',interrupted:'中断待恢复',cancelled:'已停止'}[ev.status]||'完成';
+     const streaming=[...box.querySelectorAll('.msg-assistant.streaming')].findLast(node=>ev.message_id?node.dataset.messageId===ev.message_id:node.dataset.subId===(ev.sub||''));
      if(streaming) streaming.remove();
      el.className="msg-row msg-assistant";
-     el.innerHTML=`<div class="msg-meta">${avHtml}<strong>${esc(aName)}</strong>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}<span class="msg-chip">${esc(assistantKey())}</span><span class="msg-chip">完成</span><button class="msg-copy" title="复制回复">复制</button></div><div class="md">${md(ev.content||"…")}</div>`;
+      el.dataset.messageId=ev.message_id||'';el.dataset.subId=ev.sub||'';
+     el.innerHTML=`<div class="msg-meta">${avHtml}<strong>${esc(aName)}</strong>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}<span class="msg-chip">${esc(statusName)}</span><button class="msg-copy" title="复制回复">复制</button></div><div class="md">${md(ev.content||"…")}</div>`;
   }
   else if(ev.type==="error"){ el.className="msg-err"; el.textContent="⚠ "+(ev.message||"出错了"); }
   else if(ev.type==="team"){
@@ -811,7 +913,7 @@ function appendOne(box,ev,who){
     if(ev.phase==="start"){
       el.className="sub-row"; el.id="sub-"+ev.sub;
       el.innerHTML=`<span class="sub-ico">⤷</span><span class="sub-title">${esc(ev.sub_title||"子任务")}</span>
-        <span class="sub-note">独立上下文 · 只读工具 · 跑完只回摘要</span><span class="sub-state">运行中…</span>`;
+        <span class="sub-note">独立上下文 · 可写产物 · 跑完只回摘要</span><span class="sub-state">运行中…</span>`;
       box.appendChild(el); box.scrollTop=box.scrollHeight; return;
     }
     const row=$("sub-"+ev.sub);
@@ -823,21 +925,37 @@ function appendOne(box,ev,who){
     box.scrollTop=box.scrollHeight; return;
   }
   else if(ev.type==="tool_call"){
-    el.className="tool-card"; el.id="tc"+(seq++); el.dataset.callId=ev.id||"";
-    el.innerHTML=`<details><summary><span class="disclosure-arrow">›</span><span class="tool-name">查看步骤 · ${esc(ev.name)}</span>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}
+    const toolKey=[ev.id,ev.round,ev.sub].join(':');
+    if(ev.id&&[...box.querySelectorAll('.tool-card')].some(node=>node.dataset.toolKey===toolKey&&!node.dataset.complete))return;
+    el.className="tool-card"; el.id="tc"+(seq++); el.dataset.callId=ev.id||"";el.dataset.toolKey=toolKey;el.dataset.toolName=ev.name||'';el.dataset.round=String(ev.round??'');
+    const inputContent=JSON.stringify(ev.args||{},null,2);
+    el.innerHTML=`<details><summary><span class="disclosure-arrow">›</span><span class="tool-name">工具调用 · ${esc(ev.name)}</span>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}
       <span class="tool-detail">调用中…</span><span class="tool-dur">进行中</span></summary>
-      <div class="tool-body"><p class="tool-blk">Input</p><pre>${esc(JSON.stringify(ev.args||{},null,2))}</pre></div></details>`;
+      <div class="tool-body"><div class="tool-blk-row"><span class="tool-blk">输入参数</span><button type="button" class="tool-copy-btn" title="复制输入参数">复制</button></div><pre>${esc(inputContent)}</pre><div class="tool-output"></div></div></details>`;
+    const copyIn=el.querySelector(".tool-copy-btn");
+    if(copyIn) copyIn.onclick=e=>{e.stopPropagation();navigator.clipboard.writeText(inputContent).then(()=>{copyIn.textContent='已复制';setTimeout(()=>copyIn.textContent='复制',1500);});};
     box.appendChild(el); box.scrollTop=box.scrollHeight; return;
   }
   else if(ev.type==="tool_result"){
     const cards=box.querySelectorAll(".tool-card");
-    const card=[...cards].find(c=>ev.id && c.dataset.callId===ev.id) || (cards.length?cards[cards.length-1]:null);
+    const card=[...cards].findLast(c=>(ev.id?c.dataset.callId===ev.id:c.dataset.toolName===ev.name)&&(ev.round==null||c.dataset.round===String(ev.round)));
     if(card){
-      if(!ev.ok) card.classList.add("bad");
+      card.dataset.complete='true';card.classList.toggle("bad",ev.ok===false);
       const d=card.querySelector(".tool-detail"); if(d) d.textContent=ev.summary||"";
-      const u=card.querySelector(".tool-dur"); if(u) u.textContent=ev.ok?"完成":"失败";
-      const b=card.querySelector(".tool-body");
-      if(b) b.insertAdjacentHTML("beforeend",`<p class="tool-blk">Output</p><pre>${esc(ev.summary||"")}</pre>`);
+      const u=card.querySelector(".tool-dur"); if(u) u.textContent=(ev.ok?"完成":"失败")+(ev.duration_ms!=null?' · '+(ev.duration_ms/1000).toFixed(1)+' 秒':'');
+      const b=card.querySelector(".tool-output");
+      const outputContent=ev.result==null?ev.summary||'':typeof ev.result==='string'?ev.result:JSON.stringify(ev.result,null,2);
+      if(b){
+        b.innerHTML=`<div class="tool-blk-row"><span class="tool-blk">执行结果</span><button type="button" class="tool-copy-btn" title="复制执行结果">复制</button></div><pre>${esc(outputContent)}</pre>`;
+        const copyOut=b.querySelector(".tool-copy-btn");
+        if(copyOut) copyOut.onclick=e=>{e.stopPropagation();navigator.clipboard.writeText(outputContent).then(()=>{copyOut.textContent='已复制';setTimeout(()=>copyOut.textContent='复制',1500);});};
+      }
+      if(ev.ok&&ev.navigation)WorkflowReview.mount(card,ev.navigation);
+      if(ev.ok&&ev.name==='project_create_from_idea'&&ev.result?.workspace?.project_id){
+        const button=document.createElement('button');button.type='button';button.className='btn ghost';button.dataset.stewardProject=ev.result.workspace.project_id;button.textContent='进入项目工作区 ↗';
+        button.onclick=async()=>{await refreshState(false);await ProjectWorkspace.openProject(button.dataset.stewardProject);await ProjectWorkspace.showResource('workflow');};
+        card.append(button);
+      }
     }
     box.scrollTop=box.scrollHeight; return;
   }
@@ -942,6 +1060,101 @@ document.addEventListener("click",(e)=>{          // 点菜单外面收起（监
 
 let activeAgentRun = "", activeAgentChat = "", activeAgentBase = [], activeAgentEvents = [];
 let agentHistoryIndex = -1, agentHistoryDraft = "";
+
+async function observeAgentRun(run, onEvent, remember, disconnected){
+  let delay = 300;
+  while(run.status === "running"){
+    try{
+      const res = run.runId
+        ? await fetch(`/api/runs/${encodeURIComponent(run.runId)}/stream?after=${run.cursor}`)
+        : await fetch(run.api,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(run.request)});
+      if(!res.ok || !res.body){
+        if(res.status >= 400 && res.status < 500){
+          run.status = "failed";
+          const body = await res.json().catch(()=>({}));
+          onEvent({type:"error",message:body.error || "运行请求已失效，请重新发起。"});
+          break;
+        }
+        throw new Error("HTTP " + res.status);
+      }
+      const reader = res.body.getReader(), decoder = new TextDecoder();
+      let buffer = "";
+      try{
+        while(run.status === "running"){
+          const {value,done} = await reader.read(); if(done) break;
+          buffer += decoder.decode(value,{stream:true}).replace(/\r\n/g,"\n");
+          let i;
+          while((i = buffer.indexOf("\n\n")) >= 0){
+            const block = buffer.slice(0,i); buffer = buffer.slice(i+2);
+            const line = block.split("\n").find(l=>l.startsWith("data: ")); if(!line) continue;
+            const id = Number((block.split("\n").find(l=>l.startsWith("id: ")) || "id: 0").slice(4));
+            if(id && id <= run.cursor) continue;
+            const wire = JSON.parse(line.slice(6)), ev = wire.payload || wire;
+            run.cursor = id || run.cursor;
+            if(ev.type === "run_started"){
+              run.runId = ev.run_id; remember(run); continue;
+            }
+            if(["done","error","cancelled"].includes(ev.type)) run.status = ev.type;
+            onEvent(ev);
+          }
+        }
+      }finally{ await reader.cancel().catch(()=>{}); }
+      if(run.status === "running" && run.runId){
+        const state = await api(`/api/runs/${encodeURIComponent(run.runId)}`);
+        if(["done","failed","cancelled","interrupted"].includes(state.status)){
+          run.status = state.status;
+          if(state.status === "interrupted") onEvent({type:"error",message:"任务中断，请核对已生成的产物后再继续。"});
+        }
+      }
+      delay = 300;
+    }catch(e){ if(disconnected) disconnected(e); }
+    if(run.status === "running"){
+      await new Promise(resolve=>setTimeout(resolve,delay)); delay = Math.min(delay*2,5000);
+    }
+  }
+}
+
+function rememberAgentRun(run){ localStorage.setItem("rw-agent-run",JSON.stringify(run)); }
+function restoreAgentRun(){
+  if(activeAgentRun) return;
+  let run;
+  try{ run = JSON.parse(localStorage.getItem("rw-agent-run") || "null"); }catch(e){}
+  if(!run) return;
+  activeAgentRun = run.key; activeAgentChat = run.request.task_id;
+  activeAgentBase = run.base || []; activeAgentEvents = [{type:"user",content:run.request.message}];
+  run.status = "running"; run.cursor = 0;
+  followChatRun(run);
+}
+async function followChatRun(run){
+  let error = "";
+  rememberAgentRun(run);
+  await observeAgentRun(run, ev=>{
+    if(ev.type === "error") error = ev.message || "执行失败";
+    if(!["done","user"].includes(ev.type)){
+      activeAgentEvents.push(ev);
+      const box = route() === "agent" && agentView === "conversation" && curChat === activeAgentChat ? $("msgs") : null;
+      if(box) appendOne(box,ev);
+    }
+    stEvent(ev);
+  },rememberAgentRun,()=>{
+    if($("send")) $("send").title = "连接中断，正在重连；按 Esc 停止";
+  });
+  localStorage.removeItem("rw-agent-run");
+  activeAgentRun = ""; activeAgentEvents = []; activeAgentBase = [];
+  const button = $("send");
+  if(button){ button.classList.remove("stop"); button.textContent = "↑"; button.title = "发送"; }
+  if($("projbind")) $("projbind").disabled = false;
+  await refreshState(false);
+  if(route() === "agent"){
+    await loadChat();
+    const persistedFailure=(S.chat||[]).some(message=>message.role==="assistant" &&
+      (message.run_id===run.runId || ["failed","interrupted"].includes(message.status) ||
+       (String(message.content||"").startsWith("\u6267\u884c\u5931\u8d25\uff1a") || String(message.content||"").startsWith("Execution failed:"))));
+    if(error && !persistedFailure && agentView === "conversation" && curChat === run.request.task_id && $("msgs")){
+      appendOne($("msgs"),{type:"error",message:error});
+    }
+  }
+}
 async function cancelAgentRun(){
   if(!activeAgentRun) return;
   const key=activeAgentRun;
@@ -971,33 +1184,8 @@ async function send(){
   appendOne(box,{type:"user",content:msg});
    const btn=$("send"); activeAgentRun=crypto.randomUUID(); btn.classList.add("stop"); btn.textContent="■";
   if($("projbind")) $("projbind").disabled=true;
-  let errMsg="";
-  try{
-     const res = await fetch("/api/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({task_id:curChat,message:msg,idempotency_key:activeAgentRun})});
-    if(!res.ok || !res.body) throw new Error("HTTP "+res.status);
-    const reader=res.body.getReader(); const dec=new TextDecoder(); let buf="";
-    for(;;){
-      const {value,done}=await reader.read(); if(done) break;
-      buf+=dec.decode(value,{stream:true});
-      let i;
-      while((i=buf.indexOf("\n\n"))>=0){
-        const chunk=buf.slice(0,i); buf=buf.slice(i+2);
-        const line=chunk.split("\n").find(l=>l.startsWith("data: ")); if(!line) continue;
-        let ev; try{ ev=JSON.parse(line.slice(6)); }catch{ continue; }
-         if(ev.type!=="done" && ev.type!=="user"){
-           activeAgentEvents.push(ev);
-           const liveBox=route()==="agent" && curChat===activeAgentChat ? $("msgs") : null;
-           if(liveBox) appendOne(liveBox,ev);
-         }
-        stEvent(ev);
-      }
-    }
-  }catch(e){ errMsg = e.message; appendOne(box,{type:"error",message:e.message}); }
-   activeAgentRun=""; activeAgentEvents=[]; activeAgentBase=[];
-   const liveButton=$("send"); if(liveButton){ liveButton.classList.remove("stop"); liveButton.textContent="↑"; }
-   if($("projbind")) $("projbind").disabled=false;
-  await refreshState(false); await loadChat();
-  if(errMsg) appendOne(box,{type:"error",message:errMsg});   // loadChat 重渲染会把报错行刷掉，补回去
+  await followChatRun({key:activeAgentRun,api:"/api/agent",runId:"",cursor:0,status:"running",base:activeAgentBase,
+    request:{task_id:curChat,message:msg,idempotency_key:activeAgentRun,template_ref:PromptUI.ref(`chat:${curChat}`,curChatRow()?.task_id)}});
 }
 /* 展示区：对话轮数 / 调用工具数 / 消耗 token（各一行）+ 工具名称、产出目录（各三行滚动） */
 const st = { turns:0, calls:0, tokBase:0, tok:0, tools:[], outs:[] };

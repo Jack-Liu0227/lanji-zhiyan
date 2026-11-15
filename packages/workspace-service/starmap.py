@@ -146,9 +146,12 @@ def graph(conn, task_id: str = "") -> dict[str, Any]:
                       "kind": "cite" if e["kind"] == "cite" else "shared", "weight": e.get("weight", 1)})
 
     # ② 笔记（精读笔记 + 大笔记）
+    import asset_service
     for r in conn.execute(
             "SELECT id, title, markdown, paper_id, created_at FROM notes WHERE task_id=?", (tid,)).fetchall():
         r = dict(r)
+        if asset_service.is_instruction_note(conn, tid, r["id"], r["markdown"]):
+            continue
         nodes.append({
             "id": r["id"], "kind": "note", "m": "methods", "title": r["title"],
             "short": _short(r["title"]), "ref": r["paper_id"] or "",
@@ -160,6 +163,8 @@ def graph(conn, task_id: str = "") -> dict[str, Any]:
     for r in conn.execute(
             "SELECT id, title, content, paper_id FROM md_notes WHERE task_id=?", (tid,)).fetchall():
         r = dict(r)
+        if asset_service.is_instruction_note(conn, tid, r["id"], r["content"]):
+            continue
         nodes.append({
             "id": r["id"], "kind": "note", "m": "methods", "title": r["title"],
             "short": _short(r["title"]), "ref": r["paper_id"] or "",

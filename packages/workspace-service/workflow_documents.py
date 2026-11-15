@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,26 @@ if TYPE_CHECKING:
     from workflow import WorkflowDB
 
 DATA, PAPERS, NOTES, OUT = paths.DATA, paths.PAPERS, paths.NOTES, paths.OUT
+
+
+def _guarded_document_write(operation):
+    @wraps(operation)
+    def write(db, task_id, *args, **kwargs):
+        import asset_service
+        import project_tasks
+        with project_tasks._lock:
+            if (getattr(db, 'project_task_context', None) or getattr(db, 'asset_run', None) or
+                    (getattr(db, 'usage_context', {}) or {}).get('run_id')):
+                kind = args[0] if args else kwargs.get('kind', 'outline')
+                path = map_path(db, task_id) if operation.__name__ == 'map_write' else doc_path(db, task_id, kind)
+                if path.is_file():
+                    row = db.db.execute('SELECT * FROM assets WHERE canonical_uri=? AND project_id=?', (str(path.resolve()), task_id)).fetchone()
+                    asset = dict(row) if row else {'id': '', 'project_id': task_id, 'canonical_uri': str(path.resolve()),
+                        'storage': 'file', 'kind': 'document', 'status': 'active', 'metadata': '{}',
+                        'content_hash': asset_service.sha256_file(path)}
+                    asset_service.require_context(db, asset)
+            return operation(db, task_id, *args, **kwargs)
+    return write
 
 
 
@@ -120,6 +141,7 @@ def map_read(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
             "refs": sum(1 for n in nodes if n.get("type") != "section")}
 
 
+@_guarded_document_write
 def map_write(db: "WorkflowDB", task_id: str, data: Any, keep_positions: bool = True) -> dict[str, Any]:
     """整份覆盖写（和 doc_write 同口径）。不合规的节点/边直接丢掉，不报错 —— 模型给脏数据也要能落盘。
 
@@ -318,7 +340,7 @@ def open_write(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
 def map_seed(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     """大纲已经有了、谱系图还没有 → 直接按大纲长出「章 → 节」两级，不用等用户开口。
 
-    只搬标题、不编内容：detail 留空，支撑结论 / 数据由助手后面挂上去。
+    只搬标题、不编内容：detail 留空，支撑结论 / 数据由专家后面挂上去。
     已经有图就原样返回，绝不覆盖。
     """
     cur = map_read(db, task_id)
@@ -375,7 +397,7 @@ def project_outs(db: "WorkflowDB", task_id: str, limit: int = 40) -> list[dict[s
 def map_sources(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     """谱系图能挂哪些东西：大纲小标题 / 精读笔记 / 文献库 PDF / 实验数据（项目其余/数据 + 上传区）。
 
-    笔记给「标题 + id」而不是文件名：文件名是哈希，助手只能挂出一串乱码，
+    笔记给「标题 + id」而不是文件名：文件名是哈希，专家只能挂出一串乱码，
     读的人也不知道挂的是哪一篇。
     """
     md = doc_read(db, task_id, "outline")["markdown"]
@@ -390,30 +412,45 @@ def map_sources(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
         return out[:120]
     titles = {n["id"]: (n["title"] or "") for n in db.notes(task_id)}
     note_files = ls(base / "笔记") if base else ls(NOTES, ("*.md",))
+    import note_catalog
+    note_root = base / "笔记" if base else NOTES
     notes = [{"id": Path(f).stem, "name": f, "title": titles.get(Path(f).stem) or Path(f).name}
              for f in note_files
-             if Path(f).suffix.lower() == ".md" and Path(f).name.lower() != "readme.md"]
+             if Path(f).suffix.lower() == ".md" and Path(f).name.lower() != "readme.md"
+             and not note_catalog.is_template((note_root / f).read_text(encoding="utf-8", errors="replace"))]
     papers = [p["filename"] for p in db.papers_of(task_id)]
     data = (ls(base / "其余" / "数据") if base else []) + ls(DATA / "uploads")
     return {"sections": [x.strip() for x in secs][:60], "notes": notes, "papers": papers[:60],
             "data": list(dict.fromkeys(data))[:60], "map_path": str(map_path(db, task_id))}
 
 
-def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str) -> dict[str, Any]:
+@_guarded_document_write
+def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str, mode: str = "replace") -> dict[str, Any]:
     """就地覆盖写（他要的就是「修改调整都直接在原文件改」）。
 
     空内容一律拒写：模型偶尔发一个丢参数的工具调用（args 是空的），照写就把整份正文清成 1 字节
     —— 实测真发生过，左边展示区于是永远是空的，模型还回一句「已写好文件」。
     """
-    if not (markdown or "").strip():
-        raise ValueError("markdown 不能为空：这是整份覆盖写，空内容会把文件清空（已拒写）。要给完整正文。")
+    seg = (markdown or "").strip()
+    if not seg:
+        raise ValueError("markdown 不能为空：空内容会把文件清空（已拒写）。写完的那一段要带上。")
     p = doc_path(db, task_id, kind)
+    body = seg                                   # append = 已有正文 + 这一段：逐节写时写完一段落一段
+    if str(mode or "").lower() == "append" and p.is_file():
+        try:
+            prev = p.read_text(encoding="utf-8")
+        except OSError:
+            prev = ""
+        if prev.strip():
+            body = prev.rstrip() + "\n\n" + seg
     p.parent.mkdir(parents=True, exist_ok=True)
     fileguard.before_write(p, f"{kind}正文覆盖")
     import verify                                     # 落盘前机械核一遍：素材（证据+笔记）里找不到的带单位数值，标出来
+    import note_catalog
     corpus = "\n".join([str(r["excerpt"] or "") for r in db.evidence(task_id)]
-                       + [n["markdown"][:20000] or "" for n in db.notes(task_id)[:80]])
-    content = verify.stamp((markdown or "").strip(), verify.audit(markdown, corpus=corpus, label=kind)).rstrip() + "\n"
+                       + [n["markdown"][:20000] or "" for n in db.notes(task_id)[:80]
+                          if not note_catalog.is_template(n["markdown"] or "")])
+    content = verify.stamp(body, verify.audit(seg, corpus=corpus, label=kind)).rstrip() + "\n"
     import asset_service
     asset_service.atomic_write_text(p, content)
     asset_service.register_file(db, p, project_id=task_id, kind="document", title=(DOC_STEPS.get(kind) or DOC_STEPS["outline"])["file"],
@@ -476,14 +513,14 @@ def doc_seed(db: "WorkflowDB", task_id: str, kind: str = "outline") -> dict[str,
     return cur
 
 
-READ_MAX = 12000                                   # 附件一次最多读多少字（够 agent 判断，不炸上下文）
+READ_MAX = 48000                                   # 附件一次最多读多少字：整份正文（3 万字量级）要能一次读完，否则翻译/审查得靠猜
 
 
-def read_attachment(path: str, chars: int = 8000) -> dict[str, Any]:
+def read_attachment(path: str, chars: int = 20000) -> dict[str, Any]:
     """读用户上传/项目里的文件：PDF 用 pdfio 抓正文，其余按文本读。
     白名单不在这里再写一遍 —— 统一走 paths.resolve_allowed()（data/ + 用户建过的项目目录）。"""
     p = paths.resolve_allowed(path, must_be_file=True, what="附件")
-    cap = max(500, min(int(chars or 8000), READ_MAX))
+    cap = max(500, min(int(chars or 20000), READ_MAX))
     if p.suffix.lower() == ".pdf":
         text = pdfio.text(p)
     else:
@@ -498,7 +535,10 @@ def doc_tools(kind: str) -> list[dict[str, Any]]:
         _schema("doc_write", f"把**整份**{d['label']} markdown 覆盖写进项目里那一份 {d['file']}（就地改，不新建文件）。"
                              f"用户说「更新{d['label']}」「按这个改」时调用它，参数给完整全文。"
                              f"格式要求：{d['hint']}",
-                {"markdown": {"type": "string", "description": f"完整 {d['label']} markdown 全文"}}, ["markdown"]),
+                {"markdown": {"type": "string", "description": f"{d['label']} markdown：整份，或 append 时要接上去的那一段"},
+                 "mode": {"type": "string", "enum": ["replace", "append"],
+                          "description": "replace=整份覆盖（默认）；append=接在已有内容后面 —— 逐节逐段写时用它，写完一段左边立刻多一段"}},
+                ["markdown"]),
         _schema("doc_read", f"读回当前{d['label']}文件（一般不用，system 里已经带了最新全文）。", {}, []),
         _schema("cite_add", "登记一条引用：正文里**不要**写 [1]/[2] 这类标号，凡是引用文献都用这个工具把"
                             "「位置 + 文献信息」记进后台的引用台账（题目/作者/出处/DOI/页数/引用页）。",
@@ -559,7 +599,7 @@ def outline_system(db: "WorkflowDB", task_id: str) -> str:
     task = db.summary(task_id)["task"]
     cur = doc_read(db, task_id, "outline")
     body = cur["markdown"][:6000] or "（还没有，等你给第一版）"
-    return f"""你是「览籍智研」里「拟定框架」这一步的论文框架助手，用中文工作，站在合作者（懂科研、但听用户拍板）的位置。
+    return f"""你是「览籍智研」里「拟定框架」这一步的论文框架专家，用中文工作，站在合作者（懂科研、但听用户拍板）的位置。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：把这份研究的**框架（大纲）**跟用户敲定。不做文献检索/下载/精读/撰写成稿/格式转换，用户要这些就说明去别的步骤。
@@ -590,7 +630,7 @@ def map_system(db: "WorkflowDB", task_id: str) -> str:
     cur = map_read(db, task_id)
     src = map_sources(db, task_id)
     skills = skill_text("research", "paper-reading-reports", "SKILL.md", cap=2500, db=db, task_id=task_id) or MAP_FALLBACK
-    return f"""你是「览籍智研」里「证据链谱系」这一步的**证据链助手**，用中文工作。
+    return f"""你是「览籍智研」里「证据链谱系」这一步的**证据链专家**，用中文工作。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：**维护一张证据链谱系图**（思维导图），把框架的每个小标题和「支撑它的精读结论 / 实验数据」连起来构建严密证据链。不做检索、下载、翻译、写作。
@@ -652,11 +692,11 @@ def write_system(db: "WorkflowDB", task_id: str, draft: bool = False) -> str:
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：**按已确认的框架把正文写出来/改好**。不做检索、下载、精读、格式转换。
 2. **必须以上一步敲定的框架为骨架**（标题层级、每节要写什么，照它来；要动结构先说清为什么，用户同意再动框架文件）。
 3. {('缺数据、缺文献的地方**做定性论述、用限定语**（在本文条件下 / 就现有报道看），正文里**不出现「待补」这类占位**；数字与文献一律不编造' if draft else '缺数据、缺文献、缺结论的地方，写「待补：<还差什么>」，**绝不编造**')}。数字只能来自用户给的材料或项目库。
-4. 用户说「更新正文」「写进文件」、或你们敲定了改动时，**必须调用 doc_write** 写**整份** markdown（覆盖同一个文件，不要新建、不要只给片段）；可以先写一节让他看，但落盘永远是整份。
+4. **一段一段写、写一段落一段**：写新正文时，每写完一节（或一大段）就调 doc_write（mode="append"）把它接进正文文件，左侧展示区立刻多出这一段 —— 不要憋整篇等最后一次调用（又慢又会被输出上限截断成半截）。只有整篇重写/大改结构时才用 mode="replace"；文件永远是同一个，不要新建。
 5. **能写就直接写**：用户让你写某一节、或说「按框架写」，就直接把那一节写出来（300-800 字量级，学术书面语），{('缺的东西做定性论述、写满写实' if draft else '缺的东西写「待补：<还差什么>」')}——**不要先反问一串再等**；确实缺到没法动笔（比如完全不知道研究对象）才问 1 个问题。写完落盘并说清改了哪一节。
 6. 用户上传的文件会以「[附件] … 路径」出现，需要内容就调 read_attachment（PDF 自动抓正文）。
 7. 正文文件：`{cur['path']}`（{'已有正文' if cur['exists'] else '还没有正文'}）。
-7.1 **左栏就是这份正文**：用户说「写在左边」「在左边展示正文」「生成到左边」——都是叫你把整份正文调 doc_write 落盘，写完左边立刻换成新内容；不要在聊天里贴全文当交付。工具调用要带完整 `markdown` 参数，空参数会被服务端拒写。
+7.1 **左栏就是这份正文，写多少显示多少**：每调一次 doc_write（append）左边就往下长一段，用户是盯着左边在读的；所以按「一节一次调用」的节奏写，写完说一句「已写入 <节名>，接着写 <下一节>」。不要在聊天里贴全文当交付。工具调用要带完整 `markdown` 参数，空参数会被服务端拒写。
 7.2 **图位与图题**：凡是要配图的地方，**另起一行单独写**（不要塞进句子里）：`[图位 1] 图1 <一句话图题> | 文件：<图文件名>`。序号按全文出现顺序；文件名只能用下面【图文件夹】里有的，没有对应图就写 `[图位 N] 待补图：<该画什么> | 文件：待补`；图题自己拟、说清这张图讲什么、什么条件，别写「如图所示」这种空占位。
 8. **引用只写标记、不写编号**：需要引用文献时先调 **cite_add**，把「落在哪一节 + 被引用的那句原话（照抄，用来对锚点）+ 文献题目/作者/出处/年/DOI/页数/引用页」记进后台台账 —— 台账里每条会有一个 C 编号（C1、C2…）。正文里**只写这个标记**：在要挂引用的句子末尾写双花括号包住的编号，例如 `{{{{C3}}}}`（就是台账的第 3 条）。导出 PDF/LaTeX 时标记会变成正式引用，文末参考文献表按选定样式由 .bib 生成。**不要**手打 `[1]` `[2]`，也不要写「(Smith et al., 2024)」这种行内引用 —— 编号交给编译器算。台账里**文献信息一律来自 Zotero**（搜到哪条就引哪条，别照 PDF 排版抄）；交稿前调 **cite_bib** 生成 `文献/引用台账.bib`，它会把 Zotero 里查不到的条目报回来——这些要先导进 Zotero，不许自己补题录。
 

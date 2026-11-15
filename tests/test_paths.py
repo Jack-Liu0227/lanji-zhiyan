@@ -19,10 +19,21 @@ sys.path.insert(0, str(ROOT / "packages" / "workspace-core"))
 
 
 class PathsTest(unittest.TestCase):
+    def test_frozen_resources_do_not_fall_back_to_source_tree(self) -> None:
+        import paths
+        # A dist/app build is two levels below a real source tree with packages/.
+        # Frozen modules must still use the resources shipped with that build.
+        with patch.object(sys, "frozen", True, create=True), \
+             patch.object(sys, "_MEIPASS", str(ROOT / "dist" / "app"), create=True):
+            self.assertEqual(paths.app_dir(), ROOT / "dist" / "app")
+
     def setUp(self) -> None:
         self.home = Path(tempfile.mkdtemp(prefix="rw-paths-"))
         self._saved = {k: os.environ.get(k) for k in
-                       ("RW_HOME", "RESEARCH_WORKBENCH_DATA", "RESEARCH_WORKBENCH_DB")}
+                       ("LANJI_ZHIYAN_HOME", "LANJI_ZHIYAN_DATA", "LANJI_ZHIYAN_DB",
+                        "RW_HOME", "RESEARCH_WORKBENCH_DATA", "RESEARCH_WORKBENCH_DB")}
+        for key in ("LANJI_ZHIYAN_HOME", "LANJI_ZHIYAN_DATA", "LANJI_ZHIYAN_DB"):
+            os.environ.pop(key, None)
         os.environ["RW_HOME"] = str(self.home)
         os.environ.pop("RESEARCH_WORKBENCH_DATA", None)
         os.environ.pop("RESEARCH_WORKBENCH_DB", None)
@@ -95,11 +106,16 @@ class WriteRootsStampTest(unittest.TestCase):
     """标 Low 只该跑一次：文件数没变就不再递归 icacls —— 那 1.5s 挡在「起子进程」之前。"""
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
-        os.environ["LANJI_ZHIYAN_HOME"] = str(Path(self.tmp.name) / "home")
-        self.addCleanup(os.environ.pop, "LANJI_ZHIYAN_HOME", None)
+        test_home = Path(self.tmp.name) / "home"
+        test_database = test_home / "test.sqlite3"
+        environment = patch.dict(os.environ, {"LANJI_ZHIYAN_HOME": str(test_home), "RW_HOME": str(test_home),
+                                               "LANJI_ZHIYAN_DB": str(test_database), "RESEARCH_WORKBENCH_DB": str(test_database)})
+        environment.start()
         import paths
+        self.addCleanup(lambda: importlib.reload(paths))
+        self.addCleanup(environment.stop)
         self.p = importlib.reload(paths)              # 换 HOME → 戳文件也落在临时目录
         for d in (self.p.HOME, self.p.DATA, self.p.CACHE):
             d.mkdir(parents=True, exist_ok=True)

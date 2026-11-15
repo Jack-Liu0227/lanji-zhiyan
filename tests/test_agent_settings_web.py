@@ -25,7 +25,7 @@ EDGE = next((path for base in (os.environ.get("ProgramFiles(x86)"), os.environ.g
 class AgentSettingsWebTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        tmp = tempfile.TemporaryDirectory(prefix="rw-agent-web-")
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-agent-web-")
         cls.addClassCleanup(tmp.cleanup)
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
@@ -82,6 +82,7 @@ class AgentSettingsWebTest(unittest.TestCase):
         page.locator("#ag-p-apply").click()
         page.wait_for_selector("dialog.ag-modal", state="detached")
         page.wait_for_function("S.models.some(m=>m.model==='model-two')")
+        page.locator("[data-ag-provider]").wait_for()
         self.assertEqual(page.locator("[data-ag-provider]").count(), 1)
         page.locator("[data-ag-provider]").click()
         page.locator("#ag-p-show").click()

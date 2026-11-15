@@ -94,6 +94,8 @@ def _slot(path: Path) -> Path:
 
 
 def before_write(path: object, note: str = "") -> Path | None:
+    import execution
+    execution.check()
     """覆盖写之前留一份旧内容。文件不存在/空 → 不存（没什么可丢的）。返回快照路径。"""
     p = Path(path)
     assert_writable(p)

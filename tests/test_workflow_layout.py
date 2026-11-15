@@ -11,7 +11,7 @@ import workflow_layout as layouts
 
 class WorkflowLayoutTest(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="rw-layout-")
+        self.temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-layout-")
         self.addCleanup(self.temporary.cleanup)
         self.path = Path(self.temporary.name) / "test.sqlite3"
         self.db = WorkflowDB(self.path)
@@ -50,7 +50,6 @@ class WorkflowLayoutTest(unittest.TestCase):
         invalid = []
         data = self.definition(); data["nodes"][0]["step"] = "shell"; invalid.append(data)
         data = self.definition(); data["nodes"][1]["id"] = "a"; invalid.append(data)
-        data = self.definition(); data["nodes"][1]["step"] = "search"; invalid.append(data)
         data = self.definition(); data["edges"].append({"source": "missing", "target": "a"}); invalid.append(data)
         data = self.definition(); data["edges"].append({"source": "c", "target": "a"}); invalid.append(data)
         data = self.definition(); data["order"] = ["c", "a", "b"]; invalid.append(data)
@@ -61,6 +60,14 @@ class WorkflowLayoutTest(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 self.call("POST", "/save", data)
 
+    def test_repeated_stages_and_generic_tasks_have_distinct_node_ids(self):
+        data = self.definition()
+        data["nodes"][1]["step"] = "search"
+        data["nodes"][2]["step"] = "task"
+        saved = self.call("POST", "/save", data)["layout"]
+        self.assertEqual([n["step"] for n in saved["nodes"]], ["search", "search", "task"])
+        self.assertEqual(len({n["id"] for n in saved["nodes"]}), 3)
+
     def test_graph_state_maps_steps_latest_status_and_dependencies(self):
         saved = self.call("POST", "/save", self.definition())["layout"]
         self.call("POST", "/select", {"task_id": self.tid, "layout_id": saved["id"]})
@@ -70,10 +77,10 @@ class WorkflowLayoutTest(unittest.TestCase):
         self.db.log_step(self.tid, "search", "running", "Requesting articles")
         self.db.log_step(self.tid, "outline", "done", "Outline saved")
         state = self.call("GET", "/state", query={"task_id": self.tid})
-        self.assertEqual([n["status"] for n in state["nodes"]], ["running", "done", "waiting"])
+        self.assertEqual([n["status"] for n in state["nodes"]], ["running", "succeeded", "waiting"])
         self.db.log_step(self.tid, "search", "done", "Found articles")
         state = self.call("GET", "/state", query={"task_id": self.tid})
-        self.assertEqual([n["status"] for n in state["nodes"]], ["done", "done", "ready"])
+        self.assertEqual([n["status"] for n in state["nodes"]], ["succeeded", "succeeded", "waiting"])
         self.db.log_step(self.tid, "review", "failed", "Provider rejected the request")
         node = self.call("GET", "/state", query={"task_id": self.tid})["nodes"][2]
         self.assertEqual(node["status"], "failed")

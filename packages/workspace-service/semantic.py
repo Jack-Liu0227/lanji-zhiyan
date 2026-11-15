@@ -3,8 +3,8 @@
 
 设计口径（改动前先读这四条）：
 
-1. 索引是派生数据。内容哈希 + 模型名都没变就跳过，所以**任何写入方都不用挂钩子**——
-   论文入库、笔记保存、证据摘录都不需要改代码，下次 sync 自然补上。
+1. 索引是派生数据。内容哈希 + 模型名都没变就跳过；笔记修改或删除会作废旧块，
+   下次 sync 再补齐当前内容，避免旧材料继续参与检索。
 2. 页码跟着块走。论文按页切块，命中就能回指「文件名 p.N」；这是科研检索的硬要求，
    比相似度多零点零几重要得多。
 3. 检索恒有两条腿。词法是 FTS5 trigram（中文可切），向量是 numpy 余弦。
@@ -222,6 +222,7 @@ def chunk_text(text: str, size: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP)
 
 def _sources(conn: sqlite3.Connection) -> Iterable[dict[str, Any]]:
     """所有值得进索引的东西。一篇论文 = 一页一块，页码原样保留。"""
+    import asset_service
     papers = conn.execute("""
         SELECT p.id, p.task_id, p.filename, COALESCE(m.title,'') AS meta_title
         FROM papers p LEFT JOIN paper_meta m ON m.paper_id = p.id
@@ -235,11 +236,15 @@ def _sources(conn: sqlite3.Connection) -> Iterable[dict[str, Any]]:
                "parts": [(int(r["page_no"]), r["text"] or "") for r in pages]}
 
     for n in conn.execute("SELECT id, task_id, title, markdown FROM notes").fetchall():
+        if asset_service.is_instruction_note(conn, n["task_id"], n["id"], n["markdown"]):
+            continue
         yield {"kind": "note", "id": n["id"], "project_id": n["task_id"] or "",
                "title": (n["title"] or "").strip(), "label": (n["title"] or "").strip(),
                "parts": [(0, "# %s\n%s" % (n["title"] or "", n["markdown"] or ""))]}
 
     for n in conn.execute("SELECT id, task_id, title, content FROM md_notes").fetchall():
+        if asset_service.is_instruction_note(conn, n["task_id"], n["id"], n["content"]):
+            continue
         yield {"kind": "md_note", "id": n["id"], "project_id": n["task_id"] or "",
                "title": (n["title"] or "").strip(), "label": (n["title"] or "").strip(),
                "parts": [(0, "# %s\n%s" % (n["title"] or "", n["content"] or ""))]}
@@ -275,6 +280,8 @@ def sync(db: Any, limit: int = 0, progress: Any = None) -> dict[str, Any]:
     """
     cfg = config(db)
     conn = db.db
+    prune_orphans(db)
+    conn.commit()
     stats = {"scanned": 0, "indexed": 0, "skipped": 0, "chunks": 0, "failed": 0,
              "model": cfg["model"], "errors": []}
     state = {(r["source_kind"], r["source_id"]): (r["content_hash"], r["model"])
@@ -315,16 +322,21 @@ def _index_source(conn: sqlite3.Connection, src: dict[str, Any], content_hash: s
         for i, piece in enumerate(chunk_text(text)):
             if _worth_indexing(piece):
                 chunks.append((int(page_no), i, piece))
+    mat = embed([c[2] for c in chunks], cfg) if chunks else None
+    if chunks and mat.shape[0] != len(chunks):
+        raise EmbedError("嵌入条数与块数不符")
+    # Acquire the SQLite write transaction before checking whether a source was
+    # deleted while the embedding request was in flight.
     _drop_source(conn, src["kind"], src["id"])
+    if not _source_exists(conn, src["kind"], src["id"], src["project_id"]):
+        conn.execute("DELETE FROM sem_state WHERE source_kind=? AND source_id=?", (src["kind"], src["id"]))
+        return 0
     if not chunks:
         conn.execute("""INSERT OR REPLACE INTO sem_state
             (source_kind, source_id, project_id, content_hash, model, dim, chunks, indexed_at)
             VALUES (?,?,?,?,?,0,0,?)""",
                      (src["kind"], src["id"], src["project_id"], content_hash, cfg["model"], _now()))
         return 0
-    mat = embed([c[2] for c in chunks], cfg)
-    if mat.shape[0] != len(chunks):
-        raise EmbedError("嵌入条数与块数不符")
     dim = int(mat.shape[1])
     now_iso = _now()
     for (page_no, ordv, text), vec in zip(chunks, mat):
@@ -346,6 +358,46 @@ def _drop_source(conn: sqlite3.Connection, kind: str, sid: str) -> None:
     conn.execute("DELETE FROM sem_fts WHERE rowid IN "
                  "(SELECT rowid FROM sem_chunks WHERE source_kind=? AND source_id=?)", (kind, sid))
     conn.execute("DELETE FROM sem_chunks WHERE source_kind=? AND source_id=?", (kind, sid))
+
+
+def invalidate_source(db: Any, kind: str, sid: str) -> None:
+    """Remove obsolete derived content; the next sync can index the current row."""
+    _drop_source(db.db, kind, sid)
+    db.db.execute("DELETE FROM sem_state WHERE source_kind=? AND source_id=?", (kind, sid))
+    with _LOCK:
+        _MATRIX_CACHE.clear()
+
+
+def invalidate_project(db: Any, project_id: str) -> None:
+    db.db.execute("DELETE FROM sem_fts WHERE rowid IN (SELECT rowid FROM sem_chunks WHERE project_id=?)", (project_id,))
+    db.db.execute("DELETE FROM sem_chunks WHERE project_id=?", (project_id,))
+    db.db.execute("DELETE FROM sem_state WHERE project_id=?", (project_id,))
+    with _LOCK:
+        _MATRIX_CACHE.clear()
+
+
+def _source_exists(conn: sqlite3.Connection, kind: str, sid: str, project_id: str) -> bool:
+    if project_id and not conn.execute("SELECT 1 FROM research_tasks WHERE id=?", (project_id,)).fetchone():
+        return False
+    if kind == "evidence":
+        return bool(conn.execute("SELECT 1 FROM evidence e JOIN papers p ON p.id=e.paper_id "
+                                 "WHERE e.id=? AND COALESCE(p.task_id,'')=?", (sid, project_id)).fetchone())
+    table = {"paper": "papers", "note": "notes", "md_note": "md_notes"}.get(kind)
+    if kind in ("note", "md_note"):
+        import asset_service
+        field = "markdown" if kind == "note" else "content"
+        row = conn.execute(f"SELECT {field} FROM {table} WHERE id=? AND COALESCE(task_id,'')=?", (sid, project_id)).fetchone()
+        return bool(row and not asset_service.is_instruction_note(conn, project_id, sid, row[0]))
+    return bool(table and conn.execute(f"SELECT 1 FROM {table} WHERE id=? AND COALESCE(task_id,'')=?",
+                                       (sid, project_id)).fetchone())
+
+
+def prune_orphans(db: Any) -> None:
+    sources = db.db.execute("SELECT source_kind,source_id,project_id FROM sem_state UNION "
+                            "SELECT source_kind,source_id,project_id FROM sem_chunks").fetchall()
+    for row in sources:
+        if not _source_exists(db.db, row["source_kind"], row["source_id"], row["project_id"] or ""):
+            invalidate_source(db, row["source_kind"], row["source_id"])
 
 
 def _now() -> str:
@@ -412,8 +464,13 @@ def _matrix(conn: sqlite3.Connection, db_path: str, model: str, dim: int) -> tup
 _SCOPE_SQL = " AND project_id IN (%s)"
 
 
-def search_vector(db: Any, query: str, project_ids: list[str] | None = None, k: int = 30) -> list[dict[str, Any]]:
-    """向量召回。空库/嵌入挂了都返回空表，绝不让上层崩。"""
+def search_vector(db: Any, query: str, project_ids: list[str] | None = None, k: int = 30,
+                  errors: list[str] | None = None) -> list[dict[str, Any]]:
+    """向量召回。空库/嵌入挂了都返回空表，绝不让上层崩。
+
+    errors 传一个 list 进来就把失败原因带出去 —— 否则「嵌入服务挂了」和「库里没有」
+    在上层看起来一模一样，模型会当成后者接着凭记忆写。
+    """
     q = (query or "").strip()
     if not q or np is None:
         return []
@@ -423,7 +480,9 @@ def search_vector(db: Any, query: str, project_ids: list[str] | None = None, k: 
         return []
     try:
         qv = embed([q], cfg)[0]
-    except EmbedError:
+    except EmbedError as exc:
+        if errors is not None:
+            errors.append(str(exc)[:200])
         return []
     conn = db.db
     keep, mat = _matrix(conn, str(db.path), st["model"], int(qv.shape[0]))
@@ -436,12 +495,25 @@ def search_vector(db: Any, query: str, project_ids: list[str] | None = None, k: 
     scope = set(project_ids) if project_ids is not None else None
     for idx in order:
         row = keep[int(idx)]
+        if not _source_exists(conn, row["source_kind"], row["source_id"], row["project_id"] or ""):
+            continue
         if scope is not None and (row["project_id"] or "") not in scope:
             continue
         out.append(_hit(row, float(scores[int(idx)]), names))
         if len(out) >= k:
             break
     return out
+
+
+def mark_weak(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """纯向量命中标 weak：向量说「像」，但原文里没有这个词。
+
+    不给阈值 —— 实测 bge-m3 对无关页面也给 0.5 上下，绝对阈值会把真命中一起砍光。
+    能确定的事实只有「这条有没有字面/词法证据」，把它告诉模型，由模型决定要不要当证据引用。
+    """
+    for h in hits:
+        h["weak"] = not ({"lexical", "literal"} & set(h.get("matched") or []))
+    return hits
 
 
 def _hit(row: sqlite3.Row, score: float, names: dict[str, str]) -> dict[str, Any]:
@@ -461,11 +533,15 @@ def lexical(db: Any, query: str, project_ids: list[str] | None = None, k: int = 
     """词法召回。≥3 字符走 FTS5 trigram（中文可切、带 bm25 排序）；
     更短的查（「掺杂」「层状」）trigram 切不出 token，退回 LIKE 子串扫。"""
     q = (query or "").strip()
-    if not q:
+    if not q or k <= 0 or project_ids == []:
         return []
     conn = db.db
     names = _project_names(conn)
-    scope = set(project_ids) if project_ids is not None else None
+    scope = ""
+    params = []
+    if project_ids is not None:
+        params = list(dict.fromkeys(project_ids))
+        scope = " AND COALESCE(c.project_id,'') IN (%s)" % ",".join("?" for _ in params)
     rows: list[sqlite3.Row] = []
     terms = [t for t in re.split(r"[\s,，、;；:：()（）\[\]【】]+", q) if len(t) >= 3]
     if terms:
@@ -473,16 +549,16 @@ def lexical(db: Any, query: str, project_ids: list[str] | None = None, k: int = 
         try:
             rows = conn.execute("""
                 SELECT c.* FROM sem_fts f JOIN sem_chunks c ON c.rowid = f.rowid
-                WHERE sem_fts MATCH ? ORDER BY bm25(sem_fts) LIMIT ?""",
-                                (match, k * 4)).fetchall()
+                WHERE sem_fts MATCH ?""" + scope + " ORDER BY bm25(sem_fts) LIMIT ?",
+                                [match, *params, k]).fetchall()
         except sqlite3.Error:
             rows = []
     if not rows:
-        rows = conn.execute("SELECT * FROM sem_chunks WHERE text LIKE ? ORDER BY length(text) LIMIT ?",
-                            ("%" + q + "%", k * 4)).fetchall()
+        rows = conn.execute("SELECT c.* FROM sem_chunks c WHERE c.text LIKE ?" + scope + " ORDER BY length(c.text) LIMIT ?",
+                            ["%" + q + "%", *params, k]).fetchall()
     out: list[dict[str, Any]] = []
     for rank, row in enumerate(rows):
-        if scope is not None and (row["project_id"] or "") not in scope:
+        if not _source_exists(conn, row["source_kind"], row["source_id"], row["project_id"] or ""):
             continue
         hit = _hit(row, 1.0 / (rank + 1), names)
         hit["lexical"] = True
@@ -498,7 +574,8 @@ def hybrid(db: Any, query: str, project_ids: list[str] | None = None, limit: int
     同一个来源页可能贡献多个块，**不能把每个块的排名分加起来**：那样块多的页白捡便宜。
     每种召回各取该页的最好那一次排名，两路再相加。
     """
-    vec = search_vector(db, query, project_ids, k=30)
+    vec_err: list[str] = []
+    vec = search_vector(db, query, project_ids, k=30, errors=vec_err)
     lex = lexical(db, query, project_ids, k=30)
     fused: dict[tuple[str, str], dict[str, Any]] = {}
 
@@ -513,13 +590,19 @@ def hybrid(db: Any, query: str, project_ids: list[str] | None = None, limit: int
 
     _acc("vector", vec)
     _acc("lexical", lex)
-    hits = sorted(fused.values(), key=lambda h: -sum(h["_gain"].values()))[:limit]
+    hits = mark_weak(sorted(fused.values(), key=lambda h: -sum(h["_gain"].values()))[:limit])
     for h in hits:
         h["rrf"] = round(sum(h.pop("_gain").values()), 5)
         h.pop("lexical", None)
+    if vec_err:
+        counts_err = vec_err[0]
+    else:
+        counts_err = ""
     mode = "hybrid" if (vec and lex) else ("vector" if vec else ("lexical" if lex else "empty"))
     return {"query": query, "hits": hits, "total": len(hits), "mode": mode,
-            "counts": {"vector": len(vec), "lexical": len(lex)}}
+            "weak": sum(1 for h in hits if h["weak"]),
+            "counts": ({"vector": len(vec), "lexical": len(lex), "vector_error": counts_err}
+                       if counts_err else {"vector": len(vec), "lexical": len(lex)})}
 
 
 # ---------------------------------------------------------------- 预热
@@ -541,21 +624,31 @@ def warm(db_path: str, limit: int = 0, idle: float = 0.0) -> dict[str, Any]:
 _WARMING: set[str] = set()
 
 
+_PENDING: set[str] = set()
+
+
 def warm_async(db_path: str) -> bool:
     """起一个后台线程做增量建索引（同一进程同一个库只起一次）。
 
-    返回 False 表示已经有线程在跑。启动时调一次即可；新论文入库后下次启动自动补。
+    返回 False 表示已经有线程在跑，但这次请求不会白来：记进 _PENDING，跑完再补一轮 ——
+    否则「预热还在跑的时候导入的论文」会被那一轮的开头快照漏掉，且不会自动补。
     """
     key = str(db_path)
     with _LOCK:
         if key in _WARMING:
+            _PENDING.add(key)
             return False
         _WARMING.add(key)
 
     def _run() -> None:
         try:
-            stats = warm(key, idle=0.01)
-            print("[semantic] 索引完成：%s" % {k: stats[k] for k in ("indexed", "skipped", "chunks", "failed")})
+            while True:
+                stats = warm(key, idle=0.01)
+                print("[semantic] 索引完成：%s" % {k: stats[k] for k in ("indexed", "skipped", "chunks", "failed")})
+                with _LOCK:
+                    if key not in _PENDING:
+                        break
+                    _PENDING.discard(key)
         except Exception as exc:                       # 索引失败不能让服务起不来
             print("[semantic] 索引失败：%s" % exc)
         finally:

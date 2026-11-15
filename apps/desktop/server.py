@@ -25,10 +25,56 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+# ---- 程序装在中文路径下时，先从 ASCII 的 junction 重启自己 ----
+def _reexec_from_ascii() -> None:
+    """.NET 侧对「带中文的路径」会当成网络位置/Sandbox 处理：pythonnet 加载
+    Python.Runtime.dll 报 `Failed to resolve Python.Runtime.Loader.Initialize`，
+    pywebview 加载 WebView2 的 interop dll 报 `FileLoadException ... 网络位置` ——
+    两种都是无边框窗口直接起不来，只能退回浏览器标签页。从源码跑在 site-packages
+    下是 ASCII，所以只有装在「览籍智研」这种目录里的包会犯。
+
+    做法：在 %LOCALAPPDATA% 建一个纯 ASCII 的目录 junction 指向程序目录，再从那条
+    路径重启自己 —— sys.executable 与所有模块的 __file__ 就都成了 ASCII。
+    # ponytail: 只赌「同一磁盘卷能建 junction」这一手；建不出来就照旧跑，窗口退回浏览器
+    """
+    if (not getattr(sys, "frozen", False) or "--no-open" in sys.argv
+            or os.environ.get("LANJI_ASCII_REEXEC")):
+        return
+    exe = Path(sys.executable)                  # 不能用 resolve()：会把 junction 还原回中文真路径
+    if str(exe.parent).isascii():
+        return
+    base = os.environ.get("LOCALAPPDATA")
+    # junction 只能建在同一卷内：装到 LOCALAPPDATA 下的走第一条，免安装版放在别的盘走第二条
+    alias = "Lanji-run-" + hashlib.sha256(str(exe.parent).encode("utf-8")).hexdigest()[:12]
+    spots = [Path(base) / alias] if base and base.isascii() else []
+    spots.append(Path(exe.drive + "\\") / alias)
+    real = Path(os.path.realpath(exe.parent))      # junction 也算：realpath 会解开
+    for link in spots:
+        try:
+            if link.exists():
+                # 注意别拿 islink 判 junction：Windows 的 junction 在 islink 眼里不是链接
+                if Path(os.path.realpath(link)) != real:
+                    continue                           # 那儿已经是别的目录，不碰
+            else:
+                subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                                "New-Item -ItemType Junction -Path '%s' -Target '%s' | Out-Null"
+                                % (str(link).replace("'", "''"), str(exe.parent).replace("'", "''"))],
+                               capture_output=True, timeout=30)
+            target = link / exe.name
+            if not target.is_file():
+                continue
+            subprocess.Popen([str(target), *sys.argv[1:]],
+                             env=dict(os.environ, LANJI_ASCII_REEXEC="1"), close_fds=True)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        raise SystemExit(0)
+
+
+_reexec_from_ascii()
+
 # ---- 仓库根与 packages/ 各包挂上 sys.path ----
-ROOT = Path(__file__).resolve().parents[2]
-if not (ROOT / "packages").is_dir():            # 打包后模块被平铺到 exe 目录，数据目录也在那儿
-    ROOT = Path(__file__).resolve().parent
+ROOT = (Path(sys._MEIPASS) if getattr(sys, "frozen", False)
+        else Path(__file__).resolve().parents[2])
 for _p in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
     _d = ROOT / "packages" / _p
     if _d.is_dir() and str(_d) not in sys.path:
@@ -37,7 +83,9 @@ for _p in ("database", "workspace-core", "workspace-service", "connectors", "ai-
 import fileguard                  # 文件安全：写前快照 / 打开白名单 / 审计
 import papertran                 # 论文翻译页：PDF 服务 / 元数据 / BabelDOC 任务
 import starmap                   # 知识星图：项目 → 文献/笔记/知识点/候选/工作流
-import rss                       # 情报日报：RSS 抓取/解析
+import rss_routes                # RSS 来源管理与抓取 API
+import literature_import         # 情报条目 / 手动题录 → 项目文献库
+import literature_import_routes  # 上者 + 情报列表 GET（/api/rss/items、/api/library/project）
 import vault                     # 知识库：Obsidian Vault 扫描 / 状态写回
 import workflow
 import schedule                  # 定时任务：只在应用活着时调度
@@ -54,6 +102,10 @@ import zotero_sync
 import agent_integrations
 import reproduction_routes
 import feature_routes
+import easyscholar_routes
+import zotero_mcp_routes
+import module_composition
+import langgraph_workflow        # 项目工作流图（LangGraph）执行与断点恢复
 # handlers/ 是本目录下的包：被 importlib 按文件加载（测试）或从别处 import 时，本目录不一定在 sys.path 上
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -62,6 +114,7 @@ from handlers.core import CoreRoutes
 from handlers.wf_routes import WorkflowRoutes
 from handlers.misc import MiscRoutes
 from run_manager import RunManager
+from api_registry import ApiRegistry
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
@@ -73,6 +126,20 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       en_state, en_run, _safe_path, step_plan, step_done, step_delivery,
                       stage_download_selected, stage_zotero_import, test_provider,
                       deepread_kick, deepread_state, deepread_stop)
+
+# Built-in API modules are registered here; registry order preserves existing route precedence.
+API_ROUTES = ApiRegistry(available_capabilities=("database",))
+API_ROUTES.register("module-composition", module_composition.route_for(API_ROUTES), version="1.0.0", requires=("database",))
+for _module_id, _module in (
+    ("agent-settings", agent_settings), ("capabilities", capabilities),
+    ("workflow-layout", workflow_layout), ("feishu", feishu),
+    ("zotero-sync", zotero_sync), ("reproduction", reproduction_routes),
+    ("easyscholar", easyscholar_routes), ("zotero-mcp", zotero_mcp_routes),
+    ("rss", rss_routes), ("literature-import", literature_import_routes),
+    ("langgraph", langgraph_workflow),
+    ("project-features-core", feature_routes),
+):
+    API_ROUTES.register(_module_id, _module.route, version="1.0.0", requires=("database",))
 
 HERE = Path(__file__).resolve().parent
 WEB = HERE / "web"
@@ -264,8 +331,13 @@ def _fit_side(h: int, width: int = 580) -> None:
 
 
 def _resizable(h: int) -> bool:
-    """给无边框窗补上缩放边框 WS_THICKFRAME —— 只加边框、不加 WS_CAPTION，所以黑标题栏不会回来。
-    缺了它窗口就没法拖边改宽窄（实测样式 0x16010000 里没有 THICKFRAME）。"""
+    """给无边框窗补上 WS_THICKFRAME —— 系统 resize 循环只认这个样式（没有它，
+    连自己发 WM_NCLBUTTONDOWN + HTxxx 都会被 DefWindowProc 直接丢掉）。
+
+    它带来的副作用是窗口矩形每边比客户区大 7px，那圈非客户区就是用户反复报的
+    「上面一条黑边」。所以这里补样式，紧接着 `_strip_nc_frame` 把那圈从客户区计算里抹掉 ——
+    两个一起用才有「能拖边 + 没黑边」。只用一个的话：有边框就没黑边，有黑边就没边框。
+    """
     import ctypes
     u = ctypes.windll.user32
     GWL_STYLE, THICK = -16, 0x00040000
@@ -274,6 +346,58 @@ def _resizable(h: int) -> bool:
         u.SetWindowLongW(h, GWL_STYLE, st | THICK)
         u.SetWindowPos(h, 0, 0, 0, 0, 0, 0x0020 | 0x0002 | 0x0001 | 0x0004)   # FRAMECHANGED|NOMOVE|NOSIZE|NOZORDER
     return bool(u.GetWindowLongW(h, GWL_STYLE) & THICK)
+
+
+_WNDPROC = None          # 必须模块级持有，否则回调被 GC 掉 → 窗口进程直接崩
+_OLD_WNDPROC = None
+
+
+def _strip_nc_frame(h: int) -> bool:
+    """换掉窗口过程，让 WM_NCCALCSIZE 返回 0：客户区 == 整个窗口矩形。
+
+    WS_THICKFRAME 留着（系统 resize 只认它），但那一圈 7px 非客户区被从客户区计算里
+    抹掉，页面因此铺到窗口边 —— Chrome / VS Code 这类无边框窗口的标准做法。
+
+    试过但没用的两条路，别再走：
+    - `DwmSetWindowAttribute(DWMWA_BORDER_COLOR, 页面色)`：hr=0 但像素没变，那 7px 不是
+      DWM 边框线，是窗口自己的非客户区。
+    - `comctl32.SetWindowSubclass`：在这台机器上直接返回 0（挂不上）。
+    所以只能用 SetWindowLongPtrW 换过程，并在 proc 里把消息转给旧过程（不然 .NET
+    那套 WinForms 逻辑就收不到消息了）。64 位指针必须显式声明 argtypes/restype，
+    否则 ctypes 按 c_int 截断，CallWindowProc 立刻 access violation。
+    """
+    global _WNDPROC, _OLD_WNDPROC
+    if _WNDPROC is not None:
+        return True
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    GWLP_WNDPROC, WM_NCCALCSIZE = -4, 0x0083
+    u.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+    u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+    u.CallWindowProcW.argtypes = [ctypes.c_ssize_t, wintypes.HWND, ctypes.c_uint,
+                                  ctypes.c_size_t, ctypes.c_ssize_t]
+    u.CallWindowProcW.restype = ctypes.c_ssize_t
+    u.DefWindowProcW.argtypes = [wintypes.HWND, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+    u.DefWindowProcW.restype = ctypes.c_ssize_t
+    WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, ctypes.c_uint,
+                                ctypes.c_size_t, ctypes.c_ssize_t)
+
+    def proc(hwnd, msg, wp, lp):
+        if msg == WM_NCCALCSIZE and wp:
+            return 0                      # 客户区 = 窗口矩形（wParam=TRUE 时返回值才被采用）
+        if _OLD_WNDPROC:
+            return u.CallWindowProcW(_OLD_WNDPROC, hwnd, msg, wp, lp)
+        return u.DefWindowProcW(hwnd, msg, wp, lp)
+
+    _WNDPROC = WNDPROC(proc)
+    old = u.SetWindowLongPtrW(h, GWLP_WNDPROC, ctypes.cast(_WNDPROC, ctypes.c_void_p).value)
+    if not old:
+        _WNDPROC = None
+        return False
+    _OLD_WNDPROC = old
+    u.SetWindowPos(h, 0, 0, 0, 0, 0, 0x0027)      # FRAMECHANGED 让新规则立刻重算客户区
+    return True
 
 
 def _win(action: str) -> dict[str, Any]:
@@ -301,7 +425,7 @@ def _win(action: str) -> dict[str, Any]:
     elif action == "close":
         u.PostMessageW(h, 0x0010, 0, 0)                        # WM_CLOSE
     elif action == "narrow":
-        _resizable(h)                                          # 顺手把缩放边框补上，之后也能手拖
+        _resizable(h); _strip_nc_frame(h)                      # 补 resize 样式 + 抹掉那圈非客户区
         _fit_side(h, 580)
         return {"ok": action, "narrow": True}
     elif action == "wide":
@@ -310,6 +434,51 @@ def _win(action: str) -> dict[str, Any]:
     else:
         return {"error": f"不认识的动作 {action}"}
     return {"ok": action}
+
+
+_HT = {"left": 10, "right": 11, "top": 12, "topleft": 13, "topright": 14,
+       "bottom": 15, "bottomleft": 16, "bottomright": 17}
+
+
+def _begin_resize(h: int, edge: str) -> dict[str, Any]:
+    """页面边缘按下时由前端调：自己给自己发 WM_NCLBUTTONDOWN + HTxxx，DefWindowProc
+    就会跑标准的窗口 resize 循环（拖到松手为止）。
+
+    为什么要绕这一圈：`WS_THICKFRAME` 是系统 resize 的唯一来源，但它会让窗口矩形每边
+    比客户区大 7px（页面顶上露一条非客户区色带，见 `_resizable`）。而删掉 THICKFRAME 后，
+    边缘命中测试也到不了主窗口 —— WebView2 是填满客户区的子窗口，鼠标永远在它上面。
+    所以只能由页面自己铺一圈热区，按下时把这条消息塞回主窗口。
+    """
+    ht = _HT.get(str(edge))
+    if not h or ht is None:
+        return {"error": f"不认识的方向 {edge}"}
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    k = ctypes.windll.kernel32
+    # 64 位句柄必须显式声明，否则 ctypes 按 c_int 传，hwnd 被截断 → 消息发不出去
+    u.SendMessageW.argtypes = [wintypes.HWND, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+    u.SendMessageW.restype = ctypes.c_ssize_t
+    u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
+    u.GetWindowThreadProcessId.restype = wintypes.DWORD
+    u.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+    u.AttachThreadInput.restype = wintypes.BOOL
+    # 关键在于鼠标捕获归 UI 线程所有，而 js_api 回调跑在 pywebview 的线程池里 ——
+    # 不 AttachThreadInput 的话 ReleaseCapture 调用成功但什么也没放掉，DefWindowProc
+    # 随后 SetCapture 失败，resize 循环立刻退出（这就是 SendMessage 和 PostMessage
+    # 两种发法都不动窗口的原因）。attach 后两边共享输入状态，捕获才真的转到主窗口。
+    tid_ui = u.GetWindowThreadProcessId(h, None)
+    tid_me = k.GetCurrentThreadId()
+    attached = False
+    if tid_ui and tid_ui != tid_me:
+        attached = bool(u.AttachThreadInput(tid_me, tid_ui, True))
+    try:
+        u.ReleaseCapture()
+        u.SendMessageW(h, 0x00A1, ht, 0)     # WM_NCLBUTTONDOWN —— 同步到这次拖拽结束
+    finally:
+        if attached:
+            u.AttachThreadInput(tid_me, tid_ui, False)
+    return {"ok": True, "edge": str(edge), "attached": attached}
 
 
 class _WinBridge:
@@ -322,6 +491,12 @@ class _WinBridge:
     def win(self, action: str) -> dict[str, Any]:
         try:
             return _win(str(action))
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def resize(self, edge: str) -> dict[str, Any]:
+        try:
+            return _begin_resize(_win_hwnd(), str(edge))
         except Exception as exc:
             return {"error": str(exc)}
 
@@ -375,7 +550,7 @@ def _show_pinned(win: Any) -> None:
                 break
             time.sleep(0.02)
         if h:
-            _resizable(h)                  # 先补缩放边框（会把客户区缩掉 20px），再按客户区钉
+            _resizable(h); _strip_nc_frame(h)   # 先补 resize 样式并抹掉非客户区，再按客户区钉
             _fit(h, True)
     except Exception:
         pass                               # 隐藏态钉歪了没事，_fit_after 会重钉
@@ -427,7 +602,7 @@ def _fit_after() -> None:
     """窗口起来后把矩形钉到工作区。WinForms 的 AutoScaleMode.Dpi 会在窗口 show 之后
     自己重排一次尺寸（实测 2488x1600 被打回 1866x1200 居中），所以 4 秒内每隔 100ms
     检查一次，偏了就再钉一次；钉住了就不再碰（避免反复重排把页面刷花）。
-    **补边框要排在任何钉框之前**：_resizable 会把客户区缩掉 20px，先钉后补边框等于白跳一下。"""
+    **去边框要排在任何钉框之前**：边框一变客户区就变，先钉后去等于白跳一下。"""
     framed = False
     first = True
     for _ in range(40):
@@ -435,6 +610,7 @@ def _fit_after() -> None:
         if h:
             if not framed:
                 framed = _resizable(h)
+                _strip_nc_frame(h)
             if first or not _at_work_area(h):
                 _fit(h, True)              # 拿到窗口后先无条件钉一次：隐藏态那次钉的不作数
             first = False
@@ -587,29 +763,39 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
         prefixes = (
             "/api/agent-settings", "/api/capabilities", "/api/workflow/layouts", "/api/feishu/", "/api/zotero/web/",
             "/api/projects", "/api/papers/", "/api/chats", "/api/assistants", "/api/teams/", "/api/runs/",
-            "/api/mcp/", "/api/audit/", "/api/easyscholar/", "/api/zotero/mcp/", "/api/todos", "/api/kanban", "/api/space/",
+            "/api/mcp/", "/api/audit/", "/api/modules", "/api/easyscholar/", "/api/zotero/mcp/", "/api/rss/", "/api/library/", "/api/todos", "/api/kanban", "/api/space/",
             "/api/assets", "/api/workflow/run", "/api/workflow/runs", "/api/workflow/recover",
+            "/api/paper-toolbox",
+            # 2.0 项目工作区：项目任务 / 图流 / 资料库 / 计划 / 产物交接 / 用量
+            "/api/project-tasks", "/api/project/files/", "/api/project/resources",
+            "/api/workflow/execution", "/api/workflow/reviews", "/api/langgraph/",
+            "/api/plans", "/api/execution-board", "/api/execution-conversations",
+            "/api/handoff/", "/api/calendar/linked", "/api/conversation-history",
+            "/api/usage", "/api/message-channels",
         )
         if not path.startswith(prefixes):
+            return False
+        # GET /api/rss/sources、GET /api/rss/items 归 MiscRoutes：那边要带 literature_import.annotate
+        # 算「是否已导入项目」，扩展路由这套只有 POST 的 save/delete/defaults/import。
+        if method == "GET" and path.startswith("/api/rss/"):
             return False
         # 建 / 改名 / 解散团队走 do_POST 里那段（这里只有 <id>/members 这些），别被扩展路由吃掉
         if method == "POST" and path.startswith("/api/teams/"):
             return False
         try:
             with WorkflowDB(DB_PATH) as db:
-                for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync, reproduction_routes, feature_routes):
-                    result = extension.route(method, path, body, query, db)
-                    if result is not None:
-                        # These explicit user actions may reveal credentials; never put them in general state.
-                        reveal = path.endswith(("/provider-secret", "/mcp/reveal"))
-                        if reveal:
-                            self._send(200, json.dumps(result, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8")
-                        elif path == "/api/feishu/callback":
-                            message = "飞书授权完成，可以关闭此页面并返回览籍智研。机器人发送仍需应用已发布及相应权限。"
-                            self._send(200, ("<!doctype html><html lang='zh-CN'><meta charset='utf-8'><title>飞书授权完成</title><h2>" + message + "</h2></html>").encode("utf-8"), "text/html; charset=utf-8")
-                        else:
-                            self._json(result)
-                        return True
+                result = API_ROUTES.dispatch(method, path, body, query, db)
+                if result is not None:
+                    # These explicit user actions may reveal credentials; never put them in general state.
+                    reveal = path.endswith(("/provider-secret", "/mcp/reveal"))
+                    if reveal:
+                        self._send(200, json.dumps(result, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8")
+                    elif path == "/api/feishu/callback":
+                        message = "飞书授权完成，可以关闭此页面并返回览籍智研。机器人发送仍需应用已发布及相应权限。"
+                        self._send(200, ("<!doctype html><html lang='zh-CN'><meta charset='utf-8'><title>飞书授权完成</title><h2>" + message + "</h2></html>").encode("utf-8"), "text/html; charset=utf-8")
+                    else:
+                        self._json(result)
+                    return True
             self._json({"error": "not found"}, 404)
         except (ValueError, KeyError) as exc:
             self._json({"error": str(exc)}, 400)
@@ -929,6 +1115,18 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     run_id = m_run_stream.group(1)
                     last_id = int(self.headers.get("Last-Event-ID") or (q.get("after") or [0])[0] or 0)
                     return self._stream_run(run_id, last_id)
+            if path == "/api/paper-toolbox/file":          # 论文工具箱产出的图片/图注文档下载
+                import asset_service
+                with WorkflowDB(DB_PATH) as tb_db:
+                    asset = asset_service.get(tb_db, (q.get("asset_id") or [""])[0])
+                    if (not asset or asset["project_id"] != (q.get("project_id") or [""])[0]
+                            or asset["source"] not in ("image_conversion", "image_caption")):
+                        return self._json({"error": "文件不存在或不属于当前项目"}, 404)
+                    target = Path(asset["canonical_uri"])
+                    if not target.is_file():
+                        return self._json({"error": "文件已移动"}, 404)
+                    return self._send(200, target.read_bytes(), asset["mime"] or "application/octet-stream",
+                                      {"Content-Disposition": "attachment; filename*=UTF-8''" + urllib.parse.quote(target.name)})
             if self._extension_route("GET", path, {}, q):
                 return
             if self._mail_route("GET", path, q, None):
@@ -1016,6 +1214,13 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
             with WorkflowDB(DB_PATH) as cancel_db:
                 return self._json({"cancelled": RunManager.get_instance().cancel_by_key(
                     str(data.get("idempotency_key") or ""), db=cancel_db)})
+        if path == "/api/agent/resume":
+            import agent_jobs
+            try:
+                run = agent_jobs.start(DB_PATH, {}, resume_id=str(data.get("run_id") or ""))
+                return self._json({"run_id": run.run_id})
+            except ValueError as exc:
+                return self._json({"error": str(exc)}, 409)
         if path == "/api/idea":
             return self._sse(data, "idea")
         if path == "/api/map":
@@ -1153,6 +1358,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                             if enabled and not wdb.base_dir(str(data.get("project_id") or "")):
                                 return self._json({"error": "请选择一个有文件夹的项目"}, 400)
                             row = wdb.schedule_save({"id": data.get("id"), "name": name,
+                                                     "todo_id": str(data.get("todo_id") or ""),
                                                      "prompt": str(data.get("prompt") or "").strip(),
                                                      "project_id": str(data.get("project_id") or ""),
                                                      "assistant_id": str(data.get("assistant_id") or ""),
@@ -1197,7 +1403,10 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                 if path == "/api/project/note/save":
                     with WorkflowDB(DB_PATH) as note_db:
                         return self._json(project_notes.write(note_db, str(data.get("project_id") or ""),
-                                                              str(data.get("path") or ""), str(data.get("content") or "")))
+                                                              str(data.get("path") or ""), str(data.get("content") or ""),
+                                                              title=str(data["title"]) if "title" in data else None,
+                                                              create=data.get("create") is True,
+                                                              expected_hash=str(data["expected_hash"]) if "expected_hash" in data else None))
                 if path == "/api/project/folder/create":
                     with WorkflowDB(DB_PATH) as note_db:
                         return self._json(project_notes.create_folder(note_db, str(data.get("project_id") or ""),
@@ -1206,6 +1415,22 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     with WorkflowDB(DB_PATH) as note_db:
                         return self._json(project_notes.delete(note_db, str(data.get("project_id") or ""),
                                                                str(data.get("path") or "")))
+                if path == "/api/project/note/rename":
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(project_notes.rename(note_db, str(data.get("project_id") or ""),
+                                                               str(data.get("path") or ""),
+                                                               str(data.get("new_name") or "")))
+                if path == "/api/project/note/batch":
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(project_notes.batch_update(note_db, str(data.get("project_id") or ""), data))
+                if path == "/api/project/note-categories":
+                    import note_catalog
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(note_catalog.mutate(note_db, str(data.get("project_id") or ""), data))
+                if path.startswith("/api/prompt-templates/"):
+                    import prompt_templates
+                    with WorkflowDB(DB_PATH) as note_db:
+                        return self._json(prompt_templates.route(note_db, path, data))
                 if path == "/api/trans/start":
                     tid = (data.get("task_id") or "").strip()
                     pid = (data.get("id") or "").strip()
@@ -1356,8 +1581,6 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     with WorkflowDB(DB_PATH) as db:
                         out = db.pdir(tid, "文献库") if tid else (paths.OUT)
                         return self._json(papertran.reading_note(db, tid, (data.get("id") or "").strip(), out))
-                if path == "/api/rss/refresh":
-                    return self._json(rss.refresh(db))
                 if path == "/api/task/create":
                     base = (data.get("base_dir") or "").strip()
                     if base:
@@ -1377,32 +1600,41 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                     actual_base = str(db.base_dir(tid) or "")
                     return self._json({"task_id": tid, "base_dir": actual_base,
                                        "dirs": made or [name for name, _ in workflow.PROJ_DIRS]})
+                if path == "/api/task/update":
+                    tid = str(data.get("id") or "")
+                    title = str(data.get("title") or "").strip()
+                    if not title or len(title) > 200:
+                        raise ValueError("项目标题须为 1 至 200 个字符")
+                    existing = db.db.execute("SELECT updated_at FROM research_tasks WHERE id=?", (tid,)).fetchone()
+                    if not existing:
+                        raise ValueError("项目不存在")
+                    if data.get("expected_updated_at") and existing["updated_at"] != data["expected_updated_at"]:
+                        raise ValueError("项目已更新，请重新打开后编辑")
+                    with db.db:
+                        db.db.execute("UPDATE research_tasks SET title=?,question=?,material_system=?,updated_at=? WHERE id=?",
+                            (title, str(data.get("question") or "")[:20000], str(data.get("material_system") or "")[:2000], workflow.now(), tid))
+                    return self._json({"task": db.summary(tid)["task"]})
                 if path == "/api/task/delete":
                     return self._json(db.delete_task(data.get("id", "")))
                 if path == "/api/task/papergraph/build":          # 论文星图：点「生成」才编译一次，结果落库
                     return self._json(db.build_paper_graph(data.get("id", "")))
                 if path == "/api/chat/create":
-                    return self._json({"chat": db.chat(db.create_chat(data.get("title", "")))})
+                    return self._json({"chat": db.chat(db.create_chat(data.get("title", ""), task_id=data.get("task_id", "")))})
                 if path == "/api/chat/delete":
                     cid = data.get("id", "")
-                    db.clear_messages(cid)
-                    return self._json(db.delete_chat(cid))
+                    import conversation_history
+                    return self._json(conversation_history.command(db, 'chat', cid, 'trash'))
                 if path == "/api/step/done":                  # 三栏页「确认交付」：把这一步记成已完成
                     tid = str(data.get("task_id") or "")
                     step = str(data.get("step") or "")
                     if not tid or step not in ("idea", "search", "download", "notes", "outline",
                                                "map", "write", "review", "entrans", "convert"):
                         return self._json({"error": "缺 task_id 或 step 不认识"}, 400)
-                    idx = STAGES.index(step)
-                    if idx and not step_done(db, tid, STAGES[idx-1]):   # 硬限制：流程必须按步交付，不能跨步
-                        return self._json({"error": "上一步「%s」还没交付，这一步现在只能当独立功能块用，接不上流程"
-                                           % STAGE_LABEL.get(STAGES[idx-1], STAGES[idx-1])}, 409)
-                    # 交付即留痕：现算这一步的产物（库 + 文件），跟台账一起落库，别只记「用户确认交付」
-                    delivery = step_delivery(db, tid, step)
-                    summary = "；".join("%s %s" % (k, v) for k, v in (delivery.get("items") or {}).items())
-                    res = db.log_step(tid, step, "done",
-                                      (str(data.get("summary") or "").strip() or summary or "用户确认交付")[:200],
-                                      delivery=delivery)
+                    import workflow_state
+                    try:
+                        res = workflow_state.accept(db, tid, step, str(data.get("summary") or "").strip())
+                    except ValueError as exc:
+                        return self._json({"error": str(exc)}, 409)
                     if step == "map":                     # 交付谱系图 → 文章撰写接手，先说一句开场白
                         try:
                             res["write_opening"] = open_write(db, tid)
@@ -1447,9 +1679,9 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
                 if path == "/api/chat/rename":               # 对话改名（点标题原地改）
                     b = data or {}
                     with WorkflowDB(DB_PATH) as db:
-                        db.db.execute("UPDATE chats SET title=?, updated_at=? WHERE id=?",
-                                      ((b.get("title") or "").strip()[:120] or "新对话", workflow.now(), b.get("id", "")))
-                        db.db.commit()
+                        import conversation_history
+                        conversation_history.command(db, 'chat', b.get('id', ''), 'rename',
+                                                     title=(b.get('title') or '').strip()[:120] or '新对话')
                     return self._json({"ok": True})
                 if path == "/api/chat/outdir":
                     cid = data.get("id", "")
@@ -1563,7 +1795,11 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
             self._json({"error": f"{type(exc).__name__}: {exc}"}, 500)
 
     # ---------- Agent 事件流（SSE，支持 HTTP/1.1 长连接、事件持久化与 Last-Event-ID 重放） ----------
-    def _stream_run(self, run_id: str, after_id: int = 0) -> None:
+    def _stream_run(self, run_id: str, after_id: int = 0, *, wrapped: bool = True) -> None:
+        import agent_jobs
+        with WorkflowDB(DB_PATH) as db:
+            if not db.get_async_task(run_id):
+                return self._json({"error": "?????"}, 404)
         self._responded = True
         self.protocol_version = "HTTP/1.1"
         self.close_connection = True
@@ -1573,165 +1809,39 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, BaseHTTPReq
         self.send_header("X-Accel-Buffering", "no")
         self.send_header("Connection", "close")
         self.end_headers()
-
+        cursor, heartbeat = after_id, time.monotonic()
         with WorkflowDB(DB_PATH) as db:
-            past_events = db.get_run_events(run_id, after_id=after_id)
-
-        last_sent = after_id
-        for ev in past_events:
-            last_sent = ev["event_id"]
-            wire = {
-                "event_id": ev["event_id"],
-                "run_id": ev["run_id"],
-                "type": ev["kind"],
-                "payload": ev["payload"],
-                "created_at": ev["created_at"],
-            }
-            try:
-                self.wfile.write(f"id: {ev['event_id']}\ndata: {json.dumps(wire, ensure_ascii=False, default=str)}\n\n".encode("utf-8"))
-                self.wfile.flush()
-            except OSError:
-                return
-
-        run = RunManager.get_instance().get_run(run_id)
-        if not run or run.status in ("done", "failed", "cancelled"):
-            return
-
-        queue = []
-        cond = threading.Condition()
-
-        def on_event(ev_record: dict[str, Any]) -> None:
-            with cond:
-                if ev_record.get("event_id", 0) > last_sent:
-                    queue.append(ev_record)
-                    cond.notify()
-
-        run.add_listener(on_event)
-        try:
-            while run.status == "running":
-                with cond:
-                    if not queue:
-                        signaled = cond.wait(timeout=15.0)
-                        if not signaled:
-                            try:
-                                self.wfile.write(b": keep-alive\n\n")
-                                self.wfile.flush()
-                            except OSError:
-                                if run and run.status == "running":
-                                    run.status = "suspended"
-                                    try:
-                                        with WorkflowDB(DB_PATH) as cdb:
-                                            cdb.update_background_job(run_id, status="suspended")
-                                    except Exception:
-                                        pass
-                                return
-                    to_send = list(queue)
-                    queue.clear()
-
-                for ev in to_send:
+            while True:
+                events = db.get_run_events(run_id, after_id=cursor)
+                for ev in events:
+                    payload = ev["payload"]
+                    wire = {"event_id": ev["event_id"], "run_id": run_id, "type": ev["kind"],
+                            "payload": payload, "created_at": ev["created_at"]} if wrapped else payload
                     try:
-                        self.wfile.write(f"id: {ev.get('event_id', '')}\ndata: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n".encode("utf-8"))
+                        self.wfile.write((f"id: {ev['event_id']}\ndata: " + json.dumps(wire, ensure_ascii=False, default=str) + "\n\n").encode("utf-8"))
                         self.wfile.flush()
                     except OSError:
-                        if run and run.status == "running":
-                            run.status = "suspended"
-                            try:
-                                with WorkflowDB(DB_PATH) as cdb:
-                                    cdb.update_background_job(run_id, status="suspended")
-                            except Exception:
-                                pass
                         return
-                    if ev.get("type") in ("done", "cancelled", "error"):
+                    cursor = ev["event_id"]
+                task = db.get_async_task(run_id)
+                if not task or task["status"] in agent_jobs.TERMINAL:
+                    if not db.get_run_events(run_id, after_id=cursor):
                         return
-        finally:
-            run.remove_listener(on_event)
+                    continue
+                if time.monotonic() - heartbeat >= 10:
+                    try:
+                        self.wfile.write(b": keep-alive\n\n")
+                        self.wfile.flush()
+                    except OSError:
+                        return
+                    heartbeat = time.monotonic()
+                time.sleep(0.1)
 
     def _sse(self, data: dict[str, Any], step: str = "") -> None:
-        self._responded = True
-        self.protocol_version = "HTTP/1.1"
-        self.close_connection = True
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("X-Accel-Buffering", "no")
-        self.send_header("Connection", "close")
-        self.end_headers()
+        import agent_jobs
+        run = agent_jobs.start(DB_PATH, data, step)
+        self._stream_run(run.run_id, wrapped=False)
 
-        db = WorkflowDB(DB_PATH)
-        tid = str(data.get("task_id") or data.get("chat_id") or "")
-        # 没带对话、或 localStorage 里那条已经删了 → 现开一个「不绑项目」的对话
-        #（空 id 往下走会让 run_agent 里 db.summary('') 抛 KeyError，整轮发言变成一条报错）。
-        if not (db.db.execute("SELECT 1 FROM chats WHERE id=?", (tid,)).fetchone()
-                or db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone()):
-            tid = db.create_chat("")
-            data = {**data, "task_id": tid}
-        idemp = str(data.get("idempotency_key") or "")
-        run = RunManager.get_instance().create_run(task_id=tid, idempotency_key=idemp, db=db)
-
-        had_error = False
-        client_disconnected = False
-
-        def emit(ev: dict[str, Any]) -> None:
-            nonlocal had_error, client_disconnected
-            if client_disconnected:
-                return
-            # Some runners report failures as an event and return normally;
-            # retain that state so the persisted step cannot be marked done.
-            if isinstance(ev, dict) and ev.get("type") == "error":
-                had_error = True
-            ev_record = run.emit(ev, db=db)
-            try:
-                eid = ev_record.get("event_id", 0)
-                self.wfile.write(f"id: {eid}\n".encode("utf-8"))
-                self.wfile.write(("data: " + json.dumps(ev, ensure_ascii=False, default=str) + "\n\n").encode("utf-8"))
-                self.wfile.flush()
-            except OSError:
-                client_disconnected = True
-
-        track = bool(step and db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
-        try:
-            if track:
-                db.log_step(tid, step, "running", "开始执行")
-            runners = {"idea": run_idea, "outline": run_outline, "map": run_map, "write": run_write, "review": run_review}
-            fn = runners.get(step)
-            if fn:
-                fn(db, tid, data.get("message", ""), emit)
-            else:
-                # 通用 Agent（含「论文翻译」步的助手）：把荧光笔圈中的原文塞进上下文，它才答得上「这句什么意思」
-                try:
-                    extra = db.tr_hl_context(tid)
-                except Exception:
-                    extra = ""
-                # step 只用来给这个助手一个身份（前端在 body 里带上）；不参与下面的 log_step，那一步照旧只记 runners
-                wstep = step or str(data.get("step") or "")
-                if wstep == "files":                  # 项目文件夹：把左边选中的文件带进来，它才答得上「这个文件…」
-                    sel = str(data.get("sel") or "")
-                    if sel:
-                        extra = (extra + chr(10) * 2 if extra else "") + "【当前选中的文件】" + sel
-                # 对话落在步骤自己的 scope 里（右栏按 /api/step/messages?step=X 取历史）：不落的话
-                # 通用 Agent 这几步一换步就整段消失、统计面板永远是 0。纯聊天（不绑项目）照旧 scope=''。
-                on_task = bool(db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone())
-                run_agent(db, tid, data.get("message", ""), emit, extra_context=extra,
-                          system=(files_system(db, tid) if wstep == "files"
-                                  else convert_system(db, tid) if wstep == "convert" else None),   # 格式转换：三件事依次问
-                          step=wstep, scope=wstep if (wstep and on_task) else "",
-                          cancel_check=lambda: run.cancel_requested)
-            if track:
-                db.log_step(tid, step, "failed" if had_error else "done",
-                            "执行过程报告错误" if had_error else "执行完成")
-        except Exception as exc:
-            if track:
-                db.log_step(tid, step, "failed", str(exc)[:300])
-            if run.cancel_requested:
-                emit({"type": "cancelled", "message": "运行已中断"})
-            else:
-                emit({"type": "error", "message": f"{type(exc).__name__}: {exc}"})
-                emit({"type": "done", "content": ""})
-        finally:
-            db.close()
-
-
-    # ---------- 通用 Agent 对话（不绑项目） ----------
     def _pick_folder(self, initial: str = "", title: str = "选择产出文件夹") -> dict[str, Any]:
         return paths.host_pick_folder(initial, title)
 
@@ -1769,6 +1879,8 @@ def _start_inproc(port: int, url: str) -> None:
     schedule.start()           # 定时任务：只有真正拥有服务端口的进程才调度（第二个实例不重复跑）
     feishu.start_bridge(DB_PATH)
     team.start_worker()        # 团队派活队列（串行：一次跑一个成员）
+    import agent_jobs
+    agent_jobs.recover(DB_PATH)
     _semantic_boot()           # 语义索引后台预热（内容没变就全跳过，幂等）
     print(f"览籍智研已启动：{url}")
 
@@ -1882,6 +1994,10 @@ def _start_grant_helper():
                     elif self.path == "/open":          # 文档/目录只有 Medium 开得动
                         target = str(data.get("target") or "")
                         ok = bool(target) and _host_open(target)
+                    elif self.path == "/account":       # 官方账号客户端只能在宿主（Medium）里跑
+                        import account_providers
+                        result = account_providers.host_request(data)
+                        ok = "error" not in result
                     elif self.path == "/app":           # 外部 GUI 程序：名字白名单，路径宿主自己解
                         if data.get("name") == "zotero":
                             import zotero
@@ -1891,7 +2007,7 @@ def _start_grant_helper():
                                 ok = True
                 except (OSError, ValueError, KeyError):
                     ok = False
-            body = json.dumps(result if self.path in ("/pick", "/tex") and 'result' in locals() else {"ok": ok}).encode()
+            body = json.dumps(result if self.path in ("/pick", "/tex", "/account") and 'result' in locals() else {"ok": ok}).encode()
             self.send_response(200 if ok else 403)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
@@ -1948,13 +2064,16 @@ def _spawn_low_server(port: int):
         proc = lowbox.popen(cmd, cwd=str(Path(__file__).resolve().parent), env=env)
     except OSError:
         return None
-    for _ in range(120):                       # 最多等 24s（首次冷启动要给库迁移留时间）
-        if _port_open(port, 0.1):
-                _boot_mark("低完整性服务子进程就绪")
-                return proc
+    # 等端口就绪：本机对「关着的端口」要 2s 才回 RST，所以探针超时必须短；粒度 40ms 而不是 300ms
+    # （原来 0.1s 探针 + 0.2s 睡 = 每轮白等 0.3s，窗口平白晚出四分之一秒）。总预算仍是 24s。
+    deadline = time.time() + 24
+    while time.time() < deadline:
+        if _port_open(port, 0.02):
+            _boot_mark("低完整性服务子进程就绪")
+            return proc
         if proc.poll() is not None:            # 子进程自己退了
             return None
-        time.sleep(0.2)
+        time.sleep(0.02)
     proc.kill()
     return None
 

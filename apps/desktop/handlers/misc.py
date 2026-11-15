@@ -150,16 +150,11 @@ class MiscRoutes:
                 return self._json(papertran.paper_meta(db, (q.get("id") or [""])[0]))
         if path == "/api/trans/status":
             return self._json(papertran.status((q.get("id") or [""])[0]))
-        if path == "/api/rss/sources":
+        if path in ("/api/rss/sources", "/api/rss/items", "/api/library/project"):
+            import rss_routes, literature_import_routes
+            mod = rss_routes if path == "/api/rss/sources" else literature_import_routes
             with WorkflowDB(DB_PATH) as db:
-                return self._json({"sources": db.rss_sources(), "defaults": rss.DEFAULT_SOURCES})
-        if path == "/api/rss/items":
-            with WorkflowDB(DB_PATH) as db:
-                sid = (q.get("source") or [""])[0]
-                kw = (q.get("q") or [""])[0].strip()
-                yr = (q.get("year") or [""])[0].strip()
-                return self._json({"items": db.rss_items(sid, kw, yr),
-                                   "total": db.rss_count(sid, kw, yr)})
+                return self._json(mod.route("GET", path, {}, q, db))
         if path == "/api/tools":
             return self._json({"tools": [{"name": t["function"]["name"],
                                           "description": t["function"]["description"]} for t in [*workflow.TOOL_SPECS, *agent_integrations.tool_specs()]]})
