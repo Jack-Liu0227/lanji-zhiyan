@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""delegate（子 agent 委派）自检：独立上下文 / 只回摘要 / 真并行 / 只读工具 / 不写父对话历史。
+"""delegate（子 agent 委派）自检：独立上下文 / 只回摘要 / 真并行 / 可写产物但拿不到结构配置 / 不写父对话历史 / 超长摘要落盘。
 
     python -m unittest tests.test_delegate -v
 """
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -23,7 +24,7 @@ from workflow import WorkflowDB, run_agent        # noqa: E402
 
 class TestDelegate(unittest.TestCase):
     def setUp(self) -> None:
-        self.td = tempfile.TemporaryDirectory()
+        self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db = WorkflowDB(Path(self.td.name) / "d.sqlite3")
         self.task = self.db.create_task("委派自检", "验证 delegate 的隔离与摘要", "无")
         self.db.add_model("假模型", "http://127.0.0.1:1/v1", "fake", "sk", activate=True)
@@ -71,7 +72,7 @@ class TestDelegate(unittest.TestCase):
         workflow.chat_raw = fake_chat_raw
 
     def test_isolation_digest_and_no_publish(self) -> None:
-        """子 agent 看不到父对话历史、只有只读工具；父 agent 第二轮拿到摘要；父历史照常只有 user/assistant。"""
+        """子 agent 看不到父对话历史、拿得到写产物工具但拿不到结构配置；父 agent 第二轮拿到摘要；父历史照常只有 user/assistant。"""
         self._fake()
         stream: list = []
         out = run_agent(self.db, self.task, "把 A、B 分别读一下", emit=stream.append)
@@ -80,7 +81,9 @@ class TestDelegate(unittest.TestCase):
             roles = [m["role"] for m in c["messages"]]
             self.assertEqual(roles, ["system", "system", "user"], roles)   # 没有父对话历史
             self.assertNotIn("delegate", c["tools"])                       # 子 agent 不能再往下派
-            self.assertNotIn("draft_write", c["tools"])                    # 也没有写工具
+            self.assertIn("draft_write", c["tools"])                       # 写产物放开了
+            self.assertNotIn("project_create", c["tools"])                 # 结构配置仍留在父手里
+            self.assertNotIn("workflow_start", c["tools"])
             self.assertIn("library_overview", c["tools"])
         self.assertEqual(len(self.parent_calls), 2)
         second = "\n".join(str(m.get("content") or "") for m in self.parent_calls[1]["messages"])
@@ -106,6 +109,23 @@ class TestDelegate(unittest.TestCase):
         self.assertIn("失败", by_title["甲"]["summary"])
         self.assertTrue(by_title["乙"]["ok"])
         self.assertIn("摘要[读 B 给要点]", res["digest"])
+
+    def test_long_summary_spills_to_file(self) -> None:
+        """摘要超上限要落盘、父拿到截断+路径，不再静默切掉后半段。"""
+        long_text = "结论开头" + "细" * (workflow._SUB_SUMMARY_MAX + 500)
+        old = workflow.chat_raw
+        try:
+            workflow.chat_raw = lambda profile, messages, tools=None, **kw: {
+                "role": "assistant", "content": long_text, "tool_calls": []}
+            r = workflow._delegate(self.db, self.task, [{"title": "长活", "prompt": "写长摘要"}])
+        finally:
+            workflow.chat_raw = old
+        rec = r["delegated"][0]
+        self.assertTrue(rec["ok"])
+        self.assertIn("已截断", rec["summary"])
+        self.assertTrue(rec["summary"].startswith(long_text[:workflow._SUB_SUMMARY_MAX]))
+        path = re.search(r"见 (.+?)）", rec["summary"]).group(1)
+        self.assertEqual(Path(path).read_text(encoding="utf-8"), long_text)
 
     def test_empty_jobs_is_rejected(self) -> None:
         r = workflow._delegate(self.db, self.task, [], parallel=2)

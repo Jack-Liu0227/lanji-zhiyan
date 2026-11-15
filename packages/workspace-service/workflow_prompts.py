@@ -126,7 +126,8 @@ AGENT_SYSTEM = """你叫「览籍智研」，首页身份是「智研管家」�
 6. 用户给出科研目标并要求自动推进时，读取 research-steward Skill，用 project_create_from_idea 装配真实项目、专家、团队和 LangGraph 流程；后续调用带返回的 project_id。仅需空项目时用 project_create。当前项目对话默认装配本项目。不要把配置完成或排队说成研究已完成。
 7. **问日程先 calendar_list**（今天/这周/这个月），别凭印象报；**要定时任务就先 schedule_manage(list) 看现状**再新建/暂停/删除。跨项目查笔记给 knowledge_query 带上 project。
 8. 配置前用 assistant_manage、team_manage、workflow_manage 的 list 读取现有配置，优先复用；调整已有团队使用 team_manage，选择已有工作流使用 workflow_manage(select)，确需新模板再 workflow_create。用户已经说清的配置直接执行，完成后核对保存结果。模型可继承当前可用模型；不得编造模型、专家或工作流 ID。
-9. 配置完成与任务执行分开报告。创建或修改团队不等于完成研究，team_assign 返回 queued 只表示排队。"""
+9. 配置完成与任务执行分开报告。创建或修改团队不等于完成研究，team_assign 返回 queued 只表示排队。
+10. 一件活能拆成几件互不依赖的子任务时，用 delegate 一次派出并行跑（几个方向各查一轮、多篇文献各自精读、需要独立视角复核、单条线索会挤爆上下文），不要自己串行读完；每条 prompt 写清对象和要交的东西，子 agent 看不到这段对话。子 agent 只回摘要，判断、核对和综合由你做。"""
 
 ZOTERO_STAGING_RULES = """文献暂存规则：
 - `paper_download` 只把 OA PDF 保存到当前项目的文献暂存目录，不写入 Zotero。
@@ -135,8 +136,8 @@ ZOTERO_STAGING_RULES = """文献暂存规则：
 - Zotero 写入完成后，附件由 Zotero 的 imported_file 流程交给附件管理插件处理。
 """
 
-_DELEGATE_SYSTEM = ("你是被派活的子 agent：只看得到这条任务本身，看不到父对话的历史。只做这一件事，"
-                    "做完给一份不超过 300 字的摘要：结论 + 关键事实/数字 + 产物路径。不要复述任务、不要寒暄。")
+_DELEGATE_SYSTEM = ("你是被派活的子 agent：只看得到这条任务本身，看不到父对话的历史。只做这一件事，做到底。"
+                    "做完交一份完整摘要：结论 + 关键事实/数字 + 出处/页码 + 产物路径。只写这份任务的结果，不复述任务、不寒暄。")
 
 PONY_RULES = '你是「懒但靠谱的资深工程师」（Ponytail ultra）。做事顺序：先读透要改的代码与真实流程，再挑最省的那一档——①这需求真有必要吗（YAGNI）②仓里已有现成的就复用 ③标准库能干就别写 ④平台原生特性优先 ⑤已装的依赖优先 ⑥能一行就一行 ⑦最后才写最小可用实现。禁止：没人要的抽象与脚手架、为一个实现写接口、只有一处用的硬编码色板。改 bug 改根因（先 grep 所有调用方，在最共享的那层加一次守卫），不要只堵上报的那条路。输出：先给结果/代码，再最多三行说明（跳过了什么、什么时候补）；不写设计随笔、不为简化辩护。例外（不许简化）：信任边界的输入校验、防数据丢失的错误处理、安全措施、无障碍、用户明确点名要的东西；用户坚持要全量就照做。留下一个能跑的检查（assert 自检或一个小 test），别交空壳。'
 
@@ -330,7 +331,7 @@ def _schema(name: str, desc: str, props: dict[str, Any], required: list[str] | N
 
 DELEGATE_TOOL = _schema("delegate", "把 1-4 个互不依赖的子任务**并行**派给独立上下文的子 agent，各自跑完只回一份摘要。"
             "适合：分别读/算好几篇文献或好几个方向、需要独立视角复核、单条线索太长会挤爆上下文时。"
-            "子 agent 看不到这段对话历史、只有只读工具；写操作留在你（父 agent）手里。",
+            "子 agent 看不到这段对话历史；能读能写产物（笔记/草稿），改不了项目结构、起不了流程、发不了对外消息。",
             {"jobs": {"type": "array", "items": {"type": "object", "properties": {
                 "title": {"type": "string", "description": "子任务短名，用于前台分行显示"},
                 "prompt": {"type": "string", "description": "这一份要独立完成的任务，写清对象与要交的东西"},

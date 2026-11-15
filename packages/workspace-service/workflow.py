@@ -419,7 +419,7 @@ def _fuse_literal(out: dict[str, Any], literal: list[dict[str, Any]]) -> dict[st
     """
     hits = {(h["kind"], h["id"], h.get("page_no") or 0): dict(h) for h in out["hits"]}
     for rank, h in enumerate(literal):
-        key = (h["kind"], h["id"], 0)                    # 笔记/证据没有页码，按源合并
+        key = (h["kind"], h["id"], h.get("page_no") or 0)   # 与语义腿同构，同一条不会被算成两条
         gain = 1.0 / (60 + rank + 1)
         if key in hits:
             hits[key]["rrf"] = round(hits[key]["rrf"] + gain, 5)
@@ -427,9 +427,16 @@ def _fuse_literal(out: dict[str, Any], literal: list[dict[str, Any]]) -> dict[st
                 hits[key]["matched"].append("literal")
         else:
             hits[key] = dict(h, rrf=round(gain, 5), matched=["literal"])
-    merged = sorted(hits.values(), key=lambda h: -h["rrf"])[:20]
+    import semantic as _sem
+
+    merged = _sem.mark_weak(sorted(hits.values(), key=lambda h: -h["rrf"])[:20])
     mode = "hybrid" if literal else out["mode"]
-    return {**out, "hits": merged, "total": len(merged), "mode": mode}
+    result = {**out, "hits": merged, "total": len(merged), "mode": mode,
+              "weak": sum(1 for h in merged if h["weak"])}
+    if merged and result["weak"] == len(merged):     # 一条字面证据都没有
+        result["note"] = ("全是语义相似命中（weak=true），原文里没有这些词：不要当原文引用，"
+                          "没查到就说没查到，别凭相似度写。")
+    return result
 
 
 def _knowledge_query_literal(db: "WorkflowDB", q: str, scope: list[tuple[str, str]],
@@ -455,6 +462,7 @@ def _knowledge_query_literal(db: "WorkflowDB", q: str, scope: list[tuple[str, st
                 continue
             if q in (e["value"] or "").lower() or q in (e["excerpt"] or "").lower() or q in (e["field"] or "").lower():
                 hits.append({"kind": "evidence", "project": ptitle, "field": e["field"], "value": e["value"],
+                             "id": e["id"], "page_no": e["page_no"] or 0, "title": e["filename"],
                              "citation": f"{e['filename']} p.{e['page_no']}", "context": e["excerpt"]})
     scope_ids = dict(scope)
     for note in db.md_notes():                                  # 笔记页那批「大笔记」
@@ -571,9 +579,18 @@ def _schedule_manage(db: "WorkflowDB", args: dict[str, Any], project_id: str = "
     raise ValueError("action 只支持 list / create / toggle / delete")
 
 
-# 子 agent 只给只读工具（写操作留在父对话手里，子 agent 不许越权）
-_SUB_TOOL_NAMES = ("library_overview", "knowledge_query", "paper_search", "paper_read")
-_SUB_TOOLS = [t for t in TOOL_SPECS if t.get("function", {}).get("name") in _SUB_TOOL_NAMES]
+# 子 agent 与父共用写产物工具；只卡住「递归委派 / 结构配置 / 起流程 / 对外发送」这几类
+_SUB_DENY = {
+    "delegate",                                              # 防递归：一层就够，别翻倍烧钱
+    "project_create", "task_create", "task_start", "task_cancel", "task_handoff",
+    "workflow_create", "workflow_prepare", "workflow_start", "workflow_cancel",
+    "team_create", "team_form", "team_manage", "team_assign",
+    "schedule_manage", "calendar_add", "assistant_manage", "project_task_manage",
+    "mcp_register", "skill_create",
+}
+_SUB_TOOLS = [t for t in TOOL_SPECS if t.get("function", {}).get("name") not in _SUB_DENY]
+_SUB_SUMMARY_MAX = 6000            # 超了就落盘只回摘要+路径，别把父的上下文挤爆
+# ponytail: 并发写靠 WAL + busy_timeout=60s 串行，子 agent 之间不共享写锁；真要吞吐再排队
 
 
 TOOL_RISK = {
@@ -674,7 +691,7 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
     隔离靠三件已有机制拼出来，不新建东西：
       * 每个子 agent 一个全新的 `scope`（db.messages(task_id, scope) 因此是空的）→ 看不到父对话历史；
       * `publish=False` → 子 agent 不写对话历史、不落 assistant 回复（跟「撰写流水线内部子 agent」同一条路）；
-      * 只读工具表 `_SUB_TOOLS` → 子 agent 不能改库。
+      * 工具表 `_SUB_TOOLS` → 写产物放开（笔记/草稿/落盘），只卡递归委派、结构配置、起流程、对外发送。
     子 agent 各自**新开一条连接**（同库不同连接），事件打上 `sub`/`sub_title` 供前台分行显示。
     # ponytail: 单机 SQLite，父子各一条连接 + busy_timeout；真要高并发再上 WAL 或连接池
     """
@@ -682,6 +699,10 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
     if not jobs:
         return {"ok": False, "error": "delegate 需要至少一个子任务（jobs[].prompt）"}
     path = db.path
+    try:
+        dump_dir = db.pdir(task_id, "其余")        # 主线程算好，子线程别碰父连接
+    except Exception:
+        dump_dir = None
 
     sub_events: list[dict[str, Any]] = []          # 子 agent 的事件也回给父，回放（F5）时才有分行
 
@@ -705,7 +726,19 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
                 r = run_agent(cdb, task_id, str(job["prompt"]), emit=child_emit,
                               max_steps=int(job.get("max_steps") or 4), system=_DELEGATE_SYSTEM,
                               tools=_SUB_TOOLS, publish=False, scope=sid, profile=profile)
-            rec["summary"] = (r.get("reply") or "").strip()[:2000]
+            txt = (r.get("reply") or "").strip()
+            if len(txt) > _SUB_SUMMARY_MAX:            # 超长落盘，父读摘要+按需读文件，别把上下文塞满
+                keep = txt[:_SUB_SUMMARY_MAX]
+                note = ""
+                if dump_dir is not None:
+                    try:
+                        f = dump_dir / (f"子任务{i + 1}_" + re.sub(r'[\\/:*?"<>|\s]+', "_", title)[:30] + ".md")
+                        f.write_text(txt, encoding="utf-8")
+                        note = f"见 {f}"
+                    except OSError as exc:
+                        note = f"落盘失败：{exc}"
+                txt = keep + f"\n…（已截断，全文 {len(txt)} 字{('，' + note) if note else '，未落盘'}）"
+            rec["summary"] = txt
             rec["steps"] = len(r.get("events") or [])
         except Exception as exc:                               # 一个子 agent 崩了不影响其它
             rec["ok"] = False
@@ -724,7 +757,8 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
     _nl = chr(10)
     digest = (_nl + _nl).join("## " + r["title"] + _nl + (r["summary"] or "（空）") for r in order)
     return {"ok": True, "delegated": order, "digest": digest, "sub_events": sub_events,
-            "hint": "把 digest 里的要点综合进你的回答；需要细节再向用户说明是哪路子 agent 给的。"}
+            "hint": "digest 是各子 agent 的原始摘要，不是结论：自己核对互相矛盾的条目，"
+                    "摘要标了「已截断」就读那个路径取全文，判断和综合由你做。"}
 
 
 def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], scope: str = "",

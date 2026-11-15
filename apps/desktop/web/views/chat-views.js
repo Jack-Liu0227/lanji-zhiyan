@@ -913,7 +913,7 @@ function appendOne(box,ev,who){
     if(ev.phase==="start"){
       el.className="sub-row"; el.id="sub-"+ev.sub;
       el.innerHTML=`<span class="sub-ico">⤷</span><span class="sub-title">${esc(ev.sub_title||"子任务")}</span>
-        <span class="sub-note">独立上下文 · 只读工具 · 跑完只回摘要</span><span class="sub-state">运行中…</span>`;
+        <span class="sub-note">独立上下文 · 可写产物 · 跑完只回摘要</span><span class="sub-state">运行中…</span>`;
       box.appendChild(el); box.scrollTop=box.scrollHeight; return;
     }
     const row=$("sub-"+ev.sub);
