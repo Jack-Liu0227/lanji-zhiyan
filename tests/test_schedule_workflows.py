@@ -12,7 +12,7 @@ import workflow_layout
 
 class ScheduleWorkflowsTest(unittest.TestCase):
     def setUp(self):
-        temp = tempfile.TemporaryDirectory()
+        temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(temp.cleanup)
         self.db = workflow.WorkflowDB(Path(temp.name) / 'test.sqlite3')
         self.addCleanup(self.db.close)

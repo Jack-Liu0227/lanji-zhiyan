@@ -295,6 +295,22 @@ function renderSidebar(){
 const FRAMELESS = new URLSearchParams(location.search).has("pw");
 let winZoom = true;                    // 窗口现在是不是铺满工作区 → 决定右上那个键画「最大化」还是「还原」
 let winStateAsked = false;
+if(FRAMELESS) mountResizeEdges();   // 页面接管边缘：WebView2 填满客户区，命中测试到不了主窗口
+function mountResizeEdges(){
+  if(!FRAMELESS || document.getElementById("rz")) return;
+  const EDGES = ["top","bottom","left","right","topleft","topright","bottomleft","bottomright"];
+  const box = document.createElement("div");
+  box.id = "rz";
+  box.innerHTML = EDGES.map(e=>`<i data-e="${e}"></i>`).join("");
+  document.body.append(box);
+  box.querySelectorAll("i").forEach(el=>{          // 按下时才找 api：pywebviewready 可能在启动之后
+    el.addEventListener("mousedown", ev=>{
+      ev.preventDefault(); ev.stopPropagation();
+      const py = window.pywebview && window.pywebview.api;
+      if(py && py.resize) py.resize(el.dataset.e).catch(()=>{});
+    });
+  });
+}
 function winCommand(action){
   // 关闭时页面会消失，JS 桥接无法再回传结果；通过宿主 HTTP 通道关闭。
   if(action === "close") return api("/api/win/close", {});

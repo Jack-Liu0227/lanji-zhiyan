@@ -23,7 +23,7 @@ import workflow
 
 class AgentSettingsTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.path = Path(self.tmp.name) / "test.sqlite3"
         self.db = workflow.WorkflowDB(self.path)
         self.old_path = team.DB_PATH

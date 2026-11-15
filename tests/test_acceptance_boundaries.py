@@ -25,7 +25,7 @@ import workflow
 
 class AcceptanceBoundariesTest(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="rw-acceptance-")
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-acceptance-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.db = workflow.WorkflowDB(self.root / "acceptance.sqlite3")

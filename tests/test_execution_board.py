@@ -20,7 +20,7 @@ import conversation_history
 
 class ExecutionBoardTest(unittest.TestCase):
     def setUp(self):
-        tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
+        tmp=tempfile.TemporaryDirectory(ignore_cleanup_errors=True);self.addCleanup(tmp.cleanup)
         self.db=workflow.WorkflowDB(Path(tmp.name)/'app.sqlite3');self.addCleanup(self.db.close)
         self.pid=self.db.create_task('Research');self.other=self.db.create_task('Other')
         self.binding=project_bindings.register(self.db,self.pid,'assistant','builtin-steward')['id']

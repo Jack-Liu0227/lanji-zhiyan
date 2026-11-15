@@ -141,7 +141,7 @@ class TestPdfPath(unittest.TestCase):
             zotero._get, zotero.storage_dir = original
 
     def test_picks_pdf_attachment(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             from pathlib import Path
             root = Path(tmp) / "storage"
             for key in ("ATT00001", "ATT00002"):
@@ -153,7 +153,7 @@ class TestPdfPath(unittest.TestCase):
             self.assertEqual(path, str(root / "ATT00002" / "f.pdf"))
 
     def test_no_pdf_attachment(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             children = [{"key": "ATT00001", "data": {"itemType": "attachment", "contentType": "text/html"}},
                         {"key": "ATT00009", "data": {"itemType": "attachment", "contentType": "application/pdf"}}]
             path, _ = self._run(children, tmp)          # 目录里没有文件 → 不能假装找到
@@ -175,7 +175,7 @@ class TestZoteroImport(unittest.TestCase):
         manual = {**paper, "key": "NOPDF001", "title": "Without PDF", "doi": "10.1234/manual"}
         note = {"key": "NOTE0001", "type": "note", "title": "笔记", "creators": [], "year": "",
                 "doi": "", "url": "", "abstract": ""}
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temporary:
             root = Path(temporary)
             source = write_text_pdf(root / "source.pdf", ["Original Zotero paper"])
             original = source.read_bytes()

@@ -12,7 +12,7 @@ import workflow
 
 class LiteratureImportTest(unittest.TestCase):
     def setUp(self):
-        folder=tempfile.TemporaryDirectory();self.addCleanup(folder.cleanup)
+        folder=tempfile.TemporaryDirectory(ignore_cleanup_errors=True);self.addCleanup(folder.cleanup)
         self.db=workflow.WorkflowDB(Path(folder.name)/'research.sqlite3');self.addCleanup(self.db.close)
         self.pid=self.db.create_task('Research');self.other=self.db.create_task('Other')
         source=rss.save_source(self.db,{'title':'Materials','url':'https://example.test/feed'})['source']

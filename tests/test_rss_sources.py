@@ -22,7 +22,7 @@ from workflow import WorkflowDB              # noqa: E402
 
 class TestRssSources(unittest.TestCase):
     def setUp(self) -> None:
-        self.td = tempfile.TemporaryDirectory()
+        self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db = WorkflowDB(Path(self.td.name) / "r.sqlite3")
         self._old_fetch = rss.fetch
         self.fetched: list[str] = []

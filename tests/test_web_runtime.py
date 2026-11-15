@@ -59,7 +59,7 @@ class WebRuntimeTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        temporary = tempfile.TemporaryDirectory(prefix="rw-web-runtime-")
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-web-runtime-")
         cls.addClassCleanup(temporary.cleanup)
         cls.temporary_root = Path(temporary.name)
         cls.database_path = cls.temporary_root / "research.sqlite3"

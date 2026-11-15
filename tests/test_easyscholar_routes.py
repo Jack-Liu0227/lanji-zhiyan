@@ -10,7 +10,7 @@ import migrations
 
 class EasyScholarRoutesTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-easyscholar-module-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-easyscholar-module-")
         self.conn = sqlite3.connect(Path(self.tmp.name) / "test.sqlite3")
         self.conn.row_factory = sqlite3.Row
         migrations.run_migrations(self.conn, db_path=Path(self.tmp.name) / "test.sqlite3")

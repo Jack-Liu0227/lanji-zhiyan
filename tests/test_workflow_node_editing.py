@@ -17,7 +17,7 @@ import project_task_routes
 
 class WorkflowNodeEditingTest(unittest.TestCase):
     def setUp(self):
-        temporary=tempfile.TemporaryDirectory(prefix='rw-node-edit-')
+        temporary=tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix='rw-node-edit-')
         self.addCleanup(temporary.cleanup)
         self.db=workflow.WorkflowDB(Path(temporary.name)/'test.sqlite3')
         self.addCleanup(self.db.close)

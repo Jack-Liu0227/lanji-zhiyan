@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import sqlite3
 import time
 from contextlib import closing
@@ -60,6 +61,33 @@ def backup_database(db_path: Path) -> Path | None:
         return None
 
 
+_ADD_COLUMN_RX = re.compile(r"^\s*ALTER\s+TABLE\s+\"?(\w+)\"?\s+ADD\s+COLUMN\s+\"?(\w+)\"?", re.I)
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    try:
+        return any(r[1] == column for r in conn.execute(f'PRAGMA table_info("{table}")'))
+    except sqlite3.Error:
+        return False
+
+
+def skip_existing_columns(conn: sqlite3.Connection, sql: str) -> str:
+    """老库里已存在的列，让 ADD COLUMN 那句失效而不是整条迁移炸掉。
+
+    1.0 早期版本（工具箱那轮）用 PRAGMA 补过 chats.channel / model_id / reasoning / permission，
+    2.0 的 024+ 迁移也 ADD 同名列 → duplicate column name 会让整个迁移链停在半路，库卡在中间版本。
+    只处理「一行一条 ALTER TABLE … ADD COLUMN」的写法（本项目所有迁移都这么写），别的语句原样保留。
+    """
+    out = []
+    for line in sql.splitlines():
+        m = _ADD_COLUMN_RX.match(line)
+        if m and _has_column(conn, m.group(1), m.group(2)):
+            out.append("-- skip existing column: " + line.strip())
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def run_migrations(conn: sqlite3.Connection, migrations_dir: Path | None = None,
                    db_path: Path | None = None, create_backup: bool = False) -> list[str]:
     mdir = migrations_dir or DEFAULT_MIGRATIONS_DIR
@@ -87,7 +115,7 @@ def run_migrations(conn: sqlite3.Connection, migrations_dir: Path | None = None,
 
     applied_now = []
     for version, fpath, checksum in pending:
-        sql = fpath.read_text(encoding="utf-8")
+        sql = skip_existing_columns(conn, fpath.read_text(encoding="utf-8"))
         try:
             # executescript commits a pending transaction before running its SQL.
             conn.executescript("BEGIN IMMEDIATE;\n" + sql)

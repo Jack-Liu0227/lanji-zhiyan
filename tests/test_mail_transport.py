@@ -18,7 +18,7 @@ import mail
 class MailTransportTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        temporary = tempfile.TemporaryDirectory(prefix="rw-smtp-tls-")
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-smtp-tls-")
         cls.addClassCleanup(temporary.cleanup)
         root = Path(temporary.name)
         key, cert = root / "key.pem", root / "cert.pem"

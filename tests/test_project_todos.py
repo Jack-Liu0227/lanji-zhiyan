@@ -12,7 +12,7 @@ import project_todos
 
 class ProjectTodosTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-todos-test-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-todos-test-")
         self.db_path = Path(self.tmp.name) / "test.sqlite3"
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
@@ -65,7 +65,7 @@ class CurrentStageTest(unittest.TestCase):
     """
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-stage-test-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-stage-test-")
         self.db_path = Path(self.tmp.name) / "test.sqlite3"
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row

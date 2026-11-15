@@ -16,7 +16,7 @@ from workflow import STAGES, WorkflowDB, step_done, step_plan
 
 class StepGateTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.td = tempfile.TemporaryDirectory()
+        self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db = WorkflowDB(Path(self.td.name) / "wb.sqlite3")
         self.task = self.db.create_task("O3 掺杂", "哪种掺杂元素值得验证", "NaNi1/3Fe1/3Mn1/3O2")
 

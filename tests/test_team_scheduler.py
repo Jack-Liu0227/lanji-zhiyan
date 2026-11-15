@@ -20,7 +20,7 @@ import project_task_execution
 
 class TeamSchedulerTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-team-dag-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-team-dag-")
         self.path = Path(self.tmp.name) / "research.sqlite3"
         self.previous_db = team.DB_PATH
         team.DB_PATH = self.path

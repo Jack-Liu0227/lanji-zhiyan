@@ -106,7 +106,7 @@ class WriteRootsStampTest(unittest.TestCase):
     """标 Low 只该跑一次：文件数没变就不再递归 icacls —— 那 1.5s 挡在「起子进程」之前。"""
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         test_home = Path(self.tmp.name) / "home"
         test_database = test_home / "test.sqlite3"

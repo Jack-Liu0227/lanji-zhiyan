@@ -12,7 +12,7 @@ import workflow
 
 class PaperToolboxTest(unittest.TestCase):
     def setUp(self):
-        tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
+        tmp=tempfile.TemporaryDirectory(ignore_cleanup_errors=True);self.addCleanup(tmp.cleanup)
         self.db=workflow.WorkflowDB(Path(tmp.name)/'app.sqlite3');self.addCleanup(self.db.close)
         self.pid=self.db.create_task('Paper tools')
         self.db.add_model('Fixture','http://127.0.0.1:9999/v1','fixture','test-only',activate=True)

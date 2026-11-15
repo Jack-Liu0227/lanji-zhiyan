@@ -9,7 +9,7 @@ import workflow
 
 class ExecutorCatalogTest(unittest.TestCase):
     def test_legacy_preset_keys_preserve_local_overrides_and_distinct_custom_teams(self):
-        with tempfile.TemporaryDirectory() as temp,workflow.WorkflowDB(Path(temp)/'db.sqlite3') as db:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp,workflow.WorkflowDB(Path(temp)/'db.sqlite3') as db:
             a=db.create_task('A');b=db.create_task('B')
             db.assistant_save('catalog-expert',name='Catalog expert')
             teams=[]

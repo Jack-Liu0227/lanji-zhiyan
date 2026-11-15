@@ -25,7 +25,7 @@ EDGE = next((path for base in (os.environ.get("ProgramFiles(x86)"), os.environ.g
 class AgentSettingsWebTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        tmp = tempfile.TemporaryDirectory(prefix="rw-agent-web-")
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-agent-web-")
         cls.addClassCleanup(tmp.cleanup)
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))

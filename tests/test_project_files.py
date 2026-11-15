@@ -9,7 +9,7 @@ import project_files
 
 class ProjectFilesTest(unittest.TestCase):
     def setUp(self):
-        temporary=tempfile.TemporaryDirectory(prefix='rw-file-create-')
+        temporary=tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix='rw-file-create-')
         self.addCleanup(temporary.cleanup)
         self.root=Path(temporary.name).resolve()
         (self.root/'materials').mkdir()

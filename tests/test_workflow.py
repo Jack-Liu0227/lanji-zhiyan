@@ -22,7 +22,7 @@ import pathlib
 # ---------------- 来自 test_workflow.py ----------------
 class WorkflowTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.td = tempfile.TemporaryDirectory()
+        self.td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db = WorkflowDB(Path(self.td.name) / "wb.sqlite3")
         self.task = self.db.create_task("O3 掺杂", "哪种掺杂元素值得验证", "NaNi1/3Fe1/3Mn1/3O2")
 
@@ -755,7 +755,7 @@ class PlanContextTest(unittest.TestCase):
         import tempfile
         from pathlib import Path as P
         import workflow
-        td = tempfile.TemporaryDirectory()
+        td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         db = workflow.WorkflowDB(P(td.name) / "wb.sqlite3")
         try:
             tid = db.create_task("测试项目", "研究问题", "体系")
@@ -784,7 +784,7 @@ class MapSeedTest(unittest.TestCase):
         from pathlib import Path as P
         import workflow
         import workflow_documents as wd
-        td = tempfile.TemporaryDirectory()
+        td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         db = workflow.WorkflowDB(P(td.name) / "wb.sqlite3")
         try:
             tid = db.create_task("测试项目", "研究问题", "体系", str(P(td.name) / "proj"))
@@ -818,7 +818,7 @@ class KanbanProgressTest(unittest.TestCase):
         from pathlib import Path as P
         import workflow
         import project_todos
-        td = tempfile.TemporaryDirectory()
+        td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         db = workflow.WorkflowDB(P(td.name) / "wb.sqlite3")
         try:
             tid = db.create_task("测试项目", "研究问题", "体系")

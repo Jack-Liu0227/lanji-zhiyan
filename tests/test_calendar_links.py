@@ -14,7 +14,7 @@ import workflow_layout
 
 class CalendarLinksTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.db = workflow.WorkflowDB(Path(self.tmp.name) / "app.sqlite3")
         self.addCleanup(self.db.close)

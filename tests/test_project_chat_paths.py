@@ -13,7 +13,7 @@ import zotero
 
 class ProjectChatPathsTest(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.db = workflow.WorkflowDB(self.root / 'research.sqlite3')

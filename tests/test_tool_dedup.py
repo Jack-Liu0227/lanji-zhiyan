@@ -19,7 +19,7 @@ import workflow
 
 class ToolDedupTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db = workflow.WorkflowDB(Path(self.tmp.name) / "t.sqlite3")
         self.cid = self.db.create_chat()
 

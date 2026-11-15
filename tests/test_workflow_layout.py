@@ -11,7 +11,7 @@ import workflow_layout as layouts
 
 class WorkflowLayoutTest(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="rw-layout-")
+        self.temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-layout-")
         self.addCleanup(self.temporary.cleanup)
         self.path = Path(self.temporary.name) / "test.sqlite3"
         self.db = WorkflowDB(self.path)

@@ -20,7 +20,7 @@ import workflow_runners  # noqa: E402
 
 class DraftFromMapTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db = workflow.WorkflowDB(Path(self.tmp.name) / "t.sqlite3")
         base = Path(self.tmp.name) / "proj"
         (base / "论文正文").mkdir(parents=True)

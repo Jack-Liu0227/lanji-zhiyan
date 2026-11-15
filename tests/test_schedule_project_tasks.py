@@ -15,7 +15,7 @@ import workflow_layout
 
 class ScheduleProjectTaskTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="rw-schedule-tasks-")
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-schedule-tasks-")
         self.addCleanup(self.temp.cleanup)
         self.db = workflow.WorkflowDB(Path(self.temp.name) / "app.sqlite3")
         self.addCleanup(self.db.close)

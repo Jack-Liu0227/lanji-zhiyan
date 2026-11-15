@@ -12,7 +12,7 @@ import workflow
 
 class ScheduleNotesTest(unittest.TestCase):
     def test_completed_runs_archive_once_in_project_notes_with_provenance(self):
-        with tempfile.TemporaryDirectory() as folder, workflow.WorkflowDB(Path(folder) / "app.sqlite3") as db:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder, workflow.WorkflowDB(Path(folder) / "app.sqlite3") as db:
             pid = db.create_task("Notes", base_dir=str(Path(folder) / "project"))
             sched = db.schedule_save({"name": "每周文献报告", "project_id": pid, "assistant_id": "builtin-steward", "prompt": "Report"})
             with patch.object(schedule, "DB_PATH", db.path), patch.object(workflow, "run_agent", return_value={"reply": "UNIQUE_SCHEDULE_NOTE"}):
@@ -33,7 +33,7 @@ class ScheduleNotesTest(unittest.TestCase):
             self.assertTrue(edges)
 
     def test_failed_run_does_not_create_note(self):
-        with tempfile.TemporaryDirectory() as folder, workflow.WorkflowDB(Path(folder) / "app.sqlite3") as db:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder, workflow.WorkflowDB(Path(folder) / "app.sqlite3") as db:
             pid = db.create_task("Notes", base_dir=str(Path(folder) / "project"))
             sched = db.schedule_save({"name": "Fail", "project_id": pid, "assistant_id": "builtin-steward", "prompt": "Fail"})
             with patch.object(schedule, "DB_PATH", db.path), patch.object(workflow, "run_agent", side_effect=RuntimeError("model failed")):

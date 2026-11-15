@@ -10,7 +10,7 @@ import zotero_mcp_routes
 
 class ZoteroMcpRoutesTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-zotero-mcp-test-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-zotero-mcp-test-")
         self.db_path = Path(self.tmp.name) / "test.sqlite3"
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row

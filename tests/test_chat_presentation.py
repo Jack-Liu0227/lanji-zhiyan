@@ -68,7 +68,7 @@ class ReasoningPresentationTest(unittest.TestCase):
             kwargs["on_reasoning"]("Summary")
             kwargs["on_delta"]("Answer")
             return {"content": "Answer", "reasoning": "Summary"}
-        with tempfile.TemporaryDirectory() as folder, workflow.WorkflowDB(Path(folder) / "test.sqlite3") as db:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder, workflow.WorkflowDB(Path(folder) / "test.sqlite3") as db:
             pid = db.create_task("Test")
             emitted = []
             with patch.object(workflow, "chat_raw", side_effect=model):
@@ -81,7 +81,7 @@ class ReasoningPresentationTest(unittest.TestCase):
 
 class FeishuTypingTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / "test.sqlite3"
         with workflow.WorkflowDB(self.path) as db:

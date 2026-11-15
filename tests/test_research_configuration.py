@@ -18,7 +18,7 @@ from _pdf_fixture import write_text_pdf
 
 class ResearchConfigurationTest(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="research-config-")
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="research-config-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.db = workflow.WorkflowDB(self.root / "app.sqlite3")

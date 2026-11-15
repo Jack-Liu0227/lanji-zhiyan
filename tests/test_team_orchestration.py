@@ -17,7 +17,7 @@ import team_orchestration as orchestration
 
 class TeamOrchestrationTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.path = Path(self.tmp.name) / 'app.sqlite3'
         self.db = workflow.WorkflowDB(self.path)
         self.pid = self.db.create_task('Team research', base_dir=str(Path(self.tmp.name) / 'project'))

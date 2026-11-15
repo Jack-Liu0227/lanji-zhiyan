@@ -21,7 +21,7 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
 
     def test_workspace_project_manager_creates_and_persists_project(self):
         self.load_workspace()
-        with tempfile.TemporaryDirectory(prefix="rw-project-base-") as base:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-project-base-") as base:
             self.page.route('**/api/folder/pick?*',lambda route:route.fulfill(json={'dir':base}))
             self.page.evaluate("openTab('tasks')")
             self.page.locator('dialog.project-manager').wait_for()

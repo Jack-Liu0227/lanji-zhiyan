@@ -31,7 +31,7 @@ ZOTERO_BIB = """@article{oikawa_alloym_2026,
 
 class CiteBibTest(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="cite-bib-")
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="cite-bib-")
         self.addCleanup(temporary.cleanup)
         self.db = workflow.WorkflowDB(Path(temporary.name) / "app.sqlite3")
         self.addCleanup(self.db.close)

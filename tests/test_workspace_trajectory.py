@@ -13,7 +13,7 @@ import workspace_trajectory as trace
 
 class WorkspaceTrajectoryTest(unittest.TestCase):
     def setUp(self):
-        temporary=tempfile.TemporaryDirectory(prefix='rw-trajectory-')
+        temporary=tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix='rw-trajectory-')
         self.addCleanup(temporary.cleanup)
         self.path=Path(temporary.name)/'test.sqlite3'
         with workflow.WorkflowDB(self.path) as db:

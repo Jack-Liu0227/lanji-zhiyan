@@ -50,7 +50,7 @@ class IndexTest(unittest.TestCase):
     def setUp(self):
         semantic.embed = _fake_embed
         semantic.LOCK_TIMEOUT = 0
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-sem-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-sem-")
         self.db = workflow.WorkflowDB(Path(self.tmp.name) / "research.sqlite3")
         self.project = self.db.create_task("钠电项目", "问题", "NFM")
         self.other = self.db.create_task("另一个项目", "问题", "其它")
@@ -153,7 +153,7 @@ class KnowledgeQueryWiringTest(unittest.TestCase):
 
     def setUp(self):
         semantic.embed = _fake_embed
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-sem-wire-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-sem-wire-")
         self.db = workflow.WorkflowDB(Path(self.tmp.name) / "research.sqlite3")
         self.project = self.db.create_task("钠电项目", "问题", "NFM")
         self.db.db.execute(

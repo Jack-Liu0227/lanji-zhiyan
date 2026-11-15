@@ -15,7 +15,7 @@ from _pdf_fixture import write_text_pdf
 
 class ZoteroStagedImportTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="zotero-staged-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="zotero-staged-")
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.db = workflow.WorkflowDB(self.root / "app.sqlite3")

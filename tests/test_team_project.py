@@ -23,7 +23,7 @@ _PROJECTS = {}
 def setUpModule():
     """本模块独占一个库：整个测试跑完再还原 team.DB_PATH（别的测试文件也在改它）。"""
     global _OLD_DB, _TEMP, _DB
-    _TEMP = tempfile.TemporaryDirectory(prefix="rw-team-project-")
+    _TEMP = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-team-project-")
     _DB = pathlib.Path(_TEMP.name) / "app.sqlite3"
     _OLD_DB = team.DB_PATH
     team.DB_PATH = _DB

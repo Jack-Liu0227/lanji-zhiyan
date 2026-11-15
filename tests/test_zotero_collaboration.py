@@ -59,7 +59,7 @@ class Remote:
 
 class ZoteroCollaborationTest(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory()
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(temporary.cleanup)
         self.db = workflow.WorkflowDB(Path(temporary.name) / 'test.sqlite3')
         self.addCleanup(self.db.close)

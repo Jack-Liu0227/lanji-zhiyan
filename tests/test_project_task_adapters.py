@@ -16,7 +16,7 @@ import workflow_layout
 
 class ProjectTaskAdaptersTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-task-adapters-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-task-adapters-")
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "app.sqlite3"
         self.db = workflow.WorkflowDB(self.path)
