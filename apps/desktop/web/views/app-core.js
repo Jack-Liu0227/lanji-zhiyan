@@ -200,7 +200,7 @@ const NAV = [
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {usage:"用量统计","task-center":"任务与自动化",toolbox:"论文工具箱",assistants:"专家",team:"团队",agent:"智研管家",workspace:"项目工作区",calendar:"日历",tasks:"项目管理",workflow:"项目工作区",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时自动化",space:"项目工作区",settings:"设置"};
+const TITLES = {usage:"用量统计","task-center":"任务与自动化",toolbox:"论文工具箱",assistants:"专家",team:"团队",agent:"智研管家",workspace:"项目工作区",calendar:"日历",tasks:"任务与自动化",workflow:"项目工作区",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时自动化",space:"项目工作区",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 function uiRouteIs(kind){
   return route()===kind || (route()==="workspace" && !!window.ProjectWorkspace?.hasSurface(kind));
@@ -217,7 +217,7 @@ async function uiNavigate(action){
 
 function openTab(r, title){
   if(r==="schedules"){TaskCenter.requestView('automation');r='task-center';title='任务与自动化';}
-  if(r==="tasks"&&window.ProjectManager){ProjectManager.open();return;}
+  if(r==="tasks"){TaskCenter.requestView("board");r="task-center";title="任务与自动化";}   // 老「项目管理」页已删，路由并入任务与自动化
   if(["workspace","space","workflow","notes"].includes(r) && window.ProjectWorkspace){
     ProjectWorkspace.requestRoute(r);r="workspace";title="项目工作区";
   }
