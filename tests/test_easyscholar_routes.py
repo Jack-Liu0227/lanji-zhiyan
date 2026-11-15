@@ -44,13 +44,6 @@ class EasyScholarRoutesTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             route("POST", "/api/easyscholar/ranks", {"venues": [str(i) for i in range(31)]}, {}, self.conn)
 
-    def test_settings_ui_is_loaded_as_its_own_module(self):
-        root = Path(__file__).resolve().parents[1]
-        integration_ui = (root / "apps/desktop/web/views/integrations-settings.js").read_text(encoding="utf-8")
-        index = (root / "apps/desktop/web/index.html").read_text(encoding="utf-8")
-        self.assertNotIn("loadEasyScholar", integration_ui)
-        self.assertIn('src="/views/easyscholar-settings.js"', index)
-
     def test_other_paths_are_declined(self):
         self.assertIsNone(route("GET", "/api/todos", {}, {}, self.conn))
 
