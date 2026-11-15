@@ -15,7 +15,7 @@ FORMATS = {'png':'PNG','jpg':'JPEG','jpeg':'JPEG','webp':'WEBP','tif':'TIFF','ti
 def folder(db, project_id, kind):
     if project_id:
         import project_notes
-        root=project_notes.project_root(db,project_id)/'其余'/'图片工具'/kind
+        root=project_notes.project_root(db,project_id,writable=True)/'其余'/'图片工具'/kind
     else:
         root=Path(db.path).resolve().parent/'image-toolbox'/kind
     root.mkdir(parents=True,exist_ok=True)

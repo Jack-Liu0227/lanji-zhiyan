@@ -72,9 +72,12 @@ def validate(spec):
 
 def _prepare_prompt(db,project_id,spec):
     if spec['tool'] not in PROMPT_TOOLS:return spec
-    # 1.0 没有项目提示词模板库：reference 一律忽略，只用内置预设与本次手改
     snapshot=None
-    default=next(item['prompt'] for item in PROMPT_PRESETS if item['id']==spec['prompt_preset'])
+    if spec['prompt_template'] is not None:
+        if not project_id:raise ValueError('使用项目模板前请先选择结果归属项目')
+        import prompt_templates
+        snapshot=prompt_templates.resolve(db,project_id,spec['prompt_template'])
+    default=snapshot['rendered'] if snapshot else next(item['prompt'] for item in PROMPT_PRESETS if item['id']==spec['prompt_preset'])
     prompt=spec['prompt'] if spec['prompt'] is not None else default
     if len(prompt)>20000:raise ValueError('风格提示词不能超过 20000 字符，请缩小模板内容')
     return {**spec,'prompt':prompt,'_prompt_snapshot':snapshot}
@@ -122,15 +125,13 @@ def transform(db,owner_id,spec,emit=None,*,prepared=False):
         return image_tools.transform(db,project_id,spec,emit)
     if tool=='references':return {'content':_references(text)}
     if tool=='convert':
-        import workflow_stages
-        import workflow_converters
         old=getattr(db,'quiet_steps',False);db.quiet_steps=True
         try:
             if spec['format']=='pdf':
                 if not db.db.execute('SELECT 1 FROM research_tasks WHERE id=?',(owner_id,)).fetchone():raise ValueError('导出 PDF 请选择项目，以使用项目的论文与引用配置')
                 source=db.pdir(owner_id,'其余')/('toolbox-'+uuid.uuid4().hex+'.md');asset_service.atomic_write_text(source,text)
-                result=workflow_converters.conv_run(db,owner_id,'pdf',str(source))
-            else:result=workflow_stages.stage_convert(db,owner_id,text,spec['format'],'toolbox-'+uuid.uuid4().hex[:10])
+                result=workflow.conv_run(db,owner_id,'pdf',str(source))
+            else:result=workflow.stage_convert(db,owner_id,text,spec['format'],'toolbox-'+uuid.uuid4().hex[:10])
         finally:db.quiet_steps=old
         return {'content':'已导出：'+result['path'],**result}
     if tool not in ('translate','polish'):raise ValueError('PDF 翻译请从已入库的项目文献启动')
@@ -169,13 +170,13 @@ def start(db,body):
     import agent_jobs
     import workflow
     spec=validate(body);pid=str(body.get('project_id') or '')
-    if pid and not db.db.execute('SELECT 1 FROM research_tasks WHERE id=?',(pid,)).fetchone():
-        raise ValueError('项目不存在')
+    if pid:
+        import project_tasks
+        project_tasks._project(db,pid)
     if spec['tool']=='pdf_translate':
         paper=db.paper(str(body.get('paper_id') or ''))
         if not pid or not paper or paper['task_id']!=pid:raise ValueError('请选择当前项目已入库的 PDF')
-        import papertran
-        return papertran.start(db,paper['id'],db.pdir(pid,'文献库'))
+        return workflow._tool_impl('paper_translate',db,pid,{'paper_id':paper['id'],'action':'start'})
     if spec['tool'] in ('caption','image_convert'):
         import image_tools
         image_tools.inputs(db,pid,spec['image_ids'])
@@ -192,8 +193,8 @@ def start(db,body):
         owner=old['owner_id']
     else:
         spec=_prepare_prompt(db,pid,spec)
-        owner=db.create_chat(next(item['name'] for item in TOOLS if item['id']==spec['tool']))
-        db.db.execute("UPDATE chats SET channel='toolbox',model_id=?,permission='read_only',task_id=? WHERE id=?",(model_id,pid,owner));db.db.commit()
+        owner=db.create_chat(next(item['name'] for item in TOOLS if item['id']==spec['tool']),task_id=pid)
+        db.db.execute("UPDATE chats SET channel='toolbox',model_id=?,permission='read_only' WHERE id=?",(model_id,owner));db.db.commit()
     run=agent_jobs.start(db.path,{'task_id':owner,'idempotency_key':key,'toolbox_spec':spec,'toolbox_digest':digest,'message':spec['text']},step='paper_toolbox')
     return {'run_id':run.run_id,'chat_id':owner,'request_key':key,'status':run.status}
 
@@ -239,6 +240,7 @@ def route(method,path,body,query,db):
         return image_tools.upload(db,body)
     if method=='POST' and path.endswith('/start'):return start(db,body)
     if method=='POST' and path.endswith('/save'):
+        import project_resources
         run=db.get_async_task(str(body.get('run_id') or ''));pid=str(body.get('project_id') or '')
         chat=db.chat(run['owner_id']) if run else None
         if not run or run['status']!='done' or not chat or chat['channel']!='toolbox' or chat['task_id'] not in ('',pid):raise ValueError('处理尚未完成或结果不属于当前项目')
@@ -246,13 +248,8 @@ def route(method,path,body,query,db):
         with _save_lock:
             old=asset_service.find_by_metadata(db,project_id=pid,key='toolbox_run_id',value=run['id'])
             if old:return {'asset_id':old[0]['id'],'path':old[0]['canonical_uri'],'reused':True}
-            import project_notes
-            title=str(body.get('title') or chat['title'])
-            safe=re.sub(r'[^\w\-. ]+','_',title)[:60] or 'toolbox'
-            saved=project_notes.write(db,pid,'笔记/论文工具结果/'+safe+'.md',content,title=title)
-            row=db.db.execute("SELECT id FROM assets WHERE project_id=? AND canonical_uri LIKE ? ORDER BY updated_at DESC LIMIT 1",(pid,'%'+safe+'.md')).fetchone()
-            if row:
-                asset=asset_service.get(db,row['id']);metadata={**json.loads(asset['metadata']),'toolbox_run_id':run['id']}
-                db.db.execute('UPDATE assets SET metadata=? WHERE id=?',(json.dumps(metadata),asset['id']));db.db.commit()
+            saved=project_resources.write(db,pid,{'kind':str(body.get('kind') or 'note'),'title':str(body.get('title') or chat['title']),'content':content})
+            asset=asset_service.get(db,saved['asset_id']);metadata={**json.loads(asset['metadata']),'toolbox_run_id':run['id']}
+            db.db.execute('UPDATE assets SET metadata=? WHERE id=?',(json.dumps(metadata),asset['id']));db.db.commit()
             return saved
     raise ValueError('不支持的论文工具操作')

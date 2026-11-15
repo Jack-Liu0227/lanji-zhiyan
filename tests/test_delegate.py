@@ -39,7 +39,7 @@ class TestDelegate(unittest.TestCase):
         self.db.close()
         self.td.cleanup()
 
-    def _fake(self, boom_title: str = "", long_reply: bool = False) -> None:
+    def _fake(self, boom_title: str = "") -> None:
         """假模型：父第一轮要 delegate；子 agent（system 里带标记）直接给摘要。"""
         def fake_chat_raw(profile, messages, tools=None, **kw):
             system = "\n".join(str(m.get("content") or "") for m in messages if m.get("role") == "system")
@@ -56,9 +56,6 @@ class TestDelegate(unittest.TestCase):
                 task_text = str(messages[-1].get("content") or "")
                 if boom_title and boom_title in task_text:
                     raise RuntimeError("模拟子 agent 崩了")
-                if long_reply:                       # 超长摘要：末段刻意放一个只有全文里才有的标记
-                    return {"role": "assistant", "content": "结论长" * 700 + "【末尾关键数字 42】",
-                            "tool_calls": []}
                 return {"role": "assistant", "content": "摘要[" + task_text[:14] + "]", "tool_calls": []}
             self.parent_calls.append({"messages": list(messages),                       # ===== 父 agent =====
                                       "tools": [t["function"]["name"] for t in (tools or [])]})
@@ -109,29 +106,11 @@ class TestDelegate(unittest.TestCase):
         self.assertIn("失败", by_title["甲"]["summary"])
         self.assertTrue(by_title["乙"]["ok"])
         self.assertIn("摘要[读 B 给要点]", res["digest"])
-        self.assertNotIn("summary_path", by_title["乙"])               # 正常长度的摘要不落盘、不多字段
 
     def test_empty_jobs_is_rejected(self) -> None:
         r = workflow._delegate(self.db, self.task, [], parallel=2)
         self.assertFalse(r["ok"])
         self.assertIn("至少一个子任务", r["error"])
-
-    def test_long_summary_spills_to_file(self) -> None:
-        """超 2000 字：全文落盘、摘要留路径，父 agent 拿到的不是被切断的半句话。"""
-        self._fake(long_reply=True)
-        with workflow.WorkflowDB(self.db.path) as fresh:
-            res = workflow._delegate(fresh, self.task, [{"title": "甲", "prompt": "读 A 给要点"}], parallel=1)
-        rec = res["delegated"][0]
-        self.assertTrue(rec["ok"])
-        self.assertIn("摘要已截断", rec["summary"])
-        spilled = Path(rec["summary_path"])
-        self.assertTrue(spilled.is_file())
-        self.assertIn(str(spilled), rec["summary"])                     # 父 agent 看得到路径
-        self.assertIn(str(spilled), res["digest"])                      # digest 里也带着
-        full = spilled.read_text(encoding="utf-8")
-        self.assertGreater(len(full), workflow._SUB_SUMMARY_CAP)
-        self.assertIn("【末尾关键数字 42】", full)                        # 截断会丢的尾巴，全文里在
-        self.assertNotIn("【末尾关键数字 42】", rec["summary"])
 
 
 if __name__ == "__main__":

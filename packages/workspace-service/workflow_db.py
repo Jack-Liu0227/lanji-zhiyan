@@ -30,6 +30,7 @@ import paths            # 唯一路径来源（data / user / executors 都在 HO
 import project_notes
 import securestore      # 凭据保护（DPAPI，见 securestore.py）
 from research_core import ResearchDB
+from workflow_catalog import STAGE_LABEL, STAGES
 from workflow_search import make_project_tree   # 建项目骨架（pdir 里懒建目录用）
 
 
@@ -43,7 +44,7 @@ UA = {"User-Agent": "research-workbench-1.0 (mailto:local@localhost)"}
 
 # ---------------- 凭据：库里只存密文（DPAPI），读出来才解 ----------------
 # ponytail: 只挡「整份拷走 data/ 就等于拿走 key」这一层；不挡「同一 Windows 用户下的本机进程」
-# （那需要给 HTTP 加 token / 降权运行，见 docs/交接.md 的安全一节）。
+# This does not isolate separate processes running as the same Windows user.
 def _stored_key(value: Any) -> str:
     """明文 → 入库值：加密；空串/已加密原样返回（幂等）。"""
     text = str(value or "").strip()
@@ -107,7 +108,12 @@ try:
 except (OSError, ValueError):
     PROVIDER_CATALOG = {}
 
-# 接入协议（wire）—— 卡片上的徽标；本机真正跑得通的只有 openai-completions
+import account_providers
+for _pid, _account in account_providers.CATALOG.items():
+    PROVIDER_CATALOG[_pid] = {**PROVIDER_CATALOG.get(_pid, {}), **_account,
+                              "id": _pid, "base_url": "account://" + _pid, "auth": ["account"], "n_models": len(_account["models"])}
+
+# 接入协议包括 HTTP 模型 API 与复用官方本机账号的 CLI。
 WIRE_LABEL = {
     "openai-completions": "OpenAI Chat Completions",
     "openai-responses": "OpenAI Responses",
@@ -120,8 +126,9 @@ WIRE_LABEL = {
     "openai-codex-responses": "OpenAI Codex Responses",
     "pi-messages": "Pi Messages",
 }
-USABLE_WIRES = {"openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"}
-CUSTOM_WIRES = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"]
+WIRE_LABEL.update({c["wire"]: c["name"] for c in account_providers.CATALOG.values()})
+USABLE_WIRES = {"openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai"} | account_providers.WIRES
+CUSTOM_WIRES = ["openai-completions", "openai-responses", "anthropic-messages", "google-generative-ai", *sorted(account_providers.WIRES)]
 # 「订阅 / OAuth 登录」的授权页；设备码流要各家 client_id，暂不自动授权
 # ponytail: 拿到 client_id 再加 RFC 8628 轮询
 OAUTH_CONSOLE = {
@@ -159,7 +166,6 @@ OAUTH_CONSOLE = {
     "cloudflare-workers-ai": "https://dash.cloudflare.com/",
 }
 
-STAGES = ["idea", "search", "download", "notes", "outline", "map", "write", "review", "entrans", "convert"]
 # 新用户首启那张欢迎对话的正文（改文案只改这里）
 WELCOME_TEXT = (
     "新用户你好，我是你的个人科研管家：览籍智研，叫我小智就行。\n\n"
@@ -167,11 +173,6 @@ WELCOME_TEXT = (
     "每一步都留痕，能回退。\n\n"
     "先说说你的研究方向，再给一句话研究问题，我帮你把项目建起来。只想随便聊也行。这条对话随时可以删。"
 )
-STAGE_LABEL = {
-    "idea": "创新点审查", "search": "文献检索", "download": "文献入库",
-    "notes": "文献精读", "outline": "拟定框架", "map": "证据链谱系", "write": "论文撰写", "review": "AI预审查",
-    "entrans": "学术英译", "convert": "格式排版",
-}
 
 
 def now() -> str:
@@ -291,17 +292,10 @@ class WorkflowDB(ResearchDB):
                 if is_memory or db_key not in _WORKFLOW_SCHEMA_INITIALIZED:
                     self.db.executescript(WORKFLOW_SCHEMA)
                     cols = {r["name"] for r in self.db.execute("PRAGMA table_info(chats)")}
-                    if "assistant_id" not in cols:                # 老库补列：对话绑的助手（我的/公开）
+                    if "assistant_id" not in cols:                # 老库补列：对话绑的专家（我的/公开）
                         self.db.execute("ALTER TABLE chats ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''")
                     if "task_id" not in cols:                     # 老库补列：对话绑的项目（'' = 随意对话）
                         self.db.execute("ALTER TABLE chats ADD COLUMN task_id TEXT NOT NULL DEFAULT ''")
-                    # 老库补列：对话渠道与设置（论文工具箱要用 channel 区分处理记录）
-                    for _col, _ddl in (("channel", "TEXT NOT NULL DEFAULT ''"),
-                                       ("model_id", "TEXT NOT NULL DEFAULT ''"),
-                                       ("reasoning", "TEXT NOT NULL DEFAULT ''"),
-                                       ("permission", "TEXT NOT NULL DEFAULT ''")):
-                        if _col not in cols:
-                            self.db.execute(f"ALTER TABLE chats ADD COLUMN {_col} {_ddl}")
                     # 老库补列（早期版本 providers 只有 6 列）
                     cols = {r["name"] for r in self.db.execute("PRAGMA table_info(providers)")}
                     if "source" not in cols:
@@ -327,6 +321,12 @@ class WorkflowDB(ResearchDB):
                     self.db.execute("""CREATE TABLE IF NOT EXISTS dl_queue (
                           task_id TEXT NOT NULL, result_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued',
                           path TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
+                          PRIMARY KEY (task_id, result_id))""")
+                    self.db.execute("""CREATE TABLE IF NOT EXISTS zotero_staging (
+                          task_id TEXT NOT NULL, result_id TEXT NOT NULL,
+                          zotero_status TEXT NOT NULL DEFAULT 'staged', zotero_key TEXT NOT NULL DEFAULT '',
+                          zotero_attachment_key TEXT NOT NULL DEFAULT '', zotero_error TEXT NOT NULL DEFAULT '',
+                          zotero_updated_at TEXT NOT NULL DEFAULT '',
                           PRIMARY KEY (task_id, result_id))""")
                     # 团队（Leader + 成员 + 派活队列 + 运行事件）
                     self.db.execute("""CREATE TABLE IF NOT EXISTS assistants (
@@ -379,8 +379,8 @@ class WorkflowDB(ResearchDB):
                         self.db.execute("ALTER TABLE schedule_runs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'scheduler'")
                     if "reason" not in cols_runs:
                         self.db.execute("ALTER TABLE schedule_runs ADD COLUMN reason TEXT NOT NULL DEFAULT ''")
-                    self.assistant_seed(BUILTIN_ASSISTANTS)      # 公开助手（内置）：只补缺，不覆盖改过的
-                    self.db.execute("UPDATE schedules SET assistant_id='builtin-steward' WHERE id LIKE 'builtin.schedule.%' AND assistant_id=''")
+                    self.assistant_seed(BUILTIN_ASSISTANTS)      # 公开专家（内置）：只补缺，不覆盖改过的
+                    self.db.execute("UPDATE schedules SET assistant_id='builtin-scheduler' WHERE assistant_id IN ('','builtin-steward')")
                     _recent = self.db.execute("SELECT id FROM research_tasks ORDER BY updated_at DESC LIMIT 1").fetchone()
                     self.schedule_seed(BUILTIN_SCHEDULES, _recent["id"] if _recent else "")   # 内置定时任务：只补缺（没有项目就先留空，等用户绑）
                     self.db.execute("""CREATE TABLE IF NOT EXISTS teams (
@@ -394,7 +394,7 @@ class WorkflowDB(ResearchDB):
                     if "purpose" not in cols:                      # 老库补列：加急团队「为什么组」
                         self.db.execute("ALTER TABLE teams ADD COLUMN purpose TEXT NOT NULL DEFAULT ''")
                     cols = {r["name"] for r in self.db.execute("PRAGMA table_info(team_members)")}
-                    if "assistant_id" not in cols:                 # 老库补列：成员 = 哪个助手
+                    if "assistant_id" not in cols:                 # 老库补列：成员 = 哪个专家
                         self.db.execute("ALTER TABLE team_members ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''")
                     if "color" not in cols:                        # 老库补列：成员身份色序号
                         self.db.execute("ALTER TABLE team_members ADD COLUMN color INTEGER NOT NULL DEFAULT 0")
@@ -403,6 +403,11 @@ class WorkflowDB(ResearchDB):
                         self.db.execute("ALTER TABLE chat ADD COLUMN sender TEXT NOT NULL DEFAULT ''")
                     import agent_settings
                     agent_settings.migrate(self)
+                    import team_configuration
+                    team_configuration.migrate(self)
+                    import project_bindings
+                    for project in self.db.execute("SELECT id FROM research_tasks").fetchall():
+                        project_bindings.import_legacy(self, project["id"])
                     for _t in ("providers", "model_profiles"):        # key 绑定的域名（换域名就不许拿旧 key 发）
                         _cols = {r["name"] for r in self.db.execute(f"PRAGMA table_info({_t})")}
                         if "key_host" not in _cols:
@@ -426,10 +431,14 @@ class WorkflowDB(ResearchDB):
             self.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?", (str(base), task_id))
             self.db.commit()
             make_project_tree(base, self.summary(task_id)["task"])
+        root = self.base_dir(task_id)
+        if root:
+            import note_catalog
+            root.mkdir(parents=True, exist_ok=True)
+            note_catalog.initialize(self, task_id, new_project=True)
         return task_id
 
-    def bind_chat(self, cid: str, task_id: str | None = None) -> dict[str, Any]:
-        self.chat(cid)
+    def _chat_project(self, task_id: str | None) -> str:
         tid = str(task_id or "").strip()
         if tid and self.base_dir(tid):
             paths.validate_project_dir(self.base_dir(tid))
@@ -440,6 +449,14 @@ class WorkflowDB(ResearchDB):
             self.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?", (str(base), tid))
             self.db.commit()
             make_project_tree(base, self.summary(tid)["task"])
+        return tid
+
+    def create_chat(self, title: str = "", *, task_id: str = "") -> str:
+        return super().create_chat(title, task_id=self._chat_project(task_id))
+
+    def bind_chat(self, cid: str, task_id: str | None = None) -> dict[str, Any]:
+        self.chat(cid)
+        tid = self._chat_project(task_id)
         return super().bind_chat(cid, tid)
 
     def __enter__(self) -> "WorkflowDB":
@@ -512,6 +529,16 @@ class WorkflowDB(ResearchDB):
         title = title.strip() or "未命名笔记"
         previous = self.md_note(nid) if nid and self.db.execute(
             "SELECT 1 FROM md_notes WHERE id=?", (nid,)).fetchone() else None
+        import note_catalog
+        previous_path = self._md_note_path(previous) if previous else None
+        previous_content = previous_path.read_text(encoding="utf-8") if previous_path and previous_path.is_file() else (previous or {}).get("content", "")
+        content = note_catalog.update_content(content, previous_content)
+        if note_catalog.is_template(content):
+            import prompt_templates
+            pid = task_id if task_id is not None else (previous or {}).get("task_id", "")
+            if not pid or not previous_path or task_id not in (None, (previous or {}).get("task_id")):
+                raise ValueError("提示词模板请通过项目模板入口创建或复制到其他项目")
+            content = prompt_templates.prepare(self, pid, previous_path.relative_to(self.base_dir(pid)).as_posix(), content, previous_content)
         if nid and self.db.execute("SELECT 1 FROM md_notes WHERE id=?", (nid,)).fetchone():
             self.db.execute("UPDATE md_notes SET title=?, content=?, task_id=COALESCE(?, task_id),"
                             " paper_id=COALESCE(?, paper_id), updated_at=? WHERE id=?",
@@ -553,11 +580,18 @@ class WorkflowDB(ResearchDB):
                 return Path(asset["canonical_uri"])
         if not note["task_id"]:
             return NOTES / f"{note['id']}.md"
-        return self._project_note_dir(note["task_id"]) / f"{note['id']}.md"
+        return self._project_note_dir(note["task_id"], NOTE_CATEGORY if note.get("paper_id") else "") / f"{note['id']}.md"
 
     def _project_note_dir(self, task_id: str, category: str = NOTE_CATEGORY) -> Path:
         """项目笔记按分类落盘（=project_notes.CATEGORIES 里的目录名）。都写进子目录，
         否则笔记页只能把它们算成「未分类」。"""
+        import note_catalog
+        base = self.base_dir(task_id)
+        if base:
+            catalog = note_catalog.initialize(self, task_id)
+            key = catalog.get("legacy_targets", {}).get(category, category)
+            found = note_catalog.category(catalog, key) or next((c for c in catalog["categories"] if c["name"] == category), None)
+            return project_notes.folder_path(self, task_id, found["folder"] if found else "笔记", create=True)
         return self.pdir(task_id, "笔记") / category
 
     def _rehome_md_note_asset(self, previous: dict[str, Any] | None, note: dict[str, Any],
@@ -699,28 +733,88 @@ class WorkflowDB(ResearchDB):
     def enqueue(self, task_id: str, result_ids: list[str]) -> int:
         """按本次勾选重建队列（上一批的勾选记录清掉），状态先置 queued。"""
         self.db.execute("DELETE FROM dl_queue WHERE task_id=?", (task_id,))
+        self.db.execute("DELETE FROM zotero_staging WHERE task_id=?", (task_id,))
         for rid in result_ids:
-            self.db.execute("INSERT OR REPLACE INTO dl_queue VALUES (?,?,?,?,?,?)",
-                            (task_id, rid, "queued", "", "", now()))
+            self.db.execute("""INSERT OR REPLACE INTO dl_queue
+                (task_id,result_id,status,path,error,updated_at)
+                VALUES (?,?,?,?,?,?)""", (task_id, rid, "queued", "", "", now()))
         self.db.commit()
         return len(result_ids)
 
     def set_queue(self, task_id: str, result_id: str, status: str, path: str = "", error: str = "") -> None:
-        self.db.execute("INSERT OR REPLACE INTO dl_queue VALUES (?,?,?,?,?,?)",
-                        (task_id, result_id, status, path, error, now()))
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(dl_queue)")}
+        if "zotero_status" not in columns:
+            self.db.execute("DELETE FROM zotero_staging WHERE task_id=? AND result_id=?", (task_id, result_id))
+        self.db.execute("""INSERT OR REPLACE INTO dl_queue
+            (task_id,result_id,status,path,error,updated_at)
+            VALUES (?,?,?,?,?,?)""", (task_id, result_id, status, path, error, now()))
+        self.db.commit()
+
+    def set_zotero_stage(self, task_id: str, result_id: str, status: str,
+                         zotero_key: str = "", attachment_key: str = "", error: str = "") -> None:
+        """Update the Zotero staging state without changing the download path."""
+        stamp = now()
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(dl_queue)")}
+        if "zotero_status" in columns:  # compatibility with databases created before 035
+            existing = self.db.execute(
+                "SELECT status,path,error FROM dl_queue WHERE task_id=? AND result_id=?",
+                (task_id, result_id),
+            ).fetchone()
+            queue_status = existing["status"] if existing else "queued"
+            queue_path = existing["path"] if existing else ""
+            queue_error = existing["error"] if existing else ""
+            self.db.execute("""INSERT INTO dl_queue
+                (task_id,result_id,status,path,error,updated_at,zotero_status,zotero_key,
+                 zotero_attachment_key,zotero_error,zotero_updated_at)
+                VALUES (?,?,?,?,?, ?,?,?,?,?,?)
+                ON CONFLICT(task_id,result_id) DO UPDATE SET
+                  zotero_status=excluded.zotero_status,
+                  zotero_key=excluded.zotero_key,
+                  zotero_attachment_key=excluded.zotero_attachment_key,
+                  zotero_error=excluded.zotero_error,
+                  zotero_updated_at=excluded.zotero_updated_at""",
+                            (task_id, result_id, queue_status, queue_path, queue_error, stamp,
+                             status, zotero_key, attachment_key, error, stamp))
+        else:
+            self.db.execute("""INSERT INTO zotero_staging
+                (task_id,result_id,zotero_status,zotero_key,zotero_attachment_key,zotero_error,zotero_updated_at)
+                VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(task_id,result_id) DO UPDATE SET
+                  zotero_status=excluded.zotero_status,
+                  zotero_key=excluded.zotero_key,
+                  zotero_attachment_key=excluded.zotero_attachment_key,
+                  zotero_error=excluded.zotero_error,
+                  zotero_updated_at=excluded.zotero_updated_at""",
+                            (task_id, result_id, status, zotero_key, attachment_key, error, stamp))
         self.db.commit()
 
     def queue(self, task_id: str) -> list[dict[str, Any]]:
         """队列 + 卡片字段（和论文搜索的卡片同源，前端好复用同一套卡片）。"""
-        rows = [dict(r) for r in self.db.execute(
-            "SELECT * FROM dl_queue WHERE task_id=? ORDER BY updated_at", (task_id,))]
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(dl_queue)")}
+        if "zotero_status" in columns:  # compatibility with databases created before 035
+            sql = "SELECT * FROM dl_queue WHERE task_id=? ORDER BY updated_at"
+        else:
+            sql = """SELECT q.*, COALESCE(z.zotero_status, 'staged') AS zotero_status,
+                     COALESCE(z.zotero_key, '') AS zotero_key,
+                     COALESCE(z.zotero_attachment_key, '') AS zotero_attachment_key,
+                     COALESCE(z.zotero_error, '') AS zotero_error,
+                     COALESCE(z.zotero_updated_at, '') AS zotero_updated_at
+                     FROM dl_queue q LEFT JOIN zotero_staging z
+                       ON z.task_id=q.task_id AND z.result_id=q.result_id
+                     WHERE q.task_id=? ORDER BY q.updated_at"""
+        rows = [dict(r) for r in self.db.execute(sql, (task_id,))]
         out = []
         for r in rows:
             try:
                 item = self.result(r["result_id"])
             except KeyError:
                 continue
-            item.update({"status": r["status"], "saved_path": r["path"], "error": r["error"]})
+            item.update({"status": r["status"], "saved_path": r["path"], "error": r["error"],
+                         "zotero_status": r.get("zotero_status", "staged"),
+                         "zotero_key": r.get("zotero_key", ""),
+                         "zotero_attachment_key": r.get("zotero_attachment_key", ""),
+                         "zotero_error": r.get("zotero_error", ""),
+                         "zotero_updated_at": r.get("zotero_updated_at", "")})
             out.append(item)
         return out
 
@@ -758,19 +852,27 @@ class WorkflowDB(ResearchDB):
 
     # ---------- 定时任务（规则 + 每次运行一条记录） ----------
     def schedules(self) -> list[dict[str, Any]]:
-        return [dict(r) for r in self.db.execute("SELECT s.*,COALESCE(l.todo_id,'') AS todo_id FROM schedules s "
-                    "LEFT JOIN task_links l ON l.schedule_id=s.id ORDER BY s.created_at").fetchall()]
+        return [dict(r) for r in self.db.execute("SELECT s.*,COALESCE(l.todo_id,'') AS todo_id,COALESCE(w.layout_id,'') AS workflow_id FROM schedules s "
+                    "LEFT JOIN task_links l ON l.schedule_id=s.id LEFT JOIN schedule_workflows w ON w.schedule_id=s.id ORDER BY s.created_at").fetchall()]
 
     def schedule(self, sid: str) -> dict[str, Any] | None:
-        row = self.db.execute("SELECT s.*,COALESCE(l.todo_id,'') AS todo_id FROM schedules s "
-                              "LEFT JOIN task_links l ON l.schedule_id=s.id WHERE s.id=?", (str(sid or ""),)).fetchone()
+        row = self.db.execute("SELECT s.*,COALESCE(l.todo_id,'') AS todo_id,COALESCE(w.layout_id,'') AS workflow_id FROM schedules s "
+                              "LEFT JOIN task_links l ON l.schedule_id=s.id LEFT JOIN schedule_workflows w ON w.schedule_id=s.id WHERE s.id=?", (str(sid or ""),)).fetchone()
         return dict(row) if row else None
 
     def schedule_save(self, data: dict[str, Any]) -> dict[str, Any]:
         sid = str(data.get("id") or "").strip() or uuid.uuid4().hex
         stamp = now()
         enabled = 1 if data.get("enabled", True) else 0
-        assistant_id = str(data.get("assistant_id") or "").strip()
+        assistant_id = str(data.get("assistant_id") or "builtin-scheduler").strip()
+        if assistant_id == 'builtin-steward':
+            assistant_id = 'builtin-scheduler'
+        layout_id = str(data.get("workflow_id") or "").strip()
+        if layout_id:
+            import workflow_layout
+            workflow_layout._project(self, str(data.get("project_id") or ""))
+            workflow_layout.ensure_schema(self)
+            workflow_layout._layout(self, layout_id)
         if assistant_id and (not self.assistant(assistant_id) or not self.assistant(assistant_id).get("enabled")):
             raise ValueError("绑定的专家不存在或已停用")
         linked = self.db.execute("SELECT project_id FROM task_links WHERE schedule_id=?", (sid,)).fetchone()
@@ -795,6 +897,10 @@ class WorkflowDB(ResearchDB):
                 (sid, *fields[:6], enabled, "", fields[7], stamp, stamp, assistant_id))
         if row:
             self.db.execute("UPDATE schedules SET assistant_id=? WHERE id=?", (assistant_id, sid))
+        if layout_id:
+            self.db.execute("INSERT OR REPLACE INTO schedule_workflows VALUES (?,?)", (sid, layout_id))
+        else:
+            self.db.execute("DELETE FROM schedule_workflows WHERE schedule_id=?", (sid,))
         self.db.commit()
         return self.schedule(sid) or {}
 
@@ -810,6 +916,7 @@ class WorkflowDB(ResearchDB):
         project_todos.sync_execution(self, schedule_id=sid, status="cancelled")
         self.db.execute("DELETE FROM schedule_runs WHERE schedule_id=?", (str(sid or ""),))
         self.db.execute("DELETE FROM schedules WHERE id=?", (str(sid or ""),))
+        self.db.execute("DELETE FROM schedule_workflows WHERE schedule_id=?", (str(sid or ""),))
         self.db.commit()
 
     def schedule_seed(self, builtins: list[dict[str, Any]], project_id: str = "") -> int:
@@ -820,7 +927,7 @@ class WorkflowDB(ResearchDB):
                 continue
             self.db.execute(
                 "INSERT INTO schedules (id,name,prompt,project_id,frequency,cron,output_dir,enabled,"
-                "last_run_at,next_run_at,created_at,updated_at,assistant_id) VALUES (?,?,?,?,?,?,?,1,'','',?,?,'builtin-steward')",
+                "last_run_at,next_run_at,created_at,updated_at,assistant_id) VALUES (?,?,?,?,?,?,?,1,'','',?,?,'builtin-scheduler')",
                 (b["id"], b["name"], b["prompt"], project_id, b.get("frequency", "daily"),
                  b.get("cron", "0 9 * * *"), b.get("output_dir", "定时任务"), now(), now()))
             n += 1
@@ -833,9 +940,18 @@ class WorkflowDB(ResearchDB):
         self.db.commit()
 
     def schedule_runs(self, limit: int = 80) -> list[dict[str, Any]]:
-        rows = self.db.execute("SELECT * FROM schedule_runs ORDER BY started_at DESC LIMIT ?",
+        rows = self.db.execute("SELECT r.*, n.id AS note_id,n.task_id AS note_project_id,w.workflow_run_id FROM schedule_runs r LEFT JOIN md_notes n "
+                               "ON n.id='schedule-' || r.id LEFT JOIN schedule_workflow_runs w ON w.schedule_run_id=r.id ORDER BY r.started_at DESC LIMIT ?",
                                (max(1, min(500, int(limit))),)).fetchall()
-        return [dict(r) for r in rows]
+        result = []
+        for row in rows:
+            item = dict(row)
+            if item["note_id"]:
+                path = self._md_note_path(self.md_note(item["note_id"]))
+                root = self.base_dir(item["note_project_id"])
+                item["note_path"] = path.relative_to(root).as_posix() if root and path and path.is_relative_to(root) else ""
+            result.append(item)
+        return result
 
     def schedule_run_add(self, run: dict[str, Any]) -> None:
         """同一个 id 覆盖写（先落 running，跑完再覆盖成终态）。"""
@@ -854,6 +970,10 @@ class WorkflowDB(ResearchDB):
         if not ids:
             return 0
         marks = ",".join("?" for _ in ids)
+        active = self.db.execute(f"SELECT 1 FROM schedule_workflow_runs l JOIN workflow_runs w ON w.id=l.workflow_run_id WHERE l.schedule_run_id IN ({marks}) AND w.status NOT IN ('succeeded','failed','cancelled') LIMIT 1", tuple(ids)).fetchone()
+        if active:
+            raise ValueError('请先完成或停止关联工作流，再清理定时运行记录')
+        self.db.execute(f'DELETE FROM schedule_workflow_runs WHERE schedule_run_id IN ({marks})', tuple(ids))
         cur = self.db.execute(f"DELETE FROM schedule_runs WHERE id IN ({marks})", tuple(ids))
         self.db.commit()
         return int(cur.rowcount or 0)
@@ -870,11 +990,14 @@ class WorkflowDB(ResearchDB):
         return dict(row) if row else None
 
     def team_member_add(self, task_id: str, name: str, role: str = "member", step: str = "",
-                        prompt: str = "", assistant_id: str = "", color: int = 0) -> dict[str, Any]:
+                        prompt: str = "", assistant_id: str = "", color: int = 0, *,
+                        model_id: str = "", reasoning: str = "auto", permission: str = "auto") -> dict[str, Any]:
+        import agent_settings
+        agent_settings.validate_runtime_fields(self, {"model_id": model_id, "reasoning": reasoning, "permission": permission})
         row = (uuid.uuid4().hex, task_id, name, role, step, prompt, "idle", "", now(), now(),
-               assistant_id, int(color or 0))
+               assistant_id, int(color or 0), model_id, reasoning, permission)
         self.db.execute("INSERT INTO team_members (id,task_id,name,role,step,prompt,status,note,created_at,"
-                       "updated_at,assistant_id,color) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row)
+                       "updated_at,assistant_id,color,model_id,reasoning,permission) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM team_members WHERE id=?", (row[0],)).fetchone())
 
@@ -884,6 +1007,10 @@ class WorkflowDB(ResearchDB):
         agent_settings.validate_runtime_fields(self, allow)
         if allow.get("assistant_id"):
             self.require_assistant(allow["assistant_id"])
+            member = self.team_member(mid)
+            if member and self.db.execute("SELECT 1 FROM team_members WHERE task_id=? AND assistant_id=? AND id<>?",
+                                          (member["task_id"], allow["assistant_id"], mid)).fetchone():
+                raise ValueError("这个专家已在当前团队中")
         if allow:
             allow["updated_at"] = now()
             sets = ", ".join("%s=?" % k for k in allow)
@@ -960,7 +1087,7 @@ class WorkflowDB(ResearchDB):
 
     # ---------- 团队表（一个团队 = 一条记录；成员/记录都挂在它的 id 上） ----------
     def teams(self) -> list[dict[str, Any]]:
-        return [dict(r) for r in self.db.execute("SELECT * FROM teams ORDER BY created_at")]
+        return [dict(r) for r in self.db.execute("SELECT * FROM teams WHERE id NOT IN (SELECT instance_team_id FROM team_execution_instances) ORDER BY created_at")]
 
     def team(self, tid: str) -> dict[str, Any] | None:
         row = self.db.execute("SELECT * FROM teams WHERE id=?", (tid,)).fetchone()
@@ -973,6 +1100,9 @@ class WorkflowDB(ResearchDB):
                         (tid, (name or "新团队").strip(), kind, "idle", project_id or "", purpose or "", now(), now()))
         # 不建同名 chats 行：团队用独立 team_sessions，混进对话列表删不掉
         self.db.commit()
+        if project_id and self.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (project_id,)).fetchone():
+            import project_bindings
+            project_bindings.register(self, project_id, "team", tid, source="project_team")
         return self.team(tid) or {}
 
     def team_update(self, tid: str, **fields: Any) -> dict[str, Any]:
@@ -1000,7 +1130,7 @@ class WorkflowDB(ResearchDB):
                         (uuid.uuid4().hex, team_task_id, task_id, kind, text[:2000], now()))
         self.db.commit()
 
-    # ---------- 助手（我的 / 公开；点进去设提示词） ----------
+    # ---------- 专家（我的 / 公开；点进去设提示词） ----------
     def assistants(self) -> list[dict[str, Any]]:
         rows = self.db.execute("SELECT * FROM assistants ORDER BY source='builtin', sort_order, created_at").fetchall()
         return [dict(r) for r in rows]
@@ -1011,9 +1141,9 @@ class WorkflowDB(ResearchDB):
     def require_assistant(self, aid: str) -> dict[str, Any]:
         a = self.assistant(aid)
         if not a:
-            raise ValueError("助手不存在")
+            raise ValueError("专家不存在")
         if a["source"] != "user" and not a["enabled"]:
-            raise ValueError("这个公开助手尚未启用，请先在助手设置中启用")
+            raise ValueError("这个公开专家尚未启用，请先在专家设置中启用")
         return a
 
     def assistant(self, aid: str) -> dict[str, Any] | None:
@@ -1034,7 +1164,7 @@ class WorkflowDB(ResearchDB):
                 allow["updated_at"] = now()
                 self.db.execute("UPDATE assistants SET %s WHERE id=?" % ", ".join("%s=?" % k for k in allow), (*allow.values(), aid))
         else:
-            row = (aid, "user", allow.get("name") or "新助手", allow.get("avatar", ""), allow.get("description", ""),
+            row = (aid, "user", allow.get("name") or "新专家", allow.get("avatar", ""), allow.get("description", ""),
                    allow.get("rules", ""), allow.get("prompts", "[]"), allow.get("model_id", ""), 1, 99, now(), now())
             self.db.execute("INSERT INTO assistants (id,source,name,avatar,description,rules,prompts,model_id,enabled,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row)
             extra = {k: allow[k] for k in ("enabled", "reasoning", "permission") if k in allow}
@@ -1058,17 +1188,17 @@ class WorkflowDB(ResearchDB):
     def assistant_delete(self, aid: str) -> None:
         cur = self.assistant(aid)
         if cur and cur["source"] == "builtin":
-            raise ValueError("公开助手不能删除 —— 可以「复制为我的」再改。")
+            raise ValueError("公开专家不能删除 —— 可以「复制为我的」再改。")
         self.db.execute("DELETE FROM assistants WHERE id=?", (aid,))
         self.db.commit()
 
     def assistant_of_chat(self, chat_id: str) -> str:
-        """这个对话绑的是哪个助手（空串=没绑）。"""
+        """这个对话绑的是哪个专家（空串=没绑）。"""
         row = self.db.execute("SELECT assistant_id FROM chats WHERE id=?", (chat_id,)).fetchone()
         return ((row["assistant_id"] if row else "") or "")
 
     def assistant_seed(self, builtins: list[dict[str, Any]]) -> int:
-        """内置（公开）助手：只补缺，不覆盖用户改过的。"""
+        """内置（公开）专家：只补缺，不覆盖用户改过的。"""
         n = 0
         for b in builtins:
             if not self.assistant(b["id"]):
@@ -1173,6 +1303,8 @@ class WorkflowDB(ResearchDB):
         self.db.execute("DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE owner_id=?)", (task_id,))
         self.db.execute("DELETE FROM run_events WHERE run_id IN (SELECT id FROM tasks WHERE owner_id=?)", (task_id,))
         self.db.execute("DELETE FROM tasks WHERE owner_id=?", (task_id,))
+        self.db.execute("DELETE FROM schedule_workflow_runs WHERE schedule_run_id IN (SELECT r.id FROM schedule_runs r JOIN schedules s ON s.id=r.schedule_id WHERE s.project_id=?)", (task_id,))
+        self.db.execute("DELETE FROM schedule_workflows WHERE schedule_id IN (SELECT id FROM schedules WHERE project_id=?)", (task_id,))
         self.db.execute("DELETE FROM schedule_runs WHERE schedule_id IN (SELECT id FROM schedules WHERE project_id=?)", (task_id,))
         self.db.execute("DELETE FROM schedules WHERE project_id=?", (task_id,))
         self.db.execute("DELETE FROM task_links WHERE project_id=?", (task_id,))
@@ -1182,8 +1314,9 @@ class WorkflowDB(ResearchDB):
         tables_to_clean = (
             "papers", "artifacts", "runs", "calendar_events", "notes", "steps",
             "search_cache", "chat", "paper_graph", "kb_graph", "project_memory",
-            "md_notes", "dl_queue", "team_tasks", "team_events",
-            "project_workflow_layouts", "zotero_bindings", "zotero_item_links",
+            "md_notes", "dl_queue", "zotero_staging", "team_tasks", "team_events",
+            "project_workflow_layouts", "zotero_bindings", "zotero_project_sources", "zotero_item_links", "zotero_project_memberships", "zotero_link_batches",
+            "project_paper_links",
             "task_attempts", "audit_events", "project_todos", "background_jobs",
             "idea_input", "tr_hl",
         )
@@ -1199,7 +1332,10 @@ class WorkflowDB(ResearchDB):
                 "SELECT id FROM workflow_runs WHERE project_id=?", (task_id,))]
             if run_ids:
                 marks = ",".join("?" for _ in run_ids)
+                self.db.execute(f"DELETE FROM review_reminders WHERE node_id IN (SELECT id FROM workflow_nodes WHERE run_id IN ({marks}))", run_ids)
+                self.db.execute(f"DELETE FROM schedule_workflow_runs WHERE workflow_run_id IN ({marks})", run_ids)
                 self.db.execute(f"DELETE FROM workflow_nodes WHERE run_id IN ({marks})", run_ids)
+                self.db.execute(f"DELETE FROM workflow_executions WHERE run_id IN ({marks})", run_ids)
                 self.db.execute(f"DELETE FROM workflow_runs WHERE id IN ({marks})", run_ids)
         except Exception:
             pass
@@ -1250,6 +1386,9 @@ class WorkflowDB(ResearchDB):
 
     def toggle_event(self, event_id: str, done: bool | None = None) -> dict[str, Any]:
         """勾掉/取消勾掉今日事项（今日工作计划那个复选框）。"""
+        import calendar_service
+        if event_id.startswith(calendar_service.PREFIX):
+            return calendar_service.toggle(self, event_id, done)
         cur = self.event(event_id)
         value = (0 if cur["done"] else 1) if done is None else int(bool(done))
         self.db.execute("UPDATE calendar_events SET done=? WHERE id=?", (value, event_id))
@@ -1257,6 +1396,9 @@ class WorkflowDB(ResearchDB):
         return self.event(event_id)
 
     def event(self, event_id: str) -> dict[str, Any]:
+        import calendar_service
+        if event_id.startswith(calendar_service.PREFIX):
+            return calendar_service.event(self, event_id)
         row = self.db.execute("SELECT * FROM calendar_events WHERE id=?", (event_id,)).fetchone()
         if not row:
             raise KeyError(event_id)
@@ -1269,9 +1411,14 @@ class WorkflowDB(ResearchDB):
             rows = self.db.execute(f"SELECT * FROM calendar_events WHERE date LIKE ? {order}", (month + "%",))
         else:
             rows = self.db.execute(f"SELECT * FROM calendar_events {order}")
-        return [dict(r) for r in rows]
+        import calendar_service
+        return sorted([*[dict(r) for r in rows], *calendar_service.derived(self, month)],
+                      key=lambda e: (e["date"], e.get("time") or "99:99", e["created_at"]))
 
     def delete_event(self, event_id: str) -> None:
+        import calendar_service
+        if event_id.startswith(calendar_service.PREFIX):
+            raise ValueError("此日程由关联任务自动维护，请到来源中修改、暂停或删除")
         self.db.execute("DELETE FROM calendar_events WHERE id=?", (event_id,))
         self.db.commit()
 
@@ -1291,7 +1438,8 @@ class WorkflowDB(ResearchDB):
         row = self.db.execute("SELECT * FROM model_profiles WHERE id=?", (mid,)).fetchone()
         if not row:
             raise KeyError(mid)
-        return _reveal_key(dict(row))
+        import usage_stats
+        return usage_stats.profile(self,_reveal_key(dict(row)))
 
     def models(self) -> list[dict[str, Any]]:
         return [_reveal_key(dict(r)) for r in self.db.execute("SELECT * FROM model_profiles ORDER BY created_at")]
@@ -1308,8 +1456,12 @@ class WorkflowDB(ResearchDB):
         self.db.commit()
 
     def active_model(self) -> dict[str, Any] | None:
+        # Model-backed tools in a workflow node use its selected assistant/member.
+        if getattr(self, "runtime_model", None) is not None:
+            return self.runtime_model
         row = self.db.execute("SELECT * FROM model_profiles WHERE is_active=1").fetchone()
-        return _reveal_key(dict(row)) if row else None
+        import usage_stats
+        return usage_stats.profile(self,_reveal_key(dict(row))) if row else None
 
     # ---------- Provider（模型与 Agent 卡片） ----------
     def providers(self) -> list[dict[str, Any]]:
@@ -1439,17 +1591,38 @@ class WorkflowDB(ResearchDB):
     def cache_results(self, task_id: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         saved = []
         for it in items:
-            if not it.get("title"):
+            title = (it.get("title") or "").strip()
+            if not title:
                 continue
-            key = (self.db.execute(
-                "SELECT 1 FROM search_cache WHERE task_id=? AND source=? "
-                "AND (lower(trim(doi))=lower(trim(?)) AND trim(doi)!='' OR title=? AND (trim(doi)='' OR trim(?)=''))",
-                (task_id, it.get("source", ""), it.get("doi", ""), it.get("title", ""), it.get("doi", "")),
-            ).fetchone())
-            if key:
+            doi = (it.get("doi") or "").strip().lower()
+            existing = self.db.execute(
+                "SELECT * FROM search_cache WHERE task_id=? "
+                "AND ((lower(trim(doi))=lower(trim(?)) AND trim(doi)!='') "
+                "OR (lower(trim(title))=lower(trim(?)) AND (trim(doi)='' OR trim(?)='')))",
+                (task_id, doi, title, doi),
+            ).fetchone()
+            if existing:
+                row_dict = dict(existing)
+                rid = row_dict["id"]
+                updates = {}
+                if not (row_dict.get("pdf_url") or "").strip() and (it.get("pdf_url") or "").strip():
+                    updates["pdf_url"] = it["pdf_url"].strip()
+                if not (row_dict.get("doi") or "").strip() and doi:
+                    updates["doi"] = doi
+                if len((it.get("abstract") or "").strip()) > len((row_dict.get("abstract") or "").strip()):
+                    updates["abstract"] = it["abstract"].strip()
+                if not (row_dict.get("authors") or "").strip() and (it.get("authors") or "").strip():
+                    updates["authors"] = it["authors"].strip()
+                if not (row_dict.get("year") or "").strip() and (it.get("year") or "").strip():
+                    updates["year"] = str(it["year"]).strip()
+                if updates:
+                    set_clause = ", ".join(f"{k}=?" for k in updates)
+                    self.db.execute(f"UPDATE search_cache SET {set_clause} WHERE id=?", (*updates.values(), rid))
+                    import project_library
+                    project_library.index_record(self, task_id, rid)
                 continue
             rid = uuid.uuid4().hex
-            row = (rid, task_id, it.get("source", ""), it["title"], it.get("authors", ""), it.get("year", ""),
+            row = (rid, task_id, it.get("source", ""), title, it.get("authors", ""), str(it.get("year") or ""),
                    it.get("doi", ""), it.get("url", ""), it.get("pdf_url", ""), it.get("abstract", ""),
                    float(it.get("score") or 0), now())
             self.db.execute(
@@ -1457,28 +1630,48 @@ class WorkflowDB(ResearchDB):
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row)
             saved.append(self.result(rid))
         self.db.commit()
+        import project_library
+        for item in saved:
+            project_library.index_record(self, task_id, item["id"])
         return saved
 
-    def cache_result(self, task_id: str, it: dict[str, Any]) -> str:
+    def cache_result(self, task_id: str, it: dict[str, Any], *, match_title: bool = True) -> str:
         """一条结果写进 search_cache 并返回 id；已存在（同 DOI/同标题）就返回旧 id，队列才能复用。"""
         title = (it.get("title") or "").strip()
         if not title:
             raise ValueError("这条没有标题，跳过")
+        doi = (it.get("doi") or "").strip().lower()
         row = self.db.execute(
-            "SELECT id FROM search_cache WHERE task_id=? AND source=? "
-            "AND (lower(trim(doi))=lower(trim(?)) AND trim(doi)!='' OR title=? AND (trim(doi)='' OR trim(?)=''))",
-            (task_id, it.get("source", ""), it.get("doi", ""), title, it.get("doi", "")),
+            "SELECT * FROM search_cache WHERE task_id=? "
+            "AND ((lower(trim(doi))=lower(trim(?)) AND trim(doi)!='') "
+            "OR (? AND lower(trim(title))=lower(trim(?)) AND (trim(doi)='' OR trim(?)='')))",
+            (task_id, doi, match_title, title, doi),
         ).fetchone()
         if row:
-            return row["id"]
+            row_dict = dict(row)
+            rid = row_dict["id"]
+            updates = {}
+            if not (row_dict.get("pdf_url") or "").strip() and (it.get("pdf_url") or "").strip():
+                updates["pdf_url"] = it["pdf_url"].strip()
+            if not (row_dict.get("doi") or "").strip() and doi:
+                updates["doi"] = doi
+            if updates:
+                set_clause = ", ".join(f"{k}=?" for k in updates)
+                self.db.execute(f"UPDATE search_cache SET {set_clause} WHERE id=?", (*updates.values(), rid))
+                self.db.commit()
+                import project_library
+                project_library.index_record(self, task_id, rid)
+            return rid
         rid = uuid.uuid4().hex
         self.db.execute(
             "INSERT INTO search_cache (id,task_id,source,title,authors,year,doi,url,pdf_url,abstract,score,created_at)"
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (rid, task_id, it.get("source", ""), title, it.get("authors", ""), it.get("year", ""),
-             it.get("doi", ""), it.get("url", ""), it.get("pdf_url", ""), it.get("abstract", ""),
+            (rid, task_id, it.get("source", ""), title, it.get("authors", ""), str(it.get("year") or ""),
+             doi, it.get("url", ""), it.get("pdf_url", ""), it.get("abstract", ""),
              float(it.get("score") or 0), now()))
         self.db.commit()
+        import project_library
+        project_library.index_record(self, task_id, rid)
         return rid
 
     def result(self, rid: str) -> dict[str, Any]:
@@ -1489,12 +1682,20 @@ class WorkflowDB(ResearchDB):
 
     def results(self, task_id: str) -> list[dict[str, Any]]:
         rows = self.db.execute("SELECT * FROM search_cache WHERE task_id=? ORDER BY score DESC, created_at DESC, year DESC", (task_id,))
-        return [dict(r) for r in rows]
+        import project_library
+        return project_library.visible(self, task_id, [dict(r) for r in rows])
 
     # ---------- 笔记 ----------
     @project_notes.synchronized
     def add_note(self, task_id: str, title: str, markdown: str, paper_id: str | None = None,
                  category: str = NOTE_CATEGORY) -> dict[str, Any]:
+        import note_catalog
+        if self.base_dir(task_id):
+            catalog = note_catalog.initialize(self, task_id)
+            key = catalog.get("legacy_targets", {}).get(category, category)
+            found = note_catalog.category(catalog, key) or next((c for c in catalog["categories"] if c["name"] == category), None)
+            markdown = note_catalog.update_content(markdown, changes={
+                "category_id": found["id"] if found else "", "tags": note_catalog.LEGACY.get(category, ("", []))[1]}, catalog=catalog)
         nid = uuid.uuid4().hex
         self.db.execute("INSERT INTO notes VALUES (?,?,?,?,?,?)", (nid, task_id, paper_id, title.strip() or "未命名笔记", markdown, now()))
         self.db.commit()
@@ -1532,7 +1733,8 @@ class WorkflowDB(ResearchDB):
             " COALESCE(m.doi,'') AS doi, COALESCE(m.year,'') AS year"
             " FROM papers p LEFT JOIN paper_meta m ON m.paper_id=p.id"
             " WHERE p.task_id=? ORDER BY p.created_at DESC", (task_id,))
-        return [dict(r) for r in rows]
+        import project_library
+        return project_library.visible(self, task_id, [dict(r) for r in rows], papers=True)
 
     def paper_graph(self, task_id: str) -> dict[str, Any]:
         """论文星图（读缓存）：只在用户点「生成」时算一次（build_paper_graph），平时返回上次结果。
@@ -1601,7 +1803,7 @@ class WorkflowDB(ResearchDB):
                         "created_at": n["created_at"]}
         return {}
 
-    # ---------- 论文翻译：荧光笔标注（助手要看得到圈了什么）----------
+    # ---------- 论文翻译：荧光笔标注（专家要看得到圈了什么）----------
     def tr_hl(self, paper_id: str, task_id: str = "") -> list[dict[str, Any]]:
         row = self.db.execute("SELECT json FROM tr_hl WHERE paper_id=? AND task_id=?",
                               (paper_id, task_id)).fetchone()

@@ -14,6 +14,8 @@ for name in ("database", "workspace-core", "workspace-service", "ai-runtime"):
 
 import team  # noqa: E402
 import workflow  # noqa: E402
+import project_tasks
+import project_task_execution
 
 
 class TeamSchedulerTest(unittest.TestCase):
@@ -26,8 +28,15 @@ class TeamSchedulerTest(unittest.TestCase):
             self.project = db.create_task(
                 "DAG project", "question", "material", str(Path(self.tmp.name) / "workspace")
             )
-        self.worker = team.add_member(self.project, "worker", "search")
-        self.reviewer = team.add_member(self.project, "reviewer", "review")
+            db.add_model("Test model", "http://127.0.0.1:1/v1", "fake", "key", activate=True)
+            office = db.team_add("DAG team", "custom", project_id=self.project)
+            self.scope = office["id"]
+            self.worker = db.team_member_add(self.scope, "worker", "leader", assistant_id="builtin-writer")
+            self.reviewer = db.team_member_add(self.scope, "reviewer", "member", assistant_id="builtin-reviewer")
+        self.ui = project_tasks.CommandContext.ui(self.project)
+        self.kick_patch = patch.object(project_task_execution, "kick")
+        self.kick_patch.start()
+        self.addCleanup(self.kick_patch.stop)
 
     def tearDown(self) -> None:
         team.DB_PATH = self.previous_db
@@ -44,9 +53,9 @@ class TeamSchedulerTest(unittest.TestCase):
             return db.team_task(row_id) or {}
 
     def test_dependencies_hold_queue_until_prerequisite_finishes(self) -> None:
-        first = team.assign(self.project, self.worker["id"], "collect sources")
+        first = team.assign(self.scope, self.worker["id"], "collect sources")
         second = team.assign(
-            self.project,
+            self.scope,
             self.worker["id"],
             "summarize sources",
             depends_on=[first["id"]],
@@ -57,9 +66,12 @@ class TeamSchedulerTest(unittest.TestCase):
         workflow.run_agent = self._run_fake()
         try:
             self.assertEqual(team.tick(), 1)
-            self.assertEqual(self._status(first["id"])["status"], "done")
+            self.assertEqual(self._status(first["id"])["status"], "review")
             self.assertEqual(self._status(second["id"])["status"], "queued")
+            self.assertEqual(team.tick(), 0)
+            team.review(first["id"], True, authority=self.ui)
             self.assertEqual(team.tick(), 1)
+            team.review(second["id"], True, authority=self.ui)
         finally:
             workflow.run_agent = old
 
@@ -70,24 +82,28 @@ class TeamSchedulerTest(unittest.TestCase):
 
     def test_missing_dependency_and_invalid_contract_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "依赖任务不存在"):
-            team.assign(self.project, self.worker["id"], "blocked", depends_on=["not-a-task"])
+            team.assign(self.scope, self.worker["id"], "blocked", depends_on=["not-a-task"])
         with self.assertRaisesRegex(ValueError, "output_contract"):
-            team.assign(self.project, self.worker["id"], "bad contract", output_contract=["summary"])
+            team.assign(self.scope, self.worker["id"], "bad contract", output_contract=["summary"])
 
     def test_failed_dependency_blocks_downstream_task(self) -> None:
-        first = team.assign(self.project, self.worker["id"], "collect sources")
-        second = team.assign(self.project, self.worker["id"], "summarize sources",
+        first = team.assign(self.scope, self.worker["id"], "collect sources")
+        second = team.assign(self.scope, self.worker["id"], "summarize sources",
                              depends_on=[first["id"]])
         with workflow.WorkflowDB(self.path) as db:
-            db.team_task_mark(first["id"], "failed", reason="upstream failure")
+            project_tasks.fail(db, first["canonical_task"]["latest_run"]["id"], "upstream failure")
         self.assertEqual(team.tick(), 0)
         blocked = self._status(second["id"])
-        self.assertEqual(blocked["status"], "blocked")
-        self.assertIn(first["id"], blocked["reason"])
+        self.assertEqual(blocked["status"], "queued")
+        with workflow.WorkflowDB(self.path) as db:
+            canonical = project_tasks.get(db, second["canonical_task_id"])
+            self.assertEqual(canonical["status"], "ready")
+            self.assertIsNone(canonical["latest_run"])
+            self.assertEqual(canonical["dependencies"], [first["canonical_task_id"]])
 
     def test_reviewer_gate_requeues_on_rejection_and_completes_on_approval(self) -> None:
         row = team.assign(
-            self.project,
+            self.scope,
             self.worker["id"],
             "draft evidence table",
             reviewer_id=self.reviewer["id"],
@@ -100,13 +116,14 @@ class TeamSchedulerTest(unittest.TestCase):
             self.assertEqual(review_row["status"], "review")
             self.assertEqual(review_row["review_status"], "pending")
 
-            returned = team.review(row["id"], False, self.reviewer["id"], "add page citations")
+            returned = team.review(row["id"], False, self.reviewer["id"], "add page citations", authority=self.ui)
             self.assertEqual(returned["status"], "queued")
             self.assertEqual(returned["review_attempt"], 1)
-
+            self.assertEqual(returned["canonical_task"]["status"], "blocked")
+            team.retry(row["id"], authority=self.ui)
             self.assertEqual(team.tick(), 1)
             self.assertEqual(self._status(row["id"])["status"], "review")
-            approved = team.review(row["id"], True, self.reviewer["id"], "looks good")
+            approved = team.review(row["id"], True, self.reviewer["id"], "looks good", authority=self.ui)
         finally:
             workflow.run_agent = old
 
@@ -116,21 +133,22 @@ class TeamSchedulerTest(unittest.TestCase):
 
     def test_reviewer_must_belong_to_project_team(self) -> None:
         with self.assertRaisesRegex(ValueError, "Reviewer"):
-            team.assign(self.project, self.worker["id"], "draft", reviewer_id="external-member")
+            team.assign(self.scope, self.worker["id"], "draft", reviewer_id="external-member")
 
     def test_running_task_can_stop_without_late_success(self):
         entered, release = threading.Event(), threading.Event()
-        row = team.assign(self.project, self.worker["id"], "collect sources")
+        row = team.assign(self.scope, self.worker["id"], "collect sources")
         def model(*args, **kwargs):
             entered.set()
             release.wait(5)
-            return {"content": "Late response"}
-        with patch.object(workflow, "_chat_raw", side_effect=model):
+            return {"reply": "Late response"}
+        with patch.object(workflow, "run_agent", side_effect=model):
             worker = threading.Thread(target=team.tick)
             worker.start()
             try:
                 self.assertTrue(entered.wait(5))
                 team.cancel(row["id"])
+                release.set()
                 worker.join(2)
                 self.assertFalse(worker.is_alive())
                 self.assertEqual(self._status(row["id"])["status"], "canceled")
@@ -140,14 +158,20 @@ class TeamSchedulerTest(unittest.TestCase):
                 worker.join(5)
 
     def test_restart_queues_saved_model_boundary_and_blocks_unknown_tool(self):
-        safe = team.assign(self.project, self.worker["id"], "safe restart")
-        unsafe = team.assign(self.project, self.worker["id"], "unsafe restart")
+        safe = team.assign(self.scope, self.worker["id"], "safe restart")
+        unsafe = team.assign(self.scope, self.worker["id"], "unsafe restart")
         with workflow.WorkflowDB(self.path) as db:
-            db.team_task_mark(safe["id"], "running", checkpoint={"phase": "model", "messages": [{"role": "user", "content": "saved"}]})
-            db.team_task_mark(unsafe["id"], "running", checkpoint={"phase": "tool"})
-        result = team.recover_tasks()
-        self.assertEqual(result["resumed"], [safe["id"]])
-        self.assertEqual(result["interrupted"], [unsafe["id"]])
+            for row in (safe, unsafe):
+                project_tasks.claim(db, row["canonical_task"]["latest_run"]["id"])
+            project_tasks.save_checkpoint(db, safe["canonical_task"]["latest_run"]["id"], phase="model", messages=[{"role": "user", "content": "saved"}])
+            project_tasks.save_checkpoint(db, unsafe["canonical_task"]["latest_run"]["id"], phase="tool")
+        project_task_execution.recover(self.path)
+        self.assertEqual(team.recover_tasks(), {"resumed": [], "interrupted": []})
+        self.assertEqual(team.tick(), 0)
+        restored_run = team.retry(safe["id"], authority=self.ui)
+        self.assertEqual(restored_run["run"]["id"], safe["canonical_task"]["latest_run"]["id"])
+        with self.assertRaisesRegex(ValueError, "工具结果未确认"):
+            team.retry(unsafe["id"], authority=self.ui)
         def restored(db, *args, **kwargs):
             self.assertTrue(db.resuming)
             self.assertEqual(db.job_checkpoint["messages"][0]["content"], "saved")
@@ -155,8 +179,11 @@ class TeamSchedulerTest(unittest.TestCase):
         with patch.object(workflow, "run_agent", side_effect=restored) as run:
             self.assertEqual(team.tick(), 1)
             self.assertEqual(run.call_count, 1)
-        self.assertEqual(self._status(safe["id"])["status"], "done")
-        self.assertEqual(self._status(unsafe["id"])["status"], "blocked")
+        self.assertEqual(self._status(safe["id"])["status"], "review")
+        with workflow.WorkflowDB(self.path) as db:
+            current = project_tasks.get(db, unsafe["canonical_task_id"])
+            self.assertEqual(current["status"], "blocked")
+            self.assertEqual(current["latest_run"]["status"], "interrupted")
 
 
 if __name__ == "__main__":

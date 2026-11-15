@@ -1,132 +1,64 @@
-# -*- coding: utf-8 -*-
-"""情报条目 → 项目文献库自检：题录转换 / 幂等导入 / 回显已导入 / 手动题录 / 参数校验。
-
-    python -m unittest tests.test_literature_import -v
-"""
-from __future__ import annotations
-
-import os
-import sys
+"""RSS evidence enters the canonical project bibliography without duplicate records."""
+from pathlib import Path
 import tempfile
 import unittest
-from pathlib import Path
 
-_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
-    sys.path.insert(0, os.path.join(_ROOT, "packages", _n))
-
-import literature_import as li            # noqa: E402
-import rss                               # noqa: E402
-from workflow import WorkflowDB          # noqa: E402
+import asset_service
+import literature_import as library
+import project_library
+import rss
+import workflow
 
 
-class TestLiteratureImport(unittest.TestCase):
-    def setUp(self) -> None:
-        self.td = tempfile.TemporaryDirectory()
-        self.db = WorkflowDB(Path(self.td.name) / "l.sqlite3")
-        self.project = self.db.create_task("导入自检", "", "", str(Path(self.td.name) / "proj"))
-        self.other = self.db.create_task("另一个项目", "", "", str(Path(self.td.name) / "proj2"))
-        src = rss.save_source(self.db, {"url": "https://a.example/rss", "title": "A 源"})["source"]
-        self.db.save_rss_items(src, [
-            {"link": "https://e.example/1", "title": "钠电正极掺杂", "authors": "Zhang, Li",
-             "published_at": "2026-10-06 08:30:00", "summary": "摘要一"},
-            {"link": "https://doi.org/10.1038/s41560-026-01234-5", "title": "界面稳定化",
-             "published_at": "2026-09-01 10:00:00", "summary": "摘要二"},
-        ])
-        self.rows = self.db.rss_items()
+class LiteratureImportTest(unittest.TestCase):
+    def setUp(self):
+        folder=tempfile.TemporaryDirectory();self.addCleanup(folder.cleanup)
+        self.db=workflow.WorkflowDB(Path(folder.name)/'research.sqlite3');self.addCleanup(self.db.close)
+        self.pid=self.db.create_task('Research');self.other=self.db.create_task('Other')
+        source=rss.save_source(self.db,{'title':'Materials','url':'https://example.test/feed'})['source']
+        self.db.save_rss_items(source,[{'title':'Ion transport','link':'https://doi.org/10.1234/ION.2026','authors':'Li; Wang','published_at':'Wed, 28 Oct 2026 08:00:00 GMT','summary':'Evidence from impedance.'},
+                                     {'title':'Unsafe link','link':'javascript:alert(1)'},
+                                     {'title':'Second evidence','link':'https://example.test/evidence?utm_source=feed'}])
+        self.rows={row['title']:row for row in self.db.rss_items()}
 
-    def tearDown(self) -> None:
-        self.db.close()
-        self.td.cleanup()
+    def test_import_is_project_scoped_and_retains_edits_on_repeat(self):
+        identifier=self.rows['Ion transport']['id']
+        first=library.import_rss(self.db,self.pid,[identifier,identifier])
+        self.assertEqual((first['imported'],first['existing']),(1,0))
+        row=project_library.items(self.db,self.pid)[0]
+        self.assertEqual(row['doi'],'10.1234/ion.2026');self.assertEqual(row['year'],'2026')
+        self.assertEqual(row['abstract'],'Evidence from impedance.');self.assertFalse(row['has_pdf'])
+        self.assertTrue(asset_service.list_assets(self.db,self.pid,'paper'))
+        project_library.update_record(self.db,self.pid,row['result_id'],{'title':'Edited by researcher','url':'https://example.test/changed'})
+        repeated=library.import_rss(self.db,self.pid,[identifier])
+        self.assertEqual((repeated['imported'],repeated['existing']),(0,1))
+        self.assertEqual(project_library.items(self.db,self.pid)[0]['title'],'Edited by researcher')
+        self.assertEqual(library.annotate(self.db,[self.rows['Ion transport']],self.pid)[0]['imported_result_id'],row['result_id'])
+        self.assertEqual(library.import_rss(self.db,self.other,[identifier])['imported'],1)
+        self.assertNotEqual(project_library.items(self.db,self.other)[0]['result_id'],row['result_id'])
 
-    # ---------- 纯函数 ----------
-    def test_from_feed(self) -> None:
-        item = li.from_feed(self.rows[0])
-        self.assertEqual(item["title"], "钠电正极掺杂")
-        self.assertEqual(item["authors"], "Zhang, Li")
-        self.assertEqual(item["year"], "2026")
-        self.assertEqual(item["url"], "https://e.example/1")
-        self.assertIn("A 源", item["source"])
-        # doi.org 链接能抽出 DOI
-        self.assertEqual(li.from_feed(self.rows[1])["doi"], "10.1038/s41560-026-01234-5")
-        with self.assertRaises(ValueError):
-            li.from_feed({"link": "javascript:alert(1)", "title": "x"})
+    def test_cross_source_doi_url_dedup_and_partial_invalid_items(self):
+        rid=self.db.cache_result(self.pid,{'source':'OpenAlex','title':'Existing DOI evidence','doi':'https://doi.org/10.1234/ion.2026','url':'https://publisher.test/one'})
+        result=library.import_rss(self.db,self.pid,[self.rows['Ion transport']['id'],self.rows['Unsafe link']['id']])
+        self.assertEqual((result['imported'],result['existing'],len(result['failures'])),(0,1,1))
+        self.assertEqual(result['items'][0]['result_id'],rid)
+        manual=library.import_reference(self.db,self.pid,{'title':'Manual evidence','url':'https://example.test/evidence#reading'})
+        imported=library.import_rss(self.db,self.pid,[self.rows['Second evidence']['id']])
+        self.assertEqual(imported['items'][0]['result_id'],manual['result_id'])
+        self.assertEqual(len(project_library.items(self.db,self.pid)),2)
 
-    def test_normalized_url_strips_tracking(self) -> None:
-        a = li.normalized_url("https://E.example/p/1/?utm_source=x&utm_medium=y")
-        b = li.normalized_url("https://e.example/p/1")
-        self.assertEqual(a, b)
+    def test_manual_import_validation_and_missing_ids_never_write(self):
+        before=len(self.db.results(self.pid))
+        for body in ({'title':'Bad','url':'file:///C:/private.pdf'}, {'title':'Bad','doi':'bad'}, {'title':'','url':'https://example.test'}):
+            with self.subTest(body=body),self.assertRaises(ValueError):library.import_reference(self.db,self.pid,body)
+        with self.assertRaises(ValueError):library.import_rss(self.db,self.pid,[self.rows['Ion transport']['id'],'missing'])
+        with self.assertRaises(ValueError):library.import_rss(self.db,'missing',[self.rows['Ion transport']['id']])
+        self.assertEqual(len(self.db.results(self.pid)),before)
+        value=library.import_reference(self.db,self.pid,{'title':'Manual DOI paper','doi':'doi:10.9876/EXAMPLE'})
+        self.assertEqual(self.db.result(value['result_id'])['url'],'https://doi.org/10.9876/example')
 
-    # ---------- 导入 ----------
-    def test_registered_get_routes(self) -> None:
-        import literature_import_routes
-
-        listed = literature_import_routes.route("GET", "/api/rss/items", {},
-                                                {"source": [""], "q": ["正极"],
-                                                 "year": ["2026"], "project_id": [self.project]}, self.db)
-        self.assertEqual(listed["total"], 1)
-        self.assertEqual([item["title"] for item in listed["items"]], ["钠电正极掺杂"])
-        self.assertEqual(listed["items"][0]["imported_result_id"], "")
-
-    def test_import_is_idempotent(self) -> None:
-        ids = [r["id"] for r in self.rows]
-        first = li.import_rss(self.db, self.project, ids)
-        self.assertEqual(first["imported"], 2)
-        self.assertEqual(first["existing"], 0)
-        self.assertEqual(first["failures"], [])
-        self.assertEqual(len(self.db.results(self.project)), 2)      # 真进了项目文献库
-
-        again = li.import_rss(self.db, self.project, ids)            # 再导一次
-        self.assertEqual(again["imported"], 0)
-        self.assertEqual(again["existing"], 2)
-        self.assertEqual(len(self.db.results(self.project)), 2)      # 没有重复行
-
-    def test_annotate_marks_imported(self) -> None:
-        before = li.annotate(self.db, self.rows, self.project)
-        self.assertEqual([r["imported_result_id"] for r in before], ["", ""])
-
-        li.import_rss(self.db, self.project, [self.rows[0]["id"]])
-        after = li.annotate(self.db, self.rows, self.project)
-        self.assertTrue(after[0]["imported_result_id"])
-        self.assertEqual(after[1]["imported_result_id"], "")         # 另一条还没导
-
-        # 另一个项目里是干净的：不串项目
-        other = li.annotate(self.db, self.rows, self.other)
-        self.assertEqual([r["imported_result_id"] for r in other], ["", ""])
-        # 不选项目时原样返回，不加字段
-        self.assertNotIn("imported_result_id", li.annotate(self.db, self.rows, "")[0])
-
-    def test_import_reference(self) -> None:
-        out = li.import_reference(self.db, self.project,
-                                  {"title": "手填的一篇", "doi": "10.1038/s41560-026-99999-9", "year": "2025"})
-        self.assertFalse(out["existing"])
-        again = li.import_reference(self.db, self.project,
-                                    {"title": "手填的一篇", "doi": "https://doi.org/10.1038/s41560-026-99999-9"})
-        self.assertTrue(again["existing"])
-        self.assertEqual(again["result_id"], out["result_id"])
-        self.assertEqual(len(self.db.results(self.project)), 1)
-
-    # ---------- 校验 ----------
-    def test_validation(self) -> None:
-        with self.assertRaises(ValueError):                          # 项目不存在
-            li.import_rss(self.db, "", [self.rows[0]["id"]])
-        with self.assertRaises(ValueError):                          # 空选择
-            li.import_rss(self.db, self.project, [])
-        with self.assertRaises(ValueError):                          # 超量
-            li.import_rss(self.db, self.project, [self.rows[0]["id"]] * 201)
-        with self.assertRaises(ValueError):                          # 条目不存在
-            li.import_rss(self.db, self.project, ["nope"])
-        with self.assertRaises(ValueError):                          # 手填无标题
-            li.import_reference(self.db, self.project, {"doi": "10.1038/x"})
-
-    def test_bad_link_is_reported_not_fatal(self) -> None:
-        src = rss.save_source(self.db, {"url": "https://b.example/rss", "title": "B 源"})["source"]
-        self.db.save_rss_items(src, [{"link": "not-a-url", "title": "坏链接条目"}])
-        bad = [r for r in self.db.rss_items() if r["title"] == "坏链接条目"][0]
-        out = li.import_rss(self.db, self.project, [self.rows[0]["id"], bad["id"]])
-        self.assertEqual(out["imported"], 1)                         # 好的照导
-        self.assertEqual(len(out["failures"]), 1)                    # 坏的单独报
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    def test_different_urls_with_the_same_title_remain_distinct_references(self):
+        first=library.import_reference(self.db,self.pid,{'title':'Annual evidence report','url':'https://example.test/2025'})
+        second=library.import_reference(self.db,self.pid,{'title':'Annual evidence report','url':'https://example.test/2026'})
+        self.assertNotEqual(first['result_id'],second['result_id'])
+        self.assertEqual(len(project_library.items(self.db,self.pid)),2)

@@ -331,11 +331,6 @@ def dashboard(db: Any, project_id: str, query: str = "") -> dict:
     catalog = note_catalog.load(db, project_id)
     titles = {r["id"]: r["title"] for r in db.notes(project_id)}
     titles.update({n["id"]: n["title"] for n in db.md_notes() if n.get("task_id") == project_id})
-    try:
-        rehome_legacy(db, project_id, notes)     # 老版写在 笔记/ 根上的散文件，按标题前缀归到新分类
-    except (OSError, ValueError):
-        pass
-
     for asset in db.db.execute("SELECT canonical_uri,title FROM assets WHERE project_id=? "
                                "AND kind='note' AND storage='file' AND status='active'", (project_id,)):
         titles[str(Path(asset["canonical_uri"]).resolve())] = asset["title"]

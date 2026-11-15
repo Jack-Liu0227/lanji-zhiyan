@@ -141,8 +141,9 @@ class FollowupAuditTest(unittest.TestCase):
         for doi in ("10.1000/first", "10.1000/second"):
             self.db.cache_results(self.pid, [{"source": "zotero", "title": "Editorial", "doi": doi}])
         self.db.db.execute("INSERT INTO zotero_bindings (task_id,library,collection) VALUES (?,?,?)", (self.pid, "users/123", "ABCDEFGH"))
+        self.db.db.execute("INSERT INTO zotero_project_sources VALUES (?,?,?,'all')", (self.pid, 'users/123', 'ABCDEFGH'))
         self.db.db.commit()
-        remote = [{"key": "REMOTE01", "version": 1, "data": {"itemType": "journalArticle", "title": "Editorial", "DOI": ""}}]
+        remote = [{"key": "REMOTE01", "version": 1, "data": {"itemType": "journalArticle", "title": "Editorial", "DOI": "", "collections": ["ABCDEFGH"]}}]
         before = self.db.results(self.pid)
         with patch.object(zotero_sync, "config", return_value={"library_type": "users", "library_id": "123"}), \
                 patch.object(zotero_sync, "all_pages", return_value=remote), patch.object(zotero_sync, "request") as request:

@@ -1,13 +1,12 @@
 """情报日报：RSS 抓取与解析（纯标准库，RSS 2.0 / RSS 1.0(RDF) / Atom 都吃）。
 
-管理全局订阅配置，抓取与解析来源并调度入库。落库在 workflow.WorkflowDB，路由在
-server.py。文章按 link 全局去重，删除来源仍保留已入库内容。
+管理全局订阅配置，抓取与解析来源并调度入库。落库在 workflow.WorkflowDB，
+路由在 server.py。文章按 link 全局去重，删除来源仍保留已入库内容。
 """
 from __future__ import annotations
 
 import email.utils
 import html
-import json
 import re
 import threading
 import time
@@ -21,8 +20,7 @@ UA = "Mozilla/5.0 (compatible; research-workbench/1.0; +local)"
 TIMEOUT = 12
 MAX_ITEMS = 60                 # 单个源一次最多收 60 条（够看；多的下次刷新还会来）
 SUMMARY_MAX = 400
-
-_sources_lock = threading.RLock()   # 订阅源的增删改与刷新取源互斥，避免边删边抓
+_sources_lock = threading.RLock()
 
 # 内置来源；用户可在设置中添加、编辑或停用。
 DEFAULT_SOURCES = [
@@ -125,35 +123,15 @@ def fetch(url: str, timeout: int = TIMEOUT) -> list[dict[str, str]]:
     return parse(raw, cs or "utf-8")
 
 
-def _rss_options(db: Any) -> dict[str, Any]:
-    """RSS 的全局配置（目前只有 configured 标记），借用 integration_settings 的 options 列，不新建表。"""
-    try:
-        row = db.db.execute("SELECT options FROM integration_settings WHERE service_id='rss'").fetchone()
-        data = json.loads((row["options"] if row else "") or "{}")
-    except Exception:
-        data = {}
-    return data if isinstance(data, dict) else {}
-
-
-def _mark_configured(db: Any) -> None:
-    """记下「用户已经配置过订阅源」：删光所有源之后刷新，不该把内置源又悄悄补回来。"""
-    data = json.dumps({**_rss_options(db), "configured": True}, ensure_ascii=False)
-    db.db.execute(
-        "INSERT INTO integration_settings (service_id, enabled, credentials_protected, options, updated_at)"
-        " VALUES ('rss', 0, '', ?, ?)"
-        " ON CONFLICT(service_id) DO UPDATE SET options=excluded.options, updated_at=excluded.updated_at",
-        (data, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")))
-    db.db.commit()
-
-
 def refresh(db: Any) -> dict[str, Any]:
-    """抓取已启用来源并入库（首次运行才补内置源）。网络并发跑，落库回主线程串行（sqlite 不跨线程写）。"""
+    """抓取已启用来源；网络并发，SQLite 落库在主线程串行完成。"""
     from concurrent.futures import ThreadPoolExecutor
+    import service_settings
 
-    with _sources_lock:                                # 只锁「判断 + 取源」这段，抓取不占锁
-        if not db.rss_sources() and _rss_options(db).get("configured") is not True:
-            seed(db)                                   # 首次运行补内置源；用户删光了就不再自动补
-        srcs = [s for s in db.rss_sources() if s.get("enabled", 1)]
+    with _sources_lock:
+        if not db.rss_sources() and not service_settings.read(db,'rss').get('configured'):
+            seed(db)
+        srcs = [source for source in db.rss_sources() if source['enabled']]
     if not srcs:
         return {"sources": 0, "fetched": 0, "added": 0, "failures": []}
 
@@ -183,7 +161,7 @@ def refresh(db: Any) -> dict[str, Any]:
 
 
 def seed(db: Any) -> int:
-    """补上内置来源（URL 已存在的跳过），返回新增个数。"""
+    """补上内置来源（URL 已存在的跳过），保留已有配置。"""
     have = {s["url"] for s in db.rss_sources()}
     n = 0
     for d in DEFAULT_SOURCES:
@@ -194,65 +172,52 @@ def seed(db: Any) -> int:
 
 
 def _source(db: Any, sid: str) -> dict[str, Any]:
-    try:
-        return db.rss_source(sid)
-    except KeyError:
-        raise ValueError("RSS 订阅源不存在") from None
+    try:return db.rss_source(sid)
+    except KeyError:raise ValueError('RSS 订阅源不存在') from None
+
+
+def _configured(db: Any) -> None:
+    import service_settings
+    service_settings.write(db,'rss',{**service_settings.read(db,'rss'),'configured':True})
 
 
 def save_source(db: Any, body: dict[str, Any]) -> dict[str, Any]:
-    """新增或编辑订阅源。``id`` 给了就是编辑，没给就是新增。"""
     with _sources_lock:
-        sid = str(body.get("id") or "")
-        old = _source(db, sid) if sid else {}
-        url = str(body.get("url", old.get("url", "")) or "").strip()
+        sid=str(body.get('id') or '')
+        old=_source(db,sid) if sid else {}
+        url=str(body.get('url',old.get('url','')) or '').strip()
         try:
-            parts = urllib.parse.urlsplit(url)
-            valid = (parts.scheme in ("http", "https") and bool(parts.hostname)
-                     and not any(c.isspace() for c in url))
-            parts.port                                 # 端口非法时 urlsplit 这里才抛
-        except ValueError:
-            valid = False
-        if not valid or len(url) > 8192:
-            raise ValueError("请输入有效的 http:// 或 https:// RSS 地址")
-        url = parts.geturl()
-        title = str(body.get("title", old.get("title", "")) or "").strip() or url
-        category = str(body.get("category", old.get("category", "学术论文")) or "").strip() or "学术论文"
-        if len(title) > 200:
-            raise ValueError("订阅源名称不能超过 200 字符")
-        if len(category) > 60:
-            raise ValueError("分类不能超过 60 字符")
-        enabled = body.get("enabled", old.get("enabled", True))
-        if not isinstance(enabled, bool) and enabled not in (0, 1):
-            raise ValueError("启用状态无效")
-        duplicate = db.db.execute("SELECT id FROM rss_sources WHERE url=? AND id<>?", (url, sid)).fetchone()
-        if duplicate and (not old or url != old["url"]):
-            raise ValueError("该 RSS 地址已存在，请编辑已有订阅源")
-        if not sid:
-            sid = db.add_rss_source(url, title, category)["id"]
-        db.db.execute("UPDATE rss_sources SET url=?,title=?,category=?,enabled=? WHERE id=?",
-                      (url, title, category, int(bool(enabled)), sid))
-        db.db.commit()
-        _mark_configured(db)
-        return {"source": db.rss_source(sid)}
+            parts=urllib.parse.urlsplit(url)
+            valid=parts.scheme in ('http','https') and bool(parts.hostname) and not any(c.isspace() for c in url)
+            parts.port
+        except ValueError:valid=False
+        if not valid or len(url)>8192:raise ValueError('请输入有效的 http:// 或 https:// RSS 地址')
+        url=parts.geturl()
+        title=str(body.get('title',old.get('title','')) or '').strip() or url
+        category=str(body.get('category',old.get('category','学术论文')) or '').strip() or '学术论文'
+        if len(title)>200:raise ValueError('订阅源名称不能超过 200 字符')
+        if len(category)>60:raise ValueError('分类不能超过 60 字符')
+        enabled=body.get('enabled',old.get('enabled',True))
+        if not isinstance(enabled,(bool,int)) or enabled not in (0,1):raise ValueError('启用状态无效')
+        duplicate=db.db.execute('SELECT id FROM rss_sources WHERE url=? AND id<>?',(url,sid)).fetchone()
+        if duplicate and (not old or url!=old['url']):raise ValueError('该 RSS 地址已存在，请编辑已有订阅源')
+        if not sid:sid=db.add_rss_source(url,title,category)['id']
+        db.db.execute('UPDATE rss_sources SET url=?,title=?,category=?,enabled=? WHERE id=?',(url,title,category,int(enabled),sid))
+        db.db.commit();_configured(db)
+        return {'source':db.rss_source(sid)}
 
 
 def delete_source(db: Any, body: dict[str, Any]) -> dict[str, Any]:
-    """删订阅源，已入库条目保留（列表里显示「来源已移除」）。"""
     with _sources_lock:
-        source = _source(db, str(body.get("id") or ""))
-        db.db.execute("DELETE FROM rss_sources WHERE id=?", (source["id"],))
-        db.db.commit()
-        _mark_configured(db)
-        return {"deleted": source["id"], "retained_items": db.rss_count(source_id=source["id"])}
+        source=_source(db,str(body.get('id') or ''))
+        db.db.execute('DELETE FROM rss_sources WHERE id=?',(source['id'],));db.db.commit();_configured(db)
+        return {'deleted':source['id'],'retained_items':db.rss_count(source_id=source['id'])}
 
 
 def add_defaults(db: Any) -> dict[str, Any]:
-    """把内置来源补回来（已有的按 URL 跳过）。"""
     with _sources_lock:
-        added = seed(db)
-        _mark_configured(db)
-        return {"added": added, "sources": db.rss_sources()}
+        added=seed(db);_configured(db)
+        return {'added':added,'sources':db.rss_sources()}
 
 
 if __name__ == "__main__":                     # 自带小样，不联网也能验解析

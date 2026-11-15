@@ -59,7 +59,7 @@ def config(db: Any, assistant_id: str) -> dict:
 def save(db: Any, body: dict) -> dict:
     aid = str(body.get("assistant_id") or "")
     if aid and not db.assistant(aid):
-        raise ValueError("助手不存在")
+        raise ValueError("专家不存在")
     allowed = {"app_id", "app_secret", "redirect_uri", "scopes", "receive_id", "receive_id_type",
                "webhook", "signing_secret", "enabled", "inbound_enabled", "project_id", "allowed_sender"}
     old = config(db, aid)
@@ -232,7 +232,7 @@ def _registration_clear_current(db: Any, aid: str, session_id: str) -> None:
 def registration_begin(db: Any, aid: str, body: dict | None = None) -> dict:
     """Open an assistant-scoped PersonalAgent device authorization session."""
     if not aid or not db.assistant(aid):
-        raise ValueError("助手不存在")
+        raise ValueError("专家不存在")
     body = body or {}
     requested_region = str(body.get("region") or body.get("tenant") or "feishu").strip().lower()
     if requested_region not in {"feishu", "lark", "international", "overseas"}:
@@ -284,7 +284,7 @@ def registration_begin(db: Any, aid: str, body: dict | None = None) -> dict:
 
 def registration_poll(db: Any, aid: str, session_id: str = "") -> dict:
     if not aid or not db.assistant(aid):
-        raise ValueError("助手不存在")
+        raise ValueError("专家不存在")
     session = store.read(db, REGISTRATION_SERVICE, aid)
     if not session or session.get("assistant_id") != aid:
         raise ValueError("没有进行中的飞书扫码绑定")
@@ -351,7 +351,7 @@ def registration_poll(db: Any, aid: str, session_id: str = "") -> dict:
 
 def registration_cancel(db: Any, aid: str, session_id: str = "") -> dict:
     if not aid or not db.assistant(aid):
-        raise ValueError("助手不存在")
+        raise ValueError("专家不存在")
     session = store.read(db, REGISTRATION_SERVICE, aid)
     if not session or not session_id or not secrets.compare_digest(str(session.get("session_id") or ""), str(session_id)):
         raise ValueError("飞书扫码绑定会话无效或已替换")
@@ -367,7 +367,7 @@ def send(db: Any, aid: str, text: str, receive_id: str = "", receive_id_type: st
          force_app: bool = False) -> dict:
     data = config(db, aid)
     if not data.get("enabled"):
-        raise ValueError("该助手的飞书机器人未启用")
+        raise ValueError("该专家的飞书机器人未启用")
     if not str(text).strip():
         raise ValueError("消息不能为空")
     if data.get("webhook") and not force_app:
@@ -397,7 +397,10 @@ def send(db: Any, aid: str, text: str, receive_id: str = "", receive_id_type: st
         raise ValueError("飞书未返回机器人租户令牌")
     result = request("/im/v1/messages?receive_id_type=" + urllib.parse.quote(receive_id_type or data.get("receive_id_type") or "open_id"),
                      {"receive_id": recipient, "msg_type": "text", "content": json.dumps({"text": text}, ensure_ascii=False)}, token, api=api)
-    return {"ok": True, "message_id": (result.get("data") or {}).get("message_id", "")}
+    message_id = (result.get("data") or {}).get("message_id")
+    if not message_id:
+        raise ValueError("飞书未返回消息 ID，发送结果未确认；请先检查会话，避免重复发送")
+    return {"ok": True, "message_id": message_id}
 
 
 _BRIDGE_LOCK = threading.Lock()
@@ -565,7 +568,8 @@ def start_bridge(db_path: Any) -> dict[str, str]:
     def worker() -> None:
         try:
             handler = lark.EventDispatcherHandler.builder("", "").register_p2_im_message_receive_v1(on_message).build()
-            client = lark.ws.Client(cfg["app_id"], cfg["app_secret"], event_handler=handler)
+            domain = lark.LARK_DOMAIN if cfg.get("registration_region") == "lark" else lark.FEISHU_DOMAIN
+            client = lark.ws.Client(cfg["app_id"], cfg["app_secret"], event_handler=handler, domain=domain)
             with _BRIDGE_LOCK:
                 _BRIDGE["status"] = "running"
             client.start()

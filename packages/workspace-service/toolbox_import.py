@@ -56,22 +56,14 @@ def import_file(db, body):
         except Exception:
             raise ValueError('PDF 无法读取，请检查文件是否损坏或已加密') from None
         if tool == 'pdf_translate':
+            import project_files
             import asset_service
-            import fileguard
-            import uuid
             pid = str(body.get('project_id') or '')
             if not pid:
                 raise ValueError('请先选择结果归属项目，再导入 PDF')
-            if not db.db.execute('SELECT 1 FROM research_tasks WHERE id=?', (pid,)).fetchone():
-                raise ValueError('项目不存在')
-            dest = db.pdir(pid, '文献库') / (uuid.uuid4().hex[:12] + '-' + (name or 'paper.pdf'))
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            with dest.open('xb') as output:
-                output.write(raw)
-            fileguard.audit('upload', dest, bytes=len(raw))
-            paper = db.ingest_pdf(pid, dest)
-            asset_service.register_file(db, dest, project_id=pid, kind='paper', source='toolbox_upload',
-                                       title=name, metadata={'paper_id': paper['id']})
+            saved = project_files.upload(db, pid, name, raw)
+            asset = asset_service.get(db, saved['asset_id'])
+            paper = db.ingest_pdf(pid, asset['canonical_uri'])
             return {'name': name, 'paper_id': paper['id'], 'pages': len(paper['pages'])}
         if not text.strip():
             raise ValueError('PDF 没有可提取的文字，请先 OCR，或使用 PDF 翻译工具')

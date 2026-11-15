@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+from contextlib import closing
 from pathlib import Path
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -17,12 +19,38 @@ except ImportError:
     sync_playwright = None
 
 
-ROOT = Path(__file__).resolve().parents[1]
+# The test suite lives under ``tools/tests`` while the desktop entry point is
+# rooted at the repository.  Resolve the repository root so browser tests start
+# the same app that users run through tools/start.bat.
+ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'apps/desktop/server.py').is_file())
 EDGE = next(
     (path for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"))
      if base and (path := Path(base) / "Microsoft/Edge/Application/msedge.exe").is_file()),
     None,
 )
+
+
+def workspace_section(page, section):
+    """Use the public primary view and secondary navigation, including its drawer."""
+    if section in ('tasks','automation','plan'):
+        tab=page.locator('#pwTab-tasks');tab.wait_for()
+        tab.click()
+        page.locator('[data-ec-view="'+{'tasks':'board','automation':'automation','plan':'plans'}[section]+'"]').click()
+        return
+    if section in ('manuscripts','experiments','outputs'):
+        workspace_section(page,'catalog')
+        page.locator('[data-pr-kind="'+{'manuscripts':'manuscript','experiments':'experiment','outputs':'output'}[section]+'"]').click()
+        return
+    surface = {'catalog':'library','manuscripts':'library','experiments':'library','outputs':'library','files':'library','papers':'library','notes':'library','stars':'library',
+               'tasks':'tasks','automation':'tasks','plan':'tasks','workflow':'flow','tools':'flow'}[section]
+    tab = page.locator('#pwTab-' + surface)
+    tab.wait_for()
+    if tab.get_attribute('aria-selected') != 'true':
+        tab.click()
+    target = page.locator(f'[data-pw-view="{section}"]')
+    if not target.is_visible():
+        page.locator('#pwToggleNav').click()
+    target.click()
 
 
 @unittest.skipUnless(sync_playwright and EDGE, "Requires Playwright and Microsoft Edge")
@@ -33,6 +61,8 @@ class WebRuntimeTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="rw-web-runtime-")
         cls.addClassCleanup(temporary.cleanup)
+        cls.temporary_root = Path(temporary.name)
+        cls.database_path = cls.temporary_root / "research.sqlite3"
         log = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
         cls.addClassCleanup(log.close)
         with socket.socket() as probe:
@@ -43,8 +73,14 @@ class WebRuntimeTest(unittest.TestCase):
                    LANJI_ZHIYAN_DB=str(Path(temporary.name) / "research.sqlite3"),
                    RW_HOME=temporary.name, LANJI_ZHIYAN_HOME=temporary.name,
                    PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
+        packaged = os.environ.get("LANJI_TEST_APP_DIRECTORY")
+        if packaged:
+            from tools.installer import APP
+            command = [str(Path(packaged) / (APP + ".exe"))]
+        else:
+            command = [sys.executable, str(ROOT / "apps/desktop/server.py")]
         server = subprocess.Popen(
-            [sys.executable, str(ROOT / "apps/desktop/server.py"), "--port", str(port), "--no-open"],
+            [*command, "--port", str(port), "--no-open"],
             cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
         )
 
@@ -68,7 +104,7 @@ class WebRuntimeTest(unittest.TestCase):
 
         playwright = sync_playwright().start()
         cls.addClassCleanup(playwright.stop)
-        cls.browser = playwright.chromium.launch(executable_path=str(EDGE), headless=True)
+        cls.browser = playwright.chromium.launch(executable_path=str(EDGE), headless=os.environ.get("LANJI_BROWSER_VISIBLE") != "1")
         cls.addClassCleanup(cls.browser.close)
 
     def setUp(self) -> None:
@@ -90,6 +126,96 @@ class WebRuntimeTest(unittest.TestCase):
         self.assertEqual(self.page.locator("#tabsbar [data-t]").count(), 1)
         self.assertIn("SQLite", self.page.locator("#statusbar").inner_text())
 
+    def test_progress_board_stays_inside_project_space_in_every_view(self):
+        self.load_page()
+        self.assertEqual(self.page.locator('#sidebar [data-nav="kanban"]').count(), 0)
+        self.page.locator('#sidebar [data-nav="workspace"]').click()
+        workspace_section(self.page, 'plan')
+        for view in ('list','timeline'):
+            self.page.locator('[data-ec-layout]').select_option(view)
+            self.assertTrue(self.page.locator('#projectWorkspace .execution-center').is_visible())
+            self.assertTrue(self.page.locator('.pw-sidebar').is_hidden())
+            self.assertEqual(self.page.locator('#main > .execution-center').count(), 0)
+        self.assertEqual(self.errors, [])
+
+    def save_nested_note(self, filename: str) -> str:
+        path = "笔记/界面验收/子目录/" + filename
+        self.page.evaluate("""async path => {
+          await api('/api/project/note/save', {
+            project_id:S.tasks[0].id, path, content:'# UI recovery\\n\\nNESTED_NOTE_CONTENT'
+          });
+        }""", path)
+        return path
+
+    def test_project_notes_expand_nested_folders_and_open_file(self) -> None:
+        self.load_page()
+        path = self.save_nested_note("笔记层级.md")
+        self.page.locator('#sidebar [data-nav="workspace"]').click()
+        workspace_section(self.page, 'notes')
+        self.page.locator('[data-nb-view="tree"]').click()
+        self.page.locator("#nbTreeContainer").wait_for()
+        for folder in ("笔记/界面验收", "笔记/界面验收/子目录"):
+            row = self.page.locator(f'[data-tree-dir="{folder}"]')
+            row.wait_for()
+            if "open" not in row.get_attribute("class").split():
+                row.click()
+        self.page.locator(f'[data-tree-file="{path}"]').click()
+        self.page.locator("#mdSource").wait_for()
+        self.assertIn("NESTED_NOTE_CONTENT", self.page.locator("#mdSource").input_value())
+        self.assertTrue(self.page.locator("#nbTreeContainer").is_visible())
+        self.assertEqual(self.errors, [])
+
+    def test_research_platform_project_folder_expands_and_previews_file(self) -> None:
+        self.load_page()
+        path = self.save_nested_note("项目文件.md")
+        self.page.locator('#sidebar [data-nav="workspace"]').click()
+        workspace_section(self.page, 'files')
+        self.page.locator("#panel-files").wait_for(state="visible")
+        for folder in ("笔记", "笔记/界面验收", "笔记/界面验收/子目录"):
+            self.page.locator(f'#flList .fl-tree-row[data-rel="{folder}"]').click()
+        self.page.locator(f'#flList .fl-tree-row[data-rel="{path}"]').click()
+        self.page.wait_for_function("document.querySelector('#flStage')?.textContent.includes('NESTED_NOTE_CONTENT')")
+        self.assertTrue(self.page.locator('[data-pw-view="files"][aria-current="page"]').is_visible())
+        self.assertTrue(self.page.locator("#pwProject").is_visible())
+        self.assertEqual(self.errors, [])
+
+    def test_protected_project_notes_open_read_only_and_navigation_does_not_save(self) -> None:
+        folder = self.temporary_root / "zotero/existing-project"
+        note = folder / "笔记/研究计划/existing.md"
+        note.parent.mkdir(parents=True, exist_ok=True)
+        (self.temporary_root / "zotero/zotero.sqlite").touch()
+        original_content = "# Protected evidence\n\nREAD_ONLY_BROWSER_EVIDENCE"
+        note.write_text(original_content, encoding="utf-8")
+        with closing(sqlite3.connect(self.database_path)) as db, db:
+            pid, previous = db.execute("SELECT id,base_dir FROM research_tasks LIMIT 1").fetchone()
+            db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?", (str(folder), pid))
+
+        def restore_project():
+            with closing(sqlite3.connect(self.database_path)) as db, db:
+                db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?", (previous, pid))
+
+        self.addCleanup(restore_project)
+        saves = []
+        self.page.on("request", lambda request: saves.append(request.url)
+                     if request.method == "POST" and "/api/project/note/" in request.url else None)
+        self.load_page()
+        self.page.locator('#sidebar [data-nav="workspace"]').click()
+        workspace_section(self.page, 'notes')
+        self.page.locator('[data-pn-file="笔记/研究计划/existing.md"]').click()
+        self.page.wait_for_function("document.querySelector('#mdPreview')?.textContent.includes('READ_ONLY_BROWSER_EVIDENCE')")
+        self.assertTrue(self.page.locator("#mdSource").evaluate("element => element.readOnly"))
+        self.assertTrue(self.page.locator("#mdNoteTitle").evaluate("element => element.readOnly"))
+        self.assertTrue(self.page.locator("#mdDashSave").is_disabled())
+        self.assertTrue(self.page.locator("#btnMdExport").is_enabled())
+        self.page.locator("#mdDashBackFiles").click()
+        create = self.page.locator("#nbTreeNewFile, #pnBtnSideNewFile").first
+        create.wait_for()
+        self.assertTrue(create.is_disabled())
+        self.assertEqual(saves, [])
+        self.assertEqual(note.read_text(encoding="utf-8"), original_content)
+        self.assertFalse((folder / "笔记/文献精读笔记").exists())
+        self.assertEqual(self.errors, [])
+
     def test_zotero_modal_closes_from_button_and_mask(self) -> None:
         self.load_page()
         # Exercise the real modal and its bindings without requiring Zotero to run.
@@ -103,12 +229,13 @@ class WebRuntimeTest(unittest.TestCase):
     def test_project_notes_dashboard_opens_existing_markdown(self) -> None:
         self.load_page()
         self.page.evaluate("openTab('notes')")
-        self.page.locator('[data-tree-path="笔记/文献矩阵"]').wait_for()
+        self.page.locator('[data-nb-view="category"]').click()
+        self.page.locator('[data-category="literature"]').wait_for()
         self.page.evaluate("""async () => {
           const project_id = S.tasks[0].id;
           await api('/api/project/note/save', {project_id, path:'笔记/文献矩阵/浏览器验证.md', content:'# 浏览器验证\\n\\n已有内容'});
         }""")
-        self.page.locator('[data-tree-path="笔记/文献矩阵"]').click()
+        self.page.locator('[data-category="literature"]').click()
         self.page.locator('[data-pn-file="笔记/文献矩阵/浏览器验证.md"]').click()
         self.page.locator("#mdSource").wait_for()
         self.assertIn("已有内容", self.page.locator("#mdSource").input_value())
@@ -138,9 +265,10 @@ class WebRuntimeTest(unittest.TestCase):
     def new_project_note(self, title="Browser audit", content="Initial content"):
         self.load_page()
         self.page.evaluate("openTab('notes')")
-        self.page.locator("#pnBtnSideNewFile").wait_for()
+        create = self.page.locator("#nbTreeNewFile, #pnBtnSideNewFile").first
+        create.wait_for()
         self.page.wait_for_load_state("networkidle")
-        self.page.locator("#pnBtnSideNewFile").click()
+        create.click()
         self.page.locator("#mdNoteTitle").fill(title)
         self.page.locator("#mdSource").fill(content)
 
@@ -167,7 +295,7 @@ class WebRuntimeTest(unittest.TestCase):
         self.new_project_note("Same title", "FIRST_CONTENT")
         self.assertTrue(self.page.evaluate("mdSaveProj()"))
         first = self.page.evaluate("mdProj.path")
-        self.page.locator("#pnBtnSideNewFile").click()
+        self.page.locator("#nbTreeNewFile, #pnBtnSideNewFile").first.click()
         self.page.wait_for_function("mdDraft && mdProj?.path === '' && document.querySelector('#mdNoteTitle')?.value === ''")
         self.page.locator("#mdNoteTitle").fill("Same title")
         self.page.locator("#mdSource").fill("SECOND_CONTENT")
@@ -195,7 +323,7 @@ class WebRuntimeTest(unittest.TestCase):
         self.page.evaluate("""() => {
           $('mdSource').value = 'PENDING_EDITS_MUST_SURVIVE';
           $('mdSource').dispatchEvent(new Event('input', {bubbles:true}));
-          $('pnBtnSideNewFile').click();
+          document.querySelector('#nbTreeNewFile, #pnBtnSideNewFile').click();
         }""")
         self.page.wait_for_function("mdDraft && mdProj?.path === '' && document.querySelector('#mdSource')?.value === ''")
         self.assertIn("PENDING_EDITS_MUST_SURVIVE", self.read_project_note(previous)["content"])
@@ -234,7 +362,7 @@ class WebRuntimeTest(unittest.TestCase):
           return results;
         }""")
         self.assertEqual(saved, [True, True])
-        self.assertEqual(self.read_project_note(self.page.evaluate("mdProj.path"))["content"], "LATEST_EDITS")
+        self.assertEqual(self.read_project_note(self.page.evaluate("mdProj.path"))["body"], "LATEST_EDITS")
         self.assertEqual(self.page.locator("#mdSaveState").inner_text(), "已保存")
         self.assertEqual(self.errors, [])
 
@@ -249,7 +377,7 @@ class WebRuntimeTest(unittest.TestCase):
             return window.auditOriginalApi(url, body);
           };
         }""")
-        self.page.locator("#pnBtnSideNewFile").click()
+        self.page.locator("#nbTreeNewFile, #pnBtnSideNewFile").first.click()
         self.page.wait_for_function("document.querySelector('#mdSaveState')?.textContent === '保存失败'")
         self.assertTrue(self.page.evaluate("mdProj === window.auditNote"))
         self.assertIn("UNSAVED_CONTENT", self.page.locator("#mdSource").input_value())

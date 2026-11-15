@@ -36,6 +36,33 @@ class WebFetchTest(unittest.TestCase):
         self.assertEqual(bad, [], "这些 POST 少了 Content-Type: application/json（会被 415 挡掉）：\n" + "\n".join(bad))
 
 
+class NativeWindowCommandsTest(unittest.TestCase):
+    def test_close_uses_http_while_minimize_uses_native_bridge(self):
+        source = (JS / "app-core.js").read_text(encoding="utf-8")
+        command = re.search(r"function winCommand\(action\)\{.*?\n\}", source, re.S)
+        self.assertIsNotNone(command)
+        result = subprocess.run(["node", "-e", r"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const calls = [];
+const context = vm.createContext({
+  window: {pywebview: {api: {win: action => {calls.push(['native', action]); return {ok: action};}}}},
+  api: (path, body) => {calls.push(['http', path, body]); return Promise.resolve({ok: 'close'});}
+});
+vm.runInContext(require('node:fs').readFileSync(0, 'utf8'), context);
+(async () => {
+  await context.winCommand('close');
+  await context.winCommand('minimize');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0][0], 'http');
+  assert.equal(calls[0][1], '/api/win/close');
+  assert.equal(Object.keys(calls[0][2]).length, 0);
+  assert.deepEqual(calls[1], ['native', 'minimize']);
+})().catch(error => {console.error(error); process.exitCode = 1;});
+"""], input=command.group(0), text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 class ChatWithoutConversationTest(unittest.TestCase):
     """主界面没有对话就直接发消息：服务端必须现开一条不绑项目的对话。
     以前空 id 一路走到 run_agent 的 db.summary('') → KeyError，整轮发言变成一条红字报错。"""

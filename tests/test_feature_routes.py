@@ -61,7 +61,23 @@ class FeatureRoutesTest(unittest.TestCase):
         deleted = feature_routes.route("POST", "/api/todos/delete", {"id": todo_id}, {}, self.db)
         self.assertTrue(deleted["ok"])
 
-        self.assertIsNone(feature_routes.route("GET", "/api/zotero/mcp/status", {}, {}, self.db))
+        cfg_res = feature_routes.route(
+            "POST", "/api/easyscholar/config", {"enabled": True, "secret_key": "sec_abc"}, {}, self.db
+        )
+        self.assertTrue(cfg_res["ok"])
+
+        cfg_get = feature_routes.route("GET", "/api/easyscholar/config", {}, {}, self.db)
+        self.assertTrue(cfg_get["enabled"])
+        self.assertEqual(cfg_get["secret_key"], "sec_abc")
+
+        rank_res = feature_routes.route("GET", "/api/easyscholar/rank", {}, {"journal": ["Nature"]}, self.db)
+        self.assertIn("badges", rank_res)
+
+        mcp_status = feature_routes.route("GET", "/api/zotero/mcp/status", {}, {}, self.db)
+        self.assertIn("registered", mcp_status)
+
+        mcp_enabled = feature_routes.route("POST", "/api/zotero/mcp/enable", {}, {}, self.db)
+        self.assertTrue(mcp_enabled["ok"])
 
         sp_search = feature_routes.route("GET", "/api/space/search", {}, {"task_id": ["t1"], "q": ["测试"]}, self.db)
         self.assertIn("results", sp_search)

@@ -110,17 +110,12 @@ def _migrate_legacy_home(home: Path) -> dict:
 
 
 def home_dir() -> Path:
-    """数据根：LANJI_ZHIYAN_HOME > RW_HOME > %LOCALAPPDATA%\\览籍智研-1.0。
-
-    1.0 独占 ``览籍智研-1.0``：库一旦被 2.0 升到 035，1.0 的 migrations 只有 001-010，
-    `run_migrations` 会直接拒启；反过来 1.0 建的库 2.0 也认不了它的版本线。
-    两边共用 ``览籍智研`` 只会互相锁死，所以按版本分家。2.0 继续用 ``览籍智研``。
-    """
+    """数据根：LANJI_ZHIYAN_HOME > RW_HOME > %LOCALAPPDATA%\\览籍智研。"""
     override = _env(*HOME_ENV_VARS)
     if override:
         return Path(override).expanduser()
     base = _env("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    home = Path(base) / f"{APP_NAME}-1.0"
+    home = Path(base) / APP_NAME
     _migrate_legacy_home(home)
     return home
 
@@ -287,7 +282,7 @@ def host_pick_folder(initial: str = "", title: str = "选择文件夹") -> dict:
 def assert_not_zotero_write(path: str | os.PathLike[str]) -> None:
     """Protect known Zotero storage and linked-attachment roots at write boundaries."""
     target = Path(path).expanduser().resolve()
-    if "zotero" in {part.casefold() for part in target.parts} or target.name.casefold().startswith("zotero.sqlite"):
+    if target.name.casefold().startswith("zotero.sqlite"):
         raise ValueError("Zotero 管理文件只读，请在独立项目中处理副本")
     if any((folder / "zotero.sqlite").exists() for folder in (target, *target.parents)):
         raise ValueError("Zotero 数据目录只读，请在独立项目中处理副本")
@@ -394,7 +389,8 @@ def mark_write_roots_low(verbose: bool = False) -> dict[str, str]:
 
     **不在每次启动都跑 /T**：递归 icacls 是逐文件设 ACL，三千个文件 1.5s，而这一步同步
     挡在「起子进程」之前（用户感受就是点图标后半天没反应）。一个根整棵树标过一次就记进
-    lowroots.json，以后每次只做非递归标：(OI)(CI) 挂在新目录上，之后新建的文件自动继承 Low。
+    lowroots.json，以后先读取根的实际完整性标签，符合继承要求时不重复改写权限。
+    即使不传 /T，重复设置根权限仍可能遍历大量后代；新目录由 (OI)(CI) 自动继承 Low。
     """
     import lowbox
     if not lowbox.available():

@@ -312,7 +312,7 @@ class WorkflowTest(unittest.TestCase):
 
 
     def test_检索跑完必须收口问要不要改检索式(self) -> None:
-        """文献检索助手检索完不能只报个数：要问「还要调整检索式吗」。别的步骤不带这句。"""
+        """文献检索专家检索完不能只报个数：要问「还要调整检索式吗」。别的步骤不带这句。"""
         self.db.add_model("假模型4", "http://127.0.0.1:1/v1", "fake4", "sk", activate=True)
         seen: dict = {}
 
@@ -749,7 +749,7 @@ class ReadDoneTest(unittest.TestCase):
 
 
 class PlanContextTest(unittest.TestCase):
-    """「同步上一步」的顺序：上一步的交付必须排在创新点背景之前，否则每个助手都开口复述创新点。"""
+    """「同步上一步」的顺序：上一步的交付必须排在创新点背景之前，否则每个专家都开口复述创新点。"""
 
     def test_上一步排在背景之前(self):
         import tempfile

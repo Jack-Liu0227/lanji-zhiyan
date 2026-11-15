@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -17,6 +18,26 @@ if TYPE_CHECKING:
     from workflow import WorkflowDB
 
 DATA, PAPERS, NOTES, OUT = paths.DATA, paths.PAPERS, paths.NOTES, paths.OUT
+
+
+def _guarded_document_write(operation):
+    @wraps(operation)
+    def write(db, task_id, *args, **kwargs):
+        import asset_service
+        import project_tasks
+        with project_tasks._lock:
+            if (getattr(db, 'project_task_context', None) or getattr(db, 'asset_run', None) or
+                    (getattr(db, 'usage_context', {}) or {}).get('run_id')):
+                kind = args[0] if args else kwargs.get('kind', 'outline')
+                path = map_path(db, task_id) if operation.__name__ == 'map_write' else doc_path(db, task_id, kind)
+                if path.is_file():
+                    row = db.db.execute('SELECT * FROM assets WHERE canonical_uri=? AND project_id=?', (str(path.resolve()), task_id)).fetchone()
+                    asset = dict(row) if row else {'id': '', 'project_id': task_id, 'canonical_uri': str(path.resolve()),
+                        'storage': 'file', 'kind': 'document', 'status': 'active', 'metadata': '{}',
+                        'content_hash': asset_service.sha256_file(path)}
+                    asset_service.require_context(db, asset)
+            return operation(db, task_id, *args, **kwargs)
+    return write
 
 
 
@@ -120,6 +141,7 @@ def map_read(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
             "refs": sum(1 for n in nodes if n.get("type") != "section")}
 
 
+@_guarded_document_write
 def map_write(db: "WorkflowDB", task_id: str, data: Any, keep_positions: bool = True) -> dict[str, Any]:
     """整份覆盖写（和 doc_write 同口径）。不合规的节点/边直接丢掉，不报错 —— 模型给脏数据也要能落盘。
 
@@ -318,7 +340,7 @@ def open_write(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
 def map_seed(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     """大纲已经有了、谱系图还没有 → 直接按大纲长出「章 → 节」两级，不用等用户开口。
 
-    只搬标题、不编内容：detail 留空，支撑结论 / 数据由助手后面挂上去。
+    只搬标题、不编内容：detail 留空，支撑结论 / 数据由专家后面挂上去。
     已经有图就原样返回，绝不覆盖。
     """
     cur = map_read(db, task_id)
@@ -375,7 +397,7 @@ def project_outs(db: "WorkflowDB", task_id: str, limit: int = 40) -> list[dict[s
 def map_sources(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     """谱系图能挂哪些东西：大纲小标题 / 精读笔记 / 文献库 PDF / 实验数据（项目其余/数据 + 上传区）。
 
-    笔记给「标题 + id」而不是文件名：文件名是哈希，助手只能挂出一串乱码，
+    笔记给「标题 + id」而不是文件名：文件名是哈希，专家只能挂出一串乱码，
     读的人也不知道挂的是哪一篇。
     """
     md = doc_read(db, task_id, "outline")["markdown"]
@@ -390,15 +412,19 @@ def map_sources(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
         return out[:120]
     titles = {n["id"]: (n["title"] or "") for n in db.notes(task_id)}
     note_files = ls(base / "笔记") if base else ls(NOTES, ("*.md",))
+    import note_catalog
+    note_root = base / "笔记" if base else NOTES
     notes = [{"id": Path(f).stem, "name": f, "title": titles.get(Path(f).stem) or Path(f).name}
              for f in note_files
-             if Path(f).suffix.lower() == ".md" and Path(f).name.lower() != "readme.md"]
+             if Path(f).suffix.lower() == ".md" and Path(f).name.lower() != "readme.md"
+             and not note_catalog.is_template((note_root / f).read_text(encoding="utf-8", errors="replace"))]
     papers = [p["filename"] for p in db.papers_of(task_id)]
     data = (ls(base / "其余" / "数据") if base else []) + ls(DATA / "uploads")
     return {"sections": [x.strip() for x in secs][:60], "notes": notes, "papers": papers[:60],
             "data": list(dict.fromkeys(data))[:60], "map_path": str(map_path(db, task_id))}
 
 
+@_guarded_document_write
 def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str, mode: str = "replace") -> dict[str, Any]:
     """就地覆盖写（他要的就是「修改调整都直接在原文件改」）。
 
@@ -420,8 +446,10 @@ def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str, mode: st
     p.parent.mkdir(parents=True, exist_ok=True)
     fileguard.before_write(p, f"{kind}正文覆盖")
     import verify                                     # 落盘前机械核一遍：素材（证据+笔记）里找不到的带单位数值，标出来
+    import note_catalog
     corpus = "\n".join([str(r["excerpt"] or "") for r in db.evidence(task_id)]
-                       + [n["markdown"][:20000] or "" for n in db.notes(task_id)[:80]])
+                       + [n["markdown"][:20000] or "" for n in db.notes(task_id)[:80]
+                          if not note_catalog.is_template(n["markdown"] or "")])
     content = verify.stamp(body, verify.audit(seg, corpus=corpus, label=kind)).rstrip() + "\n"
     import asset_service
     asset_service.atomic_write_text(p, content)
@@ -571,7 +599,7 @@ def outline_system(db: "WorkflowDB", task_id: str) -> str:
     task = db.summary(task_id)["task"]
     cur = doc_read(db, task_id, "outline")
     body = cur["markdown"][:6000] or "（还没有，等你给第一版）"
-    return f"""你是「览籍智研」里「拟定框架」这一步的论文框架助手，用中文工作，站在合作者（懂科研、但听用户拍板）的位置。
+    return f"""你是「览籍智研」里「拟定框架」这一步的论文框架专家，用中文工作，站在合作者（懂科研、但听用户拍板）的位置。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：把这份研究的**框架（大纲）**跟用户敲定。不做文献检索/下载/精读/撰写成稿/格式转换，用户要这些就说明去别的步骤。
@@ -602,7 +630,7 @@ def map_system(db: "WorkflowDB", task_id: str) -> str:
     cur = map_read(db, task_id)
     src = map_sources(db, task_id)
     skills = skill_text("research", "paper-reading-reports", "SKILL.md", cap=2500, db=db, task_id=task_id) or MAP_FALLBACK
-    return f"""你是「览籍智研」里「证据链谱系」这一步的**证据链助手**，用中文工作。
+    return f"""你是「览籍智研」里「证据链谱系」这一步的**证据链专家**，用中文工作。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：**维护一张证据链谱系图**（思维导图），把框架的每个小标题和「支撑它的精读结论 / 实验数据」连起来构建严密证据链。不做检索、下载、翻译、写作。

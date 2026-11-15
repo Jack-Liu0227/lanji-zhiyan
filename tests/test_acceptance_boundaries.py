@@ -152,6 +152,8 @@ class AcceptanceBoundariesTest(unittest.TestCase):
         import schedule
         with patch.object(schedule, "DB_PATH", self.db.path), patch.object(workflow, "run_agent") as model:
             row = self.db.schedule_save({"name": "Unbound", "project_id": self.a, "enabled": True})
+            self.assertEqual(row["assistant_id"], "builtin-scheduler")
+            self.db.assistant_save("builtin-scheduler", enabled=False)
             self.assertEqual(schedule.run_once(row)["status"], "blocked")
             row["assistant_id"] = "missing-expert"
             self.assertEqual(schedule.run_once(row)["status"], "blocked")

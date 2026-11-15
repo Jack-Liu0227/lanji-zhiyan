@@ -124,6 +124,38 @@ class ZoteroLocalWriteTest(unittest.TestCase):
             self.assertEqual(attachment["parentItem"], "NEW00001")
             self.assertEqual(Path(attachment["path"]), self.pdf.resolve())
 
+    def test_imported_file_uses_three_phase_local_upload(self):
+        calls = []
+
+        def fake_write(db, path, payload=None, method="POST"):
+            calls.append((path, payload, method))
+            return {"successful": {"0": {"key": "ATTCH001"}}}
+
+        local_calls = []
+
+        def fake_local(db, path, method="POST", body=None, content_type="application/x-www-form-urlencoded", extra_headers=None):
+            local_calls.append((path, body, extra_headers))
+            if len(local_calls) == 1:
+                return 200, {}, {"url": "http://upload.test/file", "uploadKey": "UPLOAD01",
+                                 "contentType": "application/pdf"}
+            return 200, {}, {}
+
+        with patch.object(zotero, "_children", return_value=[]), \
+             patch.object(zotero, "_write", side_effect=fake_write), \
+             patch.object(zotero, "_local_request", side_effect=fake_local), \
+             patch.object(zotero, "_upload_bytes") as upload:
+            out = zotero.import_pdf(self.db, "ITEM0001", str(self.pdf), "Paper PDF")
+
+        self.assertEqual(out["key"], "ATTCH001")
+        self.assertEqual(out["mode"], "imported_file")
+        self.assertEqual(calls[0][1][0]["linkMode"], "imported_file")
+        self.assertEqual(calls[0][1][0]["parentItem"], "ITEM0001")
+        self.assertEqual(local_calls[0][0], "/users/0/items/ATTCH001/file")
+        self.assertIn(b"md5=", local_calls[0][1])
+        self.assertEqual(local_calls[0][2]["If-None-Match"], "*")
+        upload.assert_called_once_with("http://upload.test/file", self.pdf.read_bytes(), "application/pdf")
+        self.assertEqual(local_calls[1][1], b"upload=UPLOAD01")
+
     def test_link_pdf_outside_project_is_refused(self):
         outside = self.root / "外部.pdf"
         outside.write_bytes(b"%PDF-1.4")

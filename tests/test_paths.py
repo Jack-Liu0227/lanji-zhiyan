@@ -108,9 +108,14 @@ class WriteRootsStampTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        os.environ["LANJI_ZHIYAN_HOME"] = str(Path(self.tmp.name) / "home")
-        self.addCleanup(os.environ.pop, "LANJI_ZHIYAN_HOME", None)
+        test_home = Path(self.tmp.name) / "home"
+        test_database = test_home / "test.sqlite3"
+        environment = patch.dict(os.environ, {"LANJI_ZHIYAN_HOME": str(test_home), "RW_HOME": str(test_home),
+                                               "LANJI_ZHIYAN_DB": str(test_database), "RESEARCH_WORKBENCH_DB": str(test_database)})
+        environment.start()
         import paths
+        self.addCleanup(lambda: importlib.reload(paths))
+        self.addCleanup(environment.stop)
         self.p = importlib.reload(paths)              # 换 HOME → 戳文件也落在临时目录
         for d in (self.p.HOME, self.p.DATA, self.p.CACHE):
             d.mkdir(parents=True, exist_ok=True)

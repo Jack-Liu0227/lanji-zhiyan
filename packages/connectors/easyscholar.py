@@ -1,6 +1,5 @@
 """easyScholar API 客户端与本地缓存适配器。
 
-文档基准：docs/easyScholar _ 显示期刊等级_SCI分区.html
 接口协议：
   GET https://www.easyscholar.cc/open/getPublicationRank?secretKey={key}&publicationName={name}
 约束：
@@ -115,9 +114,10 @@ def get_config(conn: sqlite3.Connection) -> dict[str, Any]:
 def save_config(conn: sqlite3.Connection, enabled: bool, secret_key: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_table(conn)
     current = get_config(conn)
-    submitted_key = (secret_key or "").strip()
-    final_key = current["secret_key"] if not submitted_key or submitted_key in ("********", "***") else submitted_key
-
+    final_key = secret_key.strip() if secret_key is not None else current["secret_key"]
+    if final_key in ("********", "***"):
+        final_key = current["secret_key"]
+    
     cred_prot = securestore.protect(final_key) if final_key else ""
     opts_json = json.dumps(options or current.get("options") or {}, ensure_ascii=False)
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -203,10 +203,6 @@ def query_publication_rank(conn: sqlite3.Connection, publication_name: str, forc
     ensure_table(conn)
     norm_name = name.casefold()
 
-    cfg = get_config(conn)
-    if not cfg["enabled"]:
-        return {"ok": False, "msg": "easyScholar 接口未在设置中开启", "badges": []}
-
     if not force_refresh:
         row = conn.execute("SELECT official_rank, custom_rank, updated_at FROM easyscholar_cache WHERE publication_name=?", (norm_name,)).fetchone()
         if row:
@@ -226,6 +222,9 @@ def query_publication_rank(conn: sqlite3.Connection, publication_name: str, forc
             except Exception as e:
                 logger.warning("Cache parse error for %s: %s", name, e)
 
+    cfg = get_config(conn)
+    if not cfg["enabled"]:
+        return {"ok": False, "msg": "easyScholar 接口未在设置中开启", "badges": []}
     secret_key = cfg["secret_key"]
     if not secret_key:
         return {"ok": False, "msg": "easyScholar SecretKey 尚未配置", "badges": []}

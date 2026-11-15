@@ -33,19 +33,18 @@ class ProjectIntegrationTest(unittest.TestCase):
             self.root = db.base_dir(self.project_id)
 
     def test_existing_markdown_is_browsable_and_paths_stay_inside_project(self):
-        # 2.0 的笔记分类是五类（研究规划/文献研究/实验分析/写作投稿/提示词模板），旧分类目录落「未分类」
-        folder = self.root / "笔记" / "研究规划"
-        folder.mkdir(parents=True, exist_ok=True)
-        (folder / "已有.md").write_text("# 已有 证据", encoding="utf-8")
+        path = self.root / "笔记" / "文献矩阵" / "已有.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# 已有\n\n证据", encoding="utf-8")
         custom = self.root / "笔记" / "旧分类"
         custom.mkdir()
         (custom / "历史.md").write_text("# 历史", encoding="utf-8")
         with workflow.WorkflowDB(self.db_path) as db:
             board = project_notes.dashboard(db, self.project_id)
-            group = next(g for g in board["groups"] if g["name"] == "研究规划")
+            group = next(g for g in board["groups"] if g["name"] == "文献矩阵")
             self.assertEqual(group["count"], 1)
-            self.assertEqual(next(g for g in board["groups"] if g["name"] == "旧分类")["count"], 1)   # 未知目录自成一组
-            self.assertEqual(project_notes.read(db, self.project_id, group["files"][0]["path"])["content"], "# 已有 证据")
+            self.assertEqual(next(g for g in board["groups"] if g["name"] == "旧分类")["count"], 1)
+            self.assertEqual(project_notes.read(db, self.project_id, group["files"][0]["path"])["content"], "# 已有\n\n证据")
             project_notes.write(db, self.project_id, "笔记/旧分类/历史.md", "# 更新")
             self.assertEqual((custom / "历史.md").read_text(encoding="utf-8"), "# 更新")
             with self.assertRaises(ValueError):
@@ -65,8 +64,11 @@ class ProjectIntegrationTest(unittest.TestCase):
             paths.validate_project_dir(Path.home())
         with self.assertRaises(ValueError):
             paths.validate_project_dir(Path(self.root.anchor))
+        managed = Path(self.tmp.name) / "Zotero"
+        managed.mkdir()
+        (managed / "zotero.sqlite").touch()
         with self.assertRaises(ValueError):
-            paths.validate_project_dir(Path(self.tmp.name) / "Zotero" / "storage")
+            paths.validate_project_dir(managed / "storage")
 
     def test_empty_notebook_exposes_a_usable_category_path(self):
         with workflow.WorkflowDB(self.db_path) as db:
@@ -77,14 +79,16 @@ class ProjectIntegrationTest(unittest.TestCase):
             project_notes.write(db, self.project_id, relative, "created from empty dashboard")
             self.assertEqual(project_notes.read(db, self.project_id, relative)["content"],
                              "created from empty dashboard")
-            with self.assertRaisesRegex(ValueError, "笔记/"):
-                project_notes.write(db, self.project_id, "研究规划/second.md", "invalid prefix")
+            project_notes.write(db, self.project_id, "笔记/研究计划/second.md", "project-relative note")
+            self.assertEqual(project_notes.read(db, self.project_id, "笔记/研究计划/second.md")["content"], "project-relative note")
+            with self.assertRaises(ValueError):
+                project_notes.write(db, self.project_id, "../second.md", "outside project")
 
     def test_tool_limit_reply_preserves_actual_successes_and_failures(self):
         relative = "笔记/研究计划/last-step.md"
         calls = [{"id": str(i), "type": "function", "function": {
             "name": "project_note_write", "arguments": json.dumps({"path": path, "content": "test"})}}
-            for i, path in enumerate(("研究计划/rejected.md", relative))]
+            for i, path in enumerate(("../rejected.md", relative))]
         with workflow.WorkflowDB(self.db_path) as db, patch.object(workflow, "chat_raw", return_value={
                 "content": "", "tool_calls": calls}):
             with self.assertRaises(RuntimeError) as failure:
@@ -101,6 +105,9 @@ class ProjectIntegrationTest(unittest.TestCase):
         self.assertFalse((self.root / "研究计划/rejected.md").exists())
 
     def test_feishu_cannot_bind_a_legacy_zotero_project_for_writes(self):
+        managed = Path(self.tmp.name) / "Zotero"
+        managed.mkdir()
+        (managed / "zotero.sqlite").touch()
         with workflow.WorkflowDB(self.db_path) as db:
             db.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?",
                           (str(Path(self.tmp.name) / "Zotero/library"), self.project_id))
@@ -126,7 +133,7 @@ class ProjectIntegrationTest(unittest.TestCase):
         self.assertEqual(result["status"], "completed", result)
         self.assertTrue(Path(result["output_path"]).is_relative_to(self.root))
         self.assertIn("今天的摘要", Path(result["output_path"]).read_text(encoding="utf-8"))
-        self.assertEqual(agent.call_args.kwargs["assistant_id"], "builtin-steward")
+        self.assertEqual(agent.call_args.kwargs["assistant_id"], "builtin-scheduler")
 
     def test_feishu_message_becomes_project_chat_and_duplicate_is_ignored(self):
         with workflow.WorkflowDB(self.db_path) as db:

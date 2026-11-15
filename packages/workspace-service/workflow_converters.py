@@ -879,7 +879,7 @@ def docx_to_pdf(src: Path) -> Path | None:
 
 
 def open_convert(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
-    """审查交付 → 格式转换接手：**只抛第一个问题**（图），后面两件由格式助手在对话里依次问，
+    """审查交付 → 格式转换接手：**只抛第一个问题**（图），后面两件由格式专家在对话里依次问，
     这样右栏是一问一答的对话，不是一口气砸三段。"""
     body = doc_read(db, task_id, "write")["markdown"]
     slots = re.findall(r"\[图位\s*(\d+)\]", body)
@@ -900,7 +900,7 @@ def open_convert(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
 
 
 def convert_system(db: "WorkflowDB", task_id: str) -> str:
-    """格式助手（格式转换这一步）的 system：三件事**一次只问一件**，问完全按模板编译。"""
+    """格式专家（格式转换这一步）的 system：三件事**一次只问一件**，问完全按模板编译。"""
     task = db.summary(task_id)["task"]
     figs = fig_list(db, task_id)["files"]
     tpl_lines = chr(10).join(f"- `{k}`：{v['name']} —— {v['note']}" + (f"（来源 {v['repo']}）" if v["repo"] else "")
@@ -908,7 +908,7 @@ def convert_system(db: "WorkflowDB", task_id: str) -> str:
     style_lines = chr(10).join(f"- `{k}`：{label}" + ("（本机没这个 bst，会退 plain）" if not _kpsewhich(bst + ".bst") else "")
                                for k, (bst, label) in CITE_STYLES.items())
     return (
-        "你是「览籍智研」里「格式转换」这一步的格式助手，用中文工作，站在排版工的位置。" + chr(10) + chr(10) +
+        "你是「览籍智研」里「格式转换」这一步的格式专家，用中文工作，站在排版工的位置。" + chr(10) + chr(10) +
         f"项目《{task['title']}》，你只做一件事：把「论文正文/正文.md」按用户要的格式与期刊模板导成成品，"
         "放进「最终产物」。" + chr(10) + chr(10) +
         "**开场必须依次问四件事，一次只问一件，拿到回答再问下一件**（不要一口气问完，也不要自己替用户定）：" + chr(10) +
@@ -928,9 +928,9 @@ def convert_system(db: "WorkflowDB", task_id: str) -> str:
 
 # ============================ 项目文件夹（三栏页第 11 项：看 / 预览 / 交给某一步）============================
 SKIP_NAMES = {"_work", "_parts", "_tex", "__pycache__", ".obsidian", ".git", ".agents", "node_modules"}
-HAND_STEPS = {"idea": "创新点审查助手", "search": "文献检索助手", "download": "入库助手",
-              "notes": "翻译助手", "outline": "框架助手", "map": "谱系助手",
-              "write": "写作助手", "review": "审查助手", "entrans": "中译英助手", "convert": "格式助手"}
+HAND_STEPS = {"idea": "创新点审查专家", "search": "文献检索专家", "download": "入库专家",
+              "notes": "翻译专家", "outline": "框架专家", "map": "谱系专家",
+              "write": "写作专家", "review": "审查专家", "entrans": "中译英专家", "convert": "格式专家"}
 
 
 def _fsize(n: int) -> str:
@@ -983,7 +983,7 @@ def tree_list(db: "WorkflowDB", task_id: str, rel: str = "") -> dict[str, Any]:
 
 
 def file_hand(db: "WorkflowDB", task_id: str, rel: str, step: str, note: str = "") -> dict[str, Any]:
-    """把项目里的一个文件转到某一步的对话里（scope=step）—— 那一步的助手下次开口就带着它。
+    """把项目里的一个文件转到某一步的对话里（scope=step）—— 那一步的专家下次开口就带着它。
     只写一条消息，不触发那一步跑模型（用户自己走到那一步时才会读到）。"""
     base = db.base_dir(task_id)
     if not base:
@@ -996,13 +996,13 @@ def file_hand(db: "WorkflowDB", task_id: str, rel: str, step: str, note: str = "
     if not p.is_relative_to(root) or not p.exists():
         raise ValueError("文件不在这项目里：" + (rel or ""))
     size = sum(c.stat().st_size for c in p.iterdir() if c.is_file()) if p.is_dir() else p.stat().st_size
-    msg = f"【文件管理助手转来】{p.relative_to(root).as_posix()}（{_fsize(size)}）" + (f"\n{note}" if note else "")
+    msg = f"【文件管理专家转来】{p.relative_to(root).as_posix()}（{_fsize(size)}）" + (f"\n{note}" if note else "")
     db.add_message(task_id, "user", msg, scope=step, sender="files")
     return {"ok": True, "step": step, "who": who, "name": p.name, "path": str(p), "size": size}
 
 
 def files_system(db: "WorkflowDB", task_id: str) -> str:
-    """文件管理助手（项目文件夹这一栏）的 system：整夹随便看，只读为主，要动手就交给对应那一步。"""
+    """文件管理专家（项目文件夹这一栏）的 system：整夹随便看，只读为主，要动手就交给对应那一步。"""
     task = db.summary(task_id)["task"]
     base = db.base_dir(task_id)
     try:
@@ -1012,12 +1012,12 @@ def files_system(db: "WorkflowDB", task_id: str) -> str:
     except Exception as exc:
         lines = f"（读不到目录：{exc}）"
     return (
-        "你是「览籍智研」三栏页「项目文件夹」这一栏的文件管理助手，用中文工作。" + chr(10) +
+        "你是「览籍智研」三栏页「项目文件夹」这一栏的文件管理专家，用中文工作。" + chr(10) +
         f"项目《{task['title']}》，文件夹 {base or '（这个项目还没设项目位置）'}。" + chr(10) + chr(10) +
         "用户会把文件拖进对话框、或在左边点选文件来问你。你要做的是：说清这是什么文件、里面有什么、"
         "和项目里别的文件对不对得上（比如正文和引用台账、图和图注）。" + chr(10) +
         "- 读内容用 read_attachment（自动认 md/txt/pdf/docx）；看目录/找文件用 file_list（rel 相对项目根）。" + chr(10) +
-        "- 用户说「交给 X 助手」→ 调 file_hand（rel + step + note），然后一句话说清转给了谁、那一步会拿它干什么。" +
+        "- 用户说「交给 X 专家」→ 调 file_hand（rel + step + note），然后一句话说清转给了谁、那一步会拿它干什么。" +
         "step 取值：" + "、".join(f"{k}={v}" for k, v in HAND_STEPS.items()) + "。" + chr(10) +
         "- 只读为主：改内容、挪位置、删除，都要用户明确说了才做，做之前先用一句话复述一遍。" + chr(10) +
         "- 不编造文件里没有的内容；找不到就说找不到，并列出你到底看了哪几个路径。" + chr(10) + chr(10) +

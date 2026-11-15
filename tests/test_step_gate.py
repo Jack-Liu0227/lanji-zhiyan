@@ -32,7 +32,7 @@ class StepGateTest(unittest.TestCase):
         got = step_plan(self.db, self.task, "outline")
         self.assertTrue(got.get("blocked"))
         self.assertEqual(got["prev"], STAGES[STAGES.index("outline") - 1])
-        self.assertEqual(got["prev_label"], "文献精读")
+        self.assertEqual(got["prev_label"], "论文翻译")
         self.assertEqual(self.db.messages(self.task, "outline"), [])   # 不写计划、不缓存空计划
 
     def test_交付后放行(self) -> None:

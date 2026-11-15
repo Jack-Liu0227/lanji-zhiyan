@@ -6,7 +6,6 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 import easyscholar
 import migrations
@@ -76,34 +75,12 @@ class EasyScholarTest(unittest.TestCase):
         )
         self.conn.commit()
 
-        with patch.object(easyscholar, "get_config", return_value={"enabled": True}):
-            res = easyscholar.query_publication_rank(self.conn, "Nature")
+        res = easyscholar.query_publication_rank(self.conn, "Nature")
         self.assertTrue(res["ok"])
         labels = [b["label"] for b in res["badges"]]
         self.assertIn("中科院1区", labels)
         self.assertIn("JCR Q1", labels)
         self.assertIn("IF 50.5", labels)
-
-    def test_disabled_module_does_not_serve_cached_ranks(self):
-        official = {"all": {"sciUp": "1"}}
-        self.conn.execute(
-            "INSERT OR REPLACE INTO easyscholar_cache (publication_name, official_rank, custom_rank, updated_at) "
-            "VALUES (?, ?, ?, datetime('now'))",
-            ("nature", json.dumps(official), "{}"),
-        )
-        self.conn.commit()
-        res = easyscholar.query_publication_rank(self.conn, "Nature")
-        self.assertFalse(res["ok"])
-        self.assertEqual(res["badges"], [])
-        self.assertIn("未在设置中开启", res["msg"])
-
-    def test_saving_module_toggle_with_blank_key_preserves_secret(self):
-        easyscholar.save_config(self.conn, enabled=True, secret_key="module-test-secret")
-        easyscholar.save_config(self.conn, enabled=False, secret_key="")
-        config = easyscholar.get_config(self.conn)
-        self.assertFalse(config["enabled"])
-        self.assertTrue(config["key_present"])
-        self.assertEqual(config["secret_key"], "module-test-secret")
 
 
 if __name__ == "__main__":

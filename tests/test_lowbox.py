@@ -18,6 +18,27 @@ import lowbox  # noqa: E402
 
 @unittest.skipUnless(lowbox.available() and os.environ.get("RW_TEST_LOWBOX"), "需要 Windows 且显式开启（会改临时目录完整性等级）")
 class LowBoxTest(unittest.TestCase):
+    def test_verified_low_root_is_readonly_and_changed_label_is_repaired(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        temporary = tempfile.TemporaryDirectory(prefix='lowbox-label-')
+        self.addCleanup(temporary.cleanup)
+        folder = Path(temporary.name)
+        self.assertTrue(lowbox.mark_low(folder, recursive=True))
+        self.assertTrue(lowbox.has_inheritable_low_label(folder))
+        with patch.object(lowbox.subprocess, 'run', side_effect=AssertionError('Repeated ACL rewrite')):
+            self.assertTrue(lowbox.mark_low(folder, recursive=False))
+        for label in ('M', 'L'):
+            with self.subTest(label=label):
+                result = lowbox.subprocess.run(['icacls', str(folder), '/setintegritylevel', label],
+                    capture_output=True, creationflags=0x08000000, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(lowbox.has_inheritable_low_label(folder))
+                self.assertTrue(lowbox.mark_low(folder, recursive=False))
+                self.assertTrue(lowbox.has_inheritable_low_label(folder))
+        self.assertFalse(lowbox.has_inheritable_low_label(folder / 'missing'))
+
     def test_granted_directory_writable_protected_directory_denied(self) -> None:
         import tempfile
         from pathlib import Path

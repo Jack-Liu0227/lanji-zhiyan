@@ -82,6 +82,7 @@ class AgentSettingsWebTest(unittest.TestCase):
         page.locator("#ag-p-apply").click()
         page.wait_for_selector("dialog.ag-modal", state="detached")
         page.wait_for_function("S.models.some(m=>m.model==='model-two')")
+        page.locator("[data-ag-provider]").wait_for()
         self.assertEqual(page.locator("[data-ag-provider]").count(), 1)
         page.locator("[data-ag-provider]").click()
         page.locator("#ag-p-show").click()

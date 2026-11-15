@@ -11,12 +11,30 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
     sys.path.insert(0, os.path.join(_ROOT, "packages", _n))
 import papertran  # noqa: E402
+from unittest.mock import patch
 # _splice 自检：第一段只取请求区间、第二段能把文档撑长、乱序并行缺页补空白。
 import pathlib
 import tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import pdfio
 from _pdf_fixture import write_text_pdf
+
+
+class NativeEngineSetupTest(unittest.TestCase):
+    def test_uninitialized_low_service_does_not_create_a_running_translation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            missing = root / 'missing.exe'
+            output = root / 'output'
+            with patch.object(papertran, 'pdf_path', return_value=root / 'input.pdf'), \
+                 patch.object(papertran, 'MANAGED_BABELDOC', missing), \
+                 patch.object(papertran, 'BABELDOC_EXE', missing), \
+                 patch.dict(os.environ, {'RW_LOW_SERVER': '1'}), \
+                 patch.object(papertran.os, 'name', 'nt'):
+                result = papertran.start(None, 'missing-engine-probe', output)
+            self.assertIn('初始化', result['error'])
+            self.assertFalse(output.exists())
+            self.assertNotIn('missing-engine-probe', papertran.JOBS)
 # _trim_tail 自检：超出已翻页数的尾部原页要删；范围内的页（哪怕是 fallback 的原文）不许动。
 
 

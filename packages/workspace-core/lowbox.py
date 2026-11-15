@@ -1,6 +1,6 @@
 """低完整性（Low IL）子进程：Windows 内核强制的「只能写授权目录」边界。
 
-为什么不是 AppContainer / 受限令牌（见 doc/plan/2026-10-20_真边界spike.md）：
+使用 Windows Low Integrity Level 限制子进程的写入范围，不依赖管理员权限：
   · AppContainer 从 Python 起子进程，SECURITY_CAPABILITIES 属性会被静默忽略 —— 出来的是**假沙箱**；
   · 受限令牌（S-1-5-12）连 python 都起不来（0xC0000142），System32 不认这个 SID 且改它要管理员。
 Low IL 不用管理员就能拿到真边界：Low 进程**写不了** Medium/High 的对象（内核拒绝），读不受限。
@@ -80,6 +80,16 @@ if available():
     _adv.ConvertStringSidToSidW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
     _adv.ConvertStringSidToSidW.restype = wintypes.BOOL
     _adv.CreateProcessAsUserW.restype = wintypes.BOOL
+    _adv.GetNamedSecurityInfoW.argtypes = [wintypes.LPWSTR, _DWORD, _DWORD,
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)]
+    _adv.GetNamedSecurityInfoW.restype = _DWORD
+    _adv.GetAce.argtypes = [ctypes.c_void_p, _DWORD, ctypes.POINTER(ctypes.c_void_p)]
+    _adv.GetAce.restype = wintypes.BOOL
+    _adv.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+    _adv.ConvertSidToStringSidW.restype = wintypes.BOOL
+    _k32.LocalFree.argtypes = [ctypes.c_void_p]
+    _k32.LocalFree.restype = ctypes.c_void_p
 
 
 def low_token():
@@ -101,9 +111,46 @@ def low_token():
     return dup
 
 
+def has_inheritable_low_label(path: str | os.PathLike[str]) -> bool:
+    """Read the current directory label without rewriting descendant ACLs."""
+    if not available():
+        return False
+    sacl, descriptor = ctypes.c_void_p(), ctypes.c_void_p()
+    try:
+        # SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION: no audit-SACL privilege needed.
+        code = _adv.GetNamedSecurityInfoW(str(path), 1, 0x10, None, None, None,
+                                         ctypes.byref(sacl), ctypes.byref(descriptor))
+        if code or not sacl.value:
+            return False
+        count = ctypes.c_ushort.from_address(sacl.value + 4).value
+        for index in range(count):
+            ace = ctypes.c_void_p()
+            if not _adv.GetAce(sacl, index, ctypes.byref(ace)) or not ace.value:
+                return False
+            kind, flags = ctypes.string_at(ace, 2)
+            # Both file and directory inheritance; applies to this root and propagates.
+            if kind != 0x11 or flags & 0x0F != 0x03:
+                continue
+            sid = wintypes.LPWSTR()
+            if _adv.ConvertSidToStringSidW(ace.value + 8, ctypes.byref(sid)):
+                try:
+                    if sid.value == LOW_SID:
+                        return True
+                finally:
+                    _k32.LocalFree(sid)
+        return False
+    except (OSError, ValueError):
+        return False
+    finally:
+        if descriptor.value:
+            _k32.LocalFree(descriptor)
+
+
 def mark_low(path: str | os.PathLike[str], recursive: bool = True) -> bool:
     """把目录标成 Low（含子项，用 /T）。Low 进程只有在这里才写得进去；Medium 进程照样能写。"""
     if os.name != "nt":
+        return True
+    if not recursive and has_inheritable_low_label(path):
         return True
     try:
         user = os.environ.get("USERNAME")
@@ -234,7 +281,7 @@ class LowProc:
 
 def sandbox_env(env: dict[str, str], tmpdir: str | os.PathLike[str]) -> dict[str, str]:
     """给 Low 子进程的环境：把 TEMP/TMP/TMPDIR 指到「已标 Low 的目录」。
-    实测（doc/plan/2026-10-20_真边界spike.md）：xelatex 的 PDF 后端要往 TEMP 写，
+    xelatex 的 PDF 后端要往 TEMP 写，
     TEMP 还在 Medium 时整份编译会失败；指进来就正常。顺带别让它写 __pycache__。"""
     out = dict(env)
     tmp = str(tmpdir)

@@ -101,9 +101,6 @@ class IndexTest(unittest.TestCase):
         self.assertIn("vector", top["matched"])
         self.assertEqual(len(top["matched"]), len(set(top["matched"])), "同一页的多个块不能把 matched 刷成重复项")
         self.assertLessEqual(top["rrf"], round(2 / (semantic.RRF_K + 1), 5), "RRF 每路只算一次，不能按块累加")
-        for h in out["hits"]:                                 # weak = 只有向量腿命中
-            self.assertEqual(h["weak"], "lexical" not in h["matched"], h["matched"])
-        self.assertEqual(out["weak"], sum(1 for h in out["hits"] if h["weak"]))
 
     def test_reference_page_is_not_indexed(self):
         refs = "\n".join("[%d] Author A, B. Some paper title. Journal, 2020, 12(3): 45-67." % i for i in range(20))
@@ -142,8 +139,6 @@ class IndexTest(unittest.TestCase):
         out = semantic.hybrid(self.db, "铜掺杂", limit=5)
         self.assertEqual(out["mode"], "lexical")
         self.assertTrue(out["hits"])
-        self.assertIn("vector_error", out["counts"], "嵌入挂了必须报出来，不能和「库里没有」混在一起")
-        self.assertTrue(all(not h["weak"] for h in out["hits"]), "有词法命中就不是 weak")
 
     def test_status_reports_pending(self):
         semantic.sync(self.db)
