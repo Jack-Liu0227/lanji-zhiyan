@@ -20,7 +20,7 @@
   }
   async function render(container, projectId, onChange, ticket) {
     const field = id => container.querySelector('#' + id);
-    const isCurrent = () => mounts.get(container) === ticket && container.isConnected && curTask === projectId && uiRouteIs('workspace') && spTab === 'papers';
+    const isCurrent = () => mounts.get(container) === ticket && container.isConnected && curTask === projectId && uiRouteIs('space') && spTab === 'papers';
     const error = message => { if (isCurrent() && field('integration-error')) field('integration-error').textContent = String(message?.message || message || ''); };
     async function call(path, body) {
       if (!isCurrent()) throw new Error('项目已切换，请在当前项目重新操作');

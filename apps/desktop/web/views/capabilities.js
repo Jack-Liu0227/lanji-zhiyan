@@ -278,6 +278,7 @@
               <span class="cap-item-name" title="${e(item.label || item.name)}">${e(item.label || item.name)}</span>
               <span class="pill cap-scope-pill ${item.scope === 'project' ? 'proj' : 'user'}">${item.scope === 'project' ? '项目' : '全局'}</span>
               ${section === 'mcp' ? `<span class="pill ${item.enabled ? 'on' : 'off'}">${item.enabled ? '启用' : '停用'}</span>` : ''}
+              ${item.installation ? `<span class="pill" title="${e(item.installation.source)}">已安装</span>` : ''}
             </div>
             <div class="cap-row-desc" title="${e(item.description || item.desc || '')}">${e(item.description || item.desc || '暂无说明')}</div>
           </div>
@@ -348,6 +349,7 @@
           <code id="cap-path-text" title="${e(item.path)}">${e(item.path)}</code>
           <button class="btn ghost cap-btn-sm" id="cap-copy-path">复制路径</button>
         </div>` : ''}
+        ${item.installation ? `<p class="hint" style="overflow-wrap:anywhere">安装来源：${e(item.installation.source)} · ${item.installation.files} 个文件 · ${e(item.installation.installed_at)}</p>` : ''}
 
         <div class="cap-detail-section">
           <h4 class="cap-section-title">功能说明</h4>
@@ -358,7 +360,7 @@
           <div class="cap-section-head">
             <div>
               <h4 class="cap-section-title">专家启用授权</h4>
-              <p class="hint" style="margin:2px 0 0">指定哪些助手在工作流与对话中可以使用此能力。勾选立即保存。</p>
+              <p class="hint" style="margin:2px 0 0">指定哪些专家在工作流与对话中可以使用此能力。勾选立即保存。</p>
             </div>
             <div class="cap-bulk-btns">
               <button class="cap-btn-mini on" id="cap-detail-all-on">全部启用</button>
@@ -621,6 +623,8 @@
           <button class="btn ${view === "list" ? "" : "ghost"}" data-cap-view="list">列表</button>
           <button class="btn ${view === "matrix" ? "" : "ghost"}" data-cap-view="matrix">专家启用矩阵</button>
           <button class="btn ghost" id="cap-refresh">刷新</button>
+          ${section === "skills" ? `<button class="btn" id="cap-install">安装技能</button>` : ""}
+          ${section === "skills" ? `<button class="btn ghost" id="cap-skill-sources">来源管理</button>` : ""}
           ${section === "mcp" ? `<button class="btn" id="cap-mcp-json">JSON 编辑 / 密钥</button>` : ""}
         </div>
         <p class="hint">
@@ -647,6 +651,14 @@
 
     host.querySelector("#cap-project").onchange = event => { projectId = event.target.value; selectedId = null; load(); };
     host.querySelector("#cap-search").oninput = event => { search = event.target.value; paint(host, meta); };
+    const installButton = host.querySelector("#cap-install");
+    if (installButton) installButton.onclick = () => window.SkillInstaller.open({
+      dialog, projectId, projects: S.tasks || [], onInstalled: update
+    });
+    const sourcesButton = host.querySelector("#cap-skill-sources");
+    if (sourcesButton) sourcesButton.onclick = () => window.SkillInstaller.open({
+      dialog, projectId, projects: S.tasks || [], onInstalled: update, initialTab: "sources"
+    });
     host.querySelectorAll("[data-cap-view]").forEach(button => button.onclick = () => { view = button.dataset.capView; selectedId = null; paint(host, meta); });
     host.querySelectorAll("[data-cap-cat]").forEach(b => b.onclick = () => { currentCategory = b.dataset.capCat; paint(host, meta); });
 
@@ -762,7 +774,7 @@
     });
     host.querySelectorAll("[data-cap-mcp-preview]").forEach(button => button.onclick = () => {
       const item = items.find(row => row.id === button.dataset.capMcpPreview);
-      dialog(item.name + " · MCP 工具", `<p class="hint">${item.tools.length ? "已发现工具；助手实际调用时会重新连接服务器。" : "尚未发现工具，请先明确点击“连接 / 拉取工具”。"}</p><pre>${e(JSON.stringify(item.tools, null, 2))}</pre>`);
+      dialog(item.name + " · MCP 工具", `<p class="hint">${item.tools.length ? "已发现工具；专家实际调用时会重新连接服务器。" : "尚未发现工具，请先明确点击“连接 / 拉取工具”。"}</p><pre>${e(JSON.stringify(item.tools, null, 2))}</pre>`);
     });
     if (selected) {
       const field = host.querySelector("#cap-search");

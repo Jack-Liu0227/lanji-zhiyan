@@ -3,10 +3,8 @@ const ProjectWorkspace = (() => {
   "use strict";
   const labels={ready:"可执行",draft:"已准备",queued:"排队中",running:"执行中",awaiting_review:"等待人工核查",delivered:"已交付",blocked:"等待处理",failed:"执行失败",cancelled:"已停止",waiting:"等待前置交付"};
   const resources={catalog:'统一资料库',manuscripts:'论文稿件',experiments:'实验记录',outputs:'交付产物',files:"文件",papers:"文献",notes:"笔记与成果",tasks:"任务与自动化",automation:"自动化",workflow:"LangGraph 工作流",plan:"进度与计划",stars:"论文星图",overview:"项目概况",search:"搜索项目资料",'node-result':'节点产物'};
-  const surfaces={chat:'目标对话',library:'统一资料库',workbench:'产物工作台',tasks:'任务与自动化',flow:'LangGraph 图流'};
-  // 主导航 4 项：概览(1.0 项目空间概览) / 统一资料库 / 任务与自动化 / LangGraph 图流
-  const PRIMARY=[['overview','概览','library','overview'],['library','统一资料库','library','catalog'],['tasks','任务与自动化','tasks','tasks'],['flow','LangGraph 图流','flow','workflow']];
-  const resourceSurface={catalog:'library',manuscripts:'library',experiments:'library',outputs:'library',files:'library',papers:'library',notes:'library',stars:'library',search:'library',tasks:'tasks',automation:'tasks',plan:'tasks',workflow:'flow',overview:'library','task-detail':'tasks','node-result':'workbench'};
+  const surfaces={overview:'概览',library:'统一资料库',tasks:'任务与自动化',flow:'LangGraph 图流'};
+  const resourceSurface={catalog:'library',manuscripts:'library',experiments:'library',outputs:'library',files:'library',papers:'library',notes:'library',stars:'library',search:'library',tasks:'tasks',automation:'tasks',plan:'tasks',workflow:'flow',overview:'overview','task-detail':'tasks','node-result':'tasks'};
   const states=new Map(), chats=new Map();
   let mounted=null, intent=null, generation=0, navigation=0, timer=null, restored=false;
   const h=value=>esc(String(value??""));
@@ -27,7 +25,7 @@ const ProjectWorkspace = (() => {
   const get=id=>{
     if(!states.has(id)){
       const saved=read("rw-workspace:"+id,{});if(saved.section==='tools')saved.section='workflow';if(saved.sections?.flow==='tools')saved.sections.flow='workflow';
-      states.set(id,{id,chatId:saved.chatId||"",section:saved.section||"overview",surface:surfaces[saved.surface]&&saved.surface!=='chat'?saved.surface:'library',sections:{library:'catalog',tasks:'tasks',flow:'workflow',...saved.sections},peek:false,navOpen:false,inspection:null,mode:saved.mode||"supervised",modeTouched:!!saved.modeTouched,scope:saved.scope||"project",target:saved.target||"",reading:false,
+      states.set(id,{id,chatId:saved.chatId||"",section:saved.section||"overview",surface:surfaces[saved.surface]?saved.surface:'overview',sections:{library:'catalog',tasks:'tasks',flow:'workflow',...saved.sections},peek:false,navOpen:false,inspection:null,mode:saved.mode||"supervised",modeTouched:!!saved.modeTouched,scope:saved.scope||"project",target:saved.target||"",reading:false,
         searchQuery:saved.searchQuery||"",navHidden:!!saved.navHidden,treeHidden:!!saved.treeHidden,drafts:read("rw-workspace-drafts:"+id,{}),fileRow:saved.fileRow||null,libraryFile:saved.libraryFile||saved.fileRow||null,nodeResultSelection:saved.nodeResultSelection||null,tasks:[],bindings:[],teams:[],targets:null,layout:null,project:null,review:null,filter:"",epoch:0,resourceEpoch:0,refreshing:false});
     }
     return states.get(id);
@@ -73,7 +71,7 @@ const ProjectWorkspace = (() => {
   }
   function projectOptions(id){return (S.tasks||[]).map(p=>`<option value="${h(p.id)}" ${p.id===id?"selected":""}>${h(p.title)}</option>`).join("");}
   function icon(name){
-    const paths={chat:'M4 4h16v11H9l-5 5V4Z',library:'M3 7h7l2-3h9v16H3V7Z',workbench:'M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7Zm0 4h20M8 11v8',tasks:'m4 6 2 2 4-4M13 6h7M4 13l2 2 4-4M13 13h7M4 20h16',flow:'M8 3h8v5H8V3ZM3 16h6v5H3v-5Zm12 0h6v5h-6v-5ZM12 8v4M6 16v-4h12v4',menu:'M4 6h16M4 12h16M4 18h16',back:'m10 5-7 7 7 7M3 12h18'};
+    const paths={chat:'M4 4h16v11H9l-5 5V4Z',library:'M3 7h7l2-3h9v16H3V7Z',workbench:'M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7Zm0 4h20M8 11v8',tasks:'m4 6 2 2 4-4M13 6h7M4 13l2 2 4-4M13 13h7M4 20h16',flow:'M8 3h8v5H8V3ZM3 16h6v5H3v-5Zm12 0h6v5h-6v-5ZM12 8v4M6 16v-4h12v4',overview:'M4 4h16v6H4V4Zm0 8h7v8H4v-8Zm9 0h7v8h-7v-8Z',menu:'M4 6h16M4 12h16M4 18h16',back:'m10 5-7 7 7 7M3 12h18'};
     return `<svg class="pw-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${paths[name]||paths.library}"/></svg>`;
   }
   function shell(state){
@@ -84,7 +82,7 @@ const ProjectWorkspace = (() => {
         <span class="pw-spacer"></span><div class="pw-counts" aria-label="项目任务状态"><button type="button" data-pw-filter="running" id="pwRunning">运行中 0</button><button type="button" data-pw-filter="review" id="pwPending">待确认 0</button><button type="button" data-pw-filter="attention" id="pwFailed">需处理 0</button></div>
         <button type="button" class="pw-project-manage pw-text-button" id="pwProjectCreate" title="新建项目" aria-label="新建项目">＋<span>新建项目</span></button><details class="pw-settings" id="pwProjectSettings"><summary>项目设置</summary><div class="pw-settings-menu"><button type="button" id="pwProjectEdit">编辑项目信息</button><button type="button" data-pw-view="overview">项目概况</button><button type="button" id="pwRebuildAssets">整理资料索引</button><button type="button" id="pwBindings">项目执行者与模式</button><button type="button" id="pwMembers">团队与成员</button><button type="button" id="pwExperts">管理专家</button><label>新任务模式<select class="control" id="pwMode" aria-label="新任务执行模式"><option value="supervised">人工核查</option><option value="full_access">Full access</option></select></label><p>仅影响新任务，已有运行保持原模式。</p></div></details>
       </header>
-      <nav class="pw-primary" role="tablist" aria-label="项目工作视图">${PRIMARY.map(([key,label,surface,section])=>`<button type="button" role="tab" id="pwTab-${key}" data-pw-tab="${key}" data-pw-tab-surface="${surface}" data-pw-tab-section="${section}" aria-selected="${state.surface===surface&&state.section===section}" aria-controls="pwWorkArea" tabindex="${state.surface===surface&&state.section===section?'0':'-1'}">${icon(surface)}<span>${label}</span></button>`).join('')}</nav>
+      <nav class="pw-primary" role="tablist" aria-label="项目工作视图">${Object.entries(surfaces).map(([id,label])=>`<button type="button" role="tab" id="pwTab-${id}" data-pw-surface="${id}" aria-selected="${state.surface===id}" aria-controls="pwWorkArea" tabindex="${state.surface===id?'0':'-1'}">${icon(id)}<span>${label}</span></button>`).join('')}</nav>
       <div class="pw-notice" id="pwNotice" role="status" aria-live="polite"></div><div class="pw-error" id="pwError" role="alert"></div>
       <div class="pw-layout">
         <button type="button" id="pwNavShade" class="pw-nav-shade" aria-label="关闭项目导航" hidden></button>
@@ -93,7 +91,7 @@ const ProjectWorkspace = (() => {
           <section data-pw-nav-group="chat" class="pw-nav-section"><button type="button" class="pw-new-chat" id="pwNewChat">＋ 新对话</button><div class="pw-sessions" id="pwSessions"></div></section>
           <section data-pw-nav-group="library" class="pw-nav-section"><form id="pwSearchForm" class="pw-search-form" role="search"><input type="search" class="control" id="pwSearchInput" aria-label="搜索当前项目资料" placeholder="搜索文献、笔记和进度…"><button type="submit" class="pw-text-button">搜索</button></form><button type="button" class="btn ghost" id="pwUploadFile">上传文件（也可拖入）</button><div class="pw-resource-links"><button type="button" data-pw-view="catalog">全部资料</button><button type="button" data-pw-view="files">目录与文件</button><button type="button" data-pw-view="papers" title="文献论文 (PDF)">文献论文 (PDF)</button><button type="button" data-pw-view="notes" title="研读笔记 (Markdown)">研究笔记 (Markdown)</button><button type="button" data-pw-view="stars" title="文献关联知识星图">论文星图</button></div><div id="pwSidebarTreeSlot"><div class="pw-file-tree" id="pwFileTree"></div></div></section>
 
-          <section data-pw-nav-group="workbench" class="pw-nav-section"><div class="pw-resource-links"><button type="button" data-pw-view="node-result">产物工作台</button></div><p class="pw-nav-help">按阶段查看、在线编辑并核查各个工作流节点的实际交付结果。</p></section>
+          <section data-pw-nav-group="overview" class="pw-nav-section"><div class="pw-resource-links"><button type="button" data-pw-view="overview">项目概况</button><button type="button" data-pw-view="plan">进度与计划</button><button type="button" data-pw-view="stars">论文星图</button><button type="button" data-pw-view="node-result">节点产物</button></div><p class="pw-nav-help">研究问题、十步科研管道、项目边界与最近步骤。</p></section>
           <section data-pw-nav-group="flow" class="pw-nav-section"><div class="pw-resource-links"><button type="button" data-pw-view="workflow">LangGraph 工作流</button></div><p class="pw-nav-help">在同一张图中配置节点、绑定执行者并跟踪交付。</p></section>
           <div class="pw-nav-project" id="pwNavProject">当前项目内协作</div>
         </nav>
@@ -119,10 +117,10 @@ const ProjectWorkspace = (() => {
     doc.hidden=state.surface==='chat'&&!state.peek;
     if(small&&state.surface==='chat'&&state.peek){doc.setAttribute('role','dialog');doc.setAttribute('aria-modal','true');}else{doc.removeAttribute('role');doc.removeAttribute('aria-modal');}
     document.getElementById('pwWorkArea').setAttribute('aria-labelledby','pwTab-'+state.surface);
-    node.querySelectorAll('[data-pw-tab]').forEach(b=>{const on=b.dataset.pwTabSurface===state.surface&&b.dataset.pwTabSection===state.section;b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1;});
+    node.querySelectorAll('[data-pw-surface]').forEach(b=>{const on=b.dataset.pwSurface===state.surface;b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1;});
     node.querySelectorAll('[data-pw-nav-group]').forEach(group=>group.hidden=group.dataset.pwNavGroup!==state.surface);
     node.querySelectorAll('[data-pw-view]').forEach(b=>b.setAttribute('aria-current',b.dataset.pwView===state.section&&state.surface===resourceSurface[state.section]?'page':'false'));
-    document.getElementById('pwNavTitle').textContent={chat:'项目对话',library:'项目资料',workbench:'产物工作台',tasks:'执行与交付',flow:'LangGraph 工作流'}[state.surface]||'项目资料';
+    document.getElementById('pwNavTitle').textContent={chat:'项目对话',overview:'项目概况',library:'项目资料',workbench:'产物工作台',tasks:'执行与交付',flow:'LangGraph 工作流'}[state.surface]||'项目资料';
     document.getElementById('pwNavShade').hidden=!small||!state.navOpen;
     document.getElementById('pwToggleNav').setAttribute('aria-expanded',String(small?state.navOpen:!state.navHidden&&!state.reading));
     const nav=document.getElementById('pwProjectNav');nav.inert=small?!state.navOpen:state.navHidden||state.reading;
@@ -152,7 +150,7 @@ const ProjectWorkspace = (() => {
     if(state.inspection?.origin==='task')state.fileRow=state.libraryFile;
     state.navOpen=false;state.reading=false;state.peek=false;state.inspection=null;
     if(surface==='chat'){state.resourceEpoch++;state.surface='chat';state.chatView='chat';persist(state);layoutPanels(state);paintChatView(state);document.getElementById('pwAsk').focus();return;}
-    await showResource(state.sections[surface]||{library:'files',workbench:'node-result',tasks:'tasks',flow:'workflow'}[surface],state);
+    await showResource(state.sections[surface]||{overview:'overview',library:'files',workbench:'node-result',tasks:'tasks',flow:'workflow'}[surface],state);
   }
   function closeNavigator(state){state.navOpen=false;persist(state);layoutPanels(state);document.getElementById('pwToggleNav').focus();}
 
@@ -219,8 +217,7 @@ const ProjectWorkspace = (() => {
     document.getElementById("pwProjectEdit").onclick=()=>ProjectManager.open({edit:true});
     root().querySelectorAll("[data-pw-view]").forEach(b=>b.onclick=()=>showResource(b.dataset.pwView,state));
     root().querySelectorAll('[data-pw-surface]').forEach(b=>b.onclick=()=>switchSurface(b.dataset.pwSurface,state));
-    root().querySelectorAll('[data-pw-tab]').forEach(b=>b.onclick=()=>{state.sections[b.dataset.pwTabSurface]=b.dataset.pwTabSection;switchSurface(b.dataset.pwTabSurface,state);});
-    root().querySelector('.pw-primary').onkeydown=e=>{const buttons=[...root().querySelectorAll('[data-pw-tab]')],i=buttons.indexOf(document.activeElement);if(i<0)return;let next;if(e.key==='ArrowRight')next=(i+1)%buttons.length;else if(e.key==='ArrowLeft')next=(i+buttons.length-1)%buttons.length;else if(e.key==='Home')next=0;else if(e.key==='End')next=buttons.length-1;else return;e.preventDefault();buttons[next].focus();};
+    root().querySelector('.pw-primary').onkeydown=e=>{const buttons=[...root().querySelectorAll('[data-pw-surface]')],i=buttons.indexOf(document.activeElement);if(i<0)return;let next;if(e.key==='ArrowRight')next=(i+1)%buttons.length;else if(e.key==='ArrowLeft')next=(i+buttons.length-1)%buttons.length;else if(e.key==='Home')next=0;else if(e.key==='End')next=buttons.length-1;else return;e.preventDefault();buttons[next].focus();};
     root().querySelectorAll("[data-pw-filter]").forEach(b=>b.onclick=()=>{state.filter=b.dataset.pwFilter;showResource("tasks",state);});
     document.getElementById("pwMode").value=state.mode;
     document.getElementById("pwMode").onchange=e=>{state.mode=e.target.value;state.modeTouched=true;persist(state);notice("已选择新任务模式。正在执行的任务仍按各自的运行模式处理。",state);};
@@ -541,6 +538,12 @@ const ProjectWorkspace = (() => {
     document.getElementById('pwFileToolbar').replaceChildren();
     const area=document.getElementById('pwResource');area.firstElementChild?.__nodeDispose?.();area.innerHTML='<div class="pw-resource-content"></div>';const host=area.firstElementChild;
     if(state.section!=='files')tree.innerHTML='';layoutPanels(state);
+    if(state.section==='overview'){
+      host.innerHTML='<div class="hint">正在读取项目概况…</div>';
+      try{const view=await window.SpaceOverview(state.id);if(!live(state)||state.section!=='overview')return;host.innerHTML=view.html;view.bind();}
+      catch(err){host.innerHTML='<div class="msg error">'+h(err.message||'读取项目概况失败')+'</div>';}
+      return;
+    }
     if(state.section==='node-result'){
       if(!state.nodeResultSelection){
         const eligibleTask=(state.tasks||[]).find(t=>WorkflowNodeWorkbench.eligible(t));

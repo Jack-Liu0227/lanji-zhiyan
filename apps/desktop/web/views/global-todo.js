@@ -98,7 +98,7 @@ const GlobalTodos = (() => {
   function openProject(todo){
     return uiNavigate(()=>{
       curTask=todo.task_id; spId=todo.task_id; spTab='plan';
-      localStorage.setItem('rw-task',curTask); openTab('workspace');
+      localStorage.setItem('rw-task',curTask); openTab('space');
     });
   }
   async function act(id, action){

@@ -1,20 +1,4 @@
 /* RSS configuration remains global and feeds the existing intelligence reader. */
-// 1.0 没有 2.0 的 Notebook 工具模块，这里补最小 dialog/error，下面 44 行原样照抄。
-window.Notebook=window.Notebook||(()=>{
-  function dialog(title,html){
-    const d=document.createElement('dialog');d.className='nb-dialog';
-    d.innerHTML=`<header><h3>${esc(title)}</h3><button type="button" class="pw-text-button" data-nb-close aria-label="关闭">×</button></header>${html}`;
-    d.querySelector('[data-nb-close]').onclick=()=>d.close();
-    d.addEventListener('close',()=>d.remove(),{once:true});
-    document.body.append(d);d.showModal();return d;
-  }
-  function error(host,err){
-    let p=host.querySelector('[data-nb-error]');
-    if(!p){p=document.createElement('p');p.className='pw-error';p.setAttribute('data-nb-error','');host.append(p);}
-    p.textContent=err?.message||String(err||'');
-  }
-  return {dialog,error};
-})();
 window.RSSSettings=(()=>{
   const h=value=>esc(String(value??''));
   if(!SET_SECS.some(section=>section[0]==='rss'))SET_SECS.splice(3,0,['rss','📡','RSS 订阅源']);
