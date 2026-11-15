@@ -3,6 +3,8 @@
 # 许可证一列是选型依据，见仓库 AGENTS.md：GPL/AGPL 只作参考，不作直接依赖
 pypdf==6.16.2            # BSD-3-Clause   页数 / 页面合并（pdfio.py）
 pdfplumber==0.11.10      # MIT            文本与词坐标（pdfio.py）
+Pillow==13.0.0          # MIT-CMU        图片格式转换与视觉输入
+pypdfium2==5.14.0       # Apache-2.0 / BSD-3-Clause  PDF 图片渲染
 python-docx==1.2.0       # MIT            导出 Word（workflow.py）
 pywebview==6.2.1         # BSD-3-Clause   桌面窗口（server.py；纯命令行跑服务不需要）
 PyYAML==6.0.3            # MIT            读配置（server.py）
@@ -10,3 +12,6 @@ pywin32==312             # PSF-2.0        可选：仅 installer.py 用，已包
 qrcode==8.2              # BSD-3-Clause   Local SVG QR codes for Feishu device authorization
 lark-oapi==1.7.5         # MIT            飞书长连接接收机器人消息
 numpy==2.2.6             # BSD-3-Clause   语义检索向量运算（semantic.py；万级块内暴力余弦，不引向量库）
+langgraph==1.2.18        # MIT            统一项目工作流的状态图调度，交付与恢复复用项目任务记录
+langgraph-checkpoint-sqlite==3.1.2  # MIT   Persistent local workflow cursors and human interrupts
+websockets==15.0.1      # BSD-3-Clause   与飞书 SDK 要求的 websockets<16 保持兼容
