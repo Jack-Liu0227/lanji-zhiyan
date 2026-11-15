@@ -91,8 +91,8 @@ const ProjectWorkspace = (() => {
           <section data-pw-nav-group="chat" class="pw-nav-section"><button type="button" class="pw-new-chat" id="pwNewChat">＋ 新对话</button><div class="pw-sessions" id="pwSessions"></div></section>
           <section data-pw-nav-group="library" class="pw-nav-section"><form id="pwSearchForm" class="pw-search-form" role="search"><input type="search" class="control" id="pwSearchInput" aria-label="搜索当前项目资料" placeholder="搜索文献、笔记和进度…"><button type="submit" class="pw-text-button">搜索</button></form><button type="button" class="btn ghost" id="pwUploadFile">上传文件（也可拖入）</button><div class="pw-resource-links"><button type="button" data-pw-view="catalog">全部资料</button><button type="button" data-pw-view="files">目录与文件</button><button type="button" data-pw-view="papers" title="文献论文 (PDF)">文献论文 (PDF)</button><button type="button" data-pw-view="notes" title="研读笔记 (Markdown)">研究笔记 (Markdown)</button><button type="button" data-pw-view="stars" title="文献关联知识星图">论文星图</button></div><div id="pwSidebarTreeSlot"><div class="pw-file-tree" id="pwFileTree"></div></div></section>
 
-          <section data-pw-nav-group="overview" class="pw-nav-section"><div class="pw-resource-links"><button type="button" data-pw-view="overview">项目概况</button></div><p class="pw-nav-help">研究问题、十步科研管道、项目边界与最近步骤。</p></section>
-          <section data-pw-nav-group="flow" class="pw-nav-section"><div class="pw-resource-links"><button type="button" data-pw-view="workflow">LangGraph 工作流</button></div><p class="pw-nav-help">在同一张图中配置节点、绑定执行者并跟踪交付。</p></section>
+
+
           <div class="pw-nav-project" id="pwNavProject">当前项目内协作</div>
         </nav>
         <section class="pw-main" id="pwWorkArea" role="tabpanel" aria-labelledby="pwTab-${state.surface}">
@@ -111,7 +111,9 @@ const ProjectWorkspace = (() => {
     if(!live(state))return;
     const node=root(),small=narrow(),chat=document.querySelector('.pw-chat'),doc=document.getElementById('pwDocumentPane');
     node.dataset.surface=state.surface;node.dataset.section=state.section;node.dataset.fileMode=typeof flCurrentMode!=='undefined'?flCurrentMode:'preview';
-    node.classList.toggle('pw-reading',state.reading);node.classList.toggle('pw-nav-closed',state.navHidden);node.classList.toggle('pw-nav-open',state.navOpen);node.classList.toggle('pw-peek',state.surface==='chat'&&state.peek);node.classList.toggle('pw-narrow',small);
+    node.classList.toggle('pw-reading',state.reading);
+    node.dataset.pwSidebar=state.surface==="library"?"on":"off";   // 只有统一资料库有左侧栏
+    if(state.surface!=="library")state.navOpen=false;node.classList.toggle('pw-nav-closed',state.navHidden);node.classList.toggle('pw-nav-open',state.navOpen);node.classList.toggle('pw-peek',state.surface==='chat'&&state.peek);node.classList.toggle('pw-narrow',small);
     chat.hidden=state.surface!=='chat';chat.inert=small&&state.surface==='chat'&&state.peek;
     document.getElementById('pwWorkArea').inert=small&&state.navOpen;
     doc.hidden=state.surface==='chat'&&!state.peek;

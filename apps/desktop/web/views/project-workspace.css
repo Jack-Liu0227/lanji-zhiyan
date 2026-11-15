@@ -298,3 +298,8 @@
 .project-workspace.pw-peek .pw-task-detail {
   padding: 16px;
 }
+
+/* 侧栏只在「统一资料库」出现：其余页签内容区铺满，☰ 也不再显示（navOpen 由 layoutPanels 复位，narrow 规则不会命中） */
+.project-workspace[data-pw-sidebar="off"] .pw-layout{grid-template-columns:minmax(0,1fr)}
+.project-workspace[data-pw-sidebar="off"] .pw-sidebar,.project-workspace[data-pw-sidebar="off"] #pwNavShade{display:none}
+.project-workspace[data-pw-sidebar="off"] .pw-nav-toggle{display:none}
