@@ -381,7 +381,10 @@ def _knowledge_query(db: "WorkflowDB", task_id: str, query: str, project: str = 
         import semantic
         out = semantic.hybrid(db, q, project_ids=ids if scoped else None, limit=20)
         if out.get("hits"):
-            return _fuse_literal(out, literal)
+            fused = _fuse_literal(out, literal)
+            if fused.get("weak") == len(fused["hits"]):     # 一条字面证据都没有
+                fused["note"] = "全是语义相似命中（weak=true），原文里没有这些词：不要当原文引用，没有就说没有。"
+            return fused
         reason = out.get("mode") or "empty"
     except Exception as exc:                              # 语义层是增强，不是前置依赖
         reason = "semantic_failed: %s" % exc
@@ -394,9 +397,10 @@ def _fuse_literal(out: dict[str, Any], literal: list[dict[str, Any]]) -> dict[st
     中文术语经常是「笔记写 Cu掺杂、用户问 铜掺杂」——向量能连上、trigram 连不上，
     所以把老的字面扫也并进 RRF，一个词对得上的笔记不会被长句查询挤下去。
     """
+    import semantic
     hits = {(h["kind"], h["id"], h.get("page_no") or 0): dict(h) for h in out["hits"]}
     for rank, h in enumerate(literal):
-        key = (h["kind"], h["id"], 0)                    # 笔记/证据没有页码，按源合并
+        key = (h["kind"], h["id"], h.get("page_no") or 0)   # 与语义腿同构，同一条不会被算成两条
         gain = 1.0 / (60 + rank + 1)
         if key in hits:
             hits[key]["rrf"] = round(hits[key]["rrf"] + gain, 5)
@@ -404,9 +408,10 @@ def _fuse_literal(out: dict[str, Any], literal: list[dict[str, Any]]) -> dict[st
                 hits[key]["matched"].append("literal")
         else:
             hits[key] = dict(h, rrf=round(gain, 5), matched=["literal"])
-    merged = sorted(hits.values(), key=lambda h: -h["rrf"])[:20]
+    merged = semantic.mark_weak(sorted(hits.values(), key=lambda h: -h["rrf"])[:20])
     mode = "hybrid" if literal else out["mode"]
-    return {**out, "hits": merged, "total": len(merged), "mode": mode}
+    return {**out, "hits": merged, "total": len(merged), "mode": mode,
+            "weak": sum(1 for h in merged if h["weak"])}
 
 
 def _knowledge_query_literal(db: "WorkflowDB", q: str, scope: list[tuple[str, str]],
@@ -422,7 +427,8 @@ def _knowledge_query_literal(db: "WorkflowDB", q: str, scope: list[tuple[str, st
                              "context": (n["markdown"] or "")[max(0, idx - 120): idx + 240]})
         for e in db.evidence(pid):
             if q in (e["value"] or "").lower() or q in (e["excerpt"] or "").lower() or q in (e["field"] or "").lower():
-                hits.append({"kind": "evidence", "project": ptitle, "field": e["field"], "value": e["value"],
+                hits.append({"kind": "evidence", "project": ptitle, "id": e["id"], "page_no": e["page_no"] or 0,
+                             "field": e["field"], "value": e["value"],
                              "citation": f"{e['filename']} p.{e['page_no']}", "context": e["excerpt"]})
     scope_ids = dict(scope)
     for note in db.md_notes():                                  # 笔记页那批「大笔记」
@@ -613,6 +619,29 @@ def enforce_project_scope(db: "WorkflowDB", project_id: str, name: str, args: di
             raise PermissionError("文献、笔记或检索结果不属于当前项目")
 
 
+_SUB_SUMMARY_CAP = 2000     # 摘要进父对话的字符上限；超了全文落盘，摘要里只留路径
+
+
+def _spill_sub_summary(spill_dir: Path | None, tag: str, summary: str) -> tuple[str, str]:
+    """超长摘要落盘，返回 (给父看的摘要, 落盘路径或空串)。
+
+    硬截断会从中间切掉结论（数字、产物路径常在正文后半段），父 agent 无从知道自己丢了东西。
+    ``spill_dir`` 由主线程预先算好：子线程用的是各自新开的连接，碰父连接会撞 sqlite 的同线程限制。
+    # ponytail: 全文堆在「其余」目录，子任务多了会积文件；嫌乱再按次运行建子目录
+    """
+    if len(summary) <= _SUB_SUMMARY_CAP:
+        return summary, ""
+    tail = f"\n\n…（摘要已截断，全文 {len(summary)} 字见 "
+    if spill_dir is None:
+        return summary[:_SUB_SUMMARY_CAP].rstrip() + tail + "（落盘目录不可用））", ""
+    try:
+        target = spill_dir / f"子任务摘要-{tag}-{time.strftime('%Y%m%d-%H%M%S')}.md"
+        target.write_text(summary, encoding="utf-8")
+    except Exception as exc:                       # 无权限/磁盘满：退化成截断，但不能让子任务算失败
+        return summary[:_SUB_SUMMARY_CAP].rstrip() + tail + f"（落盘失败：{exc}））", ""
+    return summary[:_SUB_SUMMARY_CAP].rstrip() + tail + f"{target}）", str(target)
+
+
 def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: Any = None,
               profile: dict[str, Any] | None = None, scope: str = "", parallel: int = 3) -> dict[str, Any]:
     """把子任务并行派给**独立上下文**的子 agent，只把摘要带回父对话。
@@ -628,6 +657,10 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
     if not jobs:
         return {"ok": False, "error": "delegate 需要至少一个子任务（jobs[].prompt）"}
     path = db.path
+    try:
+        spill_dir: Path | None = db.pdir(task_id, "其余")   # 主线程算一次：子线程各开新连接，不碰父连接
+    except Exception:
+        spill_dir = None
 
     sub_events: list[dict[str, Any]] = []          # 子 agent 的事件也回给父，回放（F5）时才有分行
 
@@ -650,7 +683,10 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
                 r = run_agent(cdb, task_id, str(job["prompt"]), emit=child_emit,
                               max_steps=int(job.get("max_steps") or 4), system=_DELEGATE_SYSTEM,
                               tools=_SUB_TOOLS, publish=False, scope=sid, profile=profile)
-            rec["summary"] = (r.get("reply") or "").strip()[:2000]
+            raw = (r.get("reply") or "").strip()
+            rec["summary"], spill_path = _spill_sub_summary(spill_dir, f"{i + 1}-{sid}", raw)
+            if spill_path:
+                rec["summary_path"] = spill_path
             rec["steps"] = len(r.get("events") or [])
         except Exception as exc:                               # 一个子 agent 崩了不影响其它
             rec["ok"] = False

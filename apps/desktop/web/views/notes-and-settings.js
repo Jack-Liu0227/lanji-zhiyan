@@ -1961,71 +1961,7 @@ refreshState().catch(e=>{ $("main").innerHTML=`<div class="msg error">加载失�
 const _hashRoute = (location.hash || "").replace(/^#\/?/, "");
 if (_hashRoute && TITLES[_hashRoute]) openTab(_hashRoute);
 
-/* ---------------- 情报日报（RSS，来源固定 5 个；读侧：
-     来源/关键词/年份三条件筛选 + 手动刷新） ---------------- */
-let itSrc = "", itQ = "", itYear = "", itItems = [], itTotal = 0, itTimer = 0, itSources = [];
-
-async function intelLoad(){
-  const p = new URLSearchParams({ source: itSrc, q: itQ, year: itYear });
-  const d = await api("/api/rss/items?" + p.toString());
-  itItems = d.items || []; itTotal = d.total || 0;
-}
-async function intelLoadSrcs(){
-  const d = await api("/api/rss/sources");
-  itSources = d.sources || [];
-  const opts = [`<option value="">全部来源</option>`].concat(
-    itSources.map(s=>`<option value="${s.id}" ${s.id===itSrc?"selected":""}>${esc(s.title)}（${s.count}）</option>`)).join("");
-  const sel = $("itSrc"); if(sel) sel.innerHTML = opts;
-}
-function intelPaintList(){
-  const box = $("itList"); if(!box) return;
-  const n = $("itCount"); if(n) n.textContent = `${itTotal} 条`;
-  box.innerHTML = itItems.length ? itItems.map(r=>`
-    <div class="it-row">
-      <a class="it-t" href="${esc(r.link)}" target="_blank" rel="noreferrer">${esc(r.title)}</a>
-      <div class="it-m">${esc(r.authors || "作者未知")} · ${esc((r.published_at || "").slice(0,10) || "日期未知")} · ${esc(r.source_title || "")}</div>
-      ${r.summary ? `<div class="it-s">${esc(r.summary)}</div>` : ""}
-    </div>`).join("")
-    : `<div class="hint">${itTotal ? "暂无匹配条目，换个条件或清掉筛选。" : "还没有数据：点右上「刷新」抓一批。"}</div>`;
-}
-async function intelRefresh(){
-  const btn = $("itGo"); if(!btn || btn.disabled) return;
-  const msg = $("itMsg");
-  btn.disabled = true; btn.textContent = "抓取中…";
-  if(msg) msg.textContent = "正在抓取 5 个来源…";
-  try{
-    const r = await api("/api/rss/refresh", {});
-    const fail = (r.failures || []).length ? `；失败 ${r.failures.length} 个（${r.failures.map(f=>f.title).join("、")}）` : "";
-    if(msg) msg.textContent = `已抓取 ${r.fetched}/${r.sources} 个来源，新增 ${r.added} 条${fail}`;
-    await intelLoadSrcs(); await intelLoad(); intelPaintList();
-  }catch(e){ if(msg) msg.textContent = "刷新失败：" + e.message; }
-  btn.disabled = false; btn.textContent = "刷新";
-}
-function intelFilterDebounced(){
-  clearTimeout(itTimer);
-  itTimer = setTimeout(async ()=>{
-    try{ await intelLoad(); intelPaintList(); }
-    catch(e){ const m = $("itMsg"); if(m) m.textContent = "查询失败：" + e.message; }
-  }, 300);
-}
+/* ---------------- 情报日报（照抄 2.0 intelligence-view.js） ---------------- */
 async function renderIntel(m){
-  m.innerHTML = `
-    <div class="card intel">
-      <div class="it-head"><h3>情报日报 <span class="pill" id="itCount">…</span></h3>
-        <button class="btn" id="itGo">刷新</button></div>
-      <div class="it-bar">
-        <select id="itSrc" class="control"><option value="">全部来源</option></select>
-        <input id="itQ" placeholder="关键词（标题 / 摘要 / 作者）">
-        <input id="itYear" placeholder="年份" inputmode="numeric">
-      </div>
-      <div class="hint" id="itMsg"></div>
-      <div class="it-list" id="itList"></div>
-    </div>`;
-  $("itGo").onclick = intelRefresh;
-  $("itQ").oninput = (e)=>{ itQ = e.target.value.trim(); intelFilterDebounced(); };
-  $("itYear").oninput = (e)=>{ itYear = e.target.value.trim(); intelFilterDebounced(); };
-  $("itSrc").onchange = async (e)=>{ itSrc = e.target.value; await intelLoad(); intelPaintList(); };
-  try{ await intelLoadSrcs(); await intelLoad(); }
-  catch(e){ m.querySelector("#itList").innerHTML = `<div class="hint">读不到数据：${esc(e.message)}</div>`; return; }
-  intelPaintList();
+  await IntelligenceView.render(m);
 }

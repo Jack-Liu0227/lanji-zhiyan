@@ -10,7 +10,7 @@ from research_core import ManagedConnection, ResearchDB
 
 class CoreTest(unittest.TestCase):
     def test_ingest_is_hash_deduplicated_and_evidence_keeps_page(self):
-        with tempfile.TemporaryDirectory() as td:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             root = Path(td); pdf = root / "paper.pdf"
             write_text_pdf(pdf, ["CuO material was sintered at 800 C and reached 120 MPa."])
             db = ResearchDB(root / "research.sqlite3")
@@ -36,7 +36,7 @@ class CoreTest(unittest.TestCase):
 
 class TransactionTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-research-core-test-")
+        self.tmp = tempfile.TemporaryDirectory(prefix="rw-research-core-test-", ignore_cleanup_errors=True)
         self.db_path = Path(self.tmp.name) / "test.sqlite3"
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row

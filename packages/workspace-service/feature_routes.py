@@ -1,10 +1,8 @@
-"""业务扩展路由：easyScholar 分区、Zotero MCP、项目待办 (TODO)、项目空间搜索与笔记预览。"""
+"""业务扩展路由：工作流运行、项目待办与项目空间搜索。"""
 from __future__ import annotations
 
 from typing import Any
 
-import capabilities
-import easyscholar
 import project_todos
 import space_service
 import asset_service
@@ -12,6 +10,13 @@ import run_service
 
 
 def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[str]], db: Any) -> Any | None:
+    # ---------------- 论文工具箱（图片图注/转换、翻译、润色、引文、格式转换、PDF 翻译） ----------------
+    if path.startswith("/api/paper-toolbox"):
+        import paper_toolbox
+        response = paper_toolbox.route(method, path, body, query, db)
+        if response is not None:
+            return response
+
     # ---------------- 0. Canonical assets and resumable workflow runs ----------------
     if path == "/api/assets" and method == "GET":
         project_id = (query.get("project_id") or [""])[0]
@@ -55,43 +60,7 @@ def route(method: str, path: str, body: dict[str, Any], query: dict[str, list[st
         import agent_jobs
         return agent_jobs.recover(db.path)
 
-    # ---------------- 1. easyScholar ----------------
-    if path == "/api/easyscholar/config" and method == "GET":
-        conn = db.db if hasattr(db, "db") else db
-        return easyscholar.get_config(conn)
-
-    if path == "/api/easyscholar/config" and method == "POST":
-        conn = db.db if hasattr(db, "db") else db
-        return easyscholar.save_config(
-            conn,
-            enabled=bool(body.get("enabled", True)),
-            secret_key=str(body.get("secret_key", "")),
-            options=body.get("options") if isinstance(body.get("options"), dict) else None,
-        )
-
-    if path == "/api/easyscholar/test" and method == "POST":
-        return easyscholar.test_connection(str(body.get("secret_key", "")))
-
-    if path == "/api/easyscholar/rank" and method == "GET":
-        conn = db.db if hasattr(db, "db") else db
-        journal = (query.get("journal") or query.get("name") or [""])[0]
-        refresh = (query.get("refresh") or ["0"])[0] in ("1", "true", "True")
-        return easyscholar.query_publication_rank(conn, journal, force_refresh=refresh)
-
-    # ---------------- 2. Zotero MCP ----------------
-    if path == "/api/zotero/mcp/status" and method == "GET":
-        cfg = capabilities._config(db)
-        z_srv = cfg.get("mcpServers", {}).get("zotero") or {}
-        return {
-            "registered": bool(z_srv),
-            "enabled": bool(z_srv.get("enabled", False)),
-            "server": z_srv,
-        }
-
-    if path == "/api/zotero/mcp/enable" and method == "POST":
-        return capabilities.ensure_zotero_mcp(db)
-
-    # ---------------- 3. 项目待办 (TODO) 与 看板概览 (Kanban) ----------------
+    # ---------------- 2. 项目待办 (TODO) 与 看板概览 (Kanban) ----------------
     if path == "/api/kanban/overview" and method == "GET":
         task_id = (query.get("task_id") or [""])[0]
         return project_todos.kanban_overview(db, task_id)

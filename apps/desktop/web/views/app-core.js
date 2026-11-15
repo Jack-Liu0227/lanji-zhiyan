@@ -148,13 +148,14 @@ const NAV = [
   {g:"solo",items:[
     {id:"library",label:"知识库",ico:"📚"},
     {id:"workflow",label:"科研平台",ico:"🔬"},
+    {id:"toolbox",label:"论文工具箱",ico:"🧰"},
     {id:"schedules",label:"定时任务",ico:"⏰"},
 
     {id:"intel",label:"情报日报",ico:"📡"}]},
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {assistants:"专家",team:"团队",agent:"智研管家",calendar:"日历",tasks:"项目管理",workflow:"科研平台",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
+const TITLES = {assistants:"专家",team:"团队",agent:"智研管家",calendar:"日历",tasks:"项目管理",workflow:"科研平台",toolbox:"论文工具箱",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时任务",space:"项目空间",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 
 function openTab(r, title){
@@ -222,6 +223,25 @@ function renderSidebar(){
 const FRAMELESS = new URLSearchParams(location.search).has("pw");
 let winZoom = true;                    // 窗口现在是不是铺满工作区 → 决定右上那个键画「最大化」还是「还原」
 let winStateAsked = false;
+/* 无边框窗的边缘拖拽。
+   WS_THICKFRAME 会每边吃掉 7px 客户区（页面顶上露一条非客户区色带），而 WebView2 是
+   填满客户区的子窗口，边缘命中测试到不了主窗口。所以页面自己铺一圈 5px 热区，按下时让
+   宿主发 WM_NCLBUTTONDOWN —— DefWindowProc 照样跑标准 resize 循环，且没有黑边。 */
+function mountResizeEdges(){
+  if(!FRAMELESS || document.getElementById("rz")) return;
+  const EDGES = ["top","bottom","left","right","topleft","topright","bottomleft","bottomright"];
+  const box = document.createElement("div");
+  box.id = "rz";
+  box.innerHTML = EDGES.map(e=>`<i data-e="${e}"></i>`).join("");
+  document.body.append(box);
+  box.querySelectorAll("i").forEach(el=>{          // 按下时才找 api：pywebviewready 可能在启动之后
+    el.addEventListener("mousedown", ev=>{
+      ev.preventDefault(); ev.stopPropagation();
+      const py = window.pywebview && window.pywebview.api;
+      if(py && py.resize) py.resize(el.dataset.e).catch(()=>{});
+    });
+  });
+}
 function winCommand(action){
   // 所有窗口命令都优先走 pywebview js_api（=宿主进程）。HTTP 服务跑在 Low IL 沙箱里，
   // UIPI 会静默拦掉它对中完整性窗口的 ShowWindow / SetWindowPos / WM_CLOSE（全是「点了没反应」）。
@@ -449,3 +469,5 @@ function skinSelects() {
   addEventListener("resize", close);
 }
 skinSelects();
+
+if(FRAMELESS) mountResizeEdges();

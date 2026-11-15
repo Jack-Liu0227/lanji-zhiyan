@@ -76,16 +76,14 @@ def _powershell(script: str, **env: str) -> subprocess.CompletedProcess:
 
 
 def _stop_installed_app(exe: Path) -> None:
+    # 不用 Get-CimInstance：它遍历全部进程时，遇到受保护进程会让
+    # $ErrorActionPreference='Stop' 直接抛，整个安装中止。Get-Process 取 Path 够用。
     _powershell(
-        "$ErrorActionPreference='Stop';"
-        "$apps=@(Get-CimInstance Win32_Process | Where-Object {"
-        "$_.ExecutablePath -eq $env:LANJI_INSTALL_EXE});"
-        "foreach($item in $apps){"
-        "$p=Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue;"
-        "if($p){[void]$p.CloseMainWindow()}};"
-        "foreach($item in $apps){"
-        "$p=Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue;"
-        "if($p -and !$p.WaitForExit(5000)){Stop-Process -Id $p.Id -Force}}",
+        "$target=$env:LANJI_INSTALL_EXE;"
+        "$apps=@(Get-Process -ErrorAction SilentlyContinue | Where-Object {"
+        "try{$_.Path -eq $target}catch{$false}});"
+        "foreach($p in $apps){try{[void]$p.CloseMainWindow()}catch{}};"
+        "foreach($p in $apps){try{if(!$p.WaitForExit(5000)){Stop-Process -Id $p.Id -Force}}catch{}}",
         LANJI_INSTALL_EXE=str(exe))
 
 

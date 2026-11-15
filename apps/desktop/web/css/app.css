@@ -2363,3 +2363,14 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .wf-page.min .wf-proj-min-btn {
   display: flex !important;
 }
+
+/* ===== 无边框窗的边缘拖拽热区（只在 pywebview 窗口里存在）===== */
+#rz i{position:fixed;z-index:2147483600}
+#rz i[data-e=top]{left:6px;right:6px;top:0;height:5px;cursor:n-resize}
+#rz i[data-e=bottom]{left:6px;right:6px;bottom:0;height:5px;cursor:s-resize}
+#rz i[data-e=left]{top:6px;bottom:6px;left:0;width:5px;cursor:w-resize}
+#rz i[data-e=right]{top:6px;bottom:6px;right:0;width:5px;cursor:e-resize}
+#rz i[data-e=topleft]{left:0;top:0;width:10px;height:10px;cursor:nw-resize}
+#rz i[data-e=topright]{right:0;top:0;width:10px;height:10px;cursor:ne-resize}
+#rz i[data-e=bottomleft]{left:0;bottom:0;width:10px;height:10px;cursor:sw-resize}
+#rz i[data-e=bottomright]{right:0;bottom:0;width:10px;height:10px;cursor:se-resize}

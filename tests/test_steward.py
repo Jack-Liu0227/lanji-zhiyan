@@ -21,7 +21,7 @@ from _pdf_fixture import write_text_pdf
 
 class StewardTest(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="steward-test-")
+        temporary = tempfile.TemporaryDirectory(prefix="steward-test-", ignore_cleanup_errors=True)
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.db = workflow.WorkflowDB(self.root / "app.sqlite3")

@@ -6,6 +6,7 @@ function render(){
   if(!S.loaded) m.innerHTML = `<div class="muted">加载中…</div>`;
   else if(r==="agent") renderAgent(m);
   else if(r==="workflow") renderWorkflow(m);
+  else if(r==="toolbox") { m.classList.add("sp-fill"); PaperToolbox.render(m); }
   else if(r==="tasks") renderTasks(m);
   else if(r==="space") renderSpace(m);
   else if(r==="calendar") renderCalendar(m);

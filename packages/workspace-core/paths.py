@@ -110,12 +110,17 @@ def _migrate_legacy_home(home: Path) -> dict:
 
 
 def home_dir() -> Path:
-    """数据根：LANJI_ZHIYAN_HOME > RW_HOME > %LOCALAPPDATA%\\览籍智研。"""
+    """数据根：LANJI_ZHIYAN_HOME > RW_HOME > %LOCALAPPDATA%\\览籍智研-1.0。
+
+    1.0 独占 ``览籍智研-1.0``：库一旦被 2.0 升到 035，1.0 的 migrations 只有 001-010，
+    `run_migrations` 会直接拒启；反过来 1.0 建的库 2.0 也认不了它的版本线。
+    两边共用 ``览籍智研`` 只会互相锁死，所以按版本分家。2.0 继续用 ``览籍智研``。
+    """
     override = _env(*HOME_ENV_VARS)
     if override:
         return Path(override).expanduser()
     base = _env("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    home = Path(base) / APP_NAME
+    home = Path(base) / f"{APP_NAME}-1.0"
     _migrate_legacy_home(home)
     return home
 

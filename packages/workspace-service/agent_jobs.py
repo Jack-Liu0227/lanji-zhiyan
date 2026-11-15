@@ -99,7 +99,10 @@ def _execute(db_path, run, request, step):
                     db.log_step(tid, step, "running", "恢复执行" if db.resuming else "开始执行")
                 runners = {"idea": workflow.run_idea, "outline": workflow.run_outline, "map": workflow.run_map,
                            "write": workflow.run_write, "review": workflow.run_review}
-                if step in runners:
+                if step == "paper_toolbox":                 # 论文工具箱：本机工具 + 单次模型调用，不记十步进度
+                    import paper_toolbox
+                    result = paper_toolbox.execute(db, request, emit)
+                elif step in runners:
                     result = runners[step](db, tid, request.get("message", ""), emit)
                 else:
                     wstep = step or str(request.get("step") or "")

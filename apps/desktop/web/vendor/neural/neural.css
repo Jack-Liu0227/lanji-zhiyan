@@ -190,12 +190,12 @@ main, .site-foot { position: relative; z-index: 1; }
 @keyframes dockIn { from { opacity: 0; transform: translate(-50%, 18px); } }
 .intro-done .dock, .intro-done .legend, .intro-done .hub-copy { animation-delay: 0s; animation-duration: .5s; }
 .dock-panel { padding: 10px 12px 10px; border-radius: 18px; border-color: rgba(208, 220, 255, .2); box-shadow: 0 0 0 1px rgba(208, 220, 255, .05), 0 0 40px rgba(208, 220, 255, .06), 0 24px 60px rgba(0, 0, 0, .45); }
-.dock-kpis { display: grid; grid-template-columns: repeat(4, 1fr); padding: 2px 4px 10px; }
+.dock-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); padding: 2px 4px 10px; }
 .dock-kpis div { display: grid; gap: 1px; padding: 0 10px; border-left: 1px solid var(--line); }
 .dock-kpis div:first-child { border-left: 0; padding-left: 4px; }
 .dock-kpis span { font-size: 10.5px; color: var(--text-2); white-space: nowrap; }
 .dock-kpis strong { font-size: 19px; font-weight: 600; }
-.dock-kpis div:nth-child(3) strong { color: #e8c884; }
+
 .ask { position: relative; display: flex; align-items: center; }
 .ask input { width: 100%; height: 42px; padding: 0 50px 0 18px; border-radius: 999px; border: 1px solid var(--line-2); background: rgba(255, 255, 255, .06); color: var(--text); outline: none; }
 .ask input:focus { border-color: rgba(232, 200, 132, .5); box-shadow: 0 0 0 3px rgba(232, 200, 132, .1); }

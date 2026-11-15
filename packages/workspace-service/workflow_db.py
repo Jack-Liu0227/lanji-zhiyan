@@ -295,6 +295,13 @@ class WorkflowDB(ResearchDB):
                         self.db.execute("ALTER TABLE chats ADD COLUMN assistant_id TEXT NOT NULL DEFAULT ''")
                     if "task_id" not in cols:                     # 老库补列：对话绑的项目（'' = 随意对话）
                         self.db.execute("ALTER TABLE chats ADD COLUMN task_id TEXT NOT NULL DEFAULT ''")
+                    # 老库补列：对话渠道与设置（论文工具箱要用 channel 区分处理记录）
+                    for _col, _ddl in (("channel", "TEXT NOT NULL DEFAULT ''"),
+                                       ("model_id", "TEXT NOT NULL DEFAULT ''"),
+                                       ("reasoning", "TEXT NOT NULL DEFAULT ''"),
+                                       ("permission", "TEXT NOT NULL DEFAULT ''")):
+                        if _col not in cols:
+                            self.db.execute(f"ALTER TABLE chats ADD COLUMN {_col} {_ddl}")
                     # 老库补列（早期版本 providers 只有 6 列）
                     cols = {r["name"] for r in self.db.execute("PRAGMA table_info(providers)")}
                     if "source" not in cols:

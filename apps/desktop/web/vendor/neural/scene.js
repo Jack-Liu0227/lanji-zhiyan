@@ -345,6 +345,19 @@ export function mount(root, api, opts = {}) {
     const enter = () => { L.hover = m.id; };
     const leave = () => { L.hover = null; L.hoverStar = null; };
     lab.addEventListener('click', (e) => {
+      // 重叠穿透：卡片压在一起时，点重叠区选「中心离鼠标最近」的那张，而不是 DOM 最上层那张。
+      // 前面那套避让已经消掉常规重叠，这里兜窄窗口 / 项目特别多时仍会叠的情况。
+      if (!lab.dataset.pass) {
+        const stack = document.elementsFromPoint(e.clientX, e.clientY)
+          .filter(x => x.classList && x.classList.contains('cluster-label'));
+        if (stack.length > 1) {
+          const near = stack.map(x => {
+            const r = x.getBoundingClientRect();
+            return {x, d: Math.hypot(r.left + r.width / 2 - e.clientX, r.top + r.height / 2 - e.clientY)};
+          }).sort((p, q) => p.d - q.d)[0].x;
+          if (near !== lab) { near.dataset.pass = '1'; near.click(); delete near.dataset.pass; return; }
+        }
+      }
       const wf = e.target.closest('[data-enter-wf]');
       if (wf) {
         e.stopPropagation();
@@ -408,7 +421,7 @@ export function mount(root, api, opts = {}) {
     const top = L.level === 'projects';
     const t = cache.totals || {};
     const kpis = top
-      ? [['项目', 'projects', L.subs.length], ['文献', 'papers', t.papers || 0],
+      ? [['文献', 'papers', t.papers || 0],
          ['笔记', 'notes', t.notes || 0], ['检索', 'candidates', t.candidates || 0]]
       : [['内容节点', 'nodes', graph.stats.content], ['连接', 'links', graph.stats.links],
          ['双向', 'mutual', graph.stats.mutual], ['关键词', 'keywords', graph.stats.concepts]];
@@ -1010,7 +1023,7 @@ export function mount(root, api, opts = {}) {
         const ly = clamp(ly0, 72, Math.max(72, L.size.h - lh - 10));
         lab.style.transform = `translate3d(${lx}px,${ly}px,0)`;
         lab.style.opacity = clamp(narrow && !hub && m.id !== L.mod ? 0 : lo, 0, 1);
-        j.label = {x: lx, y: ly, w: lw, h: lh};
+        j.label = {x: lx, y: ly, w: lw, h: lh, id: m.id};
       }
       // 星核 → 星团：金色星座线 + 缓慢流动的光粒，收在图形外沿上
       const g = refs.th[m.id];
@@ -1040,6 +1053,50 @@ export function mount(root, api, opts = {}) {
           c.style.opacity = L.reduced || L.paused ? 0 : vis * Math.sin(u * Math.PI);
         });
       }
+    });
+
+    // 标签避让：两两查重叠，撞上的上下错一行；纵向顶住了再左右各退一半。
+    // 原来卡片只按自己的尺寸朝外推、再 clamp 回边界，项目一多底部的就全被压在同一条底边上，
+    // z-index 又都是 2，被压住的那张永远点不到（用户报的「底部卡片遮盖」）。
+    // ponytail: O(n²·8) 每帧，n < 50 无所谓；n 再大按角度分桶只查相邻 ±2 个。
+    // 实测上限（1455×860，卡片 220×92）：n ≤ 15 能排开；n > 15 纵向横向都放不下，
+    // 那时只能缩小卡片或改 dock 布局 —— 见 tests/starmap_labels.test.mjs 的断言。
+    const boxes = L.subs.map(s => S.cluster[s.id] && S.cluster[s.id].label).filter(b => b && b.w);
+    const stepY = boxes.length ? boxes[0].h + 4 : 28;
+    const inter = (A, B) =>
+      Math.min(A.x + A.w, B.x + B.w) - Math.max(A.x, B.x) > 0 &&
+      Math.min(A.y + A.h, B.y + B.h) - Math.max(A.y, B.y) > 0;
+    for (let pass = 0; pass < 8; pass++) {
+      for (let a = 0; a < boxes.length; a++)          // ① 纵向错行：撞上就一个上一个下
+        for (let b = a + 1; b < boxes.length; b++) {
+          const A = boxes[a], B = boxes[b];
+          if (!inter(A, B)) continue;
+          if (A.y <= B.y) {
+            A.y = Math.max(72, A.y - stepY);
+            B.y = Math.min(L.size.h - B.h - 10, B.y + stepY);
+          } else {
+            A.y = Math.min(L.size.h - A.h - 10, A.y + stepY);
+            B.y = Math.max(72, B.y - stepY);
+          }
+        }
+      // ② 一维横排：y 还重叠的按 x 排序、从左往右怼开。两两对称推会来回振荡收敛不了。
+      const row = boxes.slice().sort((p, q) => p.x - q.x);
+      for (let i = 1; i < row.length; i++) {
+        const P = row[i - 1], C = row[i];
+        if (Math.min(P.y + P.h, C.y + C.h) - Math.max(P.y, C.y) <= 0) continue;
+        const minX = P.x + P.w + 4;
+        if (C.x < minX) C.x = Math.min(minX, L.size.w - C.w - 10);
+      }
+      for (let i = row.length - 2; i >= 0; i--) {
+        const Nx = row[i + 1], C = row[i];
+        if (Math.min(Nx.y + Nx.h, C.y + C.h) - Math.max(Nx.y, C.y) <= 0) continue;
+        const maxX = Nx.x - C.w - 4;
+        if (C.x > maxX) C.x = Math.max(10, maxX);
+      }
+    }
+    boxes.forEach(b => {
+      const lb = refs.lab[b.id];
+      if (lb) lb.style.transform = `translate3d(${b.x}px,${b.y}px,0)`;
     });
 
     // 选中簇 → 团内条目列队展开，星座线一根根显形

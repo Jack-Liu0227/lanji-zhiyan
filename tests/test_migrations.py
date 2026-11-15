@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import migrations
 
@@ -48,6 +49,23 @@ class MigrationsTest(unittest.TestCase):
         applied2 = migrations.run_migrations(self.conn, db_path=self.db_path)
         self.assertEqual(applied2, [])
 
+    def test_backup_failure_aborts_migration_before_schema_changes(self):
+        scripts = Path(self.tmp.name) / "scripts"
+        scripts.mkdir()
+        (scripts / "001_add_feature.sql").write_text(
+            "CREATE TABLE feature_data (id INTEGER);", encoding="utf-8")
+        self.conn.execute("CREATE TABLE existing_data (id INTEGER)")
+        self.conn.commit()
+
+        with patch.object(migrations, "backup_database", side_effect=OSError("disk full")):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                migrations.run_migrations(self.conn, migrations_dir=scripts, db_path=self.db_path)
+
+        self.assertIsNone(self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE name='feature_data'").fetchone())
+        self.assertIsNone(self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE name='schema_migrations'").fetchone())
+
     def test_missing_or_empty_scripts_fail_before_creating_partial_database(self):
         missing = Path(self.tmp.name) / "missing"
         for directory in (missing, Path(self.tmp.name)):
@@ -60,6 +78,53 @@ class MigrationsTest(unittest.TestCase):
         backup = migrations.backup_database(self.db_path)
         self.assertIsNotNone(backup)
         self.assertTrue(backup.is_file())
+    def test_backup_is_a_verified_pre_migration_snapshot(self):
+        self.conn.execute("CREATE TABLE existing_data (value TEXT)")
+        self.conn.execute("INSERT INTO existing_data VALUES ('keep')")
+        self.conn.commit()
+        scripts = Path(self.tmp.name) / "scripts"
+        scripts.mkdir()
+        (scripts / "001_add_feature.sql").write_text(
+            "CREATE TABLE feature_data (value TEXT);", encoding="utf-8")
+
+        migrations.run_migrations(self.conn, migrations_dir=scripts, db_path=self.db_path)
+
+        backups = list(Path(self.tmp.name).glob("test_mig.sqlite3.bak-*"))
+        self.assertEqual(len(backups), 1)
+        with sqlite3.connect(backups[0]) as backup:
+            self.assertEqual(backup.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+            self.assertEqual(backup.execute("SELECT value FROM existing_data").fetchone()[0], "keep")
+            self.assertIsNone(backup.execute(
+                "SELECT name FROM sqlite_master WHERE name='feature_data'").fetchone())
+
+    def test_failed_migration_rolls_back_its_schema_changes(self):
+        scripts = Path(self.tmp.name) / "scripts"
+        scripts.mkdir()
+        (scripts / "001_broken.sql").write_text(
+            "CREATE TABLE partial_change (id INTEGER); CREATE TABLE partial_change (id INTEGER);",
+            encoding="utf-8")
+
+        with self.assertRaisesRegex(RuntimeError, "Migration failed"):
+            migrations.run_migrations(self.conn, migrations_dir=scripts)
+
+        self.assertIsNone(self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE name='partial_change'").fetchone())
+        self.assertEqual(self.conn.execute("SELECT version FROM schema_migrations").fetchall(), [])
+
+    def test_checksum_drift_is_rejected_before_any_pending_migration(self):
+        scripts = Path(self.tmp.name) / "scripts"
+        scripts.mkdir()
+        migration = scripts / "001_base.sql"
+        migration.write_text("CREATE TABLE base_data (id INTEGER);", encoding="utf-8")
+        migrations.run_migrations(self.conn, migrations_dir=scripts)
+        migration.write_text("CREATE TABLE base_data (id INTEGER, value TEXT);", encoding="utf-8")
+        (scripts / "002_next.sql").write_text("CREATE TABLE next_data (id INTEGER);", encoding="utf-8")
+
+        with self.assertRaisesRegex(RuntimeError, "checksum mismatch"):
+            migrations.run_migrations(self.conn, migrations_dir=scripts)
+
+        self.assertIsNone(self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE name='next_data'").fetchone())
 
 
 if __name__ == "__main__":
