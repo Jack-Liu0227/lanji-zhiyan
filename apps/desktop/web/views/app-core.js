@@ -312,12 +312,19 @@ function mountResizeEdges(){
   });
 }
 function winCommand(action){
-  // 关闭时页面会消失，JS 桥接无法再回传结果；通过宿主 HTTP 通道关闭。
-  if(action === "close") return api("/api/win/close", {});
-  // 其余窗口命令优先走 pywebview js_api（=宿主进程）。HTTP 服务跑在 Low IL 沙箱里，
-  // UIPI 会静默拦掉它对中完整性窗口的 ShowWindow / SetWindowPos / WM_CLOSE（全是「点了没反应」）。
+  // 窗口命令一律先走 pywebview js_api（=宿主进程，Medium）。HTTP 服务跑在 Low IL 沙箱里，
+  // UIPI 会**静默丢掉**它对中完整性窗口的 ShowWindow / SetWindowPos / WM_CLOSE ——
+  // 症状就是「点了没反应」，而且 HTTP 还回 200（实测 2026-11-15）。
+  // 关闭时页面会立刻消失、回执拿不到，所以 close 不等返回，直接当成功。
   const py = window.pywebview && window.pywebview.api;
-  return Promise.resolve(py && py.win ? py.win(action) : api("/api/win/" + action, {}));
+  if(py && py.win){
+    if(action === "close"){
+      try{ const r = py.win(action); if(r && r.catch) r.catch(()=>{}); }catch(e){}
+      return Promise.resolve({ok:action});
+    }
+    return Promise.resolve(py.win(action)).catch(()=>api("/api/win/" + action, {}));
+  }
+  return api("/api/win/" + action, {});      // 桥没起来（极早期点击）才退回 HTTP
 }
 function renderTopbar(){
   $("topbar").innerHTML = `

@@ -89,6 +89,37 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
         self.assertEqual(self.page.locator('[data-pwg-label]').input_value(),'Custom translation')
         self.assertEqual(self.errors,[])
 
+    def test_deleting_middle_node_reconnects_chain_and_switching_saves_it(self):
+        self.load_workspace()
+        project = self.page.evaluate('curTask')
+        layout_id = self.page.evaluate("""async project => {
+          const {layout} = await api('/api/workflow/layouts/save', {
+            name: 'Delete middle node',
+            nodes: ['idea','search','review'].map(id => ({id, step:id, label:id})),
+            edges: [{source:'idea',target:'search'}, {source:'search',target:'review'}]
+          });
+          await api('/api/workflow/layouts/select', {
+            task_id:project, layout_id:layout.id, node_id:'search'
+          });
+          await openTab('workflow');
+          return layout.id;
+        }""", project)
+        self.page.evaluate("window.uiConfirm = async () => true")
+        self.assertEqual(self.page.locator('[data-pwg-label]').input_value(), 'search')
+        self.page.locator('[data-pwg-remove]').click()
+        self.page.locator('[data-wfl-node="search"]').wait_for(state='detached')
+        picker = self.page.locator('#pwWorkflowChoice')
+        picker.select_option('builtin.workflow.research')
+        self.page.locator('[data-wfl-node="search"]').wait_for()
+        picker.select_option(layout_id)
+        self.page.locator('[data-wfl-node="search"]').wait_for(state='detached')
+        self.page.locator('[data-wfl-node="review"]').wait_for()
+        state = self.page.request.get(self.url + 'api/workflow/layouts/state?task_id=' + project).json()
+        self.assertEqual(state['layout']['id'], layout_id)
+        self.assertEqual(state['layout']['order'], ['idea', 'review'])
+        self.assertEqual(state['layout']['edges'], [{'source':'idea', 'target':'review'}])
+        self.assertEqual(self.errors, [])
+
     def test_settings_step_change_updates_default_label_and_keeps_custom_label(self):
         self.load_workspace()
         self.page.evaluate("setSec='workflows'; openTab('settings'); render()")

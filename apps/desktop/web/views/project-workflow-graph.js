@@ -4,6 +4,26 @@ const ProjectWorkflowGraph=(()=>{
   let current=null;
   function dirty(){return !!current?.host.isConnected&&current.changed;}
   async function flush(){return !dirty()||await current.save();}
+  // ponytail: 拖拽重排只支持线性链（edges 恰好构成一条链）。分支流程用右侧“前置节点”改连线。
+  function chainOrder(layout){
+    const nodes=layout.nodes||[],edges=layout.edges||[];
+    if(!nodes.length||edges.length!==nodes.length-1)return null;
+    const ids=new Set(nodes.map(node=>node.id)),out=new Map(),inn=new Map();
+    for(const edge of edges){
+      if(!ids.has(edge.source)||!ids.has(edge.target))return null;
+      out.set(edge.source,(out.get(edge.source)||0)+1);inn.set(edge.target,(inn.get(edge.target)||0)+1);
+    }
+    if(nodes.some(node=>(out.get(node.id)||0)>1||(inn.get(node.id)||0)>1))return null;
+    const head=nodes.filter(node=>!inn.get(node.id));
+    if(head.length!==1)return null;
+    const order=[];let cursor=head[0];
+    while(cursor&&order.length<=nodes.length){
+      order.push(cursor.id);
+      const next=edges.find(edge=>edge.source===cursor.id);
+      cursor=next&&nodes.find(node=>node.id===next.target);
+    }
+    return order.length===nodes.length?order:null;
+  }
   async function mount(host,options){
     host.__graphDispose?.();
     const state={host,changed:false,selected:'',mode:'config',layout:null,data:null,bindings:[],run:null,tasks:[],save:null};current=state;
@@ -59,7 +79,7 @@ const ProjectWorkflowGraph=(()=>{
         const source=state.mode==='run'&&state.run?state.run.layout:state.layout;
         const ordered=new Map(source.nodes.map(node=>[node.id,node])),level=new Map(),pending=new Set(ordered.keys());
         for(let loop=0;pending.size&&loop<source.nodes.length;loop++)for(const id of [...pending]){const parents=source.edges.filter(edge=>edge.target===id).map(edge=>edge.source);if(parents.every(id=>level.has(id))){level.set(id,Math.max(-1,...parents.map(id=>level.get(id)))+1);pending.delete(id);}}
-        return {...source,selected_node:state.selected,nodes:source.nodes.map(node=>{const taskId=state.run?.settings?.task_ids?.[node.id],task=state.tasks.find(task=>task.id===taskId);return {...node,level:level.get(node.id)||0,status:state.mode==='run'?task?.status||'pending':'pending',result_available:state.mode==='run'&&WorkflowNodeWorkbench.eligible(task)};})};
+        return {...source,selected_node:state.selected,nodes:source.nodes.map(node=>{const taskId=state.run?.settings?.task_ids?.[node.id],task=state.tasks.find(task=>task.id===taskId),owner=state.bindings.find(item=>item.id===node.executor_binding_id),hasResult=state.mode==='run'&&WorkflowNodeWorkbench.eligible(task);return {...node,level:level.get(node.id)||0,status:state.mode==='run'?task?.status||'pending':'pending',owner_name:owner?.display_name||'',output_label:hasResult?'可查看产物':'',result_available:hasResult};})};
       }
       function drawMember(node){
         const binding=state.bindings.find(item=>item.id===el('binding').value),team=state.teams.find(team=>team.id===binding?.target_id);
@@ -90,9 +110,27 @@ const ProjectWorkflowGraph=(()=>{
           el('kind').value=node.node_kind||'executor';el('template').value=node.workflow_template_id||'';
           const showKind=()=>{const nested=el('kind').value==='workflow';el('tool-fields').hidden=el('kind').value!=='tool';el('template-fields').hidden=!nested;for(const key of ['binding','member','prompt'])el(key).closest('label').hidden=nested;el('tools').closest('details').hidden=nested;};showKind();el('kind').onchange=()=>{state.changed=true;showKind();if(el('kind').value==='workflow')el('step').value='task';};
           drawMember(node);el('binding').onchange=()=>{state.changed=true;node.member_id='';drawMember(node);};
-          el('inspector').querySelectorAll('input,select,textarea').forEach(input=>input.addEventListener('input',()=>{state.changed=true;}));
+          el('inspector').querySelectorAll('input,select,textarea').forEach(input=>input.addEventListener('input',()=>{state.changed=true;refreshSaveTop();}));
           el('save').onclick=state.save;
-          el('remove').onclick=async()=>{if(!await uiConfirm('删除节点「'+node.label+'」以及它的依赖连线？'))return;state.layout.nodes=state.layout.nodes.filter(item=>item.id!==node.id);state.layout.edges=state.layout.edges.filter(edge=>edge.source!==node.id&&edge.target!==node.id);state.selected=state.layout.nodes[0].id;state.changed=true;draw();};
+          el('remove').onclick=async()=>{
+            const order=chainOrder(state.layout);
+            const index=order?.indexOf(node.id);
+            const previous=order?.[index-1],next=order?.[index+1];
+            const prompt=previous&&next
+              ? '删除节点「'+node.label+'」并连接前后节点？'
+              : '删除节点「'+node.label+'」以及它的依赖连线？';
+            if(!await uiConfirm(prompt)||!alive())return;
+            state.layout.nodes=state.layout.nodes.filter(item=>item.id!==node.id);
+            if(order){
+              rebuildChain(order.filter(id=>id!==node.id));
+            }else{
+              state.layout.edges=state.layout.edges.filter(edge=>edge.source!==node.id&&edge.target!==node.id);
+              state.layout.order=state.layout.order.filter(id=>id!==node.id);
+            }
+            state.selected=next||previous||state.layout.nodes[0].id;
+            state.changed=true;
+            draw();
+          };
         }
         host.querySelector('[data-pw-node]').onclick=async()=>{if(await state.save())options.handoff(node.id);};
         if(node.node_kind==='workflow'){
@@ -102,9 +140,112 @@ const ProjectWorkflowGraph=(()=>{
         host.querySelector('[data-pwg-task]')?.addEventListener('click',()=>options.openTask(task.id));
         host.querySelector('[data-pwg-result]')?.addEventListener('click',()=>options.openResult(WorkflowNodeWorkbench.availableSelection(task)));
       }
+      function rebuildChain(order){
+        // nodes 数组也要按新顺序排：targets/产物流转都按 nodes 顺序读，只改 order 会让两边打架
+        const byId=new Map(state.layout.nodes.map(node=>[node.id,node]));
+        state.layout.nodes=order.map(id=>byId.get(id)).filter(Boolean);
+        state.layout.order=[...order];
+        state.layout.edges=order.slice(0,-1).map((id,index)=>({source:id,target:order[index+1]}));
+      }
+      function refreshSaveTop(){
+        const button=host.querySelector('[data-pwg-savetop]');if(!button)return;
+        const active=state.mode==='config'&&state.changed;
+        button.disabled=!active;button.classList.toggle('btn-primary',active);
+      }
+      function dropLine(){
+        const wrap=el('graph');let line=wrap.querySelector('.pwg-drop');
+        if(!line){line=document.createElement('div');line.className='pwg-drop';line.hidden=true;wrap.appendChild(line);}
+        return line;
+      }
+      function dropTarget(clientY){
+        const wrap=el('graph'),box=wrap.getBoundingClientRect();
+        const nodes=[...wrap.querySelectorAll('[data-wfl-node]')].map(node=>({id:node.dataset.wflNode,rect:node.getBoundingClientRect()}));
+        if(!nodes.length)return null;
+        const sorted=nodes.sort((a,b)=>a.rect.top-b.rect.top);
+        let index=0;
+        for(const node of sorted)if(clientY>node.rect.top+node.rect.height/2)index++;
+        const top=index<sorted.length?sorted[index].rect.top:sorted[sorted.length-1].rect.bottom+8;
+        return {index,top:Math.round(top-box.top+wrap.scrollTop-1)};
+      }
+      function onDragMove(event){
+        const drag=state.drag;if(!drag)return;
+        if(!drag.active){
+          if(Math.abs(event.clientY-drag.y)<6&&Math.abs(event.clientX-drag.x)<6)return;
+          if(state.mode!=='config'){state.drag=null;return;}
+          if(!chainOrder(state.layout)){state.drag=null;message('当前工作流含并行分支，拖拽只支持线性流程；请用右侧“前置节点”调整连线。');return;}
+          try{capture();}catch(error){state.drag=null;message(error.message);return;}
+          drag.active=true;drag.node?.classList.add('dragging');document.body.style.cursor='grabbing';
+        }
+        const at=dropTarget(event.clientY),line=dropLine();
+        line.hidden=!at;
+        if(at){line.style.top=at.top+'px';line.style.left='80px';line.style.right='20px';}
+      }
+      function onDragUp(event){
+        const drag=state.drag;state.drag=null;
+        drag?.node?.classList.remove('dragging');document.body.style.cursor='';
+        if(!drag)return;
+        dropLine().hidden=true;
+        if(!drag.active||event.type==='pointercancel')return;
+        state.suppressClick=true;setTimeout(()=>{state.suppressClick=false;},0);
+        const at=dropTarget(event.clientY),order=chainOrder(state.layout);
+        if(!at||!order)return;
+        const from=order.indexOf(drag.id),rest=order.filter(id=>id!==drag.id);
+        const to=Math.max(0,Math.min(rest.length,at.index>from?at.index-1:at.index));
+        rest.splice(to,0,drag.id);
+        if(rest.join()===order.join())return;
+        rebuildChain(rest);state.changed=true;
+        drawGraph();inspector();refreshSaveTop();
+        el('notice').textContent='已调整顺序，点“保存到本项目”生效。';
+      }
+      function reorder(){
+        if(!el('graph')?.querySelector('svg'))return;
+        if(!state.dragBound){
+          state.dragBound=true;
+          const move=event=>onDragMove(event),up=event=>onDragUp(event);
+          window.addEventListener('pointermove',move);window.addEventListener('pointerup',up);window.addEventListener('pointercancel',up);
+          state.dragDispose=()=>{window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',up);window.removeEventListener('pointercancel',up);};
+        }
+        el('graph').querySelectorAll('[data-wfl-node]').forEach(node=>{
+          node.addEventListener('pointerdown',event=>{
+            if(event.button!==0||state.mode!=='config')return;
+            state.drag={id:node.dataset.wflNode,x:event.clientX,y:event.clientY,active:false,node};
+          });
+        });
+      }
+      function addNode(step,label){
+        const order=chainOrder(state.layout);
+        const id='node-'+crypto.randomUUID().slice(0,8);
+        state.layout.nodes.push({id,step,label:label||'新节点',prompt:'',review_required:true,executor_role_id:id});
+        if(order&&state.selected&&order.includes(state.selected)){
+          const next=[...order];next.splice(next.indexOf(state.selected)+1,0,id);rebuildChain(next);
+        }else{
+          const tail=(state.layout.order||[]).filter(item=>item!==id).at(-1);
+          state.layout.order=[...(state.layout.order||[]),id];
+          if(tail)state.layout.edges=[...state.layout.edges.filter(edge=>edge.target!==id),{source:tail,target:id}];
+        }
+        state.selected=id;state.changed=true;draw();refreshSaveTop();el('label')?.focus();
+      }
+      function stepLibrary(){
+        const button=el('add');if(!button)return;
+        button.onclick=()=>{
+          if(state.mode!=='config'){message('请先切到“节点配置”再添加节点。');return;}
+          try{capture();}catch(error){message(error.message);return;}
+          host.querySelector('.pwg-steplib')?.remove();
+          const current=state.layout.nodes.find(node=>node.id===state.selected);
+          const box=document.createElement('div');box.className='pwg-steplib';
+          box.innerHTML=`<p class="pwg-steplib-head">插入到「${h(current?.label||'末尾')}」之后</p>`+
+            [{id:'task',name:'通用项目任务'},...state.data.stages].map(step=>`<button type="button" data-pwg-step-pick="${h(step.id)}">${h(step.name)}</button>`).join('');
+          button.closest('.pwg-toolbar').appendChild(box);
+          box.querySelectorAll('[data-pwg-step-pick]').forEach(item=>item.onclick=()=>{
+            const label=item.textContent.trim();box.remove();addNode(item.dataset.pwgStepPick,label);
+          });
+          const close=event=>{if(!box.contains(event.target)&&!button.contains(event.target)){box.remove();document.removeEventListener('pointerdown',close,true);}};
+          document.addEventListener('pointerdown',close,true);
+        };
+      }
       function drawGraph(){
         const renderedGraph=graphData();
-        el('graph').innerHTML=WorkflowGraph.render(renderedGraph).replace('role="img"','role="group"');
+        el('graph').innerHTML=WorkflowGraph.render(renderedGraph,true,Math.max(320,(el('graph')?.clientWidth||880)-32)).replace('role="img"','role="group"');
         const svg=el('graph').querySelector('svg');if(svg)svg.style.zoom=String(state.zoom||1);
         el('graph').querySelectorAll('[data-wfl-node]').forEach(node=>{
           if(renderedGraph.nodes.find(item=>item.id===node.dataset.wflNode)?.result_available){node.classList.add('result-available');node.setAttribute('title','点击查看节点产物预览与编辑');}
@@ -115,12 +256,13 @@ const ProjectWorkflowGraph=(()=>{
           // to that node's preview/editor. Nodes that are still running (or
           // have no fixed output yet) stay in the graph inspector so their
           // execution state remains visible.
-          node.onclick=()=>{if(!openResult())choose();};
+          node.onclick=()=>{if(state.suppressClick)return;if(!openResult())choose();};
           node.onkeydown=event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();if(!openResult())choose();}};
         });
+        reorder();refreshSaveTop();
       }
       function draw(){
-         host.innerHTML=`<section class="project-workflow-graph"><div class="pwg-toolbar"><label>LangGraph 工作流<select class="control" id="pwWorkflowChoice">${state.data.layouts.map(layout=>`<option value="${h(layout.id)}" ${layout.id===state.layout.id?'selected':''}>${h(layout.name)}</option>`).join('')}</select></label><span class="pw-spacer"></span><button class="btn ghost" id="pwRoles">角色绑定</button><button class="btn ghost" data-pwg-add>添加节点</button><button class="btn ghost" data-pwg-publish>发布为全局模板</button><button class="btn btn-primary" id="pwWorkflowRun">准备 / 查看运行</button><button class="btn btn-primary" data-pwg-quick-result hidden>打开当前节点产物预览与编辑</button></div><div class="pwg-mode"><button type="button" class="pw-text-button" data-pwg-mode="config" aria-pressed="${state.mode==='config'}">节点配置 · v${state.layout.revision||0}</button><button type="button" class="pw-text-button" data-pwg-mode="run" aria-pressed="${state.mode==='run'}" ${state.run?'':'disabled'}>本次运行</button><span class="hint">配置修改用于新运行，当前运行保留原版本。</span></div><p class="pwg-notice" data-pwg-notice role="status"></p><p class="pw-error" data-pwg-error role="alert"></p><div class="pwg-layout"><div class="pwg-canvas" data-pwg-graph></div><aside class="pwg-inspector" data-pwg-inspector aria-label="所选工作流节点"></aside></div></section>`;
+         host.innerHTML=`<section class="project-workflow-graph"><div class="pwg-toolbar"><label>LangGraph 工作流<select class="control" id="pwWorkflowChoice">${state.data.layouts.map(layout=>`<option value="${h(layout.id)}" ${layout.id===state.layout.id?'selected':''}>${h(layout.name)}</option>`).join('')}</select></label><span class="pw-spacer"></span><button class="btn ghost" data-pwg-add>添加节点</button><button class="btn ghost" id="pwRoles">角色绑定</button><button class="btn" data-pwg-savetop disabled>保存到本项目</button><button class="btn ghost" data-pwg-publish>发布为全局模板</button><button class="btn btn-primary" id="pwWorkflowRun">准备 / 查看运行</button><button class="btn btn-primary" data-pwg-quick-result hidden>打开当前节点产物预览与编辑</button></div><div class="pwg-mode"><button type="button" class="pw-text-button" data-pwg-mode="config" aria-pressed="${state.mode==='config'}">节点配置 · v${state.layout.revision||0}</button><button type="button" class="pw-text-button" data-pwg-mode="run" aria-pressed="${state.mode==='run'}" ${state.run?'':'disabled'}>本次运行</button><span class="hint">配置修改用于新运行，当前运行保留原版本。</span></div><p class="pwg-notice" data-pwg-notice role="status"></p><p class="pw-error" data-pwg-error role="alert"></p><div class="pwg-layout"><div class="pwg-canvas" data-pwg-graph></div><aside class="pwg-inspector" data-pwg-inspector aria-label="所选工作流节点"></aside></div></section>`;
         drawGraph();inspector();
         el('graph').closest('.pwg-layout').insertAdjacentHTML('beforebegin','<div class="pwg-zoom"><button type="button" class="pw-text-button" data-pwg-zoom="out">− 缩小</button><button type="button" class="pw-text-button" data-pwg-zoom="fit">适应画布</button><button type="button" class="pw-text-button" data-pwg-zoom="in">＋ 放大</button></div>');
         host.querySelector('.pwg-zoom').insertAdjacentHTML('beforeend','<div class="pwg-search"><input class="control" type="search" data-pwg-search aria-label="搜索工作流节点" placeholder="搜索节点名称、执行者或 ID"><div data-pwg-search-results hidden></div></div>');
@@ -136,7 +278,19 @@ const ProjectWorkflowGraph=(()=>{
         };
         el('search').onkeydown=event=>{if(event.key==='Escape'){event.stopPropagation();el('search').value='';el('search-results').hidden=true;}else if(event.key==='ArrowDown'){event.preventDefault();el('search-results').querySelector('button')?.focus();}else if(event.key==='Enter'){event.preventDefault();el('search-results').querySelector('button')?.click();}};
         host.querySelectorAll('[data-pwg-zoom]').forEach(button=>button.onclick=()=>{const svg=el('graph').querySelector('svg'),mode=button.dataset.pwgZoom;state.zoom=mode==='fit'?Math.min(1,Math.max(.25,(el('graph').clientWidth-40)/(svg?.width.baseVal.value||500))):Math.max(.25,Math.min(2,(state.zoom||1)+(mode==='in'?.15:-.15)));drawGraph();});
-        host.querySelector('#pwWorkflowChoice').onchange=async event=>{if(!await state.save()){event.target.value=state.layout.id;return;}await api('/api/workflow/layouts/select',{task_id:options.projectId,layout_id:event.target.value});await options.reload();};
+        host.querySelector('#pwWorkflowChoice').onchange=async event=>{
+          const choice=event.target;
+          const layoutId=choice.value;
+          if(!await state.save()){choice.value=state.layout.id;return;}
+          if(!alive())return;
+          try{
+            await api('/api/workflow/layouts/select',{task_id:options.projectId,layout_id:layoutId});
+            await options.reload();
+          }catch(error){
+            choice.value=state.layout.id;
+            message(error.message);
+          }
+        };
         host.querySelector('#pwRoles').onclick=async()=>{if(!await state.save())return;const dialog=await ProjectTasks.openRoles(options.projectId,state.layout.id);dialog?.addEventListener('close',options.reload,{once:true});};
         host.querySelector('#pwWorkflowRun').onclick=async()=>{if(await state.save()){await ConnectedResearch.openRun(options.projectId);document.querySelector('dialog.connected-dialog')?.addEventListener('close',()=>{if(alive())options.reload();},{once:true});}};
         el('publish').onclick=async()=>{
@@ -144,7 +298,8 @@ const ProjectWorkflowGraph=(()=>{
           if(!await uiConfirm('将当前配置发布为所有项目可调用的模板？当前项目将跟随模板，已有运行保持原版本。'))return;
           try{await api('/api/workflow/layouts/publish',{project_id:options.projectId,layout_id:state.layout.id,expected_fingerprint:state.layout.fingerprint,expected_template_updated_at:state.layout.updated_at});await options.reload();}catch(error){message(error.message);}
         };
-        el('add').onclick=()=>{capture();const id='node-'+crypto.randomUUID().slice(0,8);state.layout.nodes.push({id,step:'task',label:'新节点',prompt:'',review_required:true,executor_role_id:id});state.selected=id;state.mode='config';state.changed=true;draw();el('label')?.focus();};
+        stepLibrary();
+        host.querySelector('[data-pwg-savetop]').onclick=()=>state.save();
         host.querySelectorAll('[data-pwg-mode]').forEach(button=>button.onclick=async()=>{if(!await state.save())return;state.mode=button.dataset.pwgMode;state.selected=(state.mode==='run'?state.run.layout:state.layout).nodes[0]?.id;draw();});
       }
       draw();
@@ -156,8 +311,12 @@ const ProjectWorkflowGraph=(()=>{
           if(changed&&state.mode==='run'){drawGraph();inspector();}
         }catch(error){if(alive())message('运行状态读取失败：'+error.message);}finally{refreshing=false;}
       },2500);
-      host.__graphDispose=()=>clearInterval(timer);
+      // 整行卡宽度跟着画布走：窗口缩放要重绘，否则卡片还停在旧宽度上
+      let resizeTimer=null;
+      const onResize=()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(()=>{const top=el('graph')?.scrollTop||0;drawGraph();const box=el('graph');if(box)box.scrollTop=top;},180);};
+      window.addEventListener('resize',onResize);
+      host.__graphDispose=()=>{clearInterval(timer);clearTimeout(resizeTimer);window.removeEventListener('resize',onResize);state.dragDispose?.();};
     }catch(error){if(alive())host.innerHTML=`<p class="pw-error">工作流读取失败：${h(error.message)}</p>`;}
   }
-  const graphEditor={mount,dirty,flush};window.ProjectWorkflowGraph=graphEditor;return graphEditor;
+  const graphEditor={mount,dirty,flush,chainOrder};window.ProjectWorkflowGraph=graphEditor;return graphEditor;
 })();

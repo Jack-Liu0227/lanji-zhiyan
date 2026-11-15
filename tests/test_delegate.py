@@ -118,6 +118,9 @@ class TestDelegate(unittest.TestCase):
             workflow.chat_raw = lambda profile, messages, tools=None, **kw: {
                 "role": "assistant", "content": long_text, "tool_calls": []}
             r = workflow._delegate(self.db, self.task, [{"title": "长活", "prompt": "写长摘要"}])
+            workflow.chat_raw = lambda profile, messages, tools=None, **kw: {
+                "role": "assistant", "content": long_text + "第二轮", "tool_calls": []}
+            second = workflow._delegate(self.db, self.task, [{"title": "长活", "prompt": "写长摘要"}])
         finally:
             workflow.chat_raw = old
         rec = r["delegated"][0]
@@ -126,6 +129,9 @@ class TestDelegate(unittest.TestCase):
         self.assertTrue(rec["summary"].startswith(long_text[:workflow._SUB_SUMMARY_MAX]))
         path = re.search(r"见 (.+?)）", rec["summary"]).group(1)
         self.assertEqual(Path(path).read_text(encoding="utf-8"), long_text)
+        second_path = re.search(r"见 (.+?)）", second["delegated"][0]["summary"]).group(1)
+        self.assertNotEqual(path, second_path)
+        self.assertEqual(Path(second_path).read_text(encoding="utf-8"), long_text + "第二轮")
 
     def test_empty_jobs_is_rejected(self) -> None:
         r = workflow._delegate(self.db, self.task, [], parallel=2)

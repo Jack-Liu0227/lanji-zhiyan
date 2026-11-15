@@ -479,7 +479,7 @@ const ProjectWorkspace = (() => {
   async function refresh(state){
     if(state.refreshing)return;state.refreshing=true;const epoch=state.epoch;
     try{
-      const result=await Promise.allSettled([api('/api/project-tasks?project_id='+encodeURIComponent(state.id)),api('/api/project-tasks/executors?project_id='+encodeURIComponent(state.id)),state.scope==='workflow'&&state.targets?.layout_id?api('/api/handoff/targets?project_id='+encodeURIComponent(state.id)):Promise.resolve(state.targets),api('/api/project-tasks/policy?project_id='+encodeURIComponent(state.id)),api('/api/execution-board?project_id='+encodeURIComponent(state.id))]);
+      const result=await Promise.allSettled([api('/api/project-tasks?project_id='+encodeURIComponent(state.id)),api('/api/project-tasks/executors?project_id='+encodeURIComponent(state.id)),state.targets?.layout_id?api('/api/handoff/targets?project_id='+encodeURIComponent(state.id)):Promise.resolve(state.targets),api('/api/project-tasks/policy?project_id='+encodeURIComponent(state.id)),api('/api/execution-board?project_id='+encodeURIComponent(state.id))]);
       if(epoch!==state.epoch)return;
       if(result[0].status==='fulfilled')state.tasks=result[0].value.tasks||[];
       if(result[4].status==='fulfilled')state.executionRows=result[4].value.items||[];

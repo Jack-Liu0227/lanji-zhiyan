@@ -732,7 +732,7 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
                 note = ""
                 if dump_dir is not None:
                     try:
-                        f = dump_dir / (f"子任务{i + 1}_" + re.sub(r'[\\/:*?"<>|\s]+', "_", title)[:30] + ".md")
+                        f = dump_dir / (f"子任务{i + 1}_{sid}_" + re.sub(r'[\\/:*?"<>|\s]+', "_", title)[:30] + ".md")
                         f.write_text(txt, encoding="utf-8")
                         note = f"见 {f}"
                     except OSError as exc:

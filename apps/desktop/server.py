@@ -2064,13 +2064,16 @@ def _spawn_low_server(port: int):
         proc = lowbox.popen(cmd, cwd=str(Path(__file__).resolve().parent), env=env)
     except OSError:
         return None
-    for _ in range(120):                       # 最多等 24s（首次冷启动要给库迁移留时间）
-        if _port_open(port, 0.1):
-                _boot_mark("低完整性服务子进程就绪")
-                return proc
+    # 等端口就绪：本机对「关着的端口」要 2s 才回 RST，所以探针超时必须短；粒度 40ms 而不是 300ms
+    # （原来 0.1s 探针 + 0.2s 睡 = 每轮白等 0.3s，窗口平白晚出四分之一秒）。总预算仍是 24s。
+    deadline = time.time() + 24
+    while time.time() < deadline:
+        if _port_open(port, 0.02):
+            _boot_mark("低完整性服务子进程就绪")
+            return proc
         if proc.poll() is not None:            # 子进程自己退了
             return None
-        time.sleep(0.2)
+        time.sleep(0.02)
     proc.kill()
     return None
 
