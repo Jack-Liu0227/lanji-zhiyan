@@ -14,12 +14,8 @@ MAX_BYTES = 20 * 1024 * 1024
 MAX_CHARS = 200000
 
 
-def import_file(db, body):
-    tool = str(body.get('tool') or '')
+def decode_file(body):
     name = str(body.get('name') or '').replace('\\', '/').rsplit('/', 1)[-1]
-    suffix = Path(name).suffix.lower()
-    if tool not in FORMATS or suffix not in FORMATS[tool]:
-        raise ValueError('此文件类型不适用于当前工具')
     encoded = str(body.get('data') or '').split(',', 1)[-1]
     if len(encoded) > (MAX_BYTES + 2) // 3 * 4:
         raise ValueError('每个文件最多 20 MB')
@@ -29,6 +25,15 @@ def import_file(db, body):
         raise ValueError('文件内容编码无效') from None
     if not raw or len(raw) > MAX_BYTES:
         raise ValueError('请选择非空文件，每个文件最多 20 MB')
+    return name, raw
+
+
+def import_file(db, body):
+    tool = str(body.get('tool') or '')
+    name, raw = decode_file(body)
+    suffix = Path(name).suffix.lower()
+    if tool not in FORMATS or suffix not in FORMATS[tool]:
+        raise ValueError('此文件类型不适用于当前工具')
     if suffix == '.pdf':
         import pypdfium2
         try:

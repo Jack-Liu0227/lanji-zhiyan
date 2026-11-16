@@ -109,6 +109,8 @@ def validate_definition(data: dict[str, Any]) -> dict[str, Any]:
             config.update(manual_review_required=True, review_required=True)
         if raw.get('manual_execution') is True:
             config.update(manual_execution=True, manual_review_required=True, review_required=True)
+        if step == 'review' and not config.get('manual_execution') and raw.get('claim_audit') is True:
+            config['claim_audit'] = True
         kind = raw.get('node_kind', 'executor')
         if kind not in ('executor', 'tool', 'workflow'):
             raise ValueError('节点类型须为执行者、固定工具或子工作流')

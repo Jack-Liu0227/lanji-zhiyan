@@ -173,6 +173,32 @@ const WorkflowNodeWorkbench=(()=>{
       let sync=host.querySelector('[data-wnw-sync]');if(!sync){sync=document.createElement('section');sync.dataset.wnwSync='';sync.className='wnw-notice';el('notice').after(sync);}
       const syncErrors=result.sync_errors||[],fileConflicts=result.fileop_conflicts||[];sync.hidden=!syncErrors.length&&!fileConflicts.length;
       if(!sync.hidden){sync.innerHTML=`<p>${fileConflicts.length?'文件写入恢复存在冲突，请核对工作文件；产物和草稿仍保留。':'交付决定已保存，部分页面的状态同步尚未完成。'}</p>${syncErrors.map(error=>`<p>${h(error.adapter||'状态同步')}：${h(error.error||error.message||'同步失败')}</p>`).join('')}<button class="btn ghost" type="button" data-wnw-reconcile>重新同步状态</button>`;sync.querySelector('button').onclick=async()=>{if(!await state.saveDraft())return;const response=await mutate('reconcile');if(response)await load(state.selection);};}
+      let quality=el('quality');
+      if(!quality){quality=document.createElement('section');quality.dataset.wnwQuality='';el('notice').after(quality);}
+      const audit=result.claim_audit,targets=result.rework_targets||[];
+      const labels={supported:'支持',partial:'部分支持',conflicting:'有冲突',missing:'缺少可定位证据'};
+      quality.hidden=!audit&&!targets.length;
+      const claimRows=(audit?.claims||[]).map(item=>`<li><b>${h(labels[item.status]||item.status)}</b> · ${h(item.text)}
+        <p class="hint">${h(item.reason)}</p>${item.sources.map(source=>`<div>
+          <a href="/api/pdf?id=${encodeURIComponent(source.paper_id)}#page=${Number(source.page)}" target="_blank" rel="noopener">
+            ${h(source.filename)} · p.${h(source.page)}</a>${source.doi?' · DOI '+h(source.doi):''}
+          ${source.anchored?'':' · 引文未在该页核实'}<blockquote>${h(source.excerpt)}</blockquote></div>`).join('')}</li>`).join('');
+      quality.innerHTML=(audit?`<details ${audit.requires_review?'open':''}><summary>结论证据核查 · ${audit.claims.length} 条</summary>
+        ${audit.warnings.map(item=>`<p class="hint">${h(item)}</p>`).join('')}
+        <ol>${claimRows}</ol></details>`:'')+(targets.length?`<div class="pw-view-head"><label>返工到前置节点 <select class="control" data-wnw-return-target>
+        <option value="">请选择</option>${targets.map(item=>`<option value="${h(item.node_id)}">${h(item.title)}</option>`).join('')}</select></label>
+        <button type="button" class="btn ghost" data-wnw-return>退回并重跑受影响节点</button></div>`:'');
+      const returnButton=el('return');
+      if(returnButton)returnButton.onclick=async()=>{
+        const target=el('return-target').value;
+        if(!target||!state.feedback.trim()){message('请选择返工节点，并在人工核查意见中填写修改要求。',true);return;}
+        if(!await state.saveDraft())return;
+        const response=await mutate('return-to-stage',{target_node_id:target,feedback:state.feedback});
+        if(response?.target_task_id){
+          options.changed?.();
+          await options.select({project_id:task.project_id,task_id:response.target_task_id});
+        }
+      };
       el('goal').textContent=node.prompt||task.goal||'';
       el('guide').hidden=!result.guide;
       el('guide').innerHTML=result.guide?`<dl><dt>需要的输入</dt><dd>${h(result.guide.input)}</dd><dt>本步交付</dt><dd>${h(result.guide.output)}</dd></dl>`:'';

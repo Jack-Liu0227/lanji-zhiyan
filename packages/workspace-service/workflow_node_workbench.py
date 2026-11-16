@@ -198,7 +198,10 @@ def read(db, selection, *, authority, window_id='', task=None, include_content=T
             sync_errors[event['data']['adapter']] = event['data']
         elif event['kind'] == 'projection_recovered':
             sync_errors.pop(event['data']['adapter'], None)
+    from workflow_tasks import rework_targets
     return {'identity': _identity(task, run), 'task': tasks.public_view(task),
+            'claim_audit': run['checkpoint'].get('claim_audit'),
+            'rework_targets': rework_targets(db, task) if editable else [],
             'run': tasks.public_view({'latest_run': run})['latest_run'], 'node': node,
             'artifacts': artifacts, 'history': _history(db, task), 'drafts': drafts, 'editable': editable,
             'content': content, 'previous_content': (previous or {}).get('output_snapshot', {}).get('content'),
@@ -515,6 +518,18 @@ def command(db, task_id, body, *, authority):
                     tasks._digest(json.loads(old['output_versions'])) != identity['output_digest']):
                 raise ValueError('该请求标识已用于另一份核查决定')
             return {'task': tasks.get(db, task_id, project_id=authority.project_id)}
+    if action == 'return-to-stage':
+        target = str(body.get('target_node_id') or '')
+        from workflow_tasks import return_for_rework, rework_receipt
+        with tasks._lock:
+            receipt = rework_receipt(db, task_id, request_key, request_digest)
+            if receipt:
+                return receipt
+            task, run = _base(db, identity, authority)
+            result = return_for_rework(db, task, run, target, body.get('feedback'), request_key, request_digest, authority)
+        import workflow_execution
+        workflow_execution.kick(db.path, result['workflow_run_id'])
+        return result
     if action == 'draft':
         return {'draft': save_draft(db, identity, body, authority=authority)}
     if action == 'rework':

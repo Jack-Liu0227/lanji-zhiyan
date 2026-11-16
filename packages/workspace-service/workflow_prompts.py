@@ -370,6 +370,11 @@ TOOL_SPECS = [
         "rows": {"type": "integer", "description": "每源条数(1-50)，默认 30"}}, ["query"]),
     _schema("paper_download", "只把一条检索结果的开放获取(OA) PDF 下载到当前项目暂存目录；不会写入 Zotero。没有 OA 链接会失败。", {"result_id": {"type": "string"}}, ["result_id"]),
     _schema("paper_read", "把一篇已入库 PDF 逐页精读成中文要点（带 p.页码）。", {"paper_id": {"type": "string"}}, ["paper_id"]),
+    _schema("paper_evidence_record", "登记当前项目 PDF 的事实与原文证据。每条记录包含物理页码、字段、数值及单位、该页连续原文。逐条校验，不确定时保留缺口。", {
+        "paper_id": {"type": "string"}, "items": {"type": "array", "maxItems": 30, "items": {"type": "object",
+            "properties": {"page_no": {"type": "integer"}, "field": {"type": "string"}, "value": {"type": "string"},
+                           "excerpt": {"type": "string"}}, "required": ["page_no", "field", "value", "excerpt"]}}
+    }, ["paper_id", "items"]),
     _schema("paper_translate", "启动已入库论文的中文翻译或查询进度。返回 running 仅表示已启动，done 且有译文文件才可交付。", {"paper_id": {"type": "string"}, "action": {"type": "string", "enum": ["start", "status"]}, "pages": {"type": "string"}}, ["paper_id"]),
     _schema("notes_compose", "把一条精读笔记整理成带证据表的知识库笔记，可选写入 Obsidian。", {"note_id": {"type": "string"}, "vault": {"type": "string"}}, ["note_id"]),
     _schema("draft_write", "用当前任务的笔记与证据起草一个章节。", {"section": {"type": "string"}, "title": {"type": "string"}}),

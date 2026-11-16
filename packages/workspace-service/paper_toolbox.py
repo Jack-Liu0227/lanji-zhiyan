@@ -14,7 +14,7 @@ TOOLS=[{'id':'caption','name':'图片图注','description':'单张或批量图�
        {'id':'translate','name':'中英互译','description':'双语学术文本翻译，保留公式和引用标记'},
        {'id':'polish','name':'学术润色','description':'改进表达，保留事实、数字、公式和引用'},
        {'id':'references','name':'引文整理','description':'检查 BibTeX / RIS 重复项与缺失字段，不判定文献真实性'},
-       {'id':'convert','name':'格式转换','description':'导出 Markdown、HTML、Word；PDF 使用项目既有转换服务'},
+       {'id':'convert','name':'格式转换','description':'原文件本地转换或粘贴文本导出；论文排版 PDF 使用项目转换服务'},
        {'id':'pdf_translate','name':'PDF 论文翻译','description':'调用已有项目 PDF 翻译与进度服务'},
        {'id':'mermaid','name':'Mermaid 图表','description':'本地预览流程图、时序图等，导出 SVG 或高分辨率 PNG','runtime':'browser'}]
 PROMPT_PRESETS=[{'id':'caption_academic','tool':'caption','category':'图注','name':'论文图注与润色','description':'依据可见内容生成英文 caption，标出需补充的信息。','prompt':'依据图像和提供的背景生成严谨的论文图注。说明子图、坐标、图例及可见趋势；不得编造方法、样本量、统计显著性或结论。未知信息单独列为待确认。输出英文 caption、中文说明和待补充项；如提供原图注，核对并润色。'},
@@ -50,11 +50,16 @@ def validate(spec):
     tool=str(spec.get('tool') or 'translate');text=str(spec.get('text') or '')
     if tool not in {item['id'] for item in TOOLS}:raise ValueError('工具不存在')
     if tool=='mermaid':raise ValueError('Mermaid 图表请在工具箱中本地预览和导出')
-    if tool not in ('pdf_translate','caption','image_convert') and (not text.strip() or len(text)>200000):raise ValueError('请输入 1 至 200000 字符的内容')
+    document_id = str(spec.get('document_asset_id') or '') if tool == 'convert' else ''
+    if document_id:
+        text = ''
+    if not document_id and tool not in ('pdf_translate','caption','image_convert') and (not text.strip() or len(text)>200000):raise ValueError('请输入 1 至 200000 字符的内容')
     direction=str(spec.get('direction') or 'zh_en')
     if direction not in ('zh_en','en_zh'):raise ValueError('翻译方向无效')
     fmt=str(spec.get('format') or 'docx')
-    if fmt not in (('png','jpg','jpeg','webp','tif','tiff','pdf') if tool=='image_convert' else ('md','html','docx','pdf')):raise ValueError('导出格式无效')
+    formats = ('md','html','docx','tex') if document_id else (
+        ('png','jpg','jpeg','webp','tif','tiff','pdf') if tool=='image_convert' else ('md','html','docx','pdf'))
+    if fmt not in formats:raise ValueError('导出格式无效')
     preset_id=str(spec.get('prompt_preset') or (tool+'_academic' if tool in PROMPT_TOOLS else ''))
     prompt=spec.get('prompt');reference=spec.get('prompt_template')
     if tool not in PROMPT_TOOLS and (prompt is not None or reference is not None or preset_id):
@@ -67,6 +72,7 @@ def validate(spec):
         raise ValueError('请选择有效的项目提示词模板')
     return {'tool':tool,'text':text,'direction':direction,'format':fmt,'terminology':str(spec.get('terminology') or '')[:10000],
             'prompt_preset':preset_id,'prompt':prompt,'prompt_template':reference,
+            **({'document_asset_id': document_id} if document_id else {}),
             'image_ids':spec.get('image_ids',[]),'dpi':max(72,min(600,int(spec.get('dpi') or 180)))}
 
 
@@ -125,6 +131,10 @@ def transform(db,owner_id,spec,emit=None,*,prepared=False):
         return image_tools.transform(db,project_id,spec,emit)
     if tool=='references':return {'content':_references(text)}
     if tool=='convert':
+        if spec.get('document_asset_id'):
+            import document_convert
+            project_id = owner_id if db.db.execute('SELECT 1 FROM research_tasks WHERE id=?',(owner_id,)).fetchone() else ''
+            return document_convert.transform(db,project_id,spec['document_asset_id'],spec['format'])
         old=getattr(db,'quiet_steps',False);db.quiet_steps=True
         try:
             if spec['format']=='pdf':
@@ -180,7 +190,11 @@ def start(db,body):
     if spec['tool'] in ('caption','image_convert'):
         import image_tools
         image_tools.inputs(db,pid,spec['image_ids'])
-    model_id=str(body.get('model_id') or '')
+    if spec.get('document_asset_id'):
+        import document_convert
+        document_convert.require_engine()
+        document_convert.input_asset(db,pid,spec['document_asset_id'],spec['format'])
+    model_id=str(body.get('model_id') or '') if spec['tool'] != 'convert' else ''
     if model_id:
         import agent_settings
         agent_settings.validate_runtime_fields(db,{'model_id':model_id})
@@ -211,7 +225,7 @@ def execute(db,request,emit):
         emit({'type':'template_used','title':snapshot['title'],'revision':snapshot['revision'],'revision_id':snapshot['revision_id']})
     result=transform(db,target,spec,emit,prepared=True)
     execution.check()
-    db.add_message(owner,'user',request['toolbox_spec']['text'],scope='agent')
+    db.add_message(owner,'user',spec['text'] or ('转换文档为 '+spec['format'].upper() if spec.get('document_asset_id') else ''),scope='agent')
     db.add_message(owner,'assistant',result['content'],scope='agent')
     emit({'type':'toolbox_result',**result})
     return {'reply':result['content'],'toolbox_result':result}
@@ -220,9 +234,17 @@ def execute(db,request,emit):
 def route(method,path,body,query,db):
     if not path.startswith('/api/paper-toolbox'):return None
     if method=='POST' and path=='/api/paper-toolbox/import':
+        if body.get('tool') == 'convert' and body.get('mode') == 'document':
+            import document_convert
+            document_convert.require_engine()
+            return document_convert.upload(db,body)
         import toolbox_import
         return toolbox_import.import_file(db,body)
-    if method=='GET' and path=='/api/paper-toolbox':return {'tools':TOOLS,'prompt_presets':PROMPT_PRESETS}
+    if method=='GET' and path=='/api/paper-toolbox':
+        import document_convert
+        return {'tools':TOOLS,'prompt_presets':PROMPT_PRESETS,'document_conversion':{
+            'available':bool(document_convert.executable()),'inputs':list(document_convert.READERS),
+            'outputs':list(document_convert.WRITERS)}}
     if method=='GET' and path.endswith('/result'):
         identifier=(query.get('run_id') or [''])[0];pid=(query.get('project_id') or [''])[0]
         run=db.get_async_task(identifier);chat=db.chat(run['owner_id']) if run else None

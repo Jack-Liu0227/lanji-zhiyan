@@ -36,7 +36,7 @@ STAGE_GUIDES = {
         "input": "已纳入的检索结果及可合法获取或已入库的全文。",
         "output": "项目 PDF 和与原文页码对应的精读笔记。",
         "checks": ["确认 PDF 可读", "抽查笔记页码及引文", "记录无法获取或无法解析的全文"],
-        "action": "先复用同一文献的已入库 PDF，再对新结果调用下载工具。用 paper_read 对可读 PDF 生成逐页笔记。",
+        "action": "先复用同一文献的已入库 PDF，再对新结果调用下载工具。用 paper_read 对可读 PDF 生成逐页笔记，并用 paper_evidence_record 登记可能支撑关键结论的数值、条件和连续原句。",
     },
     "notes": {
         "input": "已入库 PDF 与精读环节确认的论文范围。",

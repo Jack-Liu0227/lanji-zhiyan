@@ -2,7 +2,7 @@
 const PaperToolbox=(()=>{
   const h=value=>esc(String(value??''));
   const read=(key,fallback)=>{try{return JSON.parse(localStorage.getItem(key))||fallback;}catch{return fallback;}};
-  let panel=null,diagramView=null,following=false,starting=false,opening=0,tools=[],presets=[],state=read('rw-paper-toolbox',{tool:'translate',text:'',direction:'zh_en',format:'docx',project_id:'',model_id:'',terminology:'',result:'',run:null,result_run_id:''});
+  let panel=null,diagramView=null,following=false,starting=false,opening=0,tools=[],presets=[],documentConversion=null,state=read('rw-paper-toolbox',{tool:'translate',text:'',direction:'zh_en',format:'docx',project_id:'',model_id:'',terminology:'',result:'',run:null,result_run_id:''});
   const el=name=>panel?.querySelector('[data-tb-'+name+']');
   const imports={
     caption:['.png,.jpg,.jpeg,.webp,.tif,.tiff,.pdf','PNG、JPG、WebP、TIFF 或 PDF · 每批最多 20 个，PDF 最多 30 页'],
@@ -14,10 +14,31 @@ const PaperToolbox=(()=>{
     pdf_translate:['.pdf','PDF · 先选择结果归属项目，导入文献后选择一篇启动翻译'],
     mermaid:['.mmd,.mermaid,.md,.txt','Mermaid、Markdown 或 TXT · 每次 1 个，替换当前图表源码'],
   };
+  const documentMode=()=>state.tool==='convert'&&state.convertMode==='document'&&documentConversion?.available;
+  function activeImport(){
+    return documentMode()?[documentConversion.inputs.map(ext=>'.'+ext).join(','),'DOCX、Markdown、HTML 或 LaTeX · 每次 1 个原文件']:imports[state.tool];
+  }
+  function fileUrl(file,project){
+    return '/api/paper-toolbox/file?asset_id='+encodeURIComponent(file.asset_id)+'&project_id='+encodeURIComponent(file.project_id??project??'');
+  }
   function paintImport(){
     if(!el('import-input'))return;
-    const config=imports[state.tool],busy=!!state.run||starting;
-    el('import-input').accept=config[0];el('import-input').multiple=state.tool!=='mermaid';
+    const config=activeImport(),busy=!!state.run||starting,direct=documentMode();
+    el('import-input').accept=config[0];el('import-input').multiple=state.tool!=='mermaid'&&!direct;
+    el('convert-mode-row').hidden=state.tool!=='convert';
+    el('document-mode').checked=direct;
+    el('document-mode').disabled=busy||!documentConversion?.available;
+    el('document-help').textContent=documentConversion?.available?'本机 Pandoc':'未检测到 Pandoc';
+    el('document-help').href='https://pandoc.org/installing.html';
+    el('document-help').hidden=!!documentConversion?.available;
+    el('document-remove').hidden=!direct||!state.document;
+    el('document-remove').disabled=busy;
+    el('document-selected').textContent=direct&&state.document?state.document.name:'';
+    const file=state.document_result&&state.files?.[0];
+    el('document-download').hidden=!file||state.tool!=='convert';
+    if(file)el('document-download').href=fileUrl(file,state.project_id);
+    if(direct&&!state.document)el('run').disabled=true;
+    if(state.tool==='convert'&&file)el('save').hidden=true;
     el('import-input').disabled=busy;el('choose-file').disabled=busy;el('paper').disabled=busy;
     el('import-hint').textContent=config[1]+' · 每个文件最多 20 MB';
     panel.dataset.dropLabel='松开鼠标导入到「'+(tools.find(item=>item.id===state.tool)?.name||'当前工具')+'」';
@@ -81,7 +102,7 @@ const PaperToolbox=(()=>{
     if(panel?.isConnected&&(!host||panel.parentElement===host)){if(state.tool==='mermaid')diagramView?.focus();else el('text').focus({preventScroll:true});return;}
     diagramView?.destroy();diagramView=null;panel?.remove();
     const selection=window.getSelection()?.toString();if(selection&&!state.run)state.text=selection;
-    try{const catalog=await api('/api/paper-toolbox');tools=catalog.tools;presets=catalog.prompt_presets||[];}catch(err){uiNotify(err.message);return;}
+    try{const catalog=await api('/api/paper-toolbox');tools=catalog.tools;presets=catalog.prompt_presets||[];documentConversion=catalog.document_conversion;}catch(err){uiNotify(err.message);return;}
     if(ticket!==opening||(host&&route()!=='toolbox'))return;
     panel=document.createElement(host?'section':'aside');panel.className='paper-toolbox'+(host?' ptb-page':'');panel.setAttribute('aria-label','论文工具箱');panel.setAttribute('role',host?'region':'complementary');
     panel.innerHTML=`<header class="ptb-header"><div><span class="pw-eyebrow">论文辅助</span><h2>工具箱</h2></div><button type="button" class="pw-text-button" data-tb-close aria-label="关闭论文工具箱">×</button></header><nav class="ptb-tools" aria-label="论文工具">${tools.map(tool=>`<button type="button" data-tb-tool="${tool.id}" aria-pressed="${state.tool===tool.id}">${h(tool.name)}</button>`).join('')}</nav><div class="ptb-pins" data-tb-pins></div><div class="ptb-body"><p class="hint" data-tb-description></p><div class="ptb-config"><label>结果归属<select name="project_id" class="control"><option value="">即时处理</option>${S.tasks.map(project=>`<option value="${h(project.id)}">${h(project.title)}</option>`).join('')}</select></label><label>模型<select name="model_id" class="control"><option value="">当前默认模型</option>${(S.models||[]).map(model=>`<option value="${h(model.id)}">${h(model.name)}</option>`).join('')}</select></label><label data-tb-direction-row>翻译方向<select name="direction" class="control"><option value="zh_en">中文 → English</option><option value="en_zh">English → 中文</option></select></label><label data-tb-format-row>导出格式<select name="format" class="control"><option value="docx">Word</option><option value="md">Markdown</option><option value="html">HTML</option><option value="pdf">PDF · 项目转换服务</option></select></label><label data-tb-paper-row>项目文献<select class="control" data-tb-paper></select></label></div><details data-tb-terminology-row><summary>术语约定</summary><textarea name="terminology" rows="2" class="control" placeholder="例如：solid electrolyte = 固态电解质"></textarea></details><div class="ptb-editors"><label>原文<textarea class="control" data-tb-text name="text" rows="13" placeholder="粘贴需要处理的文本、Markdown、BibTeX 或 RIS"></textarea></label><label>处理结果<textarea class="control" data-tb-output rows="13" readonly></textarea></label></div><p class="pw-error" data-tb-error role="alert"></p><p class="hint" data-tb-status role="status"></p></div><footer class="ptb-footer"><button type="button" class="pw-text-button" data-tb-pin>固定当前工具</button><span class="pw-spacer"></span><button type="button" class="btn ghost" data-tb-copy>复制结果</button><button type="button" class="btn ghost" data-tb-file hidden>打开文件</button><button type="button" class="btn ghost" data-tb-save>保存到项目</button><button type="button" class="btn ghost" data-tb-stop hidden>停止</button><button type="button" class="btn" data-tb-run>开始处理</button></footer>`;
@@ -98,14 +119,22 @@ const PaperToolbox=(()=>{
     }
     el('image-input').onchange=event=>{const files=[...event.target.files];event.target.value='';uploadImages(files);};
     el('description').insertAdjacentHTML('afterend',`<section class="ptb-import" data-tb-import-zone aria-label="导入当前工具的文件"><span class="ptb-import-icon" aria-hidden="true">↥</span><div><strong>拖拽文件到这里</strong><p class="hint" data-tb-import-hint></p><p class="ptb-import-result" data-tb-import-result role="status"></p></div><button class="btn ghost" type="button" data-tb-choose-file>选择文件</button><input type="file" data-tb-import-input hidden></section>`);
+    el('import-zone').insertAdjacentHTML('beforebegin',`<div class="ptb-config" data-tb-convert-mode-row hidden>
+      <label><input type="checkbox" data-tb-document-mode> 原文件转换</label>
+      <a data-tb-document-help target="_blank" rel="noopener"></a>
+      <span data-tb-document-selected></span><button type="button" class="pw-text-button" data-tb-document-remove hidden>移除文件</button></div>`);
+    el('file').insertAdjacentHTML('afterend','<a class="btn ghost" data-tb-document-download download hidden>下载转换文件</a>');
+    el('document-mode').onchange=()=>{state.convertMode=el('document-mode').checked?'document':'text';persist();updateTool();};
+    el('document-remove').onclick=()=>{state.document=null;persist();updateTool();};
     async function importFiles(files){
       if(state.run||starting)return error('当前正在处理，请完成后再上传');
       if(!files.length)return;
       error('');el('import-result').textContent='';
-      const tool=state.tool,project=state.project_id,allowed=imports[tool][0].split(',');
-      if(files.length>(tool==='mermaid'?1:20))return error(tool==='mermaid'?'Mermaid 每次导入一个文件':'每批最多 20 个文件');
+      const tool=state.tool,project=state.project_id,direct=documentMode();
+      const config=activeImport(),allowed=config[0].split(',');
+      if(files.length>(tool==='mermaid'||direct?1:20))return error(tool==='mermaid'||direct?'每次请选择一个文件':'每批最多 20 个文件');
       const invalid=files.find(file=>!allowed.some(suffix=>file.name.toLowerCase().endsWith(suffix))||file.size>20*1024*1024||!file.size);
-      if(invalid)return error(invalid.name+'：请检查文件类型、内容和大小。'+imports[tool][1]);
+      if(invalid)return error(invalid.name+'：请检查文件类型、内容和大小。'+config[1]);
       if(tool==='pdf_translate'&&!project)return error('请先选择结果归属项目，再导入 PDF');
       if(['caption','image_convert'].includes(tool))return uploadImages(files);
       const errors=[],added=[];starting=true;paint();
@@ -113,8 +142,9 @@ const PaperToolbox=(()=>{
         for(const [index,file] of files.entries()){
           try{
             if(el('import-result'))el('import-result').textContent=`正在导入 ${index+1}/${files.length}：${file.name}`;
-            const result=await api('/api/paper-toolbox/import',{tool,project_id:project,name:file.name,data:await FileDrop.dataURL(file)});
-            if(tool==='mermaid')diagramView.importCode(result.text,file.name);
+            const result=await api('/api/paper-toolbox/import',{tool,mode:direct?'document':'text',project_id:project,name:file.name,data:await FileDrop.dataURL(file)});
+            if(direct){state.document=result;updateTool();}
+            else if(tool==='mermaid')diagramView.importCode(result.text,file.name);
             else if(tool==='pdf_translate')state.paper_id=result.paper_id;
             else{
               const next=[state.text,result.text].filter(Boolean).join('\n\n');
@@ -154,7 +184,7 @@ const PaperToolbox=(()=>{
     const captions={translate:'文本双语翻译',polish:'表达与措辞',references:'BibTeX / RIS',convert:'文稿格式导出',pdf_translate:'整篇论文翻译',mermaid:'预览与高清导出'};
     panel.querySelectorAll('[data-tb-tool]').forEach(button=>{const id=button.dataset.tbTool;button.innerHTML=`<span class="ptb-tool-icon" aria-hidden="true">${glyphs[id]||'+'}</span><span class="ptb-tool-name"><strong>${h(tools.find(tool=>tool.id===id).name)}</strong><small>${h(captions[id]||'')}</small></span>`;});
     panel.querySelectorAll('[name]').forEach(input=>{input.value=state[input.name]||'';input.oninput=()=>{state[input.name]=input.value;persist();};});
-    panel.querySelector('[name=project_id]').onchange=()=>{state.project_id=panel.querySelector('[name=project_id]').value;state.images=[];paintImages();paintPrompts();persist();loadPapers();};
+    panel.querySelector('[name=project_id]').onchange=()=>{state.project_id=panel.querySelector('[name=project_id]').value;state.images=[];state.document=null;persist();updateTool();};
     el('preset').onchange=()=>{const preset=presets.find(item=>item.id===el('preset').value);if(!preset||state.run)return;state.prompt_configs[state.tool]={preset_id:preset.id,prompt:preset.prompt,original_prompt:preset.prompt,reference:null};persist();paintPrompts();};
     el('prompt').oninput=()=>{const config=promptConfig();if(config&&!state.run){config.prompt=el('prompt').value;persist();paintPrompts();}};
     el('reset-prompt').onclick=()=>{const config=promptConfig();if(config&&!state.run){config.prompt=config.original_prompt;persist();paintPrompts();}};
@@ -163,7 +193,12 @@ const PaperToolbox=(()=>{
     function choose(tool){if(state.run||starting)return;state.tool=tool;el('import-result').textContent='';persist();updateTool();}
     panel.querySelectorAll('[data-tb-tool]').forEach(button=>button.onclick=()=>choose(button.dataset.tbTool));
     function pins(){const ids=read('rw-paper-tool-pins',[]);el('pins').innerHTML=ids.filter(id=>tools.some(tool=>tool.id===id)).map(id=>`<button class="pw-text-button" type="button" data-tb-pinned="${id}">${h(tools.find(tool=>tool.id===id).name)}</button>`).join('');el('pins').querySelectorAll('button').forEach(button=>button.onclick=()=>choose(button.dataset.tbPinned));el('pin').textContent=ids.includes(state.tool)?'取消固定':'固定当前工具';}
-    function updateTool(){const diagram=state.tool==='mermaid',images=['caption','image_convert'].includes(state.tool);const format=panel.querySelector('[name=format]');format.innerHTML=(state.tool==='image_convert'?['png','jpg','jpeg','pdf','webp','tiff']:['docx','md','html','pdf']).map(value=>`<option value="${value}">${value.toUpperCase()}</option>`).join('');format.value=state.format;if(!format.value){format.selectedIndex=0;state.format=format.value;}panel.querySelectorAll('[data-tb-tool]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.tbTool===state.tool)));el('description').textContent=tools.find(tool=>tool.id===state.tool)?.description||'';el('direction-row').hidden=state.tool!=='translate';el('format-row').hidden=!['convert','image_convert'].includes(state.tool);el('terminology-row').hidden=!['translate','polish'].includes(state.tool);el('text').closest('label').hidden=['pdf_translate','image_convert'].includes(state.tool);el('text').placeholder=state.tool==='caption'?'可选：研究背景、已有图注或需要强调的信息':'粘贴需要处理的内容';el('text').closest('.ptb-editors').hidden=diagram;panel.querySelector('.ptb-config').hidden=diagram;el('mermaid').hidden=!diagram;if(diagram&&!diagramView)diagramView=MermaidTool.mount(el('mermaid'));error('');pins();loadPapers();paint();}
+    function updateTool(){const diagram=state.tool==='mermaid',images=['caption','image_convert'].includes(state.tool);const direct=documentMode(),format=panel.querySelector('[name=format]');
+      const sourceFormat={markdown:'md',htm:'html'}[state.document?.format]||state.document?.format;
+      const formats=direct?documentConversion.outputs.filter(value=>value!==sourceFormat):state.tool==='image_convert'?['png','jpg','jpeg','pdf','webp','tiff']:['docx','md','html','pdf'];
+      format.innerHTML=formats.map(value=>`<option value="${value}">${value.toUpperCase()}</option>`).join('');format.value=state.format;if(!format.value){format.selectedIndex=0;state.format=format.value;}panel.querySelectorAll('[data-tb-tool]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.tbTool===state.tool)));el('description').textContent=tools.find(tool=>tool.id===state.tool)?.description||'';el('direction-row').hidden=state.tool!=='translate';el('format-row').hidden=!['convert','image_convert'].includes(state.tool);el('terminology-row').hidden=!['translate','polish'].includes(state.tool);panel.querySelector('[name=model_id]').closest('label').hidden=state.tool==='convert';
+      el('text').closest('label').hidden=false;el('text').readOnly=!!direct;el('text').value=direct?'':state.text;
+      el('text').placeholder=direct?(state.document?'原文件：'+state.document.name:'选择或拖入要转换的原文件'):state.tool==='caption'?'可选：研究背景、已有图注或需要强调的信息':'粘贴需要处理的内容';el('text').closest('.ptb-editors').hidden=diagram||['pdf_translate','image_convert'].includes(state.tool);panel.querySelector('.ptb-config').hidden=diagram;el('mermaid').hidden=!diagram;if(diagram&&!diagramView)diagramView=MermaidTool.mount(el('mermaid'));error('');pins();loadPapers();paint();}
     el('pin').onclick=()=>{const ids=read('rw-paper-tool-pins',[]);localStorage.setItem('rw-paper-tool-pins',JSON.stringify(ids.includes(state.tool)?ids.filter(id=>id!==state.tool):[...ids,state.tool]));pins();};
     el('close').onclick=()=>{diagramView?.destroy();diagramView=null;panel.remove();panel=null;document.getElementById('paperToolbox')?.focus();};
     panel.onkeydown=event=>{if(event.key==='Escape'&&!host){event.preventDefault();event.stopPropagation();el('close').click();}};
@@ -173,9 +208,9 @@ const PaperToolbox=(()=>{
     el('save').onclick=async()=>{if(!state.project_id)return error('请选择要保存结果的项目');const button=el('save');button.disabled=true;try{const saved=await api('/api/paper-toolbox/save',{project_id:state.project_id,run_id:state.result_run_id,title:tools.find(tool=>tool.id===state.tool)?.name||'论文工具结果'});if(el('status'))el('status').textContent='已保存：'+saved.path;}catch(err){error(err.message);}finally{if(button.isConnected)button.disabled=false;}};
     el('run').onclick=async()=>{
       if(state.run||starting)return;error('');starting=true;paint();
-      try{const request={...state,image_ids:(state.images||[]).map(item=>item.asset_id),request_key:crypto.randomUUID(),paper_id:el('paper').value};delete request.result;delete request.run;delete request.prompt_configs;const config=promptConfig();if(config)Object.assign(request,{prompt_preset:config.preset_id,prompt:config.prompt,prompt_template:config.reference});const made=await api('/api/paper-toolbox/start',request);
+      try{const request={...state,document_asset_id:documentMode()?state.document?.asset_id:'',image_ids:(state.images||[]).map(item=>item.asset_id),request_key:crypto.randomUUID(),paper_id:el('paper').value};delete request.result;delete request.run;delete request.prompt_configs;const config=promptConfig();if(config)Object.assign(request,{prompt_preset:config.preset_id,prompt:config.prompt,prompt_template:config.reference});const made=await api('/api/paper-toolbox/start',request);
         if(state.tool==='pdf_translate'){state.result='';state.path='';state.result_run_id='';persist();paint();el('status').textContent=made.msg||'PDF 翻译已启动，可在项目文献中查看';pollPdf(request.paper_id,state.project_id);return;}
-        state.result='';state.path='';state.files=[];state.result_run_id='';state.run={key:made.request_key,api:'/api/agent',runId:made.run_id,cursor:0,status:'running',request:{task_id:made.chat_id}};persist();paint();follow();
+        state.result='';state.path='';state.files=[];state.document_result=false;state.result_run_id='';state.run={key:made.request_key,api:'/api/agent',runId:made.run_id,cursor:0,status:'running',request:{task_id:made.chat_id}};persist();paint();follow();
       }catch(err){error(err.message);}finally{starting=false;paint();}
     };
     updateTool();if(state.run)follow();if(state.tool==='mermaid')diagramView?.focus();else el('text').focus({preventScroll:true});
@@ -185,7 +220,7 @@ const PaperToolbox=(()=>{
     if(following||!state.run)return;following=true;const run=state.run;
     try{await observeAgentRun(run,event=>{
       if(event.type==='tool_result'&&el('status'))el('status').textContent=event.summary;
-      if(event.type==='toolbox_result'){state.result=event.content||'';state.path=event.path||'';state.files=event.files||[];state.errors=event.errors||[];}
+      if(event.type==='toolbox_result'){state.result=event.content||'';state.path=event.path||'';state.files=event.files||[];state.errors=event.errors||[];state.document_result=event.engine==='pandoc';}
       if(event.type==='done'){state.result=event.content||state.result;state.result_run_id=run.runId;}
       if(event.type==='error')error(event.message||'处理失败');
       persist();paint();
@@ -196,6 +231,12 @@ const PaperToolbox=(()=>{
     try{const data=await api('/api/paper-toolbox/result?run_id='+encodeURIComponent(runId)+'&project_id='+encodeURIComponent(project||'')),dialog=document.createElement('dialog');dialog.className='pt-dialog';dialog.setAttribute('aria-label','论文工具处理记录');
       dialog.innerHTML=`<header class="history-preview-head"><h3>${h(data.title)}</h3><button type="button" class="pw-text-button" data-result-close>关闭</button></header><p class="hint">${h({done:'处理完成',running:'正在处理',pending:'等待处理',failed:'处理失败',cancelled:'已停止'}[data.status]||data.status)}</p><pre class="history-preview">${h(data.content||'处理结果将在完成后保存。可关闭此窗口，在看板中跟踪进度。')}</pre>${data.path?'<button type="button" class="btn" data-result-file>打开转换文件</button>':''}`;
       dialog.querySelector('[data-result-close]').onclick=()=>dialog.close();const file=dialog.querySelector('[data-result-file]');if(file)file.onclick=()=>api('/api/conv/open',{path:data.path}).catch(err=>uiNotify(err.message));dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
+      for(const result of data.files||[]){
+        if(!Object.hasOwn(result,'project_id'))continue;
+        const download=document.createElement('a');
+        download.className='btn ghost';download.download='';download.href=fileUrl(result,data.project_id);
+        download.textContent='下载 '+result.name;dialog.append(download);
+      }
       if(data.prompt)dialog.querySelector('.history-preview').insertAdjacentHTML('beforebegin',`<details class="pt-preview"><summary>本次提示词 · ${h(data.prompt.title)}${data.prompt.revision?' · v'+h(data.prompt.revision):''}${data.prompt.modified?' · 本次已修改':''}</summary><pre>${h(data.prompt.text)}</pre></details>`);
     }catch(err){uiNotify(err.message);}
   }

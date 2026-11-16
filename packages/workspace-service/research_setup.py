@@ -174,6 +174,7 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
                         'executor_binding_id': team_grant['id'] if team_node else expert['binding_id'],
                         'member_id': str(node.get('member_id') or '') if team_node else '',
                         'review_required': node.get('manual_review_required', False) or (node['review_required'] and not automatic),
+                        **({'claim_audit': True} if full and node['step'] == 'review' else {}),
                         'skills': selected})
                 override = project_workflows.save(db, pid, {**(definition or template), 'layout_id': template_id,
                     'name': str(args.get('workflow_name') or result['title'] + '科研流程')[:120],

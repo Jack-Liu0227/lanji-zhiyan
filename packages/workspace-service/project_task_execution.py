@@ -367,6 +367,14 @@ def execute(db, task_run_id, cancel_check=None):
             output = _outputs(db, {**task, 'output_contract': {}} if waiting_for_team else task, run, out or {}, capture)
             checkpoint = {"input": context, "reply": (out or {}).get("reply", ""),
                           "output": capture or output, "agent_run_id": (out or {}).get("run_id", "")}
+            if stage == "review" and node.get("claim_audit") and not waiting_for_team:
+                from claim_audit import assess
+                source = workflow._accepted_workflow_manuscript(db, task["project_id"], "write")
+                if source:
+                    audit = assess(db, task["project_id"], source.read_text(encoding="utf-8"), db.runtime_model)
+                else:
+                    audit = {"claims": [], "warnings": ["本次运行缺少可核查的已交付原稿。"], "requires_review": True}
+                checkpoint["claim_audit"] = audit
             execution.check()
             return tasks.complete(db, run["id"], {"reply": checkpoint["reply"], "output_snapshot": output, "checkpoint": checkpoint})
     except Exception as exc:

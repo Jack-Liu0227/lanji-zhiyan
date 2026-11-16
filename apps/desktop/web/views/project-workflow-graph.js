@@ -34,6 +34,7 @@ const ProjectWorkflowGraph=(()=>{
         if(state.mode!=='config')return;const node=state.layout.nodes.find(node=>node.id===state.selected);if(!node||!el('label'))return;
         node.label=el('label').value.trim();node.step=el('step').value;node.prompt=el('prompt').value;node.review_required=el('review').checked;node.manual_review_required=el('manual-review').checked;
         node.manual_execution=el('manual-execution').checked;
+        node.claim_audit=node.step==='review'&&!node.manual_execution&&el('claim-audit').checked;
         node.executor_binding_id=el('binding').value;node.member_id=el('member').value;
         node.node_kind=el('kind').value;
         if(node.node_kind==='tool'){node.tool_name=el('tool-name').value.trim();try{node.tool_args=JSON.parse(el('tool-args').value||'{}');}catch{throw new Error('固定工具参数须为有效 JSON 对象');}}
@@ -88,6 +89,7 @@ const ProjectWorkflowGraph=(()=>{
           <label class="pwg-check"><input type="checkbox" data-pwg-review ${node.review_required!==false?'checked':''}>生成产物后需要人工审查</label>
           <label class="pwg-check"><input type="checkbox" data-pwg-manual-review ${node.manual_review_required?'checked':''}>强制人工核查，自动推进模式也需等待确认</label>
           <label class="pwg-check"><input type="checkbox" data-pwg-manual-execution ${node.manual_execution?'checked':''}>本节点由我完成并提交产物</label>
+          <label class="pwg-check"><input type="checkbox" data-pwg-claim-audit ${node.claim_audit?'checked':''}>核查稿件结论与 PDF 原文；证据不足时暂停交付</label>
           <fieldset class="pwg-dependencies"><legend>前置节点</legend>${state.layout.nodes.filter(item=>item.id!==node.id).map(item=>{const edge=parents.get(item.id);return `<div data-pwg-edge><label><input type="checkbox" data-pwg-parent="${h(item.id)}" ${edge?'checked':''}>${h(item.label)}</label><div data-pwg-handoff><input class="control" data-pwg-artifact aria-label="上游产物文件名 · ${h(item.label)}" placeholder="产物文件名（可选）" value="${h(edge?.artifact||'')}"><input class="control" data-pwg-argument aria-label="固定工具参数名 · ${h(item.label)}" placeholder="固定工具参数名（可选）" value="${h(edge?.argument||'')}"></div></div>`;}).join('')||'<span class="hint">暂无其他节点</span>'}</fieldset>
           <details><summary>工具与技能范围</summary><label>允许工具 ID<textarea class="control" data-pwg-tools rows="2" placeholder="留空跟随执行者配置">${h((node.tools||[]).join(', '))}</textarea></label><label>允许技能 ID<textarea class="control" data-pwg-skills rows="2" placeholder="留空跟随执行者配置">${h((node.skills||[]).join(', '))}</textarea></label></details>
           <div class="pwg-actions"><button class="btn btn-primary" data-pwg-save>保存节点</button><button class="btn ghost" data-pwg-remove ${state.layout.nodes.length<=1?'disabled':''}>删除节点</button></div>`:`<p class="hint">本次运行使用已固定的节点配置。编辑下一次运行请切换到“节点配置”。</p><h4>任务要求</h4><pre>${h(node.prompt||'跟随研究阶段要求')}</pre><p class="hint">${node.review_required!==false?'人工审查节点':'按运行策略交付'}</p>`}
@@ -100,8 +102,12 @@ const ProjectWorkflowGraph=(()=>{
             field.querySelector('[data-pwg-handoff]').hidden=!field.querySelector('[data-pwg-parent]').checked;
             field.querySelector('[data-pwg-argument]').hidden=el('kind').value!=='tool';
           });
-          el('inspector').onchange=updateHandoffs;
-          updateHandoffs();
+          const updateEvidenceCheck=()=>{
+            const audit=el('claim-audit');
+            audit.closest('label').hidden=el('step').value!=='review'||el('manual-execution').checked;
+          };
+          el('inspector').onchange=()=>{updateHandoffs();updateEvidenceCheck();};
+          updateHandoffs();updateEvidenceCheck();
           drawMember(node);el('binding').onchange=()=>{state.changed=true;node.member_id='';drawMember(node);};
           el('inspector').querySelectorAll('input,select,textarea').forEach(input=>input.addEventListener('input',()=>{state.changed=true;}));
           el('save').onclick=state.save;

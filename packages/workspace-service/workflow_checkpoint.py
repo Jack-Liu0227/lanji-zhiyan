@@ -164,7 +164,9 @@ def _dag_graph(db, run, nodes, execute_node):
 def drive(db, run, execute_node):
     nodes = list(run['settings']['task_ids'].items())
     graph = _dag_graph(db, run, nodes, execute_node) if run['settings'].get('dag_scheduler') else _linear_graph(db, nodes, execute_node)
-    config = {'configurable': {'thread_id': run['id']}, 'recursion_limit': max(50, len(nodes) * 4 + 10)}
+    epoch = run['settings'].get('checkpoint_epoch', 0)
+    thread_id = run['id'] if not epoch else f"{run['id']}:rework:{epoch}"
+    config = {'configurable': {'thread_id': thread_id}, 'recursion_limit': max(50, len(nodes) * 4 + 10)}
     # LangGraph persists in background threads; never share the UI's SQLite connection.
     with closing(sqlite3.connect(db.path, check_same_thread=False, timeout=60)) as connection:
         saver = SqliteSaver(connection, serde=JsonPlusSerializer(allowed_msgpack_modules=None))
@@ -175,7 +177,7 @@ def drive(db, run, execute_node):
         result = compiled.invoke(value, config)
         snapshot = compiled.get_state(config)
         run['settings']['checkpoint'] = {
-            'thread_id': run['id'], 'checkpoint_id': snapshot.config['configurable']['checkpoint_id'],
+            'thread_id': thread_id, 'checkpoint_id': snapshot.config['configurable']['checkpoint_id'],
             'next': list(snapshot.next), 'values': dict(snapshot.values),
             'interrupts': [item.value for task in snapshot.tasks for item in task.interrupts]}
         import workflow_tasks

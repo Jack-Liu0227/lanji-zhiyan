@@ -594,9 +594,19 @@ def _snapshot_inputs(db, task, run_id):
         if child["status"] == "delivered":
             detail = get(db, child["id"])
             children.append({"task_id": child["id"], "delivery_id": child["accepted_delivery_id"], "outputs": detail["outputs"]})
-    return {"goal": task["goal"], "assets": assets, "dependencies": dependencies, "handoffs": handoffs,
-            "children": children, "feedback": rejected["feedback"] if rejected else "",
-            "execution_context": {k: v for k, v in task["metadata"].items() if not k.startswith("_")}}
+    snapshot = {"goal": task["goal"], "assets": assets, "dependencies": dependencies, "handoffs": handoffs,
+                "children": children, "feedback": task["metadata"].get("_return_feedback") or (rejected["feedback"] if rejected else ""),
+                "execution_context": {k: v for k, v in task["metadata"].items() if not k.startswith("_")}}
+    base_run_id = task["metadata"].get("_return_base_run")
+    if base_run_id:
+        base = get_run(db, base_run_id)
+        if base["task_id"] != task["id"]:
+            raise ValueError("返工基准不属于当前节点")
+        revision = base["checkpoint"].get("output_revision", 0)
+        snapshot.update(base_run_id=base_run_id, base_revision=revision, base_output={
+            **base["output_snapshot"], "draft_authorization": {
+                "source": "human_rework", "task_id": task["id"], "task_run_id": base_run_id, "output_revision": revision}})
+    return snapshot
 
 
 def _policy(db, task, authority, mode=None):
@@ -750,7 +760,8 @@ def _effective_policy(task, run):
 
 
 def manual_review_required(task, run=None):
-    return bool(task.get('scope', {}).get('manual_review_required') or
+    return bool((run or {}).get('checkpoint', {}).get('claim_audit', {}).get('requires_review') or
+                task.get('scope', {}).get('manual_review_required') or
                 task.get('metadata', {}).get('node_config', {}).get('manual_review_required') or
                 (run or {}).get('policy_snapshot', {}).get('manual_review_required'))
 
@@ -899,7 +910,8 @@ def complete(db, run_id, result):
         import task_output_versions
         task_output_versions.remember(db, task, {**candidate, 'status': 'succeeded'}, commit=False)
         _event(db, task["id"], "waiting_children" if waiting else "output_ready", {}, run_id)
-        if not waiting and not manual_review_required(task, candidate) and (not task["review_required"] or policy["autonomy_mode"] == "full_access"):
+        evidence_hold = checkpoint.get("claim_audit", {}).get("requires_review", False)
+        if not waiting and not evidence_hold and not manual_review_required(task, candidate) and (not task["review_required"] or policy["autonomy_mode"] == "full_access"):
             _decision(db, task, candidate, approved=True, source="policy", actor_id="", feedback="", request_key="policy:" + run_id)
     _notify(db, task["id"])
     value = get(db, task["id"])
@@ -928,6 +940,8 @@ def review(db, task_id, *, approved, feedback="", authority, request_key="", rev
     if task["status"] != "awaiting_review" or not run or run["status"] != "succeeded":
         raise ValueError("该任务当前不在待验收状态")
     if approved:
+        if run["checkpoint"].get("claim_audit", {}).get("requires_review") and not feedback:
+            raise ValueError("存在未通过的证据项，请填写人工复核依据后再确认")
         _validate_versions(db, task, run)
     with _lock, _atomic(db):
         current = _task(db, task_id)

@@ -77,3 +77,48 @@ class PaperToolboxTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'本地预览和导出'):
                 paper_toolbox.start(self.db,{'tool':'mermaid','text':'flowchart LR\n A --> B'})
             jobs.assert_not_called();model.assert_not_called()
+
+
+    def test_original_file_conversion_checks_input_scope_and_engine_availability(self):
+        import base64
+        import document_convert
+
+        upload = {'tool': 'convert', 'mode': 'document', 'name': '研读.md',
+                  'project_id': self.pid, 'data': base64.b64encode(b'# Report').decode()}
+        with patch.object(document_convert,'executable',return_value=None):
+            with self.assertRaisesRegex(ValueError,'需要 Pandoc'):
+                paper_toolbox.route('POST','/api/paper-toolbox/import',upload,{},self.db)
+        staged = document_convert.upload(self.db,upload)
+        with self.assertRaisesRegex(ValueError,'当前项目'):
+            document_convert.input_asset(self.db,'',staged['asset_id'],'docx')
+        with self.assertRaisesRegex(ValueError,'不同'):
+            document_convert.input_asset(self.db,self.pid,staged['asset_id'],'md')
+        with self.assertRaisesRegex(ValueError,'Word 文件无法读取'):
+            document_convert.upload(self.db,{**upload,'name':'wrong.docx'})
+
+    def test_pandoc_reopens_word_and_keeps_table_in_original_file_mode(self):
+        import base64
+        import document_convert
+        from docx import Document
+
+        if not document_convert.executable():
+            self.skipTest('Pandoc is not available')
+        body = '# 中文课题\n\n| Name | Value |\n|---|---|\n| Cu | 89% |\n'
+        source = {'tool':'convert','mode':'document','name':'课题.md',
+                  'project_id':self.pid,'data':base64.b64encode(body.encode()).decode()}
+        picked = paper_toolbox.route('POST','/api/paper-toolbox/import',source,{},self.db)
+        with patch.object(workflow,'chat_raw',side_effect=AssertionError('conversion called a model')):
+            exported = paper_toolbox.transform(self.db,self.pid,{'tool':'convert','format':'docx',
+                                                'document_asset_id':picked['asset_id']})
+        self.assertEqual(exported['engine'],'pandoc')
+        document = Document(exported['path'])
+        self.assertEqual(document.paragraphs[0].text,'中文课题')
+        self.assertEqual(document.tables[0].cell(1,1).text,'89%')
+        saved_path=Path(exported['path'])
+        word=paper_toolbox.route('POST','/api/paper-toolbox/import',
+            {**source,'name':'课题.docx','data':base64.b64encode(saved_path.read_bytes()).decode()},{},self.db)
+        html=paper_toolbox.transform(self.db,self.pid,{'tool':'convert','format':'html','document_asset_id':word['asset_id']})
+        converted=Path(html['path']).read_text(encoding='utf-8')
+        self.assertRegex(converted,r'<table(?:\s|>)')
+        self.assertIn('89%',converted)
+        self.assertIn('Content-Security-Policy',converted)

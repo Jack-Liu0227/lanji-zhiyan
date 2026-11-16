@@ -1015,14 +1015,16 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                 return self._stream_execution_board(q)
             if path == '/api/paper-toolbox/file':
                 import asset_service
-                with WorkflowDB(DB_PATH) as db:
-                    asset=asset_service.get(db,(q.get('asset_id') or [''])[0])
-                    if not asset or asset['project_id']!=(q.get('project_id') or [''])[0] or asset['source'] not in ('image_conversion','image_caption'):
-                        return self._json({'error':'文件不存在或不属于当前项目'},404)
-                    target=Path(asset['canonical_uri'])
-                    if not target.is_file():return self._json({'error':'文件已移动'},404)
-                    return self._send(200,target.read_bytes(),asset['mime'] or 'application/octet-stream',
-                                      {'Content-Disposition':"attachment; filename*=UTF-8''"+urllib.parse.quote(target.name)})
+                with WorkflowDB(DB_PATH) as tb_db:
+                    asset = asset_service.get(tb_db, (q.get("asset_id") or [""])[0])
+                    if (not asset or asset["project_id"] != (q.get("project_id") or [""])[0]
+                            or asset["source"] not in ("image_conversion", "image_caption", "document_conversion")):
+                        return self._json({"error": "文件不存在或不属于当前项目"}, 404)
+                    target = Path(asset["canonical_uri"])
+                    if not target.is_file():
+                        return self._json({"error": "文件已移动"}, 404)
+                    return self._send(200, target.read_bytes(), asset["mime"] or "application/octet-stream",
+                                      {"Content-Disposition": "attachment; filename*=UTF-8''" + urllib.parse.quote(target.name)})
             if self._extension_route("GET", path, {}, q):
                 return
             if self._mail_route("GET", path, q, None):

@@ -593,7 +593,7 @@ TOOL_RISK = {
     "outline_write": "workspace_write", "map_write": "workspace_write", "doc_write": "workspace_write",
     "cite_add": "workspace_write", "cite_bib": "workspace_write", "memory_save": "workspace_write", "notes": "workspace_write",
     "memory": "workspace_write", "recall": "read_only", "skill_write": "workspace_write",
-    "notes_compose": "workspace_write", "idea_review": "workspace_write", "paper_read": "workspace_write",
+    "notes_compose": "workspace_write", "idea_review": "workspace_write", "paper_read": "workspace_write", "paper_evidence_record": "workspace_write",
     "read": "workspace_write", "draft_write": "workspace_write", "draft_review": "workspace_write",
     "calendar_add": "workspace_write", "team_assign": "workspace_write", "team_form": "workspace_write",
     "project_create": "workspace_write", "schedule_manage": "workspace_write", "calendar_list": "read_only",
@@ -1104,6 +1104,9 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         if paper and paper.get('source_path'):
             asset_service.require_path_context(db, task_id, paper['source_path'])
         return stage_read(db, task_id, args.get("paper_id", ""))
+    if name == "paper_evidence_record":
+        from claim_audit import record
+        return record(db, task_id, args.get("paper_id"), args.get("items"))
     if name == "paper_translate":
         import papertran
         pid = str(args.get("paper_id") or "")

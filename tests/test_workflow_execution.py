@@ -69,6 +69,68 @@ class WorkflowExecutionTest(unittest.TestCase):
         self.assertEqual(len(self.seen), 2)
         self.assertEqual(engine.create(self.db, self.pid, idempotency_key="request-one")["id"], run["id"])
 
+    def test_claim_audit_blocks_automatic_delivery_and_rework_uses_new_manuscript(self):
+        import project_tasks
+        import workflow_node_workbench as bench
+
+        self.layout([{"step": "outline", "review_required": False}, {"step": "write", "review_required": False},
+                     {"step": "review", "review_required": False, "claim_audit": True}])
+        self.db.add_model("Fixture", "http://127.0.0.1:1/v1", "fixture", "", activate=True)
+        from _pdf_fixture import write_text_pdf
+        source = "After 100 cycles retention was 89% under the baseline protocol."
+        pdf = write_text_pdf(self.db.pdir(self.pid, "文献库") / "source.pdf", [source])
+        paper = self.db.ingest_pdf(self.pid, pdf)
+        evidence_input = {"paper_id": paper["id"], "items": [{"page_no": 1, "field": "retention",
+                          "value": "89%", "excerpt": source}, {"page_no": 2, "field": "retention",
+                          "value": "99%", "excerpt": "This text does not exist in the PDF"}]}
+        evidence_result = workflow._tool_impl("paper_evidence_record", self.db, self.pid, evidence_input)
+        self.assertEqual(len(evidence_result["rejected"]), 1)
+        evidence = evidence_result["accepted"][0]
+        self.assertEqual(workflow._tool_impl("paper_evidence_record", self.db, self.pid, evidence_input)["accepted"], [evidence])
+        run = engine.create(self.db, self.pid)
+        attempts, feedback = [], []
+        original = "After 100 cycles retention was 99% under the baseline protocol."
+        def execute(db, pid, prompt, **kwargs):
+            stage = kwargs["scope"]
+            attempts.append(stage)
+            if stage == "write":
+                feedback.append(kwargs["extra_context"])
+            manuscript = original if attempts.count("write") == 1 else source
+            workflow.doc_write(db, pid, stage, manuscript if stage == "write" else "# " + stage)
+            return {"reply": stage, "output_assets": []}
+        def check_claim(_profile, messages):
+            fragment = json.loads(messages[-1]["content"])["manuscript"]
+            return {"claims": [{"text": fragment.strip(), "status": "supported", "evidence_ids": [evidence["id"]]}]}
+        with patch.object(workflow, "run_agent", side_effect=execute), \
+             patch.object(workflow, "chat_json", side_effect=check_claim), \
+             patch.object(engine, "kick"):
+            first = engine.advance(self.db, run["id"])
+            self.assertEqual(first["status"], "awaiting_review", first["error"])
+            ids = first["settings"]["task_ids"]
+            authority = project_tasks.CommandContext.ui(self.pid)
+            selection = bench.Selection(self.pid, ids["review"])
+            review = bench.read(self.db, selection, authority=authority)
+            claim = review["claim_audit"]["claims"][0]
+            self.assertEqual(claim["status"], "partial")
+            self.assertTrue(claim["sources"][0]["anchored"])
+            with self.assertRaisesRegex(ValueError, "人工复核依据"):
+                project_tasks.review(self.db, ids["review"], approved=True, authority=authority)
+            prior = project_tasks.get(self.db, ids["write"])
+            decision = {"action": "return-to-stage", "identity": review["identity"], "target_node_id": "write",
+                        "feedback": "用 89% 更正数值", "request_key": "repair-audit"}
+            result = bench.command(self.db, ids["review"], decision, authority=authority)
+            self.assertEqual(result["target_task_id"], ids["write"])
+            self.assertEqual(bench.command(self.db, ids["review"], decision, authority=authority), result)
+            self.assertEqual(project_tasks.get(self.db, ids["outline"])["status"], "delivered")
+            reworked = engine.advance(self.db, run["id"])
+            self.assertEqual(reworked["status"], "succeeded", reworked["error"])
+            self.assertEqual(attempts, ["outline", "write", "review", "write", "review"])
+            self.assertIn("用 89% 更正数值", feedback[-1])
+            old_file = next(item for item in prior["outputs"] if item["name"] != "result.md")
+            self.assertIn("99%", Path(old_file["path"]).read_text(encoding="utf-8"))
+            current = bench.read(self.db, selection, authority=authority)
+            self.assertEqual(current["claim_audit"]["claims"][0]["status"], "supported")
+
     def test_review_translation_and_export_use_frozen_manuscripts(self):
         import workflow_converters
         import project_tasks
