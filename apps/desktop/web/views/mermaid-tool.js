@@ -78,20 +78,20 @@ const MermaidTool=(()=>{
       const pending=renderQueue.then(operation);renderQueue=pending.catch(()=>{});
       try{await pending;}catch(error){if(!disposed&&ticket===sequence){clear();el('empty').textContent='请修正代码后重新预览';fail(new Error(String(error.message||error).replace(/<[^>]+>/g,'').slice(0,1200)));el('status').textContent='图表未生成，导出按钮暂不可用';}}finally{if(ticket===sequence)rendering=false;}
     }
-    function download(blob,extension){const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=(state.filename.trim().replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/,'')||'科研流程图')+'.'+extension;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);}
+    const download=(blob,extension)=>exportBlob(blob,(state.filename.trim()||'科研流程图')+'.'+extension);
     el('theme').value=state.theme;el('background').value=state.background;el('zoom').value=state.zoom;
     el('code').oninput=()=>{state.code=el('code').value;schedule();};el('render').onclick=render;
     for(const field of ['theme','background'])el(field).onchange=()=>{state[field]=el(field).value;schedule();};
     el('zoom').onchange=()=>{state.zoom=el('zoom').value;persist();fit();};
     el('width').oninput=()=>{state.width=el('width').value;persist();paintSize();};el('filename').oninput=()=>{state.filename=el('filename').value;persist();};
     el('example').onchange=async()=>{const key=el('example').value;el('example').value='';if(!samples[key])return;if(state.code.trim()&&!Object.values(samples).includes(state.code)&&!await uiConfirm('用示例替换当前 Mermaid 代码？',{ok:'替换代码',cancel:'保留当前代码',danger:true}))return;state.code=samples[key];el('code').value=state.code;schedule();};
-    el('svg').onclick=()=>{try{if(rendering)return;download(new Blob([svg()],{type:'image/svg+xml;charset=utf-8'}),'svg');el('status').textContent='SVG 已导出，可无损缩放';}catch(error){fail(error);}};
+    el('svg').onclick=async()=>{try{if(rendering)return;const message=await download(new Blob([svg()],{type:'image/svg+xml;charset=utf-8'}),'svg');if(message)el('status').textContent=message;}catch(error){fail(error);}};
     el('png').onclick=async()=>{
       if(rendering||!diagram)return;const button=el('png');button.disabled=true;el('error').textContent='';let url='';
       try{const dimensions=size(),source=svg(),image=new Image();url=URL.createObjectURL(new Blob([source],{type:'image/svg+xml;charset=utf-8'}));image.src=url;await image.decode();
         const canvas=document.createElement('canvas');canvas.width=dimensions.width;canvas.height=dimensions.height;const context=canvas.getContext('2d');if(!context)throw new Error('无法创建图片画布');
         context.imageSmoothingEnabled=true;context.imageSmoothingQuality='high';context.drawImage(image,0,0,canvas.width,canvas.height);
-        const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('PNG 导出失败，请降低导出宽度');download(blob,'png');el('status').textContent='PNG 已导出 · '+dimensions.width+' × '+dimensions.height+' px';
+        const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('PNG 导出失败，请降低导出宽度');const message=await download(blob,'png');if(message)el('status').textContent=message+' · '+dimensions.width+' × '+dimensions.height+' px';
       }catch(error){fail(error);}finally{if(url)URL.revokeObjectURL(url);if(!disposed)button.disabled=!diagram;}
     };
     const observer=new ResizeObserver(fit);observer.observe(el('viewport'));render();

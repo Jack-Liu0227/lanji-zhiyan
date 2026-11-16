@@ -40,10 +40,22 @@ def capture(db, project_id: str, step: str) -> dict:
         payload = sorted(db.results(project_id), key=lambda r: r["id"])
         valid = bool(payload)
     elif step == "download":
+        from workflow_stages import MIN_READ_NOTE_CHARS, READ_NOTE_TITLE
         payload = sorted([{"id": p["id"], "title": p.get("title"), "sha256": p.get("sha256"),
                            "text_chars": p.get("text_chars"), "filename": p.get("filename")} for p in db.papers_of(project_id)],
                          key=lambda r: r["id"])
         valid = bool(payload)
+        # Freeze the reading evidence alongside the PDF inventory. Older
+        # standalone import actions can still record PDFs before reading them.
+        papers = {paper["id"]: paper for paper in payload}
+        for note in db.notes(project_id):
+            paper = papers.get(note.get("paper_id"))
+            if paper and str(note.get("title") or "").startswith(READ_NOTE_TITLE) and len((note.get("markdown") or "").strip()) >= MIN_READ_NOTE_CHARS:
+                paper.setdefault("reading_notes", []).append({
+                    "id": note["id"], "title": note["title"], "markdown": note["markdown"],
+                })
+        result["reading_note_count"] = sum(len(paper.get("reading_notes", [])) for paper in payload)
+        result["items"]["精读笔记"] = f"{result['reading_note_count']} 份"
     elif step == "notes":
         import papertran
         payload = papertran.deliveries(db, project_id)

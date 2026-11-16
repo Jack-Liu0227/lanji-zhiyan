@@ -256,9 +256,19 @@ def _wake_parent(db, task):
     if any(child["status"] != "delivered" for child in parent["children"]):
         return
     try:
+        flow = None
+        if parent["workflow_run_id"] and not parent["parent_task_id"]:
+            import workflow_execution
+            flow = workflow_execution.detail(db, parent["workflow_run_id"])
+            if flow["status"] in ("cancelled", "succeeded"):
+                return
         attempt = start(db, parent["id"], authority=CommandContext.system(parent["project_id"]), request_key="children:" + run["id"])
-        import project_task_execution
-        project_task_execution.kick(db.path, attempt["id"])
+        if flow:
+            workflow_execution._status(db, flow["id"], "queued")
+            workflow_execution.kick(db.path, flow["id"])
+        else:
+            import project_task_execution
+            project_task_execution.kick(db.path, attempt["id"])
     except Exception as exc:
         with _atomic(db):
             _event(db, parent["id"], "aggregation_blocked", {"error": str(exc)[:2000]}, run["id"])
@@ -565,13 +575,26 @@ def _snapshot_inputs(db, task, run_id):
         if dependency["status"] != "delivered" or not dependency["accepted_delivery_id"]:
             raise ValueError("等待依赖任务交付：" + dependency["title"])
         dependencies.append({"task_id": key, "delivery_id": dependency["accepted_delivery_id"], "outputs": dependency["outputs"]})
+    by_task = {item["task_id"]: item for item in dependencies}
+    handoffs = []
+    for binding in task["metadata"].get("handoffs", []):
+        upstream = by_task[binding["task_id"]]
+        matches = [file for file in upstream["outputs"] if file.get("name") == binding["artifact"]]
+        if len(matches) != 1:
+            raise ValueError(f"上游节点 {binding['source']} 必须交付唯一的文件：{binding['artifact']}")
+        output = matches[0]
+        path = Path(output["path"]).resolve()
+        digest = output.get("content_hash") or output.get("sha256")
+        if not digest or not path.is_relative_to(root) or not path.is_file() or _hash(path) != digest:
+            raise ValueError(f"交接文件已变化或不可读取：{binding['artifact']}")
+        handoffs.append({**binding, "delivery_id": upstream["delivery_id"], "path": str(path), "content_hash": digest})
     rejected = db.db.execute("SELECT feedback FROM project_task_deliveries WHERE task_id=? AND decision='rejected' ORDER BY rowid DESC LIMIT 1", (task["id"],)).fetchone()
     children = []
     for child in get(db, task["id"])["children"]:
         if child["status"] == "delivered":
             detail = get(db, child["id"])
             children.append({"task_id": child["id"], "delivery_id": child["accepted_delivery_id"], "outputs": detail["outputs"]})
-    return {"goal": task["goal"], "assets": assets, "dependencies": dependencies,
+    return {"goal": task["goal"], "assets": assets, "dependencies": dependencies, "handoffs": handoffs,
             "children": children, "feedback": rejected["feedback"] if rejected else "",
             "execution_context": {k: v for k, v in task["metadata"].items() if not k.startswith("_")}}
 
@@ -624,12 +647,14 @@ def block_start(db, task_id, error, *, authority):
     return get(db, task_id)
 
 
-def start(db, task_id, *, authority, request_key="", autonomy_mode=None, restart=False):
+def start(db, task_id, *, authority, request_key="", autonomy_mode=None, restart=False, manual_submission=False):
     import project_bindings
     task = _task(db, task_id)
     if task['metadata'].get('deleted_at'):
         raise ValueError('任务已删除，请先恢复任务记录')
     _authority(authority, task["project_id"])
+    if task["metadata"].get("node_config", {}).get("manual_execution") and not manual_submission:
+        raise ValueError("该节点由人工完成，请在工作流运行页提交产物")
     import research_plans
     research_plans.check_dependencies(db, task_id)
     if restart and authority.source == "agent":

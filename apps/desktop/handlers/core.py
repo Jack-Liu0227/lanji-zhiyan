@@ -6,11 +6,11 @@ DB_PATH 这类运行期常量在函数里 `from server import ...` 现取：启�
 模块导入期就绑死会拿到旧值。
 """
 from typing import Any
-import json
 
 import os
 import subprocess
 import sys
+import json
 import time
 import workflow_layout
 from workflow_catalog import STAGE_CATALOG
@@ -97,36 +97,37 @@ class CoreRoutes:
                 return self._json({"notes": db.notes(tid) if tid else db.notes()})
         if path == "/api/chat":
             with WorkflowDB(DB_PATH) as db:
-                import execution_conversations
-                linked=execution_conversations.read(db,q["id"][0])
-                if linked is not None:return self._json(linked)
-                chat_id=q["id"][0]
-                # Keep the durable chat history untouched, but project the
-                # same user turn only once. This also covers the short window
-                # where the optimistic browser event and the worker's stored
-                # message overlap after a failed run.
-                messages=execution_conversations.visible_messages(db.messages(chat_id))
-                # Failed Agent runs are durable in the run ledger, but older
-                # clients only persisted successful assistant messages. Add a
-                # replayable terminal turn so a reload still shows the failure
-                # and its recorded execution events in the conversation.
-                import workspace_trajectory
-                row=db.db.execute("SELECT * FROM tasks WHERE owner_id=? AND kind='agent_run' ORDER BY rowid DESC LIMIT 1",(chat_id,)).fetchone()
-                if row and row['status'] in ('failed','interrupted') and not any(m.get('run_id')==row['id'] for m in messages):
-                    checkpoint=row['checkpoint'] or {}
-                    if isinstance(checkpoint,str):checkpoint=json.loads(checkpoint or '{}')
-                    event_rows=db.get_run_events(row['id'])
-                    events=[workspace_trajectory.redact(item['payload'] if isinstance(item['payload'],dict) else json.loads(item['payload'])) for item in event_rows]
-                    reason=''
-                    for event in reversed(events):
-                        if event.get('type')=='error':
-                            reason=event.get('message') or event.get('error') or event.get('summary') or ''
-                            if reason:break
-                    reason=reason or checkpoint.get('error') or ''
-                    if reason=='error':reason='错误信息未返回，请展开执行轨迹查看已记录的模型与工具事件。'
-                    messages.append({'id':row['id'],'role':'assistant','content':'执行失败：'+str(reason),
-                                     'created_at':row['updated_at'] or row['created_at'],'status':row['status'],
-                                     'run_id':row['id'],'events':events})
+                from execution_conversations import read, visible_messages
+                from workspace_trajectory import safe_result
+
+                chat_id = q["id"][0]
+                execution = read(db, chat_id)
+                if execution is not None:
+                    return self._json(execution)
+                messages = visible_messages(db.messages(chat_id))
+                row = db.db.execute(
+                    "SELECT id, status, checkpoint, updated_at FROM tasks "
+                    "WHERE owner_id=? AND kind='agent_run' ORDER BY rowid DESC LIMIT 1",
+                    (chat_id,)).fetchone()
+                if row and row["status"] in ("failed", "interrupted") and not any(
+                    message.get("run_id") == row["id"] for message in messages
+                ):
+                    checkpoint = json.loads(row["checkpoint"] or "{}")
+                    raw_events = [item["payload"] for item in db.get_run_events(row["id"])
+                                  if isinstance(item["payload"], dict)]
+                    errors = [item.get("message") or item.get("error") or item.get("summary")
+                              for item in raw_events if item.get("type") == "error"]
+                    reason = next((value for value in reversed(errors) if value and value != "error"), None)
+                    reason = reason or checkpoint.get("error") or "请展开执行轨迹查看已记录的模型与工具事件。"
+                    if reason == "error":
+                        reason = "请展开执行轨迹查看已记录的模型与工具事件。"
+                    heading = "执行中断：" if row["status"] == "interrupted" else "执行失败："
+                    messages.append({"id": row["id"], "role": "assistant",
+                                     "content": heading + str(safe_result(reason)),
+                                     "created_at": row["updated_at"], "status": row["status"],
+                                     "run_id": row["id"],
+                                     "events": [safe_result(event) for event in raw_events[-100:]
+                                                if event.get("type") not in ("user", "assistant_delta", "reasoning_delta")]})
                 return self._json({"messages": messages})
         if path == "/api/security":                   # 权限模式：all=不再逐次问，ask=编译/写文件每次问
             with WorkflowDB(DB_PATH) as db:

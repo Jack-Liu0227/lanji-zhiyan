@@ -12,6 +12,7 @@ import workflow_layout
 
 _lock = threading.RLock()
 DEFAULT_SKILLS = {
+    'full_research': (),
     'research_proposal': ('research-topic-finder', 'nature-academic-search', 'brainstorming-research-ideas'),
     'literature_study': ('nature-academic-search', 'literature-review', 'nature-reader'),
     'paper_writing': ('nature-writing', 'nature-reviewer', 'academic-writing'),
@@ -28,19 +29,32 @@ def _permit(db, actor_id, name):
         raise PermissionError('管家当前未启用工具：' + name)
 
 
-def configure(db, args, *, project_id='', actor_id='builtin-steward', default_model_id=''):
+def configure(db, args, *, project_id='', actor_id='builtin-steward', default_model_id='', origin_chat_id=''):
     """Same plan/key resumes setup; never recreate a queued or completed run."""
     import workflow
     with _lock:
         idea = str(args.get('idea') or '').strip()
         if not idea or len(idea) > 20000: raise ValueError('研究目标须为 1 至 20000 字符')
         if 'auto_start_graph' in args and not isinstance(args['auto_start_graph'], bool): raise ValueError('auto_start_graph 必须是布尔值')
-        graph_type = str(args.get('graph_type') or 'research_proposal')
+        automatic = args.get('fully_automatic', False)
+        if not isinstance(automatic, bool):
+            raise ValueError('fully_automatic 必须是布尔值')
+        if automatic and actor_id != 'builtin-steward':
+            raise PermissionError('全流程自动装配由智研管家负责')
+        graph_type = str(args.get('graph_type') or ('full_research' if automatic else 'research_proposal'))
         if graph_type not in langgraph_workflow.GRAPH_REGISTRY: raise ValueError('科研流程模板不存在')
         graph = langgraph_workflow.GRAPH_REGISTRY[graph_type]()
+        full = graph_type == 'full_research' and args.get('workflow') is None
         experts = args.get('experts')
         if experts is None:
-            experts = [{'role_id': node.name, 'name': name} for node, name in zip(graph.nodes.values(), NAMES[graph_type])]
+            if full:
+                from workflow_catalog import LEGACY_TEAM_STAGES
+                experts = [{'role_id': stage, 'assistant_id': next(lead for lead, stages in LEGACY_TEAM_STAGES.items() if stage in stages)}
+                           for stage in graph.nodes]
+            elif graph_type == 'full_research':
+                raise ValueError('自定义完整流程时请同时配置专家角色')
+            else:
+                experts = [{'role_id': node.name, 'name': name} for node, name in zip(graph.nodes.values(), NAMES[graph_type])]
         if not isinstance(experts, list) or not 1 <= len(experts) <= 12: raise ValueError('专家配置须为 1 至 12 个角色')
         roles = [str(expert.get('role_id') or '') for expert in experts if isinstance(expert, dict)]
         if len(roles) != len(experts) or len(set(roles)) != len(roles) or any(not workflow_layout._ID.fullmatch(role) for role in roles):
@@ -118,20 +132,26 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
                 grant = _grant(db, pid, 'assistant', assistant['id'])
                 result['experts'].append({'role_id': role, 'assistant_id': assistant['id'], 'name': assistant['name'], 'binding_id': grant['id']})
                 save()
-            if not result.get('team_id'):
+            if full:
+                import team
+                offices = team.research_offices(db, pid)
+                result['team_ids'] = {lead: room['id'] for lead, room in offices.items()}
+                result['team_id'] = offices['builtin-literature-lead']['id']
+                save()
+            elif not result.get('team_id'):
                 team_name = str(args.get('team_name') or result['title'] + '研究团队')[:120]
                 team = next((team for team in db.teams() if team.get('project_id') == pid and team['name'] == team_name and team['status'] != 'archived'), None)
                 if not team: team = db.team_add(team_name, kind='custom', project_id=pid, purpose=idea)
                 result['team_id'] = team['id'];save()
-            members = db.team_members(result['team_id'])
-            for i, expert in enumerate(result['experts']):
+            members = db.team_members(result['team_id']) if not full else []
+            for expert in ([] if full else result['experts']):
                 member = next((member for member in members if member['assistant_id'] == expert['assistant_id']), None)
                 if not member:
                     member = db.team_member_add(result['team_id'], expert['name'], role='leader' if not members else 'member', assistant_id=expert['assistant_id'], prompt='负责角色：' + expert['role_id'])
                     members.append(member)
                 expert['member_id'] = member['id']
             save()
-            team_grant = _grant(db, pid, 'team', result['team_id'])
+            team_grant = _grant(db, pid, 'team', result['team_id']) if not full else None
             if not result.get('layout_id'):
                 template_id = langgraph_workflow._template(db, graph_type)
                 template = project_workflows.current(db, pid, template_id)
@@ -146,14 +166,14 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
                     if mode not in ('assistant', 'team'):
                         raise ValueError('工作流节点 execution_mode 必须是 assistant 或 team')
                     team_node = mode == 'team'
+                    if full:
+                        from workflow_catalog import LEGACY_TEAM_STAGES
+                        lead = next(lead for lead, stages in LEGACY_TEAM_STAGES.items() if node['step'] in stages)
+                        team_grant = _grant(db, pid, 'team', offices[lead]['id'])
                     configured.append({**node, 'execution_mode': mode,
                         'executor_binding_id': team_grant['id'] if team_node else expert['binding_id'],
-                        # Bind a team node to the expert selected for its role.
-                        # A caller can still override that member explicitly;
-                        # keeping the concrete identity on the frozen layout
-                        # also lets task cards and downstream context show who
-                        # actually owns the node.
-                        'member_id': str(node.get('member_id') or expert.get('member_id') or '') if team_node else '',
+                        'member_id': str(node.get('member_id') or '') if team_node else '',
+                        'review_required': node.get('manual_review_required', False) or (node['review_required'] and not automatic),
                         'skills': selected})
                 override = project_workflows.save(db, pid, {**(definition or template), 'layout_id': template_id,
                     'name': str(args.get('workflow_name') or result['title'] + '科研流程')[:120],
@@ -177,6 +197,7 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
                     # runs, without widening the rule for ordinary workflows or
                     # scheduled stages.
                     run['settings']['research_setup'] = True
+                    run['settings']['research_setup_chat_id'] = origin_chat_id
                     workflow_tasks._save(db, run)
                     result['run_id'] = run['id'];save()
                 else:
@@ -202,4 +223,5 @@ def _public(db, result, reused=False):
     run = workflow_execution.detail(db, result['run_id']) if result.get('run_id') else None
     return {**result, 'ok': True, 'reused': reused, 'status': run['status'] if run else 'configured',
             'langgraph_run_id': result.get('run_id'), 'workspace': {'project_id': result['project_id'], 'section': 'workflow'},
+            **({'navigation': {'project_id': result['project_id'], 'workflow_run_id': run['id']}} if run else {}),
             'message': '项目、专家、团队和流程已配置。' + ('研究执行状态：' + run['status'] if run else '尚未启动研究执行。')}

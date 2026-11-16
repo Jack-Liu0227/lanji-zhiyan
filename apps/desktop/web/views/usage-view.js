@@ -63,11 +63,14 @@ const UsageView=(()=>{
     priceTable(data,host.querySelector('[data-price-table]'));
     host.querySelector('[data-price-search]').oninput=event=>{priceSearch=event.target.value;priceTable(data,host.querySelector('[data-price-table]'));};
   }
-  function exportCSV(data){
+  async function exportCSV(data){
     const keys=['created_at','model','provider','title','status','attempt','prompt_tokens','output_tokens','cached_tokens','reasoning_tokens','duration_ms','first_token_ms','currency','cost_min','cost','cost_reason'];
     const cell=value=>'"'+String(value??'').replace(/^[=+@-]/,"'$&").replaceAll('"','""')+'"';
     const csv='\uFEFF'+[keys,...data.requests.map(row=>keys.map(key=>row[key]))].map(row=>row.map(cell).join(',')).join('\r\n');
-    const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})),link=document.createElement('a');link.href=url;link.download='模型调用用量.csv';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    try{
+      const message=await exportBlob(new Blob([csv],{type:'text/csv;charset=utf-8'}),'模型调用用量.csv');
+      if(message)uiNotify(message);
+    }catch(error){uiNotify('导出失败：'+error.message);}
   }
   async function render(host){
     if(route()!=='usage')return;

@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any
 
 import workflow
+from conversation_history import synchronized
 
 DB_PATH: Any = None          # 由 server.py 运行时注入（和 schedule.py 同一套路）
 
@@ -807,6 +808,9 @@ def _say(scope: str, text: str, start: bool = True) -> dict[str, Any]:
     if not text:
         raise ValueError("要说点什么")
     with workflow.WorkflowDB(_db_path()) as db:
+        room = db.team(scope)
+        if room and room['status'] in ('disabled', 'archived', 'dissolved'):
+            raise ValueError("团队已停用或解散")
         history_scope = _history_scope(db, scope)
         import team_orchestration
         active = team_orchestration.state(db, [scope], history_scope)
@@ -1083,6 +1087,32 @@ FIXED_TEAMS = [
     ("文献抽取", ["builtin-searcher", "builtin-chunker", "builtin-chartread", "builtin-extractor"]),
     ("文件撰写", ["builtin-outline", "builtin-writer", "builtin-paperwriting", "builtin-polish"]),
 ]
+
+
+def research_offices(db, project_id):
+    """Resolve the two project offices without touching another project's roster."""
+    offices = {}
+    existing = [room for room in db.teams() if room['kind'] == 'fixed' and room['project_id'] == project_id]
+    for name, roster in FIXED_TEAMS:
+        lead = FIXED_LEADERS[name]
+        room = next((item for item in existing if item['name'] == name or any(
+            member['role'] == 'leader' and member['assistant_id'] == lead
+            for member in db.team_members(item['id']))), None)
+        if room is None:
+            room = db.team_add(name, 'fixed', project_id=project_id)
+        leader = ensure_leader(room['id'], db)
+        if leader['assistant_id'] == 'builtin-steward':
+            raise ValueError(f'{name}需要配置专业负责人')
+        if not room.get('roster_initialized'):
+            if not any(member['role'] == 'member' for member in db.team_members(room['id'])):
+                for assistant_id in roster:
+                    assistant = db.require_assistant(assistant_id)
+                    db.team_member_add(room['id'], assistant['name'], 'member',
+                                       assistant_id=assistant_id, prompt=assistant['rules'])
+            db.db.execute("UPDATE teams SET roster_initialized=1 WHERE id=?", (room['id'],))
+            db.db.commit()
+        offices[lead] = room
+    return offices
 _PLACEHOLDER = re.compile(r"^团队\s*\d+$")      # 早期播的空占位团队
 
 
@@ -1213,7 +1243,7 @@ def new_team(kind: str = "temp", name: str = "", project_id: str = "", purpose: 
         return created
 
 
-def form_team(project_id: str, purpose: str, members: list[str]) -> dict[str, Any]:
+def form_team(project_id: str, purpose: str, members: list[str], *, db=None, owner_chat_id="") -> dict[str, Any]:
     """智研管家组队：开一间加急办公室，把点到的专家按名字拉进来。"""
     pid = (project_id or "").strip()
     purpose = (purpose or "").strip()
@@ -1224,24 +1254,61 @@ def form_team(project_id: str, purpose: str, members: list[str]) -> dict[str, An
     names = [str(n).strip() for n in (members or []) if str(n).strip()]
     if not names:
         raise ValueError("一个人都没点，组什么队")
-    t = new_team("temp", purpose[:24], pid, purpose)
-    with workflow.WorkflowDB(_db_path()) as db:
+    with (nullcontext(db) if db is not None else workflow.WorkflowDB(_db_path())) as db:
         pool = {a["name"]: a for a in db.assistants() if a.get("enabled", 1)}
-    added, missing = [], []
-    for n in names:
-        a = pool.get(n)
-        if not a:
-            missing.append(n)
-            continue
-        try:
-            add_assistant(t["id"], a["id"])
-            added.append(n)
-        except Exception:
-            missing.append(n)
-    if not added:                                  # 一个人都没进来就别留空房间
-        dissolve(t["id"])
-        raise ValueError("这些专家都没找到：%s" % "、".join(missing))
-    return {**(_team_row(t["id"]) or t), "added": added, "missing": missing}
+        selected = [pool[name] for name in dict.fromkeys(names) if name in pool and pool[name]['id'] != 'builtin-steward']
+        missing = [name for name in names if name not in {item['name'] for item in selected}]
+        if not selected:
+            raise ValueError("没有找到可执行的专业专家：" + "、".join(missing))
+        t, roster = create_temporary(db, pid, purpose[:24], purpose, selected,
+                                     owner_chat_id=owner_chat_id, named_leader=bool(owner_chat_id))
+        return {**t, "added": [item["name"] for item in roster], "missing": missing}
+
+
+@synchronized
+def create_temporary(db, project_id, name, purpose, assistants, *, owner_chat_id="", named_leader=True):
+    temps = [room for room in db.teams() if room["project_id"] == project_id and room["kind"] == "temp" and room["status"] != "done"]
+    if len(temps) >= MAX_TEMP:
+        raise ValueError("三个加急位都在用，请先结束其中一个临时团队")
+    if not assistants or len(assistants) > 12:
+        raise ValueError("临时团队需要 1 至 12 位专业专家")
+    room = db.team_add(name, "temp", project_id, purpose, owner_chat_id=owner_chat_id)
+    if not named_leader:
+        ensure_leader(room["id"], db)
+    roster = [db.team_member_add(room["id"], assistant["name"], "leader" if named_leader and index == 0 else "member",
+                                 assistant_id=assistant["id"], prompt=assistant["rules"])
+              for index, assistant in enumerate(assistants)]
+    return room, roster
+
+
+def dissolve_owned(db, chat_id):
+    import project_tasks as tasks
+    owned = db.db.execute(
+        """SELECT t.id,t.project_id FROM teams t JOIN conversation_temporary_teams o ON o.team_id=t.id
+           WHERE t.kind='temp' AND o.chat_id=? AND t.status<>'dissolved'""", (chat_id,)
+    ).fetchall()
+    for room in owned:
+        tid, project_id = room["id"], room["project_id"]
+        # Revoke the runtime target before stopping tasks so new ones cannot
+        # start while the chat is being deleted. A partial cleanup is retryable.
+        db.team_update(tid, status="disabled")
+        _set(tid, stop=True, phase="发起对话已删除")
+        task_ids = db.db.execute("""
+            SELECT t.id FROM project_tasks t JOIN project_executor_bindings b ON b.id=t.executor_binding_id
+            WHERE t.project_id=? AND b.kind='team' AND b.target_id=? AND t.status NOT IN ('delivered','cancelled')
+        """, (project_id, tid)).fetchall()
+        for row in task_ids:
+            tasks.cancel(db, row["id"], authority=tasks.CommandContext.system(project_id))
+        for row in db.db.execute("SELECT id FROM team_tasks WHERE task_id=? AND status NOT IN ('done','failed','canceled')", (tid,)).fetchall():
+            signal = _cancel_signals.get(row["id"])
+            if signal:
+                signal.set()
+            _pending_retries.discard(row["id"])
+            db.team_task_mark(row["id"], "canceled", ended_at=_now(), reason="发起对话已删除")
+        db.db.execute("UPDATE team_sessions SET active=0 WHERE team_id=?", (tid,))
+        db.db.execute("UPDATE team_members SET status='disabled' WHERE task_id=?", (tid,))
+        db.team_update(tid, status="dissolved")
+    return len(owned)
 
 
 def rename_team(tid: str, name: str) -> dict[str, Any]:
@@ -1270,7 +1337,7 @@ def release(tid: str) -> None:
     """机动团队「用完」：释放成员（把专家让出来）、标记收工；对话记录留着还能看。"""
     with workflow.WorkflowDB(_db_path()) as db:
         t = db.team(tid)
-        if not t or t["kind"] != "temp":
+        if not t or t["kind"] != "temp" or t["status"] in ("disabled", "dissolved"):
             return
         for m in db.team_members(tid):
             if m["role"] == "member":

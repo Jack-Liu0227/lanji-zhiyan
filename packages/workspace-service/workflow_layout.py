@@ -107,9 +107,13 @@ def validate_definition(data: dict[str, Any]) -> dict[str, Any]:
             raise ValueError('manual_review_required 必须是布尔值')
         if manual:
             config.update(manual_review_required=True, review_required=True)
+        if raw.get('manual_execution') is True:
+            config.update(manual_execution=True, manual_review_required=True, review_required=True)
         kind = raw.get('node_kind', 'executor')
         if kind not in ('executor', 'tool', 'workflow'):
             raise ValueError('节点类型须为执行者、固定工具或子工作流')
+        if kind == 'workflow' and config.get('manual_execution'):
+            raise ValueError('请在子工作流内配置人工完成的节点')
         if kind != 'executor':
             config['node_kind'] = kind
         if kind == 'tool':
@@ -155,6 +159,8 @@ def validate_definition(data: dict[str, Any]) -> dict[str, Any]:
     links, seen = [], set()
     parents = {n["id"]: [] for n in clean}
     children = {n["id"]: [] for n in clean}
+    by_id = {n["id"]: n for n in clean}
+    arguments = set()
     for edge in edges:
         if not isinstance(edge, dict):
             raise ValueError("每条连线必须是 JSON 对象")
@@ -166,7 +172,23 @@ def validate_definition(data: dict[str, Any]) -> dict[str, Any]:
         seen.add((source, target))
         parents[target].append(source)
         children[source].append(target)
-        links.append({"source": source, "target": target})
+        link = {"source": source, "target": target}
+        artifact, argument = edge.get("artifact", ""), edge.get("argument", "")
+        if not isinstance(artifact, str) or not isinstance(argument, str):
+            raise ValueError("交接文件和工具参数必须为文本")
+        artifact, argument = artifact.strip(), argument.strip()
+        if artifact:
+            if len(artifact) > 255 or artifact in (".", "..") or any(c in artifact for c in '/\\\\:'):
+                raise ValueError("交接文件必须填写产物文件名")
+            link["artifact"] = artifact
+        if argument:
+            if not artifact or by_id[target].get("node_kind") != "tool" or not argument.isidentifier():
+                raise ValueError("工具参数绑定需要文件名和有效的固定工具参数名")
+            if (target, argument) in arguments:
+                raise ValueError("同一个固定工具参数只能绑定一个上游文件")
+            arguments.add((target, argument))
+            link["argument"] = argument
+        links.append(link)
     waiting = {key: len(value) for key, value in parents.items()}
     queue = [n["id"] for n in clean if not waiting[n["id"]]]
     ordered = []

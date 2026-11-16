@@ -7,7 +7,9 @@
 """
 from __future__ import annotations
 
+import base64
 import hashlib
+import tempfile
 import json
 import re
 import os
@@ -106,9 +108,9 @@ if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 from handlers.starmap import StarmapRoutes          # do_GET 的路由按域分片（见 handlers/*.py）
 from handlers.core import CoreRoutes
+from handlers.update import UpdateRoutes, install_current_release
 from handlers.wf_routes import WorkflowRoutes
 from handlers.misc import MiscRoutes
-from handlers.update import UpdateRoutes
 from run_manager import RunManager
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
@@ -371,6 +373,31 @@ class _WinBridge:
         try:
             return _win(str(action))
         except Exception as exc:
+            return {"error": str(exc)}
+
+
+    def save_export(self, filename: str, encoded: str) -> dict[str, Any]:
+        import webview
+
+        name = Path(filename).name
+        if name in ("", ".", "..") or name != filename or len(encoded) > 48 * 1024 * 1024:
+            return {"error": "导出文件名无效或文件过大"}
+        try:
+            contents = base64.b64decode(encoded, validate=True)
+            selection = webview.windows[0].create_file_dialog(webview.FileDialog.SAVE, save_filename=name)
+            if not selection:
+                return {"cancelled": True}
+            target = Path(selection[0] if isinstance(selection, (list, tuple)) else selection)
+            stream = tempfile.NamedTemporaryFile(dir=target.parent, prefix=".lanji-export-", delete=False)
+            temporary = Path(stream.name)
+            try:
+                with stream:
+                    stream.write(contents)
+                temporary.replace(target)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return {"path": str(target)}
+        except (OSError, TypeError, ValueError) as exc:
             return {"error": str(exc)}
 
 
@@ -1080,12 +1107,12 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
             self._drain()
             return self._json({"error": "只接受 application/json"}, 415)
         data = self._body()
+        if path == "/api/app/update/install":
+            return self._p_update()
         if self._extension_route("POST", path, data, q):
             return
         if self._mail_route("POST", path, q, data):
             return
-        if path == "/api/app/update/install":
-            return self._p_update(path, data, q)
         if path == "/api/vault/status":            # 看板上的状态写回笔记 frontmatter
             try:
                 out = vault.set_status(str(data.get("vault") or ""), str(data.get("path") or ""),
@@ -1930,29 +1957,19 @@ def _start_grant_helper():
                     elif self.path == "/open":          # 文档/目录只有 Medium 开得动
                         target = str(data.get("target") or "")
                         ok = bool(target) and _host_open(target)
-                    elif self.path == "/account":
+                    elif self.path == "/update":
+                        try:
+                            result = install_current_release()
+                            ok = True
+                        except (OSError, ValueError, RuntimeError) as exc:
+                            result = {"error": str(exc)}
+                    elif self.path == "/account":       # 官方账号客户端只能在宿主（Medium）里跑
                         import account_providers
                         result = account_providers.host_request(data)
                         ok = "error" not in result
                     elif self.path == "/close":
                         result = _win("close")
                         ok = "error" not in result
-                    elif self.path == "/update":
-                        # The web server may run at Low integrity.  Start the
-                        # installer in this Medium-integrity host process so
-                        # it can replace the application directory safely.
-                        installer = Path(str(data.get("installer") or "")).resolve()
-                        install_dir = Path(str(data.get("install_dir") or "")).resolve()
-                        cache = Path(paths.CACHE).resolve()
-                        active_dir = Path(sys.executable).resolve().parent
-                        if (installer.suffix.lower() == ".exe" and installer.is_file()
-                                and installer.is_relative_to(cache)
-                                and install_dir == active_dir):
-                            import app_update
-                            app_update.start_installer(
-                                installer, install_dir=install_dir,
-                                create_shortcut=bool(data.get("create_shortcut", True)))
-                            ok = True
                     elif self.path == "/app":           # 外部 GUI 程序：名字白名单，路径宿主自己解
                         if data.get("name") == "zotero":
                             import zotero
@@ -1962,7 +1979,7 @@ def _start_grant_helper():
                                 ok = True
                 except (OSError, ValueError, KeyError):
                     ok = False
-            body = json.dumps(result if self.path in ("/pick", "/tex", "/account") and 'result' in locals() else {"ok": ok}).encode()
+            body = json.dumps(result if self.path in ("/pick", "/tex", "/account", "/update") and 'result' in locals() else {"ok": ok}).encode()
             self.send_response(200 if ok else 403)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

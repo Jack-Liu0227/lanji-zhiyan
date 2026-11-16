@@ -184,6 +184,29 @@ async function api(path, opts){
 }
 
 /* ============================== 路由 ============================== */
+async function exportBlob(blob, filename){
+  if(window.pywebview?.api?.save_export&&blob.size>36*1024*1024)throw new Error('导出文件超过 36 MB');
+  const name=filename.replace(/[<>:"/\|?*\\]/g,'_');
+  const bridge=window.pywebview?.api;
+  if(bridge?.save_export){
+    const encoded=await new Promise((resolve,reject)=>{
+      const reader=new FileReader();
+      reader.onload=()=>resolve(String(reader.result).split(',',2)[1]);
+      reader.onerror=()=>reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+    const result=await bridge.save_export(name,encoded);
+    if(result.error)throw new Error(result.error);
+    if(result.cancelled)return null;
+    return '已保存到 '+result.path;
+  }
+  const url=URL.createObjectURL(blob),link=document.createElement('a');
+  link.href=url;link.download=name;
+  document.body.append(link);link.click();link.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),30000);
+  return '已发起下载 '+name;
+}
+
 const NAV = [
   {g:"primary",items:[
     {id:"agent",label:"智研管家",ico:"🤖"},

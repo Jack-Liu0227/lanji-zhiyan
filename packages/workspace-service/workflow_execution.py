@@ -215,6 +215,14 @@ def route(method, path, body, query, db):
     if not path.startswith(prefix):
         return None
     if method == "GET":
+        project_id = (query.get("project_id") or [""])[0]
+        if path == prefix and project_id and not query.get("id"):
+            rows = db.db.execute(
+                "SELECT r.id, r.started_at, r.status, json_extract(e.layout_snapshot, '$.name') AS layout_name, "
+                "json_extract(e.layout_snapshot, '$.order') AS node_order "
+                "FROM workflow_runs r JOIN workflow_executions e ON e.run_id=r.id "
+                "WHERE r.project_id=? ORDER BY r.started_at DESC, r.rowid DESC LIMIT 100", (project_id,))
+            return {"runs": [{**dict(row), "node_order": json.loads(row["node_order"] or "[]")} for row in rows]}
         run_id = (query.get("id") or [""])[0]
         return {"run": public_view(detail(db, run_id) if run_id else latest(db, (query.get("task_id") or [""])[0]))}
     import workflow_tasks
@@ -240,7 +248,11 @@ def route(method, path, body, query, db):
             run = detail(db, run_id)
             if any(body.get(k) and str(body[k]) != run["project_id"] for k in ("task_id", "project_id")):
                 raise ValueError("运行不属于当前项目")
-            if action == "review":
+            if action == "submit-manual":
+                if (str(Path(db.path).resolve()), run_id) in _workers:
+                    raise ValueError("请稍等，工作流正在保存状态")
+                run = workflow_tasks.submit_manual(db, run, body)
+            elif action == "review":
                 if not body.get('reviewed_run_id') or body.get('reviewed_output_version') is None:
                     raise ValueError('请在当前节点产物页核查，并提交对应尝试和修订版本')
                 run = review(db, run_id, str(body.get("node_id") or ""), body.get("approved"), body.get("feedback", ""),
@@ -268,6 +280,13 @@ def route(method, path, body, query, db):
                 if run["settings"].get("handoff_id"):
                     import file_handoff
                     file_handoff.validate_run(db, run)
+                if run["settings"].get("dag_scheduler"):
+                    errors = run["settings"].get("dag_errors", {})
+                    node = (current or {}).get("workflow_node_id")
+                    if node not in errors and errors:
+                        node = next(iter(errors))
+                    errors.pop(node, None)
+                    workflow_tasks._save(db, run)
                 _status(db, run_id, "queued")
                 kick(db.path, run_id)
             elif action == "cancel":

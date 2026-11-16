@@ -1236,7 +1236,7 @@ def en_state(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
         if candidate.parent == src.parent.resolve():
             res = candidate
     source = src.read_text(encoding="utf-8", errors="replace") if src.is_file() else ""
-    if saved.get("custom_source"):
+    if saved.get("custom_source") or (res.is_file() and "source_text" in saved):
         source = saved.get("source_text", "")
     return {"source_path": str(src), "source_text": source,
             "result_path": str(res), "result_text": res.read_text(encoding="utf-8", errors="replace") if res.is_file() else "",

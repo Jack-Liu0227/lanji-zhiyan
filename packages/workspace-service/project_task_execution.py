@@ -112,7 +112,7 @@ def _freeze_file(db, task, run, source, folder, index):
             "original_path": str(source), "relative": source.relative_to(root).as_posix(), "name": source.name}
 
 
-def validate_fixed_tool(db, project_id, node, executor):
+def validate_fixed_tool(db, project_id, node, executor, *, args=None, bound_arguments=()):
     import workflow
     import task_tools
     import agent_settings
@@ -122,21 +122,30 @@ def validate_fixed_tool(db, project_id, node, executor):
     specs, _ = _tools(db, {'project_id': project_id, 'scope': {}, 'metadata': {'stage': node['step']}},
                       {'executor_snapshot': executor}, node)
     specs = capabilities.filter_tools(db, executor['assistant_id'], specs, str(db.base_dir(project_id)))
-    if name in task_tools.NAMES or name.startswith('graph_workflow_') or name not in {s['function']['name'] for s in specs}:
+    spec = next((s['function'] for s in specs if s['function']['name'] == name), None)
+    if name in task_tools.NAMES or name.startswith('graph_workflow_') or spec is None:
         raise ValueError('固定节点工具未获授权或属于工作流控制工具：' + name)
+    properties = spec.get('parameters', {}).get('properties', {})
+    for argument in bound_arguments:
+        if properties.get(argument, {}).get('type') != 'string':
+            raise ValueError(f'固定工具 {name} 没有可绑定文件路径的文本参数：{argument}')
     cfg = executor.get('runtime_config') or agent_settings.runtime_config(db, project_id, executor['assistant_id'], executor.get('member'))
     if name.startswith('mcp_') and name != 'mcp_register' and cfg['permission'] != 'full_access':
         raise ValueError('项目内 MCP 工具需要执行者的完全访问权限')
-    workflow.enforce_tool_policy(name, node['tool_args'], cfg['permission'])
-    workflow.enforce_project_scope(db, project_id, name, node['tool_args'])
+    args = node['tool_args'] if args is None else args
+    workflow.enforce_tool_policy(name, args, cfg['permission'])
+    workflow.enforce_project_scope(db, project_id, name, args)
 
 
 def _fixed_tool(db, task, run, node, emit):
     import workflow
     import agent_integrations
     import capabilities
-    validate_fixed_tool(db, task['project_id'], node, run['executor_snapshot'])
-    name, args = node['tool_name'], node['tool_args']
+    name, args = node['tool_name'], dict(node['tool_args'])
+    for handoff in run['input_snapshot'].get('handoffs', []):
+        if handoff.get('argument'):
+            args[handoff['argument']] = handoff['path']
+    validate_fixed_tool(db, task['project_id'], node, run['executor_snapshot'], args=args)
     if task['scope'].get('tools') is not None and name not in task['scope']['tools']:
         raise ValueError('工具超出当前任务范围：' + name)
     if 'fixed_tool_result' in run['checkpoint']:
@@ -254,6 +263,9 @@ def execute(db, task_run_id, cancel_check=None):
             if validator:
                 validator(db, {**task, "metadata": metadata}, run)
             project_bindings.resolve(db, task["project_id"], task["executor_binding_id"], member_id=executor.get("member_id", ""))
+            import team_orchestration
+            if team_orchestration.prepare_office_members(db, task, executor):
+                return tasks.complete(db, run["id"], {"reply": "已派发独立专家任务，等待成员交付后汇总。"})
             member = executor.get("member") or None
             cfg = executor.get("runtime_config") or agent_settings.runtime_config(db, task["project_id"], executor["assistant_id"], member)
             model = db.model(cfg["model_id"]) if cfg["model_id"] else db.active_model()
@@ -281,6 +293,8 @@ def execute(db, task_run_id, cancel_check=None):
                        "model_id": (model or {}).get("id", ""), "tool_permission": cfg["permission"]}
             context['accepted_upstream'] = _accepted_upstream(
                 db, task['project_id'], run['input_snapshot'].get('dependencies', []))
+            if run['input_snapshot'].get('handoffs'):
+                context['handoffs'] = run['input_snapshot']['handoffs']
             if metadata.get('_handoff_context'):
                 context['handoff_context'] = metadata['_handoff_context']
             if metadata.get("legacy_stage_compat") and not context.get("upstream_hash"):
@@ -311,6 +325,10 @@ def execute(db, task_run_id, cancel_check=None):
             purpose = node.get("label") or task["title"]
             prompt = node.get("prompt") or task["goal"]
             system = "执行当前项目任务「" + purpose + "」。依据版本化输入完成目标，使用工具保存实际产物；需要派生工作时只能使用当前任务允许的执行者和范围。"
+            from workflow_catalog import STAGE_GUIDES
+            guide = STAGE_GUIDES.get(stage)
+            if guide:
+                system += f"\n本阶段输入：{guide['input']}\n必须交付：{guide['output']}\n操作：{guide['action']}"
             import team_orchestration
             system += team_orchestration.prompt(task, run)
             max_steps = None
@@ -340,8 +358,12 @@ def execute(db, task_run_id, cancel_check=None):
             if known_stage and not waiting_for_team:
                 import workflow_state
                 capture = workflow_state.capture(db, task["project_id"], stage)
+                if stage == "download" and capture["valid"] and not capture["reading_note_count"]:
+                    raise ValueError("PDF 已入库，仍缺对应的逐页精读笔记。请在本节点对已入库论文执行精读后重试。")
                 if not capture["valid"]:
-                    raise ValueError("节点未生成完整产物，请检查工具记录并重试；已保存文件仍可在产物页面预览")
+                    expected = guide['output'] if guide else "该节点约定的产物"
+                    detail = capture["items"].get("读取产物出错")
+                    raise ValueError(f"尚未生成完整产物。应交付：{expected}" + (f" 读取失败：{detail}" if detail else " 请在产物工作台核对已保存内容后重试。"))
             output = _outputs(db, {**task, 'output_contract': {}} if waiting_for_team else task, run, out or {}, capture)
             checkpoint = {"input": context, "reply": (out or {}).get("reply", ""),
                           "output": capture or output, "agent_run_id": (out or {}).get("run_id", "")}

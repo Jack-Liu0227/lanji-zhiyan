@@ -98,6 +98,14 @@ class AppUpdateTest(unittest.TestCase):
                 app_update.download_update(info, Path(tmp), opener=lambda *_args, **_kwargs: _Response(b"bad"))
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
+    def test_download_requires_valid_sha256_before_opening_asset(self):
+        info = {"supported": True, "asset_url": "https://github.com/example/setup.exe",
+                "asset_name": "setup.exe"}
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            with self.assertRaisesRegex(app_update.UpdateError, "SHA-256"):
+                app_update.download_update(info, Path(tmp), opener=lambda *_args, **_kwargs: self.fail("asset downloaded"))
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
     def test_installer_receives_active_directory_and_shortcut_policy(self):
         with tempfile.TemporaryDirectory() as tmp:
             installer = Path(tmp) / "setup.exe"

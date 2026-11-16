@@ -20,8 +20,8 @@
 .pw-settings-menu>button:hover{background:var(--panel2)}
 .pw-settings-menu>label{display:grid;gap:7px;padding:12px 10px 4px;border-top:1px solid var(--line);margin-top:6px;color:var(--muted);font-size:12px}
 .pw-settings-menu p{margin:5px 10px 9px;color:var(--muted);font-size:11px;line-height:1.6}
-.pw-primary{display:flex;gap:26px;padding:0 24px;background:var(--panel);border-bottom:1px solid var(--line)}
-.pw-primary>button{display:flex;align-items:center;gap:8px;padding:13px 3px 12px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;font-weight:550;cursor:pointer}
+.pw-primary{display:flex;gap:26px;overflow-x:auto;padding:0 24px;background:var(--panel);border-bottom:1px solid var(--line)}
+.pw-primary>button{display:flex;flex-shrink:0;white-space:nowrap;align-items:center;gap:8px;padding:13px 3px 12px;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;font-weight:550;cursor:pointer}
 .pw-primary>button:hover{color:var(--fg)}
 .pw-primary>button[aria-selected=true]{color:var(--accent);border-bottom-color:var(--accent)}
 .pw-notice:empty,.pw-error:empty{display:none}

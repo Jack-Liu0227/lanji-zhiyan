@@ -185,6 +185,9 @@ def download_update(info: dict[str, Any], destination: Path,
     name = Path(str(info.get("asset_name") or "更新安装包.exe")).name
     if not name.lower().endswith(".exe"):
         raise UpdateError("更新资产不是 Windows 安装程序")
+    expected = _expected_sha256(info)
+    if not expected:
+        raise UpdateError("发布源没有提供有效的 SHA-256 校验值")
     destination.mkdir(parents=True, exist_ok=True)
     target = destination / name
     fd, temp_name = tempfile.mkstemp(prefix=".lanji-update-", suffix=".tmp", dir=str(destination))
@@ -212,8 +215,7 @@ def download_update(info: dict[str, Any], destination: Path,
         if total <= 0 or (expected_size > 0 and total != expected_size):
             raise UpdateError("安装包大小校验失败，请稍后重试")
         actual = digest.hexdigest()
-        expected = _expected_sha256(info)
-        if expected and actual != expected:
+        if actual != expected:
             raise UpdateError("安装包校验失败，请稍后重试")
         os.replace(temp_name, target)
         return target, actual

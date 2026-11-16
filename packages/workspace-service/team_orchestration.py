@@ -105,6 +105,46 @@ def needs_aggregation(task, run):
     return any(c['id'] not in seen for c in task['children'])
 
 
+def prepare_office_members(db, task, executor):
+    """Give the two default offices concrete member work before the leader aggregates."""
+    from team_configuration import PROFILES
+    from workflow_catalog import LEGACY_MEMBER_STAGES
+    import project_tasks as tasks
+
+    policy = task['metadata'].get('_team_orchestration')
+    stage = task['metadata'].get('stage', '')
+    node = task['metadata'].get('node_config', {})
+    if not policy or node.get('node_kind') == 'tool':
+        return False
+    office = db.team(policy['team_id']) or {}
+    if office.get('kind') != 'fixed' and executor['assistant_id'] not in PROFILES.values():
+        return False
+    roster = [member for member in policy['members'] if member['id'] in policy['worker_ids']]
+    if not roster:
+        raise ValueError('常驻团队没有可用成员，请在团队配置中启用至少一位专业成员')
+    prefix = f"office:{task['id']}:"
+    children = task['children']
+    if not children or any(child['request_key'].startswith(prefix) for child in children):
+        ordered = sorted(roster, key=lambda member: stage not in LEGACY_MEMBER_STAGES.get(member['assistant_id'], ()))
+        authority = tasks.CommandContext.system(task['project_id'], task['id'])
+        existing = {child['request_key'] for child in children}
+        for member in ordered[:2]:
+            request_key = prefix + member['id']
+            if request_key in existing:
+                continue
+            tasks.create(db, {
+                'project_id': task['project_id'],
+                'title': f"{task['title']} · {member['name']}",
+                'goal': f"{task['goal']}\n\n从你的专业职责出发独立核对本阶段资料和前置交付，给负责人返回可追溯的证据、问题与建议。",
+                'executor_binding_id': policy['binding_id'],
+                'member_id': member['id'],
+                'inputs': task['inputs'],
+                'dependencies': task['dependencies'],
+            }, authority=authority, request_key=request_key)
+        task = tasks.get(db, task['id'])
+    return any(child['status'] != 'delivered' for child in task['children'])
+
+
 def dispatch(db, parent_id):
     import project_tasks as tasks
     import project_task_execution as worker

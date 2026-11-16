@@ -49,3 +49,33 @@ class ConversationHistoryTest(unittest.TestCase):
         with self.assertRaises(ValueError):agent_settings.session(self.db,team['id'],session['id'])
         history.command(self.db,'team',session['id'],'restore',team_id=team['id'])
         self.assertIn('Team research',history.command(self.db,'team',session['id'],'export',team_id=team['id'])['content'])
+
+    def test_trash_only_dissolves_the_chat_owned_temporary_team_and_cancels_its_work(self):
+        import agent_settings
+        import project_bindings
+        import project_tasks
+        other = self.db.create_chat('Other steward dialogue')
+        args = {'project': self.pid, 'name': 'Temporary extraction', 'assistant_ids': ['builtin-searcher', 'builtin-extractor']}
+        temporary = workflow._tool_impl('team_create', self.db, self.pid, args, origin_chat_id=self.cid)['team']
+        formed = workflow._tool_impl('team_form', self.db, self.pid, {
+            'purpose': 'Check provenance', 'members': [self.db.assistant('builtin-searcher')['name']],
+        }, origin_chat_id=self.cid)
+        retained = workflow._tool_impl('team_create', self.db, self.pid, {**args, 'persistent': True}, origin_chat_id=self.cid)['team']
+        unrelated = workflow._tool_impl('team_create', self.db, self.pid, args, origin_chat_id=other)['team']
+        session = agent_settings.session(self.db, temporary['id'], create=True)
+        binding = next(item for item in project_bindings.list_bindings(self.db, self.pid)
+                       if item['target_id'] == temporary['id'])
+        task = project_tasks.create(self.db, {
+            'project_id': self.pid, 'goal': 'Work that must stop',
+            'executor_binding_id': binding['id'],
+        }, authority=project_tasks.CommandContext.ui(self.pid))
+        history.command(self.db, 'chat', self.cid, 'trash')
+        self.assertEqual(self.db.team(temporary['id'])['status'], 'dissolved')
+        self.assertEqual(self.db.team(formed['id'])['status'], 'dissolved')
+        self.assertEqual(project_tasks.get(self.db, task['id'])['status'], 'cancelled')
+        self.assertEqual(self.db.db.execute('SELECT active FROM team_sessions WHERE id=?', (session['id'],)).fetchone()[0], 0)
+        self.assertNotIn(temporary['id'], [row['id'] for row in self.db.teams()])
+        self.assertNotEqual(self.db.team(unrelated['id'])['status'], 'dissolved')
+        self.assertNotEqual(self.db.team(retained['id'])['status'], 'dissolved')
+        history.command(self.db, 'chat', self.cid, 'purge')
+        self.assertEqual(self.db.team(temporary['id'])['status'], 'dissolved')

@@ -61,6 +61,19 @@ class ResearchSetupTest(unittest.TestCase):
         self.assertEqual(node['prompt'], 'Use the lab method')
         with self.assertRaises(PermissionError): workflow._tool_impl('project_create_from_idea', self.db, pid, {**args, 'project': self.db.create_task('Other')})
 
+    def test_steward_full_research_uses_both_offices_and_needs_no_routine_approval(self):
+        with patch('workflow_execution.kick') as kick:
+            result = workflow._tool_impl('project_create_from_idea', self.db, self.chat,
+                                         {'idea': 'Automate the complete research lifecycle', 'fully_automatic': True})
+        run = workflow_execution.detail(self.db, result['run_id'])
+        self.assertEqual(run['layout']['order'], workflow.STAGES)
+        self.assertEqual(run['settings']['research_setup_chat_id'], self.chat)
+        self.assertEqual(set(result['team_ids']), {'builtin-literature-lead', 'builtin-writing-lead'})
+        tasks = project_tasks.list_tasks(self.db, result['project_id'], workflow_run_id=run['id'])
+        self.assertTrue(all(not task['review_required'] and task['metadata']['_team_orchestration']['worker_ids']
+                            for task in tasks))
+        kick.assert_called_once_with(self.db.path, run['id'])
+
     def test_custom_langgraph_nodes_can_bind_an_expert_or_a_team(self):
         pid = self.db.create_task('Mixed actor workflow')
         args = {

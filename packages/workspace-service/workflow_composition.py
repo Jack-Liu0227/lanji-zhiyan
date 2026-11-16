@@ -32,11 +32,14 @@ def expand(db, project_id, layout, ancestors=()):
                           'tools': allowed,
                           'review_required': item['review_required'] or (node['review_required'] and item['id'] in exits),
                           'manual_review_required': bool(item.get('manual_review_required') or (node.get('manual_review_required') and item['id'] in exits))})
-        edges.extend({'source': names[edge['source']], 'target': names[edge['target']]} for edge in child['edges'])
+        edges.extend({**edge, 'source': names[edge['source']], 'target': names[edge['target']]} for edge in child['edges'])
         order.extend(names[item] for item in child['order'])
         endpoints[nid] = ([names[item] for item in entries], [names[item] for item in exits])
     for edge in definition['edges']:
-        edges.extend({'source': source, 'target': target}
-                     for source in endpoints[edge['source']][1] for target in endpoints[edge['target']][0])
+        sources, targets = endpoints[edge['source']][1], endpoints[edge['target']][0]
+        if edge.get('artifact') and (len(sources) != 1 or len(targets) != 1):
+            raise ValueError('交接文件的连线必须有唯一上游和下游节点')
+        edges.extend({**edge, 'source': source, 'target': target}
+                     for source in sources for target in targets)
     return {**layout, **workflow_layout.validate_definition({'nodes': nodes, 'edges': edges, 'order': order}),
             'composition': {'template_id': layout['id'], 'revision': layout.get('revision', 0)}}

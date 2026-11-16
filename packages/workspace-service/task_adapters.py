@@ -120,7 +120,9 @@ def project(task, db):
                     if run.get("status") == "interrupted":
                         parent_status = "interrupted"
                     if parent_status:
-                        error = run.get("error", "") or ("人工审查已退回，请按修改意见重试节点" if task["status"] == "blocked" else "")
+                        error = run.get("error", "")
+                        if not error and task["status"] == "blocked":
+                            error = "等待团队成员交付" if checkpoint.get("waiting_children") else "人工审查已退回，请按修改意见重试节点"
                         db.db.execute("UPDATE workflow_runs SET status=?,error=? WHERE id=? AND status<>'cancelled'", (parent_status, error, node["run_id"]))
             elif kind == "team_task":
                 status = {"ready": "queued", "awaiting_review": "review", "delivered": "done", "cancelled": "canceled", "blocked": "queued"}.get(task["status"], task["status"])

@@ -91,7 +91,9 @@ def compile_run(db, run):
     mapping = {}
     for nid in selected_ids:
         executor, node = resolved[nid]
-        deps = [mapping[e["source"]] for e in layout["edges"] if e["target"] == nid and e["source"] in mapping]
+        incoming = [e for e in layout["edges"] if e["target"] == nid and e["source"] in mapping]
+        deps = [mapping[e["source"]] for e in incoming]
+        handoffs = [{**e, "task_id": mapping[e["source"]]} for e in incoming if e.get("artifact")]
         inputs = list(run["settings"].get("task_inputs") or [])
         source = run["settings"].get("file_input")
         if source:
@@ -116,7 +118,7 @@ def compile_run(db, run):
             "executor_binding_id": executor["binding_id"], "member_id": executor.get("requested_member_id", "") if not run["settings"].get("actor") else executor.get("member_id", ""),
             "inputs": inputs, "dependencies": deps, "output_contract": node.get("output_contract") or {},
             "review_required": node.get("review_required", True), "workflow_run_id": run["id"], "workflow_node_id": nid,
-            "scope": scope, "metadata": {"stage": node["step"], "node_config": node,
+            "scope": scope, "metadata": {"stage": node["step"], "node_config": node, "handoffs": handoffs,
                 "legacy_stage_compat": compat, "layout_snapshot": layout,
                 "workflow_node": {"run_id": run["id"], "node_id": nid},
                 **({"template_ref": run["settings"]["task_template_ref"]} if run["settings"].get("task_template_ref") else {})}},
@@ -157,12 +159,18 @@ def prepare(db, project_id, goal="", idempotency_key="", template_id="", *, inpu
     for node in frozen["nodes"]:
         executor, _ = _executor(db, project_id, frozen, node)
         if node.get('node_kind') == 'tool':
-            worker.validate_fixed_tool(db, project_id, node, executor)
+            arguments = [edge['argument'] for edge in frozen['edges']
+                         if edge['target'] == node['id'] and edge.get('argument')]
+            worker.validate_fixed_tool(db, project_id, node, executor, bound_arguments=arguments)
     if any(n["step"] == "idea" for n in frozen["nodes"]) and not db.idea_input(project_id).strip():
         project = db.summary(project_id)["task"]
         db.idea_input_save(project_id, str(goal).strip() or project.get("question") or project["title"])
     run = run_service.start(db, project_id, "research-sequence", idempotency_key=idempotency_key or "workflow:" + uuid.uuid4().hex)
     settings = {"goal": str(goal)[:20000], "policy": bindings.settings(db, project_id), "prepared": True, "task_inputs": inputs or []}
+    order = frozen["order"]
+    links = {(edge["source"], edge["target"]) for edge in frozen["edges"]}
+    if links != set(zip(order, order[1:])):
+        settings["dag_scheduler"] = True
     db.db.execute("INSERT INTO workflow_executions VALUES (?,?,?,?)", (run["id"], json.dumps(frozen, ensure_ascii=False), json.dumps(settings, ensure_ascii=False), workflow.now()))
     engine._status(db, run["id"], "queued")
     compile_run(db, engine.detail(db, run["id"]))
@@ -331,6 +339,51 @@ def _accepted_history(task):
             'feedback': delivery.get('feedback', '')}
 
 
+def submit_manual(db, run, body):
+    from pathlib import Path
+    import workflow_execution as engine
+    node_id = str(body.get('node_id') or '')
+    task_id = run['settings'].get('task_ids', {}).get(node_id)
+    if not task_id:
+        raise ValueError('节点不属于本次运行')
+    task = tasks.get(db, task_id, project_id=run['project_id'])
+    pending = run['settings'].get('manual_pending', {})
+    if pending.get('node_id') != node_id or run['status'] not in ('blocked', 'awaiting_review'):
+        raise ValueError('该节点当前无法提交人工产物')
+    if task['status'] not in ('ready', 'blocked', 'failed'):
+        raise ValueError('节点已提交或尚未就绪')
+    text = str(body.get('text') or '').strip()
+    paths = body.get('paths') or []
+    if not isinstance(paths, list) or len(paths) > 20 or len(text) > 200000:
+        raise ValueError('最多提交 20 个项目文件，正文不得超过 20 万字')
+    root = tasks._root(db, run['project_id'])
+    files = []
+    for value in paths:
+        relative = Path(str(value))
+        path = (root / relative).resolve()
+        if relative.is_absolute() or not path.is_relative_to(root) or not path.is_file() or not path.stat().st_size:
+            raise ValueError('请提供存在且非空的项目相对文件：' + str(value))
+        files.append(str(path))
+    if not text and not files:
+        raise ValueError('请输入结果或提交至少一个项目文件')
+    attempt = tasks.start(db, task_id, authority=tasks.CommandContext.ui(run['project_id']), restart=True, manual_submission=True)
+    _record_attempt(db, run, node_id, task, attempt, attempt['input_snapshot'])
+    try:
+        output = worker._outputs(db, task, attempt, {}, {'content': text, 'files': files})
+        task = tasks.complete(db, attempt['id'], {'output_snapshot': output, 'reply': '已提交人工产物',
+                                                  'checkpoint': {'execution_source': 'human'}})
+    except Exception as exc:
+        task = tasks.fail(db, attempt['id'], worker._error_detail(exc))
+        _sync_workflow_node(db, run, task)
+        raise
+    _sync_workflow_node(db, run, task)
+    latest = engine.detail(db, run['id'])
+    latest['settings'].pop('manual_pending', None)
+    _save(db, latest)
+    engine._status(db, run['id'], task['status'])
+    return engine.detail(db, run['id'])
+
+
 def advance(db, run_id, cancel_check=None):
     import workflow_execution as engine
     import run_service
@@ -361,10 +414,17 @@ def advance(db, run_id, cancel_check=None):
                     return {"status": "delivered"}
                 if task["status"] == "awaiting_review":
                     _sync_workflow_node(db, run, task, task.get("latest_run"))
+                    if run["settings"].get("dag_scheduler"):
+                        return {"status": "awaiting_review"}
                     engine._status(db, run_id, "awaiting_review")
                     return {"status": engine.detail(db, run_id)["status"]}
                 node = task["metadata"]["node_config"]
                 run["settings"]["current_node_id"] = nid
+                if node.get('manual_execution'):
+                    run['settings']['manual_pending'] = {'node_id': nid, 'task_id': task_id, 'label': node['label']}
+                    _save(db, run)
+                    engine._status(db, run_id, 'blocked', '等待提交人工产物：' + node['label'])
+                    return {'status': 'blocked'}
                 _save(db, run)
                 if run["settings"].get("legacy_stage_compat"):
                     snapshot = engine._snapshot(db, run, node)
@@ -383,7 +443,13 @@ def advance(db, run_id, cancel_check=None):
                 _sync_workflow_node(db, run, task, task.get("latest_run"))
                 if task["status"] != "delivered":
                     status = task["status"] if task["status"] in ("awaiting_review", "blocked", "cancelled", "running", "queued") else "failed"
-                    engine._status(db, run_id, status, (task["latest_run"] or {}).get("error", ""))
+                    if run["settings"].get("dag_scheduler"):
+                        return {"status": status}
+                    attempt = task["latest_run"] or {}
+                    error = attempt.get("error", "")
+                    if status == "blocked" and attempt.get("checkpoint", {}).get("waiting_children"):
+                        error = "等待团队成员交付"
+                    engine._status(db, run_id, status, error)
                     return {"status": engine.detail(db, run_id)["status"]}
             _sync_workflow_node(db, run, task, task.get("latest_run"))
             return {"status": "delivered"}

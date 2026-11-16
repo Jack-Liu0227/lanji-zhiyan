@@ -69,6 +69,39 @@ class WorkflowExecutionTest(unittest.TestCase):
         self.assertEqual(len(self.seen), 2)
         self.assertEqual(engine.create(self.db, self.pid, idempotency_key="request-one")["id"], run["id"])
 
+    def test_review_translation_and_export_use_frozen_manuscripts(self):
+        import workflow_converters
+        import project_tasks
+        self.layout([{"step": stage, "review_required": False}
+                     for stage in ("write", "review", "entrans", "convert")])
+        self.db.add_model("Fixture", "http://127.0.0.1:1/v1", "fixture", "", activate=True)
+        chinese = "# 正文\n\n已验收原稿 MARK_FIRST"
+        english = "# Manuscript\n\nAccepted translation MARK_EN"
+
+        def execute(db, pid, prompt, **options):
+            stage = options["scope"]
+            if stage == "write":
+                return workflow.doc_write(db, pid, stage, chinese)
+            if stage == "review":
+                return workflow._tool_impl("draft_review", db, pid, {}, scope=stage)
+            if stage == "entrans":
+                return workflow._tool_impl("manuscript_translate_en", db, pid, {}, scope=stage)
+            return workflow._tool_impl("format_convert", db, pid, {"format": "md", "name": "accepted"}, scope=stage)
+
+        with patch.object(workflow, "run_agent", side_effect=execute), \
+             patch.object(workflow, "chat_json", return_value={"verdict": "小修", "scores": {}, "issues": []}) as review, \
+             patch.object(workflow_converters, "en_translate", return_value={"text": english, "chunks": 1, "ms": 1}) as translate:
+            run = engine.create(self.db, self.pid)
+            run = engine.advance(self.db, run["id"])
+            self.assertEqual(run["status"], "succeeded", run["error"])
+            self.assertIn("MARK_FIRST", review.call_args.args[1][-1]["content"])
+            self.assertIn("MARK_FIRST", translate.call_args.args[1])
+        task = project_tasks.get(self.db, run["settings"]["task_ids"]["convert"])
+        export = next(file for file in task["outputs"] if file["name"] == "accepted.md")
+        self.assertIn("MARK_EN", Path(export["path"]).read_text(encoding="utf-8"))
+        workflow.doc_write(self.db, self.pid, "write", "# Working draft\n\nUnaccepted edit")
+        self.assertIn("MARK_FIRST", workflow_converters.en_state(self.db, self.pid)["source_text"])
+
     def test_rejection_retries_same_node_with_feedback_and_saved_upstream(self):
         self.layout([{"step": "outline", "review_required": False}, {"step": "write"}])
         run = engine.create(self.db, self.pid)
