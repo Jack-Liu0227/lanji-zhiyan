@@ -455,6 +455,9 @@ TOOL_SPECS = [
                     "action": {"type": "string", "enum": ["add", "patch", "remove", "archive", "restore"]},
                     "id": {"type": "string", "description": "patch/remove/archive 用：先用 query 拿 id"},
                     "old_text": {"type": "string", "description": "没记 id 就用原文片段定位"},
+                    "expected_text": {"type": "string", "description": "patch 前 recall 得到的当前完整正文"},
+                    "reason": {"type": "string", "description": "修改正文的依据或用户确认的原因"},
+                    "source_ref": {"type": "string", "description": "可核对的依据，如 DOI 和 PDF 页码。用户对话来源由系统补入"},
                     "text": {"type": "string", "description": "add/patch 用：一句话，陈述式，别写过程"},
                     "kind": {"type": "string", "enum": ["fact", "preference", "constraint", "decision", "episode"]},
                     "scope": {"type": "string", "enum": ["project", "global"],
@@ -467,6 +470,7 @@ TOOL_SPECS = [
              "limit": {"type": "integer"}}),
     _schema("recall", "回想：按关键词检索 记忆 + 过往对话 + 笔记/证据原文块。引用旧结论之前先查，别凭印象。",
             {"query": {"type": "string", "description": "关键词，两三个词最好；两字也能搜"},
+             "include_history": {"type": "boolean", "description": "追溯旧口径、变更原因与来源时开启。也可用记忆 ID 查询"},
              "limit": {"type": "integer", "description": "每类最多几条，默认 8"}}, ["query"]),
     _schema("translate_doc", "把「论文撰写」那份正文.md 整篇译成英文、落成同目录的 正文_en.md："
                              "服务端按节分片、4 路并行翻，几十秒到两分钟，不往对话里灌全文。"

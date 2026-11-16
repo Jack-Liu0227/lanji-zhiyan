@@ -900,6 +900,29 @@ class RecentDialogueTest(unittest.TestCase):
         self.assertEqual(len(got), 1)
 
 
+class ChatContextTest(unittest.TestCase):
+    def test_keeps_evidence_from_an_older_turn_and_bounds_history(self):
+        import chat_context
+
+        evidence = {"role": "user", "content": "前言" * 500 + "烧结条件为 850 °C，保温 12 小时。" + "结束" * 500}
+        unrelated = {"role": "assistant", "content": "日程已经整理。"}
+        recent = [{"role": "assistant", "content": f"回复{i}\n" + "甲" * 4000 + "\n最终结论"} for i in range(8)]
+        history = [evidence, unrelated, *recent]
+        selected = chat_context.select(history, "之前的烧结条件是什么？", 2000)
+
+        self.assertIn("850 °C，保温 12 小时", selected[0]["content"])
+        self.assertTrue(selected[-1]["content"].endswith("最终结论"))
+        self.assertLessEqual(sum(len(item["content"]) for item in selected), 2000)
+        self.assertNotIn(unrelated, selected)
+        self.assertGreater(len(history[-1]["content"]), 4000)
+
+    def test_keeps_short_conversation_in_order(self):
+        import chat_context
+
+        history = [{"role": "user", "content": "查 NFM 文献。"}, {"role": "assistant", "content": "已找到三篇。"}]
+        self.assertEqual(chat_context.select(history, "继续", 2000), history)
+
+
 class ContextBudgetTest(unittest.TestCase):
     """设置页存的值优先；没存或越界一律回落默认，不能让整个对话跑不起来。"""
 

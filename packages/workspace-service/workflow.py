@@ -728,7 +728,8 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
 
 
 def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], scope: str = "",
-               emit: Any = None, profile: dict[str, Any] | None = None) -> Any:
+               emit: Any = None, profile: dict[str, Any] | None = None, *,
+               memory_source_ref: str = "") -> Any:
     """scope = 当前步骤（''/'idea'/'outline'/'write'/'review'）—— doc_read/doc_write 据此决定动哪个文件。"""
     import team_orchestration
     team_orchestration.enforce_tool(db, name, args)
@@ -996,10 +997,11 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
                             output_contract=args.get("output_contract"), reviewer_id=args.get("reviewer_id", ""),
                             db=db, authority=getattr(db, "project_task_context", None))
     if name == "memory":
-        return memory_store.apply(db, task_id, args)
+        return memory_store.apply(db, task_id, args, source_ref=memory_source_ref)
     if name == "recall":
         q = str(args.get("query") or "")
-        found = memory_store.recall(db, q, task_id, int(args.get("limit") or 8))
+        found = memory_store.recall(db, q, task_id, max(1, min(20, int(args.get("limit") or 8))),
+                                    include_history=bool(args.get("include_history")))
         try:                                   # 笔记/证据的原文块也一起给（那里带页码出处）
             found["notes"] = _knowledge_query(db, task_id, q)["hits"][:8]
         except Exception:
@@ -1485,8 +1487,13 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     profile["assistant_id"] = aid
     resume = getattr(db, "agent_resume", {}) or {}
     save_checkpoint = getattr(db, "save_agent_checkpoint", lambda **values: None)
-    if publish and not resume.get("messages"):
-        db.add_message(task_id, "user", text, scope=scope)
+    source_ref = str(resume.get("memory_source_ref") or "")
+    new_user_turn = publish and not resume.get("messages")
+    if new_user_turn:
+        message = db.add_message(task_id, "user", text, scope=scope)
+        if (message or {}).get("id"):
+            source_ref = "chat:" + message["id"]
+            save_checkpoint(memory_source_ref=source_ref)
         say({"type": "user", "content": text})
     task = db.summary(task_id)["task"]
     chat_row = db.db.execute("SELECT * FROM chats WHERE id=?", (task_id,)).fetchone()
@@ -1501,16 +1508,16 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     elif db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone():
         bound = task_id
     ctx_id = bound or task_id                       # 工具按这个 id 干活：绑了项目就落在项目里
-    if publish and bound:                           # 用户当场定的口径：不等下轮，先记成一条约束
-        try:
-            memory_store.capture(db, bound, text)
-        except Exception:
-            pass
     if bound:
         root = db.base_dir(bound)
         if not root:
             raise ValueError("绑定项目尚未设置文件夹，请重新选择项目")
         paths.validate_project_dir(root)
+        if new_user_turn and permission != "read_only":
+            try:
+                memory_store.capture(db, bound, text, source_ref=source_ref)
+            except (OSError, ValueError, sqlite3.Error):
+                pass
     import run_service
     tracked_run = run_service.get(db, resume.get("workflow_run_id", "")) if resume.get("messages") else None
     tracked_run = tracked_run or run_service.start(db, ctx_id, "agent", idempotency_key="")
@@ -1559,6 +1566,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                           "revision": snapshot["revision"], "revision_id": snapshot["revision_id"], "project_id": bound}
         say(template_event)
         save_checkpoint(template_snapshot=snapshot)
+    memory_context = ""
     if chat_row and bound:                        # 绑了项目 → Partner Agent（对话历史独立，视野与产出跟项目走）
         pt = db.summary(bound)["task"]
         ctx = (f"你是《{pt['title']}》项目的 **Partner Agent**：这个对话绑在该项目上 —— 对话历史自己一份，"
@@ -1566,7 +1574,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                f"当前项目：{pt['title']}\n研究问题：{pt['question']}\n关键词 / 材料体系：{pt['material_system']}\n"
                f"项目 ID：{bound}\n产出目录：{db.pdir(bound, '其余')}")
         try:
-            ctx += "\n\n" + db.memory_block(bound)     # 项目的长期/短期记忆
+            memory_context = db.memory_block(bound, include_dialogue=member is None and publish)
         except Exception:
             pass
     elif chat_row:  # 首页 Agent = 智研管家：不绑项目，但有全局视野
@@ -1579,12 +1587,15 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                "你也可以用 `team_board` 看某项目团队的成员与执行状态、用 `team_assign` 直接把活派给某个项目的 Partner Agent"
                "（它们排队执行，产出落在该项目目录的「团队/」里）。\n"
                f"这是通用对话「{task['title']}」，产出目录：{db.out_dir(task_id)}" + _global_brief(db))
+        memory_context = memory_store.block(db, "")
     else:
         ctx = (f"你是《{task['title']}》项目的 **Partner Agent**：绑定单个项目，只在这个项目范围内工作；"
                "跨项目的事让用户回首页 Agent（智研管家）做。\n"
                f"当前项目：{task['title']}\n研究问题：{task['question']}\n"
                f"关键词 / 材料体系：{task['material_system']}\n项目 ID：{task_id}\n产出目录：{db.out_dir(task_id)}")
-        ctx += "\n\n" + db.memory_block(task_id)
+        memory_context = db.memory_block(task_id, include_dialogue=member is None and publish)
+    if memory_context:
+        ctx += "\n\n" + memory_context
     # builtin-steward 的 rules 就是 AGENT_SYSTEM，首页/通用对话上面已经整段写过了，再套一层【当前专家】等于把同一段话重复一遍
     if aid and aid != "builtin-steward":   # Also applies to each team's selected assistant.
         try:
@@ -1611,9 +1622,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         ctx += capabilities.steward_context(db, aid, project_dir)
     ctx += ("\n\n【记忆纪律】记忆分两层：全局（跨项目的口径/偏好，scope=global）与项目（这个项目的事实、决定、约束）。\n"
             "- 值得留下的结论、用户偏好、导师要求、口径 → 用 memory 工具记（add；同一件事改已有的用 patch，不堆重复）。\n"
-            "- 用户纠正你、或当场定了规矩（「以后都…」「不要…」）→ 立刻 memory add(kind=constraint)，别等下一轮。\n"
+            "- 用户更正已有口径时，先 recall 定位条目；若仍是旧口径，用 memory patch，传 id、expected_text、新正文和 reason。新约束才用 add。目标不明确时询问用户。\n"
             "- 「做法/流程/踩坑」不是记忆，是 skill → skill_write 写进 SKILL.md；下次同类任务自己会被索引到。\n"
-            "- 要用到以前说过的事 → 先 recall 检索（记忆 + 历史对话 + 笔记），不要凭印象编。\n"
+            "- 采用当前记忆中的生效口径；追问改动原因时用 recall(include_history=true)。证据或原因缺失时说明缺失。\n"
             "- 记忆块满了会提示条数；要腾地方就 patch 合并或 archive，不要直接放弃旧约束。")
     ctx += "\n\n权限模式：%s。%s" % (permission, {
         "auto": "Choose actions for the user goal. Sending mail or messages and remote writes require user enabled Full Access.",
@@ -1623,8 +1634,18 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     }[permission])
     if handoff and handoff != "[]":
         ctx += "\n\n【已验收的上游交付版本】\n" + handoff[:30000]
-    history = [{"role": m["role"], "content": m["content"]}
-               for m in recent_dialogue(db.messages(task_id, scope or "idea")[:-1], context_budget(db))]
+    if member is not None:
+        ctx += ("\n\n【团队项目记忆】以已确认的共同口径为准。按角色独立检索，"
+                "引用证据定位，保留异议。拟议更新写在本次产出里，由用户确认后录入共享记忆。")
+    history = []
+    if member is None and not resume.get("messages"):
+        stored = db.messages(task_id, scope or "idea")[:-1]
+        if chat_row and publish and not scope and not step:
+            import chat_context
+            history = chat_context.select(stored, text, context_budget(db))
+        else:
+            history = [{"role": m["role"], "content": m["content"]}
+                       for m in recent_dialogue(stored, context_budget(db))]
     tool_specs = list(TOOL_SPECS if tools is None else tools)
     if tools is None:
         tool_specs += agent_integrations.tool_specs()
@@ -1651,8 +1672,15 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         tool_specs = [t for t in tool_specs if t["function"]["name"] in allowed_tools]
     allowed_names = {t.get("function", {}).get("name") for t in tool_specs}
     integration_names = {t.get("function", {}).get("name") for t in agent_integrations.tool_specs()}
+    identity = _system_for(who or (member or {}).get("name", ""), system)
+    persona = memory_store.profile_context()
+    if persona:
+        identity += "\n\n" + persona
+    if not resume.get("messages"):
+        profile["_usage_context"]["memory_chars"] = len(memory_context)
+        profile["_usage_context"]["profile_chars"] = len(persona)
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": _system_for(who or (member or {}).get("name", ""), system)},
+        {"role": "system", "content": identity},
         {"role": "system", "content": ctx},
         *history, {"role": "user", "content": text + ("\n\n【本次使用的提示词模板：" + snapshot["title"] + "】\n" + snapshot["rendered"] if snapshot else "")},
     ]
@@ -1791,6 +1819,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                     raise PermissionError("当前专家未获准使用此工具：" + name)
                 enforce_tool_policy(name, args, permission)
                 enforce_project_scope(db, bound, name, args)
+                if member is not None and (name == "memory_save" or
+                                           (name == "memory" and not args.get("query"))):
+                    raise PermissionError("团队成员请把建议与证据写入产出，由用户确认后更新共享记忆")
                 if name != "delegate" and cache_key in _done_calls:
                     result = _done_calls[cache_key]
                 elif name in integration_names:
@@ -1798,7 +1829,11 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 elif name in ("skill_read", "skill_write") or (name.startswith("mcp_") and name != "mcp_register"):
                     result = capabilities.invoke_tool(db, aid, name, args, project_dir)
                 else:
-                    result = _tool_impl(name, db, ctx_id, args, scope, emit=emit, profile=profile)
+                    if name == "memory" and source_ref:
+                        result = _tool_impl(name, db, ctx_id, args, scope, emit=emit, profile=profile,
+                                            memory_source_ref=source_ref)
+                    else:
+                        result = _tool_impl(name, db, ctx_id, args, scope, emit=emit, profile=profile)
                 if isinstance(result, dict) and result.get("sub_events"):
                     events.extend(result["sub_events"])      # 子 agent 的事件并进本轮 → 回放可还原
                 ok, brief = True, _brief(name, result)
@@ -1944,8 +1979,9 @@ def _brief(name: str, result: Any) -> str:
         dup = sum(1 for r in rows if isinstance(r, dict) and r.get("duplicate"))
         return "记忆已更新 %d 条%s" % (len(rows), "（%d 条本来就记着）" % dup if dup else "")
     if name == "recall":
-        return "回想：记忆 %d 条 / 历史对话 %d 条 / 笔记 %d 条" % (
-            len(result.get("memory") or []), len(result.get("chats") or []), len(result.get("notes") or []))
+        return "回想：记忆 %d 条 / 历史对话 %d 条 / 笔记 %d 条 / 口径变更 %d 条" % (
+            len(result.get("memory") or []), len(result.get("chats") or []),
+            len(result.get("notes") or []), len(result.get("history") or []))
     if name == "skill_write":
         return "已写入 skill「%s」（%s）" % (result.get("id", ""), result.get("scope", ""))
     return "完成"

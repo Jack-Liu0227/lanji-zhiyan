@@ -253,6 +253,16 @@ details[open]>summary>.disclosure-arrow{transform:rotate(90deg)}
 .reasoning-card.running .reasoning-icon{display:inline-block;animation:reasoning-spin 1.4s linear infinite}
 @keyframes reasoning-spin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){.reasoning-card.running .reasoning-icon{animation:none}}
+.chat-activity{display:flex;align-items:center;gap:9px;width:fit-content;margin:8px 0;padding:8px 12px;
+  border:1px solid var(--line);border-radius:10px;color:var(--muted);font-size:12px}
+.chat-activity[hidden]{display:none}
+.chat-activity-dots{display:inline-flex;align-items:center;gap:3px;color:var(--accent)}
+.chat-activity-dots i{width:4px;height:4px;border-radius:50%;background:currentColor;
+  animation:chat-activity-pulse 1.2s ease-in-out infinite}
+.chat-activity-dots i:nth-child(2){animation-delay:.16s}
+.chat-activity-dots i:nth-child(3){animation-delay:.32s}
+@keyframes chat-activity-pulse{0%,70%,100%{opacity:.35;transform:translateY(0)}35%{opacity:1;transform:translateY(-3px)}}
+@media(prefers-reduced-motion:reduce){.chat-activity-dots i{animation:none}}
 .md .katex-display{overflow-x:auto;overflow-y:hidden;padding:8px 0;max-width:100%}
 .md{white-space:normal}
 .md pre{overflow:auto;max-width:100%;white-space:pre;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px}

@@ -840,11 +840,43 @@ function renderTrajectory(box){
   box.classList.add('at-trajectory');const chat=(S.chats||[]).find(row=>row.id===curChat),id=curChat;
   WorkspaceTrajectory.mount(box,{chatId:id,projectId:chat?.task_id||'',live:()=>route()==='agent'&&curChat===id&&agentView==='trajectory'});
 }
+const chatActivityLabels = {
+  chat_waiting: "正在准备上下文…",
+  chat_reconnecting: "对话连接中断，正在重连…",
+  reasoning_start: "等待模型响应…",
+  reasoning_delta: "模型正在思考…",
+  tool_call: "正在运行工具…",
+  tool_result: "正在处理工具结果…",
+};
+
+function updateChatActivity(box, type){
+  let status = box.querySelector(".chat-activity");
+  if(!status && type === "chat_waiting"){
+    status = document.createElement("div");
+    status.className = "chat-activity";
+    status.setAttribute("role","status");
+    status.innerHTML = '<span class="chat-activity-dots" aria-hidden="true"><i></i><i></i><i></i></span><span></span>';
+  }
+  if(!status) return;
+  if(["done","error","cancelled"].includes(type)){ status.remove(); return; }
+  if(["assistant_delta","assistant","team"].includes(type)){ status.hidden = true; return; }
+  const label = chatActivityLabels[type];
+  if(!label) return;
+  const text = status.lastElementChild;
+  if(text.textContent !== label) text.textContent = label;
+  status.hidden = false;
+  if(status !== box.lastElementChild) box.appendChild(status);
+  box.scrollTop = box.scrollHeight;
+}
+
 function appendOne(box,ev,who){
+  updateChatActivity(box,ev.type);
+  if(ev.type === "chat_waiting") return;
   if(ev.sender||ev.assistant_name)who={name:ev.sender||ev.assistant_name,emoji:who?.emoji||'🤖'};
   else if(ev.assistant_id){const expert=(S.assistants||[]).find(item=>item.id===ev.assistant_id);if(expert)who={name:expert.name,emoji:expert.avatar||'🤖'};}
   if(ev.type==='template_used'){PromptUI.event(box,ev);return;}
   if(ev.type.startsWith("reasoning_")){
+    if(ev.type === "reasoning_start" && box.querySelector(".chat-activity")) return;
     let card=[...box.querySelectorAll(".reasoning-card")].find(n=>n.dataset.reasoningId===ev.id);
     if(ev.type==="reasoning_done" && !ev.content){ if(card) card.remove(); return; }
     if(!card){
@@ -1120,7 +1152,8 @@ function restoreAgentRun(){
   try{ run = JSON.parse(localStorage.getItem("rw-agent-run") || "null"); }catch(e){}
   if(!run) return;
   activeAgentRun = run.key; activeAgentChat = run.request.task_id;
-  activeAgentBase = run.base || []; activeAgentEvents = [{type:"user",content:run.request.message}];
+  activeAgentBase = run.base || [];
+  activeAgentEvents = [{type:"user",content:run.request.message},{type:"chat_waiting"}];
   run.status = "running"; run.cursor = 0;
   followChatRun(run);
 }
@@ -1137,7 +1170,13 @@ async function followChatRun(run){
     stEvent(ev);
   },rememberAgentRun,()=>{
     if($("send")) $("send").title = "连接中断，正在重连；按 Esc 停止";
+    if(route() === "agent" && agentView === "conversation" && curChat === activeAgentChat && $("msgs")){
+      updateChatActivity($("msgs"),"chat_reconnecting");
+    }
   });
+  if(route() === "agent" && agentView === "conversation" && curChat === activeAgentChat && $("msgs")){
+    updateChatActivity($("msgs"),"done");
+  }
   localStorage.removeItem("rw-agent-run");
   activeAgentRun = ""; activeAgentEvents = []; activeAgentBase = [];
   const button = $("send");
@@ -1179,8 +1218,10 @@ async function send(){
       : `- ${a.name}${a.paper_id?`（已入库 PDF，paper_id=${a.paper_id}，${a.pages} 页）`:`（本地文件：${a.path}）`}`).join("\n") : text;
    ta.value=""; grow(); atts.length=0; setAtts(); agentHistoryIndex=-1; agentHistoryDraft="";
   const box=$("msgs"); if(box.querySelector(".muted,.at-empty-wrap")) box.innerHTML="";
-  activeAgentChat=curChat; activeAgentBase=[...(S.chat||[])]; activeAgentEvents=[{type:"user",content:msg}];
+  activeAgentChat=curChat; activeAgentBase=[...(S.chat||[])];
+  activeAgentEvents=[{type:"user",content:msg},{type:"chat_waiting"}];
   appendOne(box,{type:"user",content:msg});
+  updateChatActivity(box,"chat_waiting");
    const btn=$("send"); activeAgentRun=crypto.randomUUID(); btn.classList.add("stop"); btn.textContent="■";
   if($("projbind")) $("projbind").disabled=true;
   await followChatRun({key:activeAgentRun,api:"/api/agent",runId:"",cursor:0,status:"running",base:activeAgentBase,

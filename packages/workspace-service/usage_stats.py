@@ -27,6 +27,7 @@ def normalize(raw, api):
 
 def context_sizes(messages, tools):
     counts={'system':0,'conversation':0,'tool_results':0,'tools':len(json.dumps(tools,ensure_ascii=False)) if tools else 0,'images':0}
+    counts['retrieval'] = 0
     for message in messages:
         key='system' if message.get('role')=='system' else 'tool_results' if message.get('role')=='tool' else 'conversation'
         value=message.get('content') or ''
@@ -34,6 +35,8 @@ def context_sizes(messages, tools):
             counts['images']+=sum(part.get('type')=='image_url' for part in value)
             value='\n'.join(part.get('text','') for part in value)
         counts[key]+=len(str(value))
+        if key == 'tool_results' and message.get('name') in ('recall', 'knowledge_query'):
+            counts['retrieval'] += len(str(value))
     return counts
 
 
@@ -50,13 +53,17 @@ def record(profile, messages, tools, duration_ms, usage, status, attempt, first_
     context=profile.get('_usage_context') or {};path=context.get('db_path')
     if not path or path==':memory:' or not Path(path).is_file():return
     exact=usage.get('exact',False)
+    sizes = context_sizes(messages, tools)
+    for key in ('memory_chars', 'profile_chars'):
+        if key in context:
+            sizes[key] = context[key]
     values=[uuid.uuid4().hex,datetime.now(timezone.utc).isoformat(),
             *[str(context.get(key) or '') for key in ('project_id','owner_id','assistant_id','run_id')],
             str(profile.get('id') or ''),model_pricing.provider_for(profile),
             str(profile.get('model') or ''),status,attempt,
             usage.get('prompt') if exact else None,usage.get('completion') if exact else None,
             usage.get('cached'),usage.get('reasoning'),usage.get('cache_write'),duration_ms,first_token_ms,
-            json.dumps(context_sizes(messages,tools))]
+            json.dumps(sizes)]
     try:
         with closing(sqlite3.connect(path,timeout=5)) as connection:
             connection.execute('INSERT INTO model_requests VALUES ('+','.join('?' for _ in values)+')',values)

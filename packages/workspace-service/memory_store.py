@@ -5,13 +5,10 @@
 1. **事实进这里，做法进 skill**（capabilities.skills）。同一句话不许两边都写。
 2. **记忆不会静默消失**：超预算的条目归档（archived=1），recall 还能查到，只是不再常驻注入。
    老实现是「只取最后 40 条」，早期的结论会无声丢掉 —— 那是这套要替掉的东西。
-3. 写入只有两条路：模型调 `memory` 工具、用户纠正时 `capture()` 规则捕获。
-   没有 LLM 后台总结（ponytail: 规则捕获已覆盖「用户纠正」这个真痛点；要做语义抽取
-   再加一个 background job，别现在猜）。
+3. 项目口径更新用 patch 保存新版本，并保留旧正文、变更原因和来源。
 """
 from __future__ import annotations
 
-import difflib
 import re
 import sqlite3
 import uuid
@@ -22,7 +19,6 @@ from typing import Any
 KINDS = ("fact", "preference", "constraint", "decision", "episode")
 KIND_LABEL = {"fact": "事实", "preference": "偏好", "constraint": "约束", "decision": "决定", "episode": "经过"}
 BUDGET = {"global": 3000, "project": 8000}          # 字符，不是 token：中文 1 字≈1 token 量级
-MERGE_AT = 0.82                                     # 三元组相似度到这就算同一件事
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory (
@@ -33,6 +29,12 @@ CREATE TABLE IF NOT EXISTS memory (
   superseded_by TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_memory_scope ON memory(scope, scope_id, archived);
+CREATE TABLE IF NOT EXISTS memory_revisions (
+  id INTEGER PRIMARY KEY, memory_id TEXT NOT NULL, old_text TEXT NOT NULL,
+  new_text TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', source_ref TEXT NOT NULL DEFAULT '',
+  changed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_revisions ON memory_revisions(memory_id, id);
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(mem_id UNINDEXED, text, tags, tokenize='trigram');
 CREATE VIRTUAL TABLE IF NOT EXISTS chat_fts USING fts5(chat_id UNINDEXED, task_id UNINDEXED, role UNINDEXED,
                                                       content, tokenize='trigram');
@@ -76,18 +78,6 @@ def ready(db) -> None:
     _READY.add(key)
 
 
-def _similar(a: str, b: str) -> float:
-    """同一件事的判定。用 difflib 而不是「三元组重叠」：中文短句（十几个字）三元组集合太小，
-    改一个字就把 jaccard 打到 0.5 以下。quick_ratio 先做 O(n) 上界剪枝，长文本也不会退化成 O(n²)。"""
-    a, b = _clean(a).casefold(), _clean(b).casefold()
-    if not a or not b:
-        return 0.0
-    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
-    if matcher.quick_ratio() < MERGE_AT:
-        return 0.0
-    return matcher.ratio()
-
-
 def _age_days(stamp: str) -> float:
     try:
         then = datetime.fromisoformat(stamp)
@@ -116,7 +106,7 @@ def _rows(db, sql: str, args: list | tuple = ()) -> list[dict[str, Any]]:
 # ------------------------------------------------------------------ 写
 def add(db, text: str, *, scope: str = "project", scope_id: str = "", kind: str = "fact",
         tags: str = "", source: str = "agent", importance: int = 1) -> dict[str, Any]:
-    """写一条。同scope里已有同一件事（完全相同或三元组相似）就只加 hits，不重复堆。"""
+    """相同作用域、类型和正文的条目只登记一次。"""
     ready(db)
     body = _clean(text)
     if not body:
@@ -126,22 +116,22 @@ def add(db, text: str, *, scope: str = "project", scope_id: str = "", kind: str 
     scope = "global" if scope == "global" else "project"
     scope_id = "" if scope == "global" else str(scope_id or "")
     conn = db.db
-    same = _rows(db, f"SELECT * FROM memory WHERE {_scope_sql(scope, scope_id, False)[0]} "
-                     "AND archived=0 ORDER BY importance DESC, updated_at DESC LIMIT 200",
-                 _scope_sql(scope, scope_id, False)[1])
-    for row in same:
-        if row["text"] == body or _similar(row["text"], body) >= MERGE_AT:
-            conn.execute("UPDATE memory SET hits=hits+1, updated_at=?, importance=MAX(importance,?) WHERE id=?",
-                         (now(), importance, row["id"]))
-            conn.commit()
-            return {**row, "duplicate": True}
+    where, args = _scope_sql(scope, scope_id, False)
     mem_id = uuid.uuid4().hex
     stamp = now()
-    conn.execute("INSERT INTO memory (id,scope,scope_id,kind,text,tags,source,importance,hits,archived,"
-                 "superseded_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,0,0,'',?,?)",
-                 (mem_id, scope, scope_id, kind, body, _clean(tags), source, importance, stamp, stamp))
-    _index(conn, mem_id, body, _clean(tags))
-    conn.commit()
+    with conn:
+        same = conn.execute(f"""
+            UPDATE memory SET hits=hits+1, updated_at=?, importance=MAX(importance,?)
+            WHERE id=(SELECT id FROM memory WHERE {where} AND kind=? AND text=? AND superseded_by=''
+                      ORDER BY archived, importance DESC, updated_at DESC LIMIT 1)
+            RETURNING *
+            """, [stamp, importance, *args, kind, body]).fetchone()
+        if same:
+            return {**same, "duplicate": True}
+        conn.execute("INSERT INTO memory (id,scope,scope_id,kind,text,tags,source,importance,hits,archived,"
+                     "superseded_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,0,0,'',?,?)",
+                     (mem_id, scope, scope_id, kind, body, _clean(tags), source, importance, stamp, stamp))
+        _index(conn, mem_id, body, _clean(tags))
     dump(db, scope_id)
     _tidy(db, scope, scope_id)
     return {"id": mem_id, "scope": scope, "scope_id": scope_id, "kind": kind, "text": body,
@@ -153,7 +143,7 @@ def resolve(db, mem_id: str = "", old_text: str = "", scope_id: str = "") -> dic
     ready(db)
     if mem_id:
         row = db.db.execute("SELECT * FROM memory WHERE id=?", (mem_id,)).fetchone()
-        if not row:
+        if not row or (scope_id and row["scope"] == "project" and row["scope_id"] != scope_id):
             raise ValueError("没有这条记忆：" + mem_id)
         return dict(row)
     body = _clean(old_text)
@@ -168,9 +158,14 @@ def resolve(db, mem_id: str = "", old_text: str = "", scope_id: str = "") -> dic
 
 def patch(db, mem_id: str = "", old_text: str = "", *, scope_id: str = "", text: str | None = None,
           kind: str | None = None, tags: str | None = None, importance: int | None = None,
-          archived: bool | None = None) -> dict[str, Any]:
-    """改一条。改正文自动重建索引；改完把旧口令靠 superseded_by 留痕。"""
+          archived: bool | None = None, reason: str = "", source_ref: str = "",
+          expected_text: str | None = None) -> dict[str, Any]:
+    """更新当前条目。正文和版本历史在同一事务中写入。"""
     row = resolve(db, mem_id, old_text, scope_id)
+    if expected_text is not None and row["text"] != expected_text:
+        raise ValueError("口径已更新，请先重新检索")
+    if text is not None and not _clean(text):
+        raise ValueError("记忆内容不能为空")
     conn = db.db
     fields, args, changes = [], [], {}
     for column, value in (("text", _clean(text) if text is not None else None),
@@ -185,24 +180,32 @@ def patch(db, mem_id: str = "", old_text: str = "", *, scope_id: str = "", text:
     if not fields:
         return row
     fields.append("updated_at=?")
-    args += [now(), row["id"]]
-    conn.execute(f"UPDATE memory SET {', '.join(fields)} WHERE id=?", args)
-    if text is not None:
-        _index(conn, row["id"], _clean(text), changes.get("tags", row.get("tags") or ""))
-        _drop_lines(db, row["scope_id"], {row["text"]})     # 旧句子的文件行也别留着（不然会被读回来）
-    conn.commit()
+    changed_at = now()
+    args += [changed_at, row["id"], row["updated_at"]]
+    with conn:
+        result = conn.execute(f"UPDATE memory SET {', '.join(fields)} WHERE id=? AND updated_at=?", args)
+        if result.rowcount != 1:
+            raise ValueError("口径已更新，请先重新检索")
+        if "text" in changes:
+            conn.execute("INSERT INTO memory_revisions(memory_id,old_text,new_text,reason,source_ref,changed_at) "
+                         "VALUES (?,?,?,?,?,?)", (row["id"], row["text"], changes["text"],
+                                                  _clean(reason), _clean(source_ref), changed_at))
+        if "text" in changes or "tags" in changes:
+            _index(conn, row["id"], changes.get("text", row["text"]), changes.get("tags", row["tags"]))
+    if "text" in changes:
+        _drop_lines(db, row["scope_id"], {row["text"]})
     dump(db, row["scope_id"])
-    return {**row, **changes}
+    return {**row, **changes, "updated_at": changed_at}
 
 
 def _drop_lines(db, scope_id: str, texts: set[str]) -> None:
-    """删/改记忆时把文件里对应的那行也去掉 —— 否则下一次 dump 会先把文件行读回来，
-    记忆就「删了又长出来」。文件是副本，写到副本上的手改仍会被收编，但删掉就是删掉。"""
-    base = db.base_dir(scope_id) if scope_id else None
+    """删/改记忆时一起清除 Markdown 副本中的对应行。"""
+    base = db.base_dir(scope_id) if scope_id else _user_root() / "记忆"
     if not base or not texts:
         return
-    folder = db.pdir(scope_id, "记忆")
-    for name in ("长期记忆.md", "短期记忆.md"):
+    folder = db.pdir(scope_id, "记忆") if scope_id else base
+    names = ("长期记忆.md", "短期记忆.md") if scope_id else ("全局记忆.md",)
+    for name in names:
         path = folder / name
         try:
             if not path.is_file() or not path.resolve().is_relative_to(base.resolve()):
@@ -216,15 +219,17 @@ def _drop_lines(db, scope_id: str, texts: set[str]) -> None:
 
 def remove(db, mem_id: str = "", old_text: str = "", scope_id: str = "") -> dict[str, Any]:
     row = resolve(db, mem_id, old_text, scope_id)
-    db.db.execute("DELETE FROM memory WHERE id=?", (row["id"],))
-    db.db.execute("DELETE FROM memory_fts WHERE mem_id=?", (row["id"],))
-    db.db.commit()
-    _drop_lines(db, row["scope_id"], {row["text"]})
+    with db.db:
+        old = {r["old_text"] for r in _rows(db, "SELECT old_text FROM memory_revisions WHERE memory_id=?", (row["id"],))}
+        db.db.execute("DELETE FROM memory_revisions WHERE memory_id=?", (row["id"],))
+        db.db.execute("DELETE FROM memory WHERE id=?", (row["id"],))
+        db.db.execute("DELETE FROM memory_fts WHERE mem_id=?", (row["id"],))
+    _drop_lines(db, row["scope_id"], old | {row["text"]})
     dump(db, row["scope_id"])
     return {"removed": row["id"], "text": row["text"]}
 
 
-def apply(db, scope_id: str, args: dict[str, Any]) -> dict[str, Any]:
+def apply(db, scope_id: str, args: dict[str, Any], *, source_ref: str = "") -> dict[str, Any]:
     """`memory` 工具的入口：一次可以给多条 ops。"""
     if args.get("query"):
         return {"query": args["query"], "hits": search(db, args["query"], scope_id, int(args.get("limit") or 10))}
@@ -242,7 +247,9 @@ def apply(db, scope_id: str, args: dict[str, Any]) -> dict[str, Any]:
             elif action == "patch":
                 done.append(patch(db, str(op.get("id") or ""), str(op.get("old_text") or ""), scope_id=scope_id,
                                   text=op.get("text"), kind=op.get("kind"), tags=op.get("tags"),
-                                  importance=op.get("importance"), archived=op.get("archived")))
+                                  importance=op.get("importance"), archived=op.get("archived"),
+                                  reason=op.get("reason", ""), source_ref=source_ref or op.get("source_ref", ""),
+                                  expected_text=op.get("expected_text")))
             elif action in ("remove", "forget"):
                 done.append(remove(db, str(op.get("id") or ""), str(op.get("old_text") or ""), scope_id))
             elif action in ("archive", "restore"):
@@ -264,21 +271,22 @@ def search(db, query: str, scope_id: str = "", limit: int = 10, include_archived
         return []
     conn = db.db
     where, args = _scope_sql("project", scope_id, True)
-    extra = "" if include_archived else " AND archived=0"
+    extra = " AND superseded_by=''" if include_archived else " AND archived=0"
     scores: dict[str, float] = {}
     rows: dict[str, dict] = {}
-    for row in _rows(db, f"SELECT * FROM memory WHERE {where}{extra} ORDER BY updated_at DESC LIMIT 500", args):
+    for row in _rows(db, f"SELECT * FROM memory WHERE {where}{extra} AND "
+                     "instr(lower(text || ' ' || tags), lower(?)) > 0",
+                     [*args, q]):
         rows[row["id"]] = row
     if len(q) >= 3:
         phrase = '"' + q.replace('"', '""') + '"'
         try:
             for mem_id, bm in conn.execute("SELECT mem_id, bm25(memory_fts) FROM memory_fts "
-                                           "WHERE memory_fts MATCH ? LIMIT 200", (phrase,)):
+                                           "WHERE memory_fts MATCH ?", (phrase,)):
                 if mem_id in rows:
                     scores[mem_id] = -float(bm)
         except sqlite3.OperationalError:
             pass
-    like = "%" + q + "%"
     for row in rows.values():
         if q.casefold() in row["text"].casefold() or q.casefold() in (row["tags"] or "").casefold():
             scores[row["id"]] = max(scores.get(row["id"], 0.0), 1.0)
@@ -289,7 +297,7 @@ def search(db, query: str, scope_id: str = "", limit: int = 10, include_archived
         row["score"] = round(base + 0.8 * row["importance"] + 0.2 * min(row["hits"], 5)
                              + 1.5 / (1 + _age_days(row["updated_at"]) / 30), 3)
         out.append(row)
-    out.sort(key=lambda r: -r["score"])
+    out.sort(key=lambda r: (r["archived"], -r["score"], r["id"]))
     for row in out[:limit]:                       # 命中即算被用上：重要性按实际使用走，不靠人点
         conn.execute("UPDATE memory SET hits=hits+1 WHERE id=?", (row["id"],))
     conn.commit()
@@ -328,12 +336,23 @@ def _fts_chats(db, query: str, task_id: str, limit: int) -> list[dict]:
     return out
 
 
-def recall(db, query: str, scope_id: str = "", limit: int = 8) -> dict[str, Any]:
+def recall(db, query: str, scope_id: str = "", limit: int = 8, *, include_history: bool = False) -> dict[str, Any]:
     """跨层回想：记忆 + 历史对话。笔记/证据仍走 knowledge_query（那里带页码出处）。"""
-    return {"query": query,
-            "memory": [{k: r[k] for k in ("id", "kind", "text", "tags", "importance", "updated_at", "score")}
-                       for r in search(db, query, scope_id, limit)],
-            "chats": _fts_chats(db, query, scope_id, limit)}
+    found = {"query": query,
+             "memory": [{k: r[k] for k in ("id", "kind", "text", "tags", "importance", "updated_at", "score", "archived")}
+                        for r in search(db, query, scope_id, limit, include_archived=True)],
+             "chats": _fts_chats(db, query, scope_id, limit)}
+    if include_history:
+        q = _clean(query)
+        found["history"] = _rows(db, """
+            SELECT r.memory_id, r.old_text, r.new_text, r.reason, r.source_ref, r.changed_at,
+                   m.text AS current_text
+            FROM memory_revisions r JOIN memory m ON m.id=r.memory_id
+            WHERE (m.scope='global' OR m.scope_id=?) AND ?<>''
+              AND (instr(lower(r.old_text || ' ' || r.new_text || ' ' || r.reason || ' ' || m.text), lower(?)) > 0
+                   OR m.id=?)
+            ORDER BY r.id DESC LIMIT ?""", (scope_id, q, q, q, limit))
+    return found
 
 
 # ------------------------------------------------------------------ 注入
@@ -362,6 +381,40 @@ def _user_root() -> Path:
         return Path.home() / ".lanji-zhiyan"
 
 
+_PROFILE_FILES = (
+    ("soul.md", "Agent 性格与工作习惯", 2800,
+     "# 科研 Agent\n\n先给结论，明确证据与推断，给出可复现的下一步。"
+     "\n团队协作时独立判断，给出依据与反例，保留有证据的分歧。\n"),
+    ("user.md", "用户档案", 2000,
+     "# 用户档案\n\n在此记录自己的科研方向、工作环境和长期协作偏好。\n"),
+)
+
+
+def profile_context() -> str:
+    """按需生成用户配置起始文件，读取有界文本。已有文件由用户维护。"""
+    root = _user_root()
+    sections = []
+    for name, title, budget, starter in _PROFILE_FILES:
+        path = root / name
+        try:
+            if path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
+                continue
+            if not path.exists():
+                root.mkdir(parents=True, exist_ok=True)
+                try:
+                    with path.open("x", encoding="utf-8") as handle:
+                        handle.write(starter)
+                except FileExistsError:
+                    pass
+            with path.open(encoding="utf-8-sig") as handle:
+                body = handle.read(budget + 1).strip()
+        except (OSError, ValueError):
+            continue
+        if body and not (name == "user.md" and body == starter.strip()):
+            sections.append(f"【{title}】\n" + body[:budget] + ("\n（已截断）" if len(body) > budget else ""))
+    return "\n\n".join(sections)
+
+
 def _import_from_files(db, scope_id: str) -> int:
     """人工直接改 `记忆/*.md` 的路子留着：文件里 `- ` 开头的行补进库（只插没有的原句）。
 
@@ -388,6 +441,9 @@ def _import_from_files(db, scope_id: str) -> int:
                 continue
             known = {r["text"] for r in _rows(
                 db, "SELECT text FROM memory WHERE scope=? AND scope_id=?", (scope, sid))}
+            known.update(r["old_text"] for r in _rows(db, """
+                SELECT r.old_text FROM memory_revisions r JOIN memory m ON m.id=r.memory_id
+                WHERE m.scope=? AND m.scope_id=?""", (scope, sid)))
             for line in path.read_text(encoding="utf-8").splitlines():
                 body = line[2:].strip()
                 if not line.startswith("- ") or not body or "（暂无）" in body or body in known:
@@ -407,11 +463,12 @@ def _import_from_files(db, scope_id: str) -> int:
 
 
 def sync_files(db, scope_id: str) -> None:
-    _import_from_files(db, scope_id)
+    if scope_id:
+        _import_from_files(db, scope_id)
     _import_from_files(db, "")                # 全局记忆.md 也读回来（dump 写它，得有人读）
 
 
-def block(db, scope_id: str, now_window: int = 10, line: int = 120) -> str:
+def block(db, scope_id: str, now_window: int = 10, line: int = 120, *, include_dialogue: bool = True) -> str:
     """拼给模型看的记忆块：全局 → 项目 → 窗口外的老对话。超预算的条目只报数，不静默丢。"""
     ready(db)
     try:
@@ -420,14 +477,16 @@ def block(db, scope_id: str, now_window: int = 10, line: int = 120) -> str:
         pass
     parts: list[str] = []
     over: list[str] = []
-    for scope, title, budget in (("global", "全局记忆（跨项目）", BUDGET["global"]),
-                                 ("project", "项目记忆", BUDGET["project"])):
-        picked, missed = _section(db, scope, scope_id, budget)
+    scopes = [("global", "全局记忆（跨项目）")]
+    if scope_id:
+        scopes.append(("project", "项目记忆"))
+    for scope, title in scopes:
+        picked, missed = _section(db, scope, scope_id, BUDGET[scope])
         if picked:
             parts.append(f"【{title}】\n" + "\n".join(f"- {x}" for x in picked))
         if missed:
             over.append(f"{title} 还有 {missed} 条超预算没注入")
-    if scope_id:
+    if scope_id and include_dialogue:
         try:
             n_ep = db.db.execute("SELECT COUNT(*) FROM memory WHERE scope_id=? AND archived=0 "
                                  "AND kind='episode'", (scope_id,)).fetchone()[0]
@@ -470,7 +529,7 @@ def _tally(rows: list[dict]) -> dict[str, int]:
 
 
 def consolidate(db, scope_id: str = "") -> dict[str, Any]:
-    """合并近重复 + 把超预算的尾巴归档。确定性，不叫模型 —— 记忆整理不该有随机性。"""
+    """合并类型和正文相同的条目，归档超出注入预算的条目。"""
     ready(db)
     merged = archived = 0
     conn = db.db
@@ -478,17 +537,18 @@ def consolidate(db, scope_id: str = "") -> dict[str, Any]:
         where, args = _scope_sql(scope, scope_id, False)
         rows = _rows(db, f"SELECT * FROM memory WHERE {where} AND archived=0 "
                          "ORDER BY importance DESC, updated_at DESC", args)
-        kept: list[dict] = []
+        kept: dict[tuple[str, str], dict] = {}
         for row in rows:
-            twin = next((k for k in kept if _similar(k["text"], row["text"]) >= MERGE_AT), None)
+            key = (row["kind"], row["text"])
+            twin = kept.get(key)
             if twin:
                 conn.execute("UPDATE memory SET hits=hits+?, archived=1, superseded_by=?, updated_at=? WHERE id=?",
                              (row["hits"] + 1, twin["id"], now(), row["id"]))
                 merged += 1
             else:
-                kept.append(row)
+                kept[key] = row
         used = 0
-        for row in kept:
+        for row in kept.values():
             if row["kind"] == "episode":            # 不进常驻注入，也就不占注入预算（见 _section）
                 continue
             if used + len(row["text"]) <= BUDGET[scope]:
@@ -502,11 +562,7 @@ def consolidate(db, scope_id: str = "") -> dict[str, Any]:
 
 
 def _tidy(db, scope: str, scope_id: str) -> None:
-    """写完之后看一眼：注入层真撑破预算才整理。
-
-    不放进 block() —— 那是每轮都跑的路径，两两相似度在 79 条上就是三千次 difflib。
-    ponytail: 门槛只看字符数；等条目上千再换成按 importance 分层预算，别现在猜。
-    """
+    """注入层超出预算时整理。"""
     where, args = _scope_sql(scope, scope_id, False)
     try:
         used = db.db.execute(f"SELECT COALESCE(SUM(LENGTH(text)),0) FROM memory WHERE {where} "
@@ -548,18 +604,41 @@ def _write(path: Path, title: str, note: str, lines: list[str]) -> None:
 
 
 # ------------------------------------------------------------------ 纠正捕获
-_CORRECTION = re.compile(r"(不要|别|不准|禁止|必须|一律|统一|以后都|记住|我说过|不是这样|应该用|改成|口径)")
+_CORRECTION = re.compile(r"(不要|别|不准|禁止|必须|一律|统一|以后都|记住|我说过|不是这样|应该用|改成|改为|调整为|更正为|口径)")
+_NUMBER_CORRECTION = re.compile(
+    r"(?:把|从|原来(?:的)?|原先(?:的)?)\s*(?:第\s*)?"
+    r"(?P<old>\d+(?:\.\d+)?)\s*(?P<unit>圈|周|天|次|小时|分钟|%|mAh/g|mA/g|V)\s*"
+    r"(?:改成|改为|调整为|更正为)\s*(?:第\s*)?(?P<new>\d+(?:\.\d+)?)\s*(?P=unit)(?![a-zA-Z0-9/%])",
+    re.IGNORECASE,
+)
 
 
-def capture(db, scope_id: str, text: str) -> dict[str, Any] | None:
-    """用户当场定的规矩别等下轮：命中纠正口吻就记一条约束（去重靠 add 自己的相似判定）。
-    ponytail: 规则命中，不做语义判断；误记的代价是一条可删的约束，漏记的代价是下轮又犯。"""
+def capture(db, scope_id: str, text: str, *, source_ref: str = "") -> dict[str, Any] | None:
+    """明确的数值更正仅在当前项目有唯一匹配时直接更新。"""
     body = _clean(text)
     if not scope_id or not body or len(body) > 400:
         return None
     match = _CORRECTION.search(body)
     if not match:
         return None
+    numeric = _NUMBER_CORRECTION.search(body)
+    if numeric:
+        if re.search(r"如果|假设|试试|对照|能否|要不要|[？?]", body):
+            return None
+        ready(db)
+        before = re.compile(r"(?<![.\d])" + re.escape(numeric["old"]) + r"(\s*" +
+                            re.escape(numeric["unit"]) + r")(?![a-zA-Z0-9/%])", re.IGNORECASE)
+        candidates = [row for row in _rows(db, """
+            SELECT * FROM memory WHERE scope='project' AND scope_id=? AND superseded_by=''
+              AND kind IN ('constraint','decision')""", (scope_id,)) if before.search(row["text"])]
+        if len(candidates) == 1 and len(before.findall(candidates[0]["text"])) == 1:
+            row = candidates[0]
+            return patch(db, row["id"], scope_id=scope_id, expected_text=row["text"], archived=False,
+                         text=before.sub(lambda hit: numeric["new"] + hit[1], row["text"]),
+                         reason=body, source_ref=source_ref)
+        return None                       # 交由 Agent 先查清目标，再请求明确的变更
+    if re.search(r"改成|改为|调整为|更正为", body):
+        return None                       # 通用更正由 Agent 查找目标并记录版本
     sentence = re.split(r"[。！？!?\n]", body)
     line = next((s for s in sentence if match.group(1) in s), body)
     return add(db, "用户口径：" + line.strip()[:160], scope_id=scope_id, kind="constraint",
@@ -587,7 +666,7 @@ if __name__ == "__main__":                            # python memory_store.py
     ready(db)
     assert stats(db, "t1")["project"]["count"] == 1, "旧数据没搬过来"
     a = add(db, "导师要求中文稿不用小括号", scope_id="t1", kind="constraint", importance=3)
-    assert add(db, "导师要求中文稿不用小括号", scope_id="t1")["duplicate"], "同一条没去重"
+    assert add(db, "导师要求中文稿不用小括号", scope_id="t1", kind="constraint")["duplicate"], "同一条没去重"
     assert search(db, "小括号", "t1")[0]["id"] == a["id"], "三字以上检索失效"
     assert search(db, "小括", "t1")[0]["id"] == a["id"], "两字检索失效"
     assert not search(db, "小括号", "t2"), "串项目了"
@@ -597,19 +676,19 @@ if __name__ == "__main__":                            # python memory_store.py
     assert not search(db, "分号", "t1"), "删了还能搜到"
     add(db, "配图用 Okabe-Ito 色盲安全配色", scope_id="t1", kind="preference")
     add(db, "访谈结论：单卡 8G 显存，训练只能小批量", scope_id="t2", kind="decision")
-    assert add(db, "访谈结论：单卡 8G 显存，训练只能小批", scope_id="t2")["duplicate"], "写入时没去重"
+    assert add(db, "访谈结论：单卡 8G 显存，训练只能小批量", scope_id="t2", kind="decision")["duplicate"], "写入时没去重"
     for i in range(60):
         add(db, "条目%d：%s" % (i, chr(0x4e00 + i * 5) * 200), scope_id="t2", importance=1)
     out = consolidate(db, "t2")              # 写入路径上的 _tidy 已经压过一次，这里应当无活可干
     assert out["stats"]["project"]["archived"] > 0, "超预算没归档"
     assert out["stats"]["project"]["chars"] <= BUDGET["project"], "预算没兜住"
     assert search(db, "8G", "t2", include_archived=True), "归档后连检索也查不到了"
-    for i in range(2):                       # 绕过 add 直接塞两条近重复，验证 consolidate 的兜底合并
+    for i in range(2):                       # 模拟旧库已有的重复条目
         db.db.execute("INSERT INTO memory (id,scope,scope_id,kind,text,tags,source,importance,hits,archived,"
                       "superseded_by,created_at,updated_at) VALUES (?,?,?,?,?,'','import',1,0,0,'',?,?)",
-                      ("dup%d" % i, "project", "t3", "fact", "同一件事换了个说法版本" + ("甲乙"[i]), now(), now()))
+                      ("dup%d" % i, "project", "t3", "fact", "重复记录的同一个条目", now(), now()))
     db.db.commit()
-    assert consolidate(db, "t3")["merged"] == 1, "consolidate 没合并近重复"
+    assert consolidate(db, "t3")["merged"] == 1, "consolidate 没合并重复条目"
     got = capture(db, "t1", "以后都按这个口径来，不要自己改数字")
     assert got and got["kind"] == "constraint", "纠正没捕获"
     assert capture(db, "t1", "今天天气不错") is None, "没纠正也记了"
