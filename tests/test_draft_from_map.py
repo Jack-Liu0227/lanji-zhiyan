@@ -62,6 +62,16 @@ class DraftFromMapTest(unittest.TestCase):
         self.assertIn("支撑（背景）", selected)
         self.assertTrue(result["gaps"])
 
+    def test_saving_graph_and_draft_without_mime_registry_access(self):
+        with patch("asset_service.mimetypes.guess_type", side_effect=PermissionError):
+            graph = workflow.map_read(self.db, self.tid)
+            saved = workflow.map_write(self.db, self.tid, graph, expected_revision=graph["edit_revision"])
+            result = workflow_runners.run_write(self.db, self.tid, "按谱系图生成")
+        self.assertEqual(saved["revision"], result["revision"])
+        for path in (saved["path"], result["path"]):
+            asset = self.db.db.execute("SELECT content_hash FROM assets WHERE canonical_uri=?", (path,)).fetchone()
+            self.assertTrue(asset and asset["content_hash"])
+
     def test_changed_order_and_removed_evidence_invalidate_previous_draft(self):
         from lineage_draft import validate_draft
         workflow_runners.run_write(self.db, self.tid, "按谱系图生成")

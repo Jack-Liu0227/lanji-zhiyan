@@ -394,6 +394,14 @@ def is_instruction_note(db, project_id, note_id, content):
     return any(is_instruction_asset(dict(row)) for row in rows)
 
 
+def _guess_mime_type(uri: str) -> str:
+    try:
+        return mimetypes.guess_type(uri)[0] or ""
+    except PermissionError:
+        # Windows may deny access to the system MIME registry.
+        return mimetypes.types_map.get(Path(uri).suffix.lower(), "")
+
+
 def register(db, *, project_id: str = "", kind: str, title: str = "", canonical_uri: str,
              storage: str = "file", mime: str = "", content_hash: str = "",
              source: str = "local", metadata: dict[str, Any] | None = None,
@@ -413,7 +421,7 @@ def register(db, *, project_id: str = "", kind: str, title: str = "", canonical_
           storage=excluded.storage, mime=excluded.mime, content_hash=excluded.content_hash,
           source=excluded.source, metadata=excluded.metadata, updated_at=excluded.updated_at""",
                  (asset_id, project_id or "", kind, title or "", canonical_uri, storage,
-                  mime or mimetypes.guess_type(canonical_uri)[0] or "", content_hash or "",
+                  mime or _guess_mime_type(canonical_uri), content_hash or "",
                   source or "local", _json(metadata), stamp, stamp))
     row = conn.execute("SELECT * FROM assets WHERE canonical_uri=?", (canonical_uri,)).fetchone()
     asset = dict(row)
