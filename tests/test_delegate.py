@@ -12,6 +12,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
@@ -74,7 +75,10 @@ class TestDelegate(unittest.TestCase):
         """子 agent 看不到父对话历史、只有只读工具；父 agent 第二轮拿到摘要；父历史照常只有 user/assistant。"""
         self._fake()
         stream: list = []
-        out = run_agent(self.db, self.task, "把 A、B 分别读一下", emit=stream.append)
+        def persist(event):
+            self.db.db.execute("SELECT 1").fetchone()
+            stream.append(event)
+        out = run_agent(self.db, self.task, "把 A、B 分别读一下", emit=persist)
         self.assertEqual(len(self.child_calls), 2)
         for c in self.child_calls:
             roles = [m["role"] for m in c["messages"]]
@@ -111,6 +115,66 @@ class TestDelegate(unittest.TestCase):
         r = workflow._delegate(self.db, self.task, [], parallel=2)
         self.assertFalse(r["ok"])
         self.assertIn("至少一个子任务", r["error"])
+
+    def test_research_roles_use_shared_evidence_and_resume_cache(self) -> None:
+        calls = []
+        tool = {"id": "inspect", "type": "function",
+                "function": {"name": "knowledge_query", "arguments": '{"query":"matched control"}'}}
+
+        def model(profile, messages, tools=None, **kw):
+            identity = messages[0]["content"]
+            names = {spec["function"]["name"] for spec in tools or []}
+            if "职责：原文取证" in identity:
+                self.assertEqual(names, {"knowledge_query", "paper_excerpt", "paper_focus", "paper_evidence_get"})
+                if messages[-1]["role"] == "user":
+                    calls.append("evidence")
+                    return {"role": "assistant", "content": "", "tool_calls": [tool]}
+                return {"role": "assistant", "content": "私有判断：强烈推荐该题", "tool_calls": []}
+            self.assertIn("职责：独立评审", identity)
+            self.assertEqual(names, {"knowledge_query", "paper_excerpt", "research_data_profile"})
+            text = json.dumps(messages, ensure_ascii=False)
+            self.assertIn("对照组和实验组使用不同电压", text)
+            self.assertNotIn("私有判断", text)
+            calls.append("review")
+            return {"role": "assistant", "content": "需要匹配电压区间", "tool_calls": []}
+
+        jobs = [
+            {"id": "extract", "role": "evidence", "prompt": "读同一原文"},
+            {"id": "duplicate", "role": "evidence", "prompt": "读同一原文"},
+            {"id": "review", "role": "review", "prompt": "是否有匹配的对照", "depends_on": ["extract"]},
+        ]
+        with patch.object(workflow, "chat_raw", side_effect=model), \
+             patch.object(workflow, "_knowledge_query", return_value={"hits": [
+                 {"citation": "example.pdf p.7", "snippet": "对照组和实验组使用不同电压"}]}):
+            state = {}
+            first = workflow._delegate(self.db, self.task, jobs, state=state)
+            second = workflow._delegate(self.db, self.task, jobs, state=json.loads(json.dumps(state)))
+        self.assertEqual(calls, ["evidence", "review"])
+        self.assertTrue(first["delegated"][1]["reused"])
+        self.assertIn("需要匹配电压区间", first["digest"])
+        self.assertTrue(all(item["reused"] for item in second["delegated"]))
+        self.assertEqual(second["sub_events"], [])
+
+    def test_dependency_cycle_rejected_before_model_calls(self) -> None:
+        with patch.object(workflow, "chat_raw") as model:
+            result = workflow._delegate(self.db, self.task, [
+                {"id": "a", "prompt": "a", "depends_on": ["b"]},
+                {"id": "b", "prompt": "b", "depends_on": ["a"]},
+            ])
+        self.assertFalse(result["ok"])
+        model.assert_not_called()
+
+    def test_data_profile_counts_filtered_rows_and_independent_groups(self) -> None:
+        data = {"asset_id": "dataset", "path": "samples.csv", "content_hash": "v1",
+                "content": "\ufeffpaper,element,value\np1,Cu,80\np1,Cu,84\np2,Cu,\np3,Fe,75\n"}
+        with patch("project_resources.read", return_value=data) as reader:
+            result = workflow._tool_impl("research_data_profile", self.db, self.task, {
+                "asset_id": "dataset", "group_by": "paper", "where": {"element": "Cu"},
+            })
+        reader.assert_called_once_with(self.db, self.task, "dataset")
+        self.assertEqual((result["rows"], result["distinct_groups"]), (3, 2))
+        self.assertEqual(result["missing"], {"value": 1})
+        self.assertEqual(result["content_hash"], "v1")
 
 
 if __name__ == "__main__":

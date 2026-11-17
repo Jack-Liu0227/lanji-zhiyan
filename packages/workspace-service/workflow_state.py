@@ -40,10 +40,29 @@ def capture(db, project_id: str, step: str) -> dict:
         payload = sorted(db.results(project_id), key=lambda r: r["id"])
         valid = bool(payload)
     elif step == "download":
+        from workflow_stages import MIN_READ_NOTE_CHARS, READ_NOTE_TITLE
+        import research_reading
+        abstracts = {p["id"]: research_reading.abstract(db, project_id, p)
+                     for p in research_reading._available(db, project_id)}
         payload = sorted([{"id": p["id"], "title": p.get("title"), "sha256": p.get("sha256"),
                            "text_chars": p.get("text_chars"), "filename": p.get("filename")} for p in db.papers_of(project_id)],
                          key=lambda r: r["id"])
         valid = bool(payload)
+        # Freeze the reading evidence alongside the PDF inventory. Older
+        # standalone import actions can still record PDFs before reading them.
+        papers = {paper["id"]: paper for paper in payload}
+        for paper in payload:
+            paper["abstract"] = abstracts.get(paper["id"], {"status": "missing"})
+        result["abstract_count"] = sum(item["status"] == "available" for item in abstracts.values())
+        result["items"]["摘要初筛"] = f"{result['abstract_count']}/{len(payload)} 篇有摘要"
+        for note in db.notes(project_id):
+            paper = papers.get(note.get("paper_id"))
+            if paper and str(note.get("title") or "").startswith(READ_NOTE_TITLE) and len((note.get("markdown") or "").strip()) >= MIN_READ_NOTE_CHARS:
+                paper.setdefault("reading_notes", []).append({
+                    "id": note["id"], "title": note["title"], "markdown": note["markdown"],
+                })
+        result["reading_note_count"] = sum(len(paper.get("reading_notes", [])) for paper in payload)
+        result["items"]["精读笔记"] = f"{result['reading_note_count']} 份"
     elif step == "notes":
         import papertran
         payload = papertran.deliveries(db, project_id)
@@ -53,6 +72,14 @@ def capture(db, project_id: str, step: str) -> dict:
         doc = workflow.doc_read(db, project_id, step)
         payload = doc.get("markdown", "") if doc.get("exists") else ""
         valid = bool(payload.strip()) and (step != "write" or "（本节未生成 ——" not in payload)
+        if valid and step == "write":
+            from lineage_draft import validate_draft
+            try:
+                lineage = validate_draft(db, project_id, payload)
+                result["items"]["谱系版本"] = lineage["revision"][:12]
+            except ValueError as exc:
+                valid = False
+                result["items"]["读取产物出错"] = str(exc)
     elif step == "map":
         data = workflow.map_read(db, project_id)
         payload = {"nodes": data.get("nodes", []), "edges": data.get("edges", [])}

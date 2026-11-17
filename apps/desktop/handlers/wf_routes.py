@@ -27,10 +27,19 @@ class WorkflowRoutes:
             step = (q.get("step") or ["outline"])[0]
             with WorkflowDB(DB_PATH) as db:
                 tid = q["id"][0]
+                document = doc_read(db, tid, step)
+                if step == "write" and document["exists"]:
+                    from lineage_draft import validate_draft
+                    try:
+                        result = validate_draft(db, tid, document["markdown"], require_complete=False)
+                        document["lineage_status"] = (f"谱系 {result['revision'][:12]} · "
+                                                      + (f"{len(result['gaps'])} 项待核" if result["gaps"] else "证据链一致"))
+                    except ValueError as exc:
+                        document["lineage_status"] = str(exc)
                 return self._json({"step": step, "out": str(db.out_dir(tid)),
                                    "long": db.memory(tid, "long"),
                                    "messages": db.messages(tid, step),
-                                   **doc_read(db, tid, step)})
+                                   **document})
         if path == "/api/map/state":                  # 梳理精读：谱系图 + 能挂的源 + 大纲
             with WorkflowDB(DB_PATH) as db:
                 tid = q["id"][0]

@@ -53,16 +53,13 @@ class AuditRegressionTest(unittest.TestCase):
         workflow.map_write(self.db, self.pid, {"nodes": [
             {"id": "a", "label": "Introduction", "type": "section"},
             {"id": "b", "label": "Methods", "type": "section"}], "edges": []})
-        for responses in (["", ""], ["A complete section", RuntimeError("provider failed")]):
-            with self.subTest(responses=responses):
-                workflow.doc_write(self.db, self.pid, "write", "KEEP_REVIEWED_MANUSCRIPT")
-                previous = workflow.doc_read(self.db, self.pid, "write")["markdown"]
-                with patch.object(workflow, "chat", side_effect=responses), patch.object(workflow, "agent_profile", return_value={}):
-                    with self.assertRaisesRegex(RuntimeError, "原稿未改动"):
-                        workflow_runners.run_write(self.db, self.pid, "整篇重写")
-                self.assertEqual(workflow.doc_read(self.db, self.pid, "write")["markdown"], previous)
-                with self.assertRaises(ValueError):
-                    workflow_state.accept(self.db, self.pid, "write")
+        workflow.doc_write(self.db, self.pid, "write", "KEEP_REVIEWED_MANUSCRIPT")
+        previous = workflow.doc_read(self.db, self.pid, "write")["markdown"]
+        with self.assertRaisesRegex(ValueError, "现有正文保留"):
+            workflow_runners.run_write(self.db, self.pid, "整篇重写")
+        self.assertEqual(workflow.doc_read(self.db, self.pid, "write")["markdown"], previous)
+        with self.assertRaises(ValueError):
+            workflow_state.accept(self.db, self.pid, "write")
 
     def test_old_missing_section_placeholder_cannot_be_delivered(self):
         self.layout(["write"])
@@ -339,50 +336,17 @@ class AuditRegressionTest(unittest.TestCase):
         self.assertEqual(result["status"], "completed", result)
         self.assertIn("Streaming report", Path(result["output_path"]).read_text(encoding="utf-8"))
 
-    def test_write_pipeline_resume_keeps_review_and_revision(self):
-        self.resume_write_pipeline()
-
-    def test_legacy_write_pipeline_checkpoint_resumes_review(self):
-        self.resume_write_pipeline(legacy=True)
-
-    def test_legacy_writer_interruption_after_file_write_still_reaches_review(self):
-        self.resume_write_pipeline(legacy=True, interrupt_writer=True)
-
-    def resume_write_pipeline(self, legacy=False, interrupt_writer=False):
-        workflow.doc_write(self.db, self.pid, "outline", "# Outline\n## Introduction")
-        self.layout(["write"])
-        run = self.manager.create_run(self.pid, "pipeline", self.db)
-        self.db.job_checkpoint = {}
-        def save(**values):
-            self.db.job_checkpoint.update(values)
-            self.db.update_async_task(run.run_id, checkpoint=self.db.job_checkpoint)
-        self.db.save_agent_checkpoint = save
-        def write_call(text):
-            return {"tool_calls": [{"id": "write", "type": "function", "function": {
-                "name": "doc_write", "arguments": json.dumps({"markdown": text})}}]}
-        initial = [{"content": "Material"}, write_call("DRAFT_BEFORE_RESTART")]
-        if not interrupt_writer:
-            initial.append({"content": "Draft saved"})
-        initial.append(SystemExit("Simulated process stop"))
-        with patch.object(workflow, "agent_profile", return_value={"permission": "workspace_write"}), \
-                patch.object(workflow, "_chat_raw", side_effect=initial):
-            with self.assertRaises(SystemExit):
-                workflow_runners.run_write(self.db, self.pid, "请开始写作")
-        self.assertEqual(workflow.doc_read(self.db, self.pid, "write")["markdown"].strip(), "DRAFT_BEFORE_RESTART")
-        with workflow.WorkflowDB(self.db.path) as restored:
-            restored.job_checkpoint = restored.get_async_task(run.run_id)["checkpoint"]
-            self.assertEqual(restored.job_checkpoint["write_mode"], "pipeline")
-            if legacy:
-                restored.job_checkpoint.pop("write_mode")
-            restored.resuming = True
-            remaining = ([{"content": "Draft saved"}] if interrupt_writer else []) + [
-                {"content": "- Revise introduction"}, write_call("FINAL_AFTER_REVIEW"), {"content": "Final saved"}]
-            with patch.object(workflow, "agent_profile", return_value={"permission": "workspace_write"}), \
-                    patch.object(workflow, "_chat_raw", side_effect=remaining) as call:
-                result = workflow_runners.run_write(restored, self.pid, "请开始写作")
-            self.assertEqual(call.call_count, len(remaining))
-            self.assertIn("流水线完成", result["reply"])
-            self.assertEqual(workflow.doc_read(restored, self.pid, "write")["markdown"].strip(), "FINAL_AFTER_REVIEW")
+    def test_resumed_legacy_write_respects_lineage_and_preserves_draft(self):
+        workflow.doc_write(self.db, self.pid, "write", "# Before interruption")
+        self.db.resuming = True
+        for checkpoint in ({"write_mode": "pipeline"}, {}):
+            with self.subTest(checkpoint=checkpoint), patch.object(workflow, "_chat_raw") as model:
+                self.db.job_checkpoint = checkpoint
+                with self.assertRaisesRegex(ValueError, "谱系图"):
+                    workflow_runners.run_write(self.db, self.pid, "请开始写作")
+                model.assert_not_called()
+                self.assertEqual(workflow.doc_read(self.db, self.pid, "write")["markdown"].strip(),
+                                 "# Before interruption")
 
 
 if __name__ == "__main__":

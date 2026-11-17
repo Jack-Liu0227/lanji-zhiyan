@@ -496,57 +496,21 @@ class WorkflowTest(unittest.TestCase):
             httpd.server_close()
 
 
-    def test_write_pipeline_three_agents_then_final_pass(self) -> None:
-        """文章撰写后台流水线：素材官 → 写手（初稿）→ 审查 → 写手（定稿）。
-        子 agent 不能占对话历史、不能各发一个 done（否则前台第一次 done 就收流）。"""
-        self.db.add_model("假模型3", "http://127.0.0.1:1/v1", "fake3", "sk", activate=True)
-        workflow.doc_write(self.db, self.task, "outline", "## 1 引言\n### 1.1 背景\n## 2 结果\n")
-        seen: list = []
-        stages: list[str] = []
+    def test_lineage_writer_streams_one_done_and_persists_the_result(self) -> None:
+        from unittest.mock import patch
+        graph = workflow.map_write(self.db, self.task, {
+            "nodes": [{"id": "intro", "type": "section", "label": "引言"}], "edges": [],
+        })
+        events = []
+        with patch.object(workflow, "chat_raw") as model:
+            result = workflow.run_write(self.db, self.task, "按谱系图生成", emit=events.append)
+        model.assert_not_called()
+        self.assertEqual([item["type"] for item in events], ["tool_result", "done"])
+        messages = self.db.messages(self.task, "write")
+        self.assertEqual([row["role"] for row in messages], ["user", "assistant"])
+        self.assertEqual(messages[-1]["events"][0]["result"]["revision"], graph["revision"])
+        self.assertEqual(workflow.doc_read(self.db, self.task, "write")["markdown"], result["markdown"])
 
-        def fake_chat_raw(profile, messages, tools=None, **kw):
-            system = messages[0]["content"]
-            names = [t["function"]["name"] for t in (tools or [])]
-            if "**素材官**（后台 agent" in system:
-                stages.append("素材官")
-                return {"role": "assistant", "tool_calls": [],
-                        "content": "- [1 引言] Cu 掺杂提升循环保持率 —— 出处：a.pdf p.3\n- [2 结果] 出处：无（待核）"}
-            if "**审查 agent**（后台 agent" in system:
-                stages.append("审查")
-                return {"role": "assistant", "tool_calls": [],
-                        "content": "- [2 结果] 保持率数字没有出处 → 补出处，拿不到就写「待补」"}
-            stages.append("写手")
-            wrote = any(m.get("role") == "tool" for m in messages)
-            if "doc_write" in names and not wrote:      # 初稿与定稿各落盘一次（整份覆盖）
-                return {"role": "assistant", "content": "", "tool_calls": [
-                    {"id": "w1", "type": "function", "function": {
-                        "name": "doc_write", "arguments": '{"markdown": "正文：Cu 掺杂提升循环保持率。"}'}}]}
-            return {"role": "assistant", "content": "正文写好了。", "tool_calls": []}
-
-        old = workflow.chat_raw
-        workflow.chat_raw = fake_chat_raw
-        try:
-            out = workflow.run_write(self.db, self.task, "写一版初稿", emit=seen.append)
-        finally:
-            workflow.chat_raw = old
-
-        self.assertEqual(stages, ["素材官", "写手", "写手", "审查", "写手", "写手"])   # 顺序就是流水线
-        self.assertEqual([e["type"] for e in seen].count("done"), 1)                 # 只有一个收尾 done
-        self.assertEqual(seen[-1]["type"], "done")
-        self.assertEqual([m["role"] for m in self.db.messages(self.task, "write")], ["user", "assistant"])
-        # 右栏的团队协作：四段「谁 → 谁」，审查意见原文要进前台（不是只剩一句统计）
-        team = [e for e in seen if e.get("type") == "team"]
-        self.assertEqual([t["role"] for t in team], ["evidence", "writer", "critic", "writer"])
-        self.assertEqual([t["to"] for t in team], ["论文写作", "论文审查", "论文写作", "左边正文"])
-        self.assertTrue(team[2]["content"].startswith("- [2 结果]"))
-        self.assertRegex(team[3]["tag"], r"^定稿 \d+ 字 · 待补 0 处$")
-        saved = [e for e in self.db.messages(self.task, "write")[-1]["events"] if e.get("type") == "team"]
-        self.assertEqual(len(saved), 4)                                              # 落库 → 刷新后还在
-        self.assertIn("后台流水线完成", out["reply"])
-        self.assertIn("审查意见：1 条", out["reply"])
-        body = workflow.doc_read(self.db, self.task, "write")
-        self.assertTrue(body["exists"] and "Cu 掺杂提升循环保持率" in body["markdown"])
-        workflow.doc_path(self.db, self.task, "write").unlink(missing_ok=True)       # 别在产出目录留测试文件
 
     def test_write_pipeline_gate(self) -> None:
         """流水线拐点：没框架不走；第一次（没正文）走；已有正文只说改一节时不走，说整篇/重写才走。"""

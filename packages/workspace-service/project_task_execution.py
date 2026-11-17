@@ -323,7 +323,18 @@ def execute(db, task_run_id, cancel_check=None):
                     execution_board.publish(db, task['project_id'], kind, task_id=task['id'], run_id=run['id'], activity=event.get('name') or kind)
                     db.db.commit()
                 if getattr(db, 'project_task_emit', None): db.project_task_emit(event)
-            out = _fixed_tool(db, task, run, node, board_emit) if node.get('node_kind') == 'tool' else workflow.run_agent(db, task["project_id"], prompt, system=system, tools=specs,
+            if stage == "write":
+                from workflow_runners import draft_from_lineage
+                permission = (run["executor_snapshot"].get("runtime_config") or {}).get("permission", "auto")
+                workflow.enforce_tool_policy("draft_write", {}, permission)
+                if not any(tool["function"]["name"] in {"doc_write", "draft_write"} for tool in specs):
+                    raise PermissionError("当前执行者未获得正文写入工具权限")
+                out = draft_from_lineage(db, task["project_id"], require_complete=True)
+                board_emit({"type": "tool_result", "name": "draft_write", "ok": True, "summary": out["reply"]})
+            elif node.get("node_kind") == "tool":
+                out = _fixed_tool(db, task, run, node, board_emit)
+            else:
+                out = workflow.run_agent(db, task["project_id"], prompt, system=system, tools=specs,
                 emit=board_emit,
                 profile=db.runtime_model,
                 extra_context=context_text, assistant_id=executor["assistant_id"], member=member,

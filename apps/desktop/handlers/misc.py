@@ -129,7 +129,10 @@ class MiscRoutes:
                 pid = (q.get("id") or [""])[0]
                 src = papertran.pdf_path(db, pid)
                 tid = (q.get("task") or [""])[0]
-                out = db.pdir(tid, "文献库") if tid else (paths.OUT)
+                try:
+                    out = papertran.output_dir(db, pid, tid)
+                except ValueError as exc:
+                    return self._json({"error": str(exc)}, 404)
             if not src:
                 return self._send(404, b"not found", "text/plain; charset=utf-8")
             f = papertran.out_paths(src, out)[0 if kind == "dual" else 1]

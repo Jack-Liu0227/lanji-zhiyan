@@ -3,13 +3,14 @@
 三件事各自独立，都不动业务库结构（只读 papers 表 + 复用 md_notes）：
   · pdf_path(db, pid)        -> 找到那篇 PDF 的真实路径（来源是我们自己的入库记录）
   · paper_meta(db, pid)      -> DOI / 题目 / 关键词 / 发表时间，取不到给 ""（前端显示「暂无信息」）
-  · start(db, ...)           -> 后台跑 BabelDOC（默认输出**同页左右对照**），进度写进进程内状态表
+  · start(db, ...)           -> 后台跑 BabelDOC，合并译文并持久化已完成页码
   · note_from_translation()  -> 把译文（mono.pdf）逐页文字抽出来，建成**绑定到项目**的笔记
 """
 from __future__ import annotations
 
 import pdfio            # PDF 读写（pypdf/pdfplumber，见 pdfio.py）
 import json
+from hashlib import sha256
 import lowbox          # 低完整性（Low IL）子进程：写入范围由内核限制
 import paths
 import os
@@ -56,7 +57,6 @@ CHUNK_MAX = int(os.environ.get("RW_TRANS_CHUNKS", "4"))           # 整篇切几
 JOBS: dict[str, dict[str, Any]] = {}          # paper_id -> 翻译任务状态（进程内，够用）
 _LOCK = threading.Lock()
 _LOG_LOCK = threading.Lock()      # 多段并行时日志文件是共享的
-_SPLICE_LOCK = threading.Lock()   # 拼接译文必须串行，否则页序会乱
 
 DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+")
 KW_RE = re.compile(r"(?i)key\s?words?\s*[:：]?\s*(.{5,240})")
@@ -130,16 +130,23 @@ def paper_meta(db: Any, paper_id: str) -> dict[str, Any]:
 
 
 # ---------------- 翻译任务（BabelDOC） ----------------
-def _llm_cfg(db: Any) -> dict[str, str]:
+def _llm_cfg(db: Any, model_id: str = "") -> dict[str, str]:
     """优先用应用里配好的模型；没有就退回环境里的智谱（实测可用）。"""
-    try:
-        m = db.active_model() or {}
-    except Exception:
-        m = {}
+    m = db.model(model_id) if model_id else db.active_model()
+    m = m or {}
     base = (m.get("base_url") or "").strip()
     key = (m.get("api_key") or "").strip()
-    if base and key:
-        return {"base": base, "key": key, "model": (m.get("model") or ZHIPU_MODEL).strip()}
+    if base and (key or model_id):
+        from workflow_db import _assert_key_host
+        _assert_key_host(m)
+        host = urllib.parse.urlsplit(base).hostname
+        local = host in {"localhost", "127.0.0.1", "::1"}
+        if m.get("api") not in (None, "", "openai-chat", "openai-completions"):
+            raise ValueError("PDF 翻译需要 OpenAI 兼容的 Chat Completions 模型")
+        return {"base": base, "key": key or ("local" if local else ""),
+                "model": (m.get("model") or ZHIPU_MODEL).strip()}
+    if model_id:
+        raise ValueError("所选翻译模型缺少接口地址")
     return {"base": ZHIPU_BASE, "key": os.environ.get("ZHIPUAI_API_KEY", "").strip(), "model": ZHIPU_MODEL}
 
 
@@ -169,24 +176,22 @@ def deliveries(db: Any, project_id: str) -> list[dict[str, Any]]:
     completed = []
     for paper in sorted(db.papers_of(project_id), key=lambda row: row["id"]):
         source = pdf_path(db, paper["id"])
-        if not source or status(paper["id"], out_dir).get("state") != "done":
+        if not source or not _read_state(out_dir, paper["id"]).get("done"):
             continue
         dual, mono = out_paths(source, out_dir)
         if not mono.is_file() or not mono.stat().st_size:
             continue
-        files = [str(path) for path in (mono, dual) if path.is_file() and path.stat().st_size]
+        files = [str(mono)]
+        if not _read_state(out_dir, paper["id"]).get("identity") and dual.is_file() and dual.stat().st_size:
+            files.append(str(dual))
         completed.append({"id": paper["id"], "files": files})
     return completed
 
 
-def _save_state(out_dir: Path, paper_id: str, pages_done: int, total: int, done: bool) -> None:
-    """译文是边翻边落盘的，所以「文件在不在」不等于「翻完了」—— 单独记一份状态，靠它判断缓存/续翻。"""
-    try:
-        _state_path(out_dir, paper_id).write_text(
-            json.dumps({"pages_done": pages_done, "total": total, "done": done}, ensure_ascii=False),
-            encoding="utf-8")
-    except OSError:
-        pass
+def _save_state(out_dir: Path, paper_id: str, pages_done: int, total: int, done: bool, **metadata: Any) -> None:
+    from asset_service import atomic_write_text
+    atomic_write_text(_state_path(out_dir, paper_id), json.dumps(
+        {"pages_done": pages_done, "total": total, "done": done, **metadata}, ensure_ascii=False))
 
 
 def _read_state(out_dir: Path, paper_id: str) -> dict[str, Any]:
@@ -212,10 +217,11 @@ def status(paper_id: str, out_dir: Path | None = None) -> dict[str, Any]:
                 if done:
                     return {"state": "done", "pct": 100, "msg": "已有译文（断点缓存）",
                             "pages_done": total, "total_pages": total}
-                if pages_done > 0:
-                    pct = int(pages_done * 100 / max(1, total)) if total else 0
-                    return {"state": "interrupted", "pct": pct,
-                            "msg": f"任务可断点恢复（第 1-{pages_done} 页已完成）",
+                finished = len(st.get("completed_pages", [])) if "completed_pages" in st else pages_done
+                if finished > 0:
+                    pct = int(finished * 100 / max(1, total)) if total else 0
+                    return {"state": "interrupted", "pct": pct, "completed_count": finished,
+                            "msg": f"已缓存 {finished} 页，可按所需范围续翻",
                             "pages_done": pages_done, "total_pages": total}
     return {"state": "idle"}
 
@@ -277,46 +283,73 @@ def _plan(n: int) -> list[tuple[int, int]]:
     return parts
 
 
-def start(db: Any, paper_id: str, out_dir: Path, pages: str = "", force: bool = False) -> dict[str, Any]:
+def _page_plan(n, pages, completed):
+    ranges = _parse_pages(pages) if pages else _plan(n)
+    requested = set()
+    missing = []
+    for a, b in ranges:
+        if not 1 <= a <= b <= n:
+            raise ValueError(f"页码范围必须在 1–{n} 内")
+        first = None
+        for page in range(a, b + 1):
+            if page not in completed and page not in requested:
+                first = page if first is None else first
+            elif first is not None:
+                missing.append((first, page - 1))
+                first = None
+            requested.add(page)
+        if first is not None:
+            missing.append((first, b))
+    if not requested:
+        raise ValueError("请输入页码范围，例如 3 或 2-4,8")
+    return requested, missing
+
+
+def start(db: Any, paper_id: str, out_dir: Path, pages: str = "", force: bool = False,
+          *, model_id: str = "") -> dict[str, Any]:
+    import asset_service
     path = pdf_path(db, paper_id)
     if not path:
         return {"error": "找不到这篇 PDF 的文件"}
     if os.name == "nt" and os.environ.get("RW_LOW_SERVER") == "1" and not (MANAGED_BABELDOC.is_file() or BABELDOC_EXE.is_file()):
         return {"error": "翻译引擎尚未初始化。请先完成翻译环境初始化，再重新开始翻译。"}
-    out_dir.mkdir(parents=True, exist_ok=True)
+    n = pdfio.page_count(path)
+    requested, _ = _page_plan(n, pages, set())
+    cfg = _llm_cfg(db, model_id)
+    identity = sha256(json.dumps(
+        [asset_service.sha256_file(path), cfg["base"], cfg["model"], "en", "zh", 1]
+    ).encode()).hexdigest()
     dual, mono = out_paths(path, out_dir)
-    cfg = _llm_cfg(db)
-    if not cfg["key"]:
-        return {"error": "没有可用的翻译模型：先去「模型」页配一家，或让环境里有 ZHIPUAI_API_KEY"}
-    st = _read_state(out_dir, paper_id)
     with _LOCK:
         job = JOBS.get(paper_id)
         if job and job.get("state") == "running":
             return {"ok": True, "already": True, **job}
-        if mono.is_file() and st.get("done") and not force:     # 只有状态文件说翻完了才算缓存
-            JOBS[paper_id] = {"state": "done", "pct": 100, "msg": "已有译文（缓存）", "mono": str(mono),
-                              "dual": str(dual) if dual.is_file() else "", "cached": True,
-                              "pages_done": st.get("total") or 0, "total_pages": st.get("total") or 0}
+        state = _read_state(out_dir, paper_id)
+        completed = set()
+        if mono.is_file() and not force:
+            if state.get("identity") == identity:
+                present = min(n, pdfio.page_count(mono))
+                completed = {number for number in state.get("completed_pages", [])
+                             if type(number) is int and 1 <= number <= present}
+            elif not state.get("identity") and state.get("done") and state.get("total") == n and not model_id:
+                if pdfio.page_count(mono) == n:
+                    completed = set(range(1, n + 1))
+        _, plan = _page_plan(n, pages, completed)
+        status_fields = {"selected": bool(pages), "first_page": min(requested), "scope_total": len(requested),
+                         "completed_count": len(requested & completed), "total_pages": n,
+                         "pages_done": len(completed), "full_document": len(completed) == n}
+        if not plan:
+            JOBS[paper_id] = {**status_fields, "state": "done", "pct": 100, "msg": "已复用缓存译文",
+                              "mono": str(mono), "dual": str(dual) if dual.is_file() and len(completed) == n else ""}
             return {"ok": True, "cached": True, **JOBS[paper_id]}
-        JOBS[paper_id] = {"state": "running", "pct": 0, "msg": "启动中…", "mono": str(mono) if mono.is_file() else "",
-                          "dual": "", "pages_done": 0, "total_pages": 0}
-    n = 0
-    try:
-        n = pdfio.page_count(path)
-    except Exception:
-        pass
-    plan = _parse_pages(pages) or _plan(n)
-    if not pages and mono.is_file():
-        keep = int(st.get("pages_done") or 0)                # 上次翻到一半：从没翻的那段接着来
-        if 0 < keep < n:
-            plan = [c for c in plan if c[0] > keep] or _plan(n)
-            with _LOCK:
-                JOBS[paper_id] = {**JOBS[paper_id], "pages_done": keep, "total_pages": n,
-                                  "pct": int(keep * 100 / max(1, n)),
-                                  "msg": f"接着翻（第 1-{keep} 页已翻好）"}
-    _save_state(out_dir, paper_id, int(st.get("pages_done") or 0) if mono.is_file() else 0, n, False)
-    threading.Thread(target=_run, args=(paper_id, path, out_dir, cfg, plan, mono, _env()), daemon=True).start()
-    return {"ok": True, "state": "running", "chunks": len(plan), "total_pages": n}
+        if not cfg["key"]:
+            return {"error": "没有可用的翻译模型。请先在模型页配置 OpenAI 兼容的翻译后端。"}
+        out_dir.mkdir(parents=True, exist_ok=True)
+        JOBS[paper_id] = {**status_fields, "state": "running", "pct": 0, "msg": "准备翻译",
+                          "mono": str(mono) if completed else "", "dual": ""}
+    threading.Thread(target=_run, args=(paper_id, path, out_dir, cfg, plan, mono, _env(), identity,
+                                      n, requested, completed), daemon=True).start()
+    return {"ok": True, "state": "running", "chunks": len(plan), **status_fields}
 
 
 _PROG = re.compile(r"(\d+)\s*/\s*(\d+)")
@@ -395,11 +428,6 @@ def _spawn(paper_id: str, cmd: list[str], env: dict[str, str], fh: Any, a: int, 
     return proc.wait()
 
 
-def _splice_serial(dest: Path, part: Path, a: int, b: int) -> None:
-    with _SPLICE_LOCK:                    # 多段并行时，拼页必须一个一个来
-        _splice(dest, part, a, b)
-
-
 def _trim_tail(mono: Path, src: Path, done_pages: int) -> None:
     """只裁「超出已翻页数 done_pages」的尾部原页 —— 那些是 babeldoc 为版式上下文带进来的
     未翻译页（实测要 1-2 页会给整篇）。
@@ -458,23 +486,6 @@ def _splice(dest: Path, part: Path, a: int, b: int) -> None:
         except OSError:                              # 前端可能正读着这个文件，等一下再换
             time.sleep(0.4)
 
-def _progress(paper_id: str, msg: str, done: int, total: int, log: Path,
-              pct: int | None = None, mono: str = "") -> None:
-    with _LOCK:
-        cur = JOBS.get(paper_id, {})
-        upd = {**cur, "state": "running", "msg": msg, "pages_done": done, "total_pages": total, "log": str(log)}
-        if pct is not None:
-            upd["pct"] = pct
-        if mono:
-            upd["mono"] = mono
-        JOBS[paper_id] = upd
-
-
-def _pages_done(paper_id: str) -> int:
-    with _LOCK:
-        return int(JOBS.get(paper_id, {}).get("pages_done") or 0)
-
-
 def _balance_hint(tail: str) -> str:
     """从日志尾部认出发钱相关的错误，直接给人话（这类错重试没用，得充值/降并发）。"""
     low = tail.lower()
@@ -493,28 +504,45 @@ def _fail(paper_id: str, mono: Path, total: int, log: Path, a: int, b: int, code
         pass
     with _LOCK:
         cur = JOBS.get(paper_id, {})
-        JOBS[paper_id] = {**cur, "state": "partial" if mono.is_file() else "error",
+        has_partial = bool(cur.get("pages_done")) and mono.is_file()
+        JOBS[paper_id] = {**cur, "state": "partial" if has_partial else "error",
                           "msg": (hint or f"翻到第 {a}-{b} 页时失败（退出码 {code}{_why(code)}）"),
-                          "total_pages": total, "mono": str(mono) if mono.is_file() else "", "log": str(log)}
+                          "total_pages": total, "mono": str(mono) if has_partial else "", "log": str(log)}
+
+
+def _merge_translation_pages(dest, part, source, a, b, completed):
+    part_length = pdfio.page_count(part)
+    if part_length >= b:
+        part_start = a - 1
+    elif part_length == b - a + 1:
+        part_start = 0
+    else:
+        raise ValueError("译文页数与请求范围不一致")
+    tmp = dest.with_name(dest.name + ".tmp.pdf")
+    out = []
+    for page in range(1, max(b, max(completed, default=0)) + 1):
+        if a <= page <= b:
+            out.append((part, part_start + page - a))
+        elif page in completed:
+            out.append((dest, page - 1))
+        else:
+            out.append((source, page - 1))
+    pdfio.write_pages(tmp, out)
+    tmp.replace(dest)
 
 
 def _run(paper_id: str, path: Path, out_dir: Path, cfg: dict[str, str],
-         plan: list[tuple[int, int]], mono: Path, env: dict[str, str]) -> None:
-    """按段翻，段与段**并行**（CHUNK_PARALLEL）；翻好一段立刻拼进 mono，UI 就能边翻边看。
-
-    ponytail: 每段仍各自重跑一次版式模型（实测约 16s/段），所以段数被 CHUNK_MAX 压着。
-    想再快就把整篇交给一个 babeldoc 进程跑 —— 代价是失去「第一页先出来」和断点续翻。
-    """
+         plan: list[tuple[int, int]], mono: Path, env: dict[str, str], identity: str,
+         total: int, requested: set[int], completed: set[int]) -> None:
+    """Translate missing ranges in parallel and commit only completed pages."""
     log = mono.parent / f"trans_{paper_id[:8]}.log"
-    total = plan[-1][1] if plan else 0
 
-    def one(idx: int, a: int, b: int) -> bool:
-        part_dir = out_dir / "_parts" / f"p{a}-{b}"
+    def one(idx: int, a: int, b: int):
+        part_dir = out_dir / "_parts" / paper_id[:12] / identity[:16] / f"p{a}-{b}"
         part_dir.mkdir(parents=True, exist_ok=True)
         with _LOG_LOCK:
             fh.write(f"\n===== 第 {a}-{b} 页（第 {idx}/{len(plan)} 段）=====\n")
             fh.flush()
-        _progress(paper_id, f"正在翻第 {a}-{b} 页（第 {idx}/{len(plan)} 段）", a - 1, total, log)
         _off_think = ("--openai-thinking", "disabled") if (
             "deepseek" in str(cfg.get("base") or "").lower()
             or "deepseek" in str(cfg.get("model") or "").lower()) else ()
@@ -530,46 +558,44 @@ def _run(paper_id: str, path: Path, out_dir: Path, cfg: dict[str, str],
                               "--no-dual",                    # UI 只用单语译文，省掉对照版的生成
                               "--no-auto-extract-glossary",   # 省掉一整趟全篇术语抽取的 LLM 调用
                               "--pages", f"{a}-{b}",
-                              "--working-dir", str(out_dir / "_work" / f"p{a}-{b}"),
+                              "--working-dir", str(part_dir / "work"),
                               "--output", str(part_dir)]
-        code = _spawn(paper_id, cmd, env, fh, a, b)
         part_mono = part_dir / mono.name
-        if code != 0 or not part_mono.is_file():
-            with _LOG_LOCK:
-                fh.write(f"!!! 这段失败：退出码 {code}\n")
-                fh.flush()
-            _fail(paper_id, mono, total, log, a, b, code)
-            return False
-        _splice_serial(mono, part_mono, a, b)
-        _trim_tail(mono, path, max(_pages_done(paper_id), b))   # 只裁超出已翻范围的尾部原页
-        done = max(_pages_done(paper_id), b)      # 并行完成顺序不定，进度只许往前走
-        _save_state(out_dir, paper_id, done, total, False)
-        _progress(paper_id, f"已翻好第 1-{done} 页 / 共 {total} 页", done, total, log,
-                  pct=int(done * 100 / max(1, total)), mono=str(mono))
-        return True
+        part_mono.unlink(missing_ok=True)
+        code = _spawn(paper_id, cmd, env, fh, a, b)
+        return a, b, code, part_mono
 
+    failures = []
     try:
         with log.open("w", encoding="utf-8", errors="replace") as fh:
-            futs = []
-            with ThreadPoolExecutor(max_workers=max(1, min(CHUNK_PARALLEL, len(plan) or 1))) as ex:
-                for idx, (a, b) in enumerate(plan, 1):
-                    futs.append(ex.submit(one, idx, a, b))
-                for f in as_completed(futs):
-                    if not f.result():             # 有一段失败：停掉还没跑的，已翻好的留下
-                        for g in futs:
-                            g.cancel()
-                        return
-        _save_state(out_dir, paper_id, total, total, True)
-        with _LOCK:
-            JOBS[paper_id] = {**JOBS.get(paper_id, {}), "state": "done", "pct": 100, "msg": "完成",
-                              "pages_done": total, "total_pages": total,
-                              "mono": str(mono), "log": str(log)}
+            with ThreadPoolExecutor(max_workers=max(1, min(CHUNK_PARALLEL, len(plan)))) as pool:
+                pending = [pool.submit(one, idx, a, b) for idx, (a, b) in enumerate(plan, 1)]
+                for future in as_completed(pending):
+                    a, b, code, translated = future.result()
+                    if code != 0 or not translated.is_file():
+                        failures.append((a, b, code))
+                        continue
+                    _merge_translation_pages(mono, translated, path, a, b, completed)
+                    completed.update(range(a, b + 1))
+                    full_document = len(completed) == total
+                    _save_state(out_dir, paper_id, len(completed), total, full_document,
+                                identity=identity, completed_pages=sorted(completed))
+                    done = len(completed & requested)
+                    with _LOCK:
+                        JOBS[paper_id].update(
+                            pages_done=len(completed), completed_count=done, full_document=full_document,
+                            pct=int(done * 100 / len(requested)), mono=str(mono), log=str(log),
+                            msg=f"当前范围已翻译 {done}/{len(requested)} 页"
+                        )
+        if failures:
+            _fail(paper_id, mono, total, log, *failures[0])
+        else:
+            with _LOCK:
+                JOBS[paper_id].update(state="done", pct=100, msg="翻译完成", mono=str(mono), log=str(log))
     except Exception as exc:
         with _LOCK:
-            cur = JOBS.get(paper_id, {})
-            JOBS[paper_id] = {**cur, "state": "partial" if mono.is_file() else "error",
-                              "msg": f"{type(exc).__name__}: {exc}", "log": str(log)}
-            _save_state(out_dir, paper_id, int(cur.get("pages_done") or 0), total, False)
+            JOBS[paper_id].update(state="partial" if completed else "error",
+                                  msg=f"{type(exc).__name__}: {exc}", log=str(log))
 
 
 # ---------------- 译文 → 中文笔记 ----------------

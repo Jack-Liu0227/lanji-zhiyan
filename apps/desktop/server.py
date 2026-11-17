@@ -1395,7 +1395,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                         except ValueError as exc:
                             return self._json({"error": str(exc)}, 400)
                         return self._json(papertran.start(db, pid, out, str(data.get("pages") or ""),
-                                                          bool(data.get("force"))))
+                                                          bool(data.get("force")), model_id=str(data.get("model_id") or "")))
                 if path == "/api/en/run":                   # 一键翻译（中文 markdown → 英文 markdown）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(en_run(db, (data.get("task_id") or "").strip(),
@@ -1433,7 +1433,8 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(map_write(db, (data.get("task_id") or "").strip(),
                                                     data.get("data") or {},
-                                                    keep_positions=bool(data.get("keep_positions", False))))
+                                                    keep_positions=bool(data.get("keep_positions", False)),
+                                                    expected_revision=data.get("expected_revision")))
                 if path == "/api/map/tidy":                # 重新整理：按大纲当前的顺序重认一遍框架
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(map_tidy(db, (data.get("task_id") or "").strip()))
@@ -1695,7 +1696,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                         return self._json(stage_zotero_import(db, tid, data.get("collection", ""),
                                                               data.get("keys") or []))
                     if stage == "deepread":                     # 一键精读：扔后台跑，立刻返回（前端轮询进度、可停）
-                        return self._json(deepread_kick(str(DB_PATH), tid))
+                        return self._json(deepread_kick(str(DB_PATH), tid, str(data.get("mode") or "full")))
                     if stage == "queue":                        # 下载精读面板的实时数据
                         items = db.queue(tid)
                         return self._json({

@@ -82,6 +82,41 @@ class SpliceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.td = pathlib.Path(tempfile.mkdtemp())
 
+    def test_selected_page_is_cached_and_full_translation_only_fills_gaps(self):
+        source = write_text_pdf(self.td / "study.pdf", ["EN1", "EN2", "EN3", "EN4"])
+        output = self.td / "out"
+        backend = {"base": "https://example.test/v1", "key": "fixture", "model": "translate"}
+        calls = []
+
+        def fake_spawn(_paper, command, _env, _log, first, last):
+            calls.append((first, last))
+            part = pathlib.Path(command[command.index("--output") + 1]) / "study.no_watermark.zh.mono.pdf"
+            write_text_pdf(part, [f"ZH{page}" for page in range(first, last + 1)])
+            return 0
+
+        def wait_for_translation():
+            for _ in range(200):
+                result = papertran.status("selective-test", output)
+                if result["state"] != "running":
+                    return result
+                time.sleep(0.02)
+            self.fail("translation worker stalled")
+
+        with patch.object(papertran, "pdf_path", return_value=source), \
+             patch.object(papertran, "_llm_cfg", return_value=backend), \
+             patch.object(papertran, "_spawn", side_effect=fake_spawn):
+            papertran.start(None, "selective-test", output, "3")
+            selected = wait_for_translation()
+            self.assertEqual((selected["state"], selected["full_document"]), ("done", False), selected)
+            self.assertEqual(pdfio.page_texts(output / "study.no_watermark.zh.mono.pdf"), ["EN1", "EN2", "ZH3"])
+            self.assertTrue(papertran.start(None, "selective-test", output, "3")["cached"])
+            papertran.start(None, "selective-test", output)
+            full = wait_for_translation()
+            self.assertTrue(full["full_document"], full)
+            self.assertEqual(sorted(calls), [(1, 1), (2, 2), (3, 3), (4, 4)])
+            self.assertEqual(pdfio.page_texts(output / "study.no_watermark.zh.mono.pdf"), ["ZH1", "ZH2", "ZH3", "ZH4"])
+        papertran.JOBS.pop("selective-test", None)
+
     def test_第一段只取请求区间(self) -> None:
         """要 1-2 页，part 带 3 页（版式上下文多给的），产物只能有 2 页。"""
         part = write_text_pdf(self.td / "part.pdf", ["P1", "P2", "P3"])

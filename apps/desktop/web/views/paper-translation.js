@@ -12,8 +12,14 @@ function trPanelHTML(active){
       <button class="btn btn-teal" id="trAdd">＋ 添加论文</button>
       <span class="tr-seg" id="trSeg">
         <button class="tr-seg-b active" id="trBtnEn" title="英文原文 PDF">English</button>
-        <button class="tr-seg-b" id="trBtnZh" title="纯中文（BabelDOC 译文）">中文</button>
+        <button class="tr-seg-b" id="trBtnZh" title="按所填页码翻译，留空翻译全文">中文</button>
       </span>
+      <input id="trTranslatePages" size="10" placeholder="页码 · 留空全文" aria-label="翻译页码，如 2-4,8">
+      <button class="btn" id="trTranslateCurrent">翻当前页</button>
+      <select id="trTranslateModel" aria-label="PDF 翻译模型" title="PDF 翻译模型">
+        <option value="">使用当前模型</option>
+        ${(S.models || []).map(m=>`<option value="${esc(m.id)}">${esc(m.name || m.model)}</option>`).join("")}
+      </select>
       <span class="tr-spacer"></span>
       <span class="tr-grp">
         <button class="tr-ib" id="trPenTop" title="荧光笔" aria-label="荧光笔">🖍</button>
@@ -125,7 +131,7 @@ async function trReader(pid){
   const box = trScrollEl("a"); if(box) box.innerHTML = "";
   await trMount("a", `/api/pdf?id=${encodeURIComponent(pid)}`);
 }
-async function trShowZh(v){
+async function trShowZh(v, page){
   /* 单栏：纯中文（BabelDOC 译文）—— 切过去保住读到哪 */
   if(!TR.pid) return trMsg("先添加一篇 PDF");
   if(!window.pdfjsLib){ trMsg("pdf.js 没加载"); return; }
@@ -134,7 +140,10 @@ async function trShowZh(v){
   trView("zh");
   TR.monoUrl = trMonoUrl(v);
   await trMount("a", TR.monoUrl);
-  if(box) box.scrollTop = y;
+  if(box){
+    const target = page ? box.querySelector(`.tr-page[data-page="${Number(page)}"]`) : null;
+    box.scrollTop = target ? target.offsetTop : y;
+  }
 }
 async function trMount(key, url){
   const box = trScrollEl(key); if(!box) return;
@@ -334,7 +343,7 @@ function trHlOnMouseUp(e){
 }
 
 /* ---------------- 中英互译（BabelDOC 后台任务） ---------------- */
-async function trTranslate(){
+async function trTranslate(pages = $("trTranslatePages")?.value.trim() || ""){
   if(!TR.pid) return trMsg("先添加一篇 PDF");
   if(TR.job && TR.job.state === "running") return;
   const b = $("trBtnZh");
@@ -344,10 +353,11 @@ async function trTranslate(){
   TR.busyOff = 0;
   trBusy(true, "正在翻译中", "开始识别版式，第一篇要等十几秒…");
   try{
-    const r = await api("/api/trans/start", {id: TR.pid, task_id: curTask, pages: TR.testPages || ""});
+    const r = await api("/api/trans/start", {id:TR.pid, task_id:curTask, pages,
+                                            model_id:$("trTranslateModel")?.value || ""});
     if(r.error) throw new Error(r.error);
     TR.job = r;
-    if(r.state === "done" || r.cached){ if(b) b.disabled = false; trBusy(false); trMsg("已打开中文译文（这篇翻过，直接用）"); return trShowZh(r.pages_done || 0); }
+    if(r.state === "done" || r.cached){ if(b) b.disabled = false; trBusy(false); trMsg("已复用缓存译文"); return trShowZh(r.pages_done || 0, r.selected ? r.first_page : null); }
     trStartPoll();
   }catch(e){ trBusy(false); trMsg("翻译启动失败：" + e.message); if(b) b.disabled = false; }
 }
@@ -361,13 +371,13 @@ function trStartPoll(){
       if(s.state === "running" || s.state === "partial"){
         const el = Math.round((Date.now() - (TR.t0 || (TR.t0 = Date.now()))) / 1000);
         lbl("翻译中…", true);
-        const done = s.pages_done || 0;
+        const done = s.completed_count ?? s.pages_done ?? 0;
         trMsg(`${s.msg || "正在翻译"}　已用 ${Math.floor(el/60)}分${el%60}秒（${TR.pages||"整篇"} 页大约十几分钟，可以先干别的）`);
-        trBusy(true, "正在翻译中", `${s.msg || "正在翻译"}　已翻 ${done}/${s.total_pages || TR.pages || "?"} 页 · 已用 ${Math.floor(el/60)}分${el%60}秒`);
+        trBusy(true, "正在翻译中", `${s.msg || "正在翻译"}　已翻 ${done}/${s.scope_total || s.total_pages || "?"} 页 · 已用 ${Math.floor(el/60)}分${el%60}秒`);
         if(done > 0 && done !== TR.prog){          // 翻好一批就在「中文」里先看这一批
           TR.prog = done;
-          trShowZh(done);
-          trMsg(`已翻好第 1-${done} 页（共 ${s.total_pages||TR.pages||"?"} 页），后面还在翻…`);
+          trShowZh(s.pages_done || done);
+          trMsg(`本次范围已翻 ${done}/${s.scope_total || s.total_pages || "?"} 页`);
         }
         if(s.state === "partial"){                 // 后面失败了：已翻好的照看
           trStopPoll(); TR.t0 = 0; lbl("中文", false);
@@ -375,7 +385,10 @@ function trStartPoll(){
           trBusy(true, "翻译中断", `翻到第 ${done} 页时失败：${s.msg || ""}` + (s.log ? `\n日志：${s.log}` : ""), true);
         }
       }
-      if(s.state === "done"){ trStopPoll(); TR.t0 = 0; lbl("中文", false); trBusy(false); trShowZh(s.pages_done || 0); }
+      if(s.state === "done"){ trStopPoll(); TR.t0 = 0; lbl("中文", false); trBusy(false);
+        trMsg(s.full_document ? "全文译文已完成" : "指定页已译完，其余页可继续翻译");
+        trShowZh(s.pages_done || 0, s.selected ? s.first_page : null);
+      }
       if(s.state === "error"){ trStopPoll(); TR.t0 = 0; lbl("中文", false);
                               trMsg("翻译失败：" + (s.msg||"") + (s.log ? `（日志：${s.log}）` : ""));
                               trBusy(true, "翻译失败", (s.msg || "") + (s.log ? `\n日志：${s.log}` : ""), true); }
@@ -524,6 +537,7 @@ function trBind(){
   $("trPenTop").onclick = ()=>trPenPanel();
   $("trBtnEn").onclick = ()=>{ if(!TR.pid) return trMsg("先添加一篇 PDF"); trSegActive("read"); trReader(TR.pid); };
   $("trBtnZh").onclick = ()=>trTranslate();
+  $("trTranslateCurrent").onclick = ()=>trTranslate(String(TR.cur || 1));
   $("trBtnN").onclick = ()=>trNoteMode();
   $("trStripMore").onclick = ()=>$("trDetail")?.classList.toggle("hidden");
   trPenInit(); trZoomLabel();
@@ -552,7 +566,8 @@ function trBind(){
 /* ==== 证据链谱系（工作流第 6 步）：左 2/3 证据链谱系图（框架小标题 → 精读结论 / 实验数据）+ 右 1/3 证据链 agent ==== */
 const MP = { nodes:[], edges:[], sel:"", src:null, busy:false, poll:0, outline:"", pos:{}, zoom:1 };
 const MP_COL = { section:"var(--muted)", paper:"var(--accent)", note:"#8f7fb5", data:"#4ade80" };
-const MP_TAG = { section:"小节", paper:"论文", note:"笔记", data:"数据" };
+const MP_TAG = { section:"小节", evidence:"原文证据", paper:"论文", note:"笔记", data:"数据" };
+const MP_SEQ = new Set(["下一章", "下一节"]);
 const MP_W = { gapx: 84, gapy: 12, padx: 26, pady: 22 };   // 横向分层：层间距 84，同层卡片间距 12
 
 function mapPanelHTML(active){
@@ -625,11 +640,12 @@ async function mpLoad(){
   try{
     let d = await api(`/api/map/state?id=${encodeURIComponent(curTask)}`);
     // 大纲已经有了、图还没有 → 直接按大纲长一版，不用等用户开口（服务端不会覆盖已有图）
-    if(!(d.nodes||[]).length && /^###\s/m.test((d.outline&&d.outline.markdown)||"")){
+    if(!d.exists && /^#{2,3}\s/m.test((d.outline&&d.outline.markdown)||"")){
       await api("/api/map/seed", {task_id: curTask});
       d = await api(`/api/map/state?id=${encodeURIComponent(curTask)}`);
     }
     MP.nodes = d.nodes||[]; MP.edges = d.edges||[]; MP.src = d.sources||null; MP.outline = (d.outline&&d.outline.markdown)||"";
+    MP.revision = d.edit_revision;
     MP_MEAS.clear();                                 // 大纲/说明变了，卡片尺寸得重新量
     MP.sig = JSON.stringify([MP.nodes, MP.edges]);
     $("mp-file").textContent = (d.path||"谱系.json").split(/[\\/]/).pop();
@@ -816,9 +832,29 @@ function mpPickHTML(){
   const src = MP.src || {};
   const grp = (name, rows) => rows.length
     ? `<optgroup label="${name}">${rows.map(([v,t])=>`<option value="${esc(v)}">${esc(t)}</option>`).join("")}</optgroup>` : "";
-  return grp("精读笔记", (src.notes||[]).map(x=>[`note|${x.id}`, x.title||x.name]))
+  return grp("已登记的原文证据", (src.evidence||[]).map(x=>[`evidence|${x.id}`,x.title]))
+       + grp("精读笔记", (src.notes||[]).map(x=>[`note|${x.id}`, x.title||x.name]))
        + grp("实验数据", (src.data||[]).map(x=>[`data|${x}`, String(x).split(/[\\/]/).pop()]))
        + grp("文献库", (src.papers||[]).map(x=>[`paper|${x}`, String(x).replace(/\.pdf$/i,"")]));
+}
+function mpSectionParent(id){
+  return MP.edges.find(e=>e.to===id && !MP_SEQ.has(e.label) &&
+    MP.nodes.some(n=>n.id===e.from && n.type==="section"))?.from || "";
+}
+function mpSiblingOrder(parent){
+  const pending = MP.nodes.filter(n=>n.type==="section" && mpSectionParent(n.id)===parent).map(n=>n.id);
+  const ordered = [];
+  while(pending.length){
+    const i = pending.findIndex(id=>!MP.edges.some(e=>e.to===id && MP_SEQ.has(e.label) && pending.includes(e.from)));
+    if(i<0) return [...ordered,...pending];
+    ordered.push(pending.splice(i,1)[0]);
+  }
+  return ordered;
+}
+function mpSetSiblingOrder(ids, parent){
+  const members = new Set(ids);
+  MP.edges = MP.edges.filter(e=>!(MP_SEQ.has(e.label) && members.has(e.from) && members.has(e.to)));
+  for(let i=1;i<ids.length;i++) MP.edges.push({from:ids[i-1],to:ids[i],label:parent?"下一节":"下一章"});
 }
 function mpCard(id){
   const n = MP.nodes.find(x=>x.id===id); if(!n) return;
@@ -828,6 +864,9 @@ function mpCard(id){
   const secNodes = MP.nodes.filter(x=>x.type==="section");
   const secIds = new Set(secNodes.map(x=>x.id));
   const secPar = MP.edges.filter(e=>e.to===id && secIds.has(e.from)).map(e=>e.from);
+  const parent = mpSectionParent(id);
+  const siblings = mpSiblingOrder(parent);
+  const position = siblings.indexOf(id);
   const wrap = $("mp-wrap");
   const div = document.createElement("div");
   div.className = "mp-card";
@@ -836,6 +875,14 @@ function mpCard(id){
     <label class="mp-f">说明<textarea id="mp-e-detail" rows="3">${esc(n.detail||"")}</textarea></label>
     <label class="mp-f">类型<select id="mp-e-type">${Object.keys(MP_TAG).map(k=>`<option value="${k}"${n.type===k?" selected":""}>${MP_TAG[k]}</option>`).join("")}</select></label>
     ${n.type==="section"?`<label class="mp-f">挂一条资料<select id="mp-e-add"><option value="">— 精读笔记 / 实验数据 / 文献库 —</option>${mpPickHTML()}</select></label>`:""}
+    ${n.type==="section"?`<label class="mp-f">上级章节<select id="mp-section-parent">
+      <option value="">顶层章节</option>${secNodes.filter(s=>s.id!==id).map(s=>`<option value="${esc(s.id)}"${parent===s.id?" selected":""}>${esc(s.label)}</option>`).join("")}
+    </select></label><div class="row">
+      <button class="btn ghost" id="mp-section-up"${position<=0?" disabled":""}>上移</button>
+      <button class="btn ghost" id="mp-section-down"${position===siblings.length-1?" disabled":""}>下移</button>
+    </div>`:""}
+    ${kidEdges.filter(e=>!secIds.has(e.to)).map(e=>`<label class="mp-f">${esc(lab(e.to))}
+      <input data-mp-relation="${esc(e.to)}" aria-label="证据关系" value="${esc(e.label||"支撑")}"></label>`).join("")}
     ${kidEdges.length?`<div class="mp-rel">挂出去的：${kidEdges.map(e=>`<button class="mp-unl" data-un="${esc(e.to)}" title="从这一节上摘掉">${esc(lab(e.to))} ✕</button>`).join("")}</div>`:""}
     ${n.ref?`<p class="mp-rel">来源：${esc(n.ref)}</p>`:""}
     ${n.type==="section"?"":`<label class="mp-f">挂在小节<select id="mp-e-par">
@@ -858,13 +905,21 @@ function mpCard(id){
       const o = (src.notes||[]).find(x=>x.id===ref);
       if(o){ label = o.title || o.name || label; ref = o.name || ref; }
     }
+    if(kind === "evidence") label = (src.evidence||[]).find(x=>x.id===ref)?.title || ref;
     let nid = "r1"; while(MP.nodes.some(x=>x.id===nid)) nid = "r" + (Number(nid.slice(1)) + 1);
     MP.nodes.push({id:nid, type:kind === "paper" ? "paper" : kind, label, detail:"", ref});
     MP.edges.push({from:id, to:nid, label:"支撑"});
     add.value = "";
-    await mpSave();
-    mpSay(`已把「${label}」挂到这一节（谱系.json 已更新）`);
+    if(await mpSave()) mpSay(`已把「${label}」挂到这一节`);
   };
+  for(const [button,delta] of [["mp-section-up",-1],["mp-section-down",1]]){
+    const move = $(button);
+    if(move) move.onclick = async ()=>{
+      [siblings[position],siblings[position+delta]] = [siblings[position+delta],siblings[position]];
+      mpSetSiblingOrder(siblings,parent);
+      await mpSave();
+    };
+  }
   const parSel = $("mp-e-par");
   if(parSel) parSel.onchange = async ()=>{
     const sid = parSel.value;
@@ -878,8 +933,7 @@ function mpCard(id){
     b.onclick = async ()=>{
       const cid = b.dataset.un;
       MP.edges = MP.edges.filter(e=>!(e.from===id && e.to===cid));
-      if(!MP.edges.some(e=>e.to===cid)) MP.nodes = MP.nodes.filter(x=>x.id!==cid);   // 没别处挂着就一起清掉
-      await mpSave(); mpSay("已摘掉这条关联（谱系.json 已更新）");
+      if(await mpSave()) mpSay("已摘掉这条关联");
     };
   });
   $("mp-cx").onclick = ()=>{ MP.sel=""; div.remove(); mpPaint(); };
@@ -889,16 +943,25 @@ function mpCard(id){
     n.label = label;
     n.detail = $("mp-e-detail").value.trim();
     n.type = $("mp-e-type").value;
+    const parentSelect = $("mp-section-parent");
+    if(parentSelect && parentSelect.value !== parent){
+      MP.edges = MP.edges.filter(e=>!(e.to===id && secIds.has(e.from)) && !(e.from===id && MP_SEQ.has(e.label)));
+      if(parentSelect.value) MP.edges.push({from:parentSelect.value,to:id,label:"包含"});
+      mpSetSiblingOrder(siblings.filter(s=>s!==id), parent);
+    }
+    div.querySelectorAll("[data-mp-relation]").forEach(input=>{
+      const edge = MP.edges.find(e=>e.from===id && e.to===input.dataset.mpRelation);
+      if(edge) edge.label = input.value.trim();
+    });
     MP.sel = "";
     div.remove();
-    await mpSave();
-    mpSay("节点已更新（谱系.json 已落盘）");
+    if(await mpSave()) mpSay("节点已更新");
   };
   $("mp-cdel").onclick = async ()=>{
     MP.nodes = MP.nodes.filter(x=>x.id!==id);
     MP.edges = MP.edges.filter(e=>e.from!==id && e.to!==id);
     MP.sel = "";
-    await mpSave(); mpSay("已删掉这个节点（谱系.json 已更新）");
+    if(await mpSave()) mpSay("已删掉这个节点");
   };
 }
 function mpNew(pid){
@@ -961,20 +1024,14 @@ async function mpTidy(){
     const d = await api("/api/map/tidy", {task_id: curTask});
     if(d.error) throw new Error(d.error);
     MP.nodes = d.nodes || []; MP.edges = d.edges || []; MP.sel = ""; MP_MEAS.clear();
+    MP.revision = d.edit_revision;
     MP.sig = JSON.stringify([MP.nodes, MP.edges]);
     $("mp-meta").textContent = `${d.sections||0} 小节 · ${d.refs||0} 关联`;
     mpPaint();
     (d.changed||[]).forEach(t=>mpSay("↻ " + t));
     if(!(d.changed||[]).length) mpSay(`跟大纲对过了（${d.sections||0} 节没变），位置已按层级重排`);
     const miss = d.unattached || [];
-    if(miss.length && hasModelKey()){
-      $("map-ask").value = "框架刚按大纲重新整理过。请把这些还没挂上的精读笔记按标题挂到对应小节下面："
-        + "不要读附件、不要检索，判断完直接一次 map_write 写完整份谱系图；标题看不出归属的先别挂，最后列出来问我：\n"
-        + miss.slice(0, 20).map(x=>"- " + x).join("\n");
-      await docSend("map");
-    }else if(miss.length){
-      mpSay(`还有 ${miss.length} 条精读笔记没挂上 —— 点小节右上角 ＋ 手动挂，或跟我说「把精读笔记挂到各节下面」`);
-    }
+    if(miss.length) mpSay(`还有 ${miss.length} 条笔记未关联，可以在小节编辑卡选择资料`);
   }catch(e){
     mpSay("重新整理失败：" + e.message);
   }
@@ -982,12 +1039,14 @@ async function mpTidy(){
 
 async function mpSave(){
   try{
-    const d = await api("/api/map/save", {task_id: curTask, data: {nodes: MP.nodes, edges: MP.edges}});
+    const d = await api("/api/map/save", {task_id: curTask, expected_revision:MP.revision, data: {nodes: MP.nodes, edges: MP.edges}});
     if(d.error) throw new Error(d.error);
     MP.nodes = d.nodes; MP.edges = d.edges;
+    MP.revision = d.edit_revision;
     $("mp-meta").textContent = `${d.sections} 小节 · ${d.refs} 关联`;
     mpPaint();
-  }catch(e){ mpSay("保存失败：" + e.message); }
+    return true;
+  }catch(e){ await mpLoad(); mpSay("保存失败：" + e.message); return false; }
 }
 
 function mpBind(m){
@@ -1023,9 +1082,10 @@ function mpBind(m){
   };
   $("mp-save").onclick = async ()=>{
     try{ const d = JSON.parse($("mp-json").value || "{}");
-      const r = await api("/api/map/save", {task_id: curTask, data: d});
+      const r = await api("/api/map/save", {task_id: curTask, expected_revision:MP.revision, data: d});
       if(r.error) throw new Error(r.error);
       MP.nodes = r.nodes; MP.edges = r.edges;
+      MP.revision = r.edit_revision;
       $("mp-json").classList.add("hidden"); $("mp-save").classList.add("hidden"); $("mp-wrap").classList.remove("hidden");
       mpPaint();
     }catch(e){ mpSay("JSON 有问题：" + e.message); }
@@ -1125,6 +1185,8 @@ async function mpReloadQuiet(){
     mpSrcPaint(MP.src);                                  // 数字紧跟事实，不等图变
     $("mp-meta").textContent = `${d.sections||0} 小节 · ${d.refs||0} 关联${d.exists?"":" · 还没有图"}${d.broken?" · JSON 坏了":""}`;
     const sig = JSON.stringify([d.nodes, d.edges]);
+    if(!$("mp-json")?.classList.contains("hidden")) return;
+    MP.revision = d.edit_revision;
     if(sig === MP.sig) return;
     MP.sig = sig; MP.nodes = d.nodes||[]; MP.edges = d.edges||[]; mpPaint();
   }catch(_){}
