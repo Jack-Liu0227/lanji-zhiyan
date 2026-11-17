@@ -8,23 +8,20 @@ function renderStar(m){
       <button class="btn ghost" id="smRebuild" type="button" style="margin-left:8px" title="重新扫库编译一次（平时只读上次编译结果，不实时重算）">重算星图</button>
     </div>
     <div class="sm-search"><input class="control" type="search" aria-label="搜索知识库项目" placeholder="搜索知识库项目名称或研究问题"><div data-sm-results hidden></div></div>
-    <div class="sm-projects" aria-label="知识库项目">${(S.tasks||[]).map(project=>`<button type="button" data-sm-card="${esc(project.id)}"><strong>${esc(project.title)}</strong><span>${esc(project.question||'查看该项目的文献、笔记与关联知识')}</span><small>进入知识星图 →</small></button>`).join('')}<p data-sm-empty hidden>没有匹配的项目</p></div>
     <iframe id="kbFrame" class="sm-frame" src="/kb.html?theme=dark" title="知识星图"></iframe>
   </div>`;
   const rb = m.querySelector("#smRebuild"), fr = m.querySelector("#kbFrame"), zb = m.querySelector("#smZotero");
   const search=m.querySelector('.sm-search input'),results=m.querySelector('[data-sm-results]');
-  const wrap=m.querySelector('.sm-wrap'),back=m.querySelector('.sm-back');
-  const selectProject=id=>{curTask=id;localStorage.setItem('rw-task',id);fr.src='/kb.html?theme=dark&task='+encodeURIComponent(id);wrap.classList.add('sm-project-open');back.hidden=false;results.hidden=true;search.value='';renderStatus();};
-  m.querySelectorAll('[data-sm-card]').forEach(button=>button.onclick=()=>selectProject(button.dataset.smCard));
-  back.onclick=()=>{wrap.classList.remove('sm-project-open');back.hidden=true;search.value='';search.oninput();fr.src='/kb.html?theme=dark';};
+  const back=m.querySelector('.sm-back');
+  const selectProject=id=>{curTask=id;localStorage.setItem('rw-task',id);fr.src='/kb.html?theme=dark&task='+encodeURIComponent(id);back.hidden=false;results.hidden=true;search.value='';renderStatus();};
+  back.onclick=()=>{back.hidden=true;search.value='';search.oninput();fr.src='/kb.html?theme=dark';};
   search.oninput=()=>{
     const q=search.value.trim().toLocaleLowerCase();results.hidden=!q;
     const projects=(S.tasks||[]).filter(project=>(project.title+' '+(project.question||'')).toLocaleLowerCase().includes(q));
-    const matched=new Set(projects.map(project=>project.id));m.querySelectorAll('[data-sm-card]').forEach(card=>card.hidden=!matched.has(card.dataset.smCard));m.querySelector('[data-sm-empty]').hidden=projects.length>0;
     results.innerHTML=projects.map(project=>`<button type="button" data-sm-project="${esc(project.id)}">${esc(project.title)}</button>`).join('')||'<p role="status">没有匹配的项目</p>';
     results.querySelectorAll('[data-sm-project]').forEach(button=>button.onclick=()=>selectProject(button.dataset.smProject));
   };
-  search.onkeydown=event=>{if(event.key==='Escape'){event.stopPropagation();search.value='';search.oninput();}else if(event.key==='Enter'){event.preventDefault();results.querySelector('button')?.click();}else if(event.key==='ArrowDown'){event.preventDefault();(wrap.classList.contains('sm-project-open')||innerWidth>1000?results.querySelector('button'):m.querySelector('[data-sm-card]:not([hidden])'))?.focus();}};
+  search.onkeydown=event=>{if(event.key==='Escape'){event.stopPropagation();search.value='';search.oninput();}else if(event.key==='Enter'){event.preventDefault();results.querySelector('button')?.click();}else if(event.key==='ArrowDown'){event.preventDefault();if(!results.hidden)results.querySelector('button')?.focus();}};
   if(zb) zb.onclick = () => { if(typeof window.zotOpen === "function") window.zotOpen(); else if(typeof zotOpen === "function") zotOpen(); };
   if(rb && fr) rb.onclick = ()=>{                    // 星图是编译产物：只有这里（或第一次进知识库）才重算
     rb.disabled = true; rb.textContent = "重算中…";
