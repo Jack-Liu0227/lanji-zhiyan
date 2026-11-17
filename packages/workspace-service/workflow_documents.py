@@ -12,7 +12,7 @@ import fileguard
 import paths
 import pdfio
 from research_core import now
-from workflow_prompts import OUTLINE_TEMPLATE, _schema, DELEGATE_TOOL, skill_text
+from workflow_prompts import OUTLINE_TEMPLATE, _schema, DELEGATE_TOOL, READING_TOOLS, TOOL_SPECS, skill_text
 
 if TYPE_CHECKING:
     from workflow import WorkflowDB
@@ -73,7 +73,7 @@ def doc_read(db: "WorkflowDB", task_id: str, kind: str = "outline") -> dict[str,
 
 # ---- 梳理精读（第 5 步）：大纲每个小标题 → 论文精读结论 / 实验数据 的谱系图 ----
 MAP_FILE = "谱系.json"
-MAP_TYPES = ("section", "paper", "note", "data")
+MAP_TYPES = ("section", "paper", "note", "data", "evidence")
 
 
 def map_path(db: "WorkflowDB", task_id: str) -> Path:
@@ -113,18 +113,26 @@ def _note_brief(db: "WorkflowDB", task_id: str, ref: str) -> str:
 
 
 def map_read(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
+    from lineage_draft import graph_revision
+    from hashlib import sha256
     p = map_path(db, task_id)
     raw: dict[str, Any] = {"nodes": [], "edges": []}
     broken = False
+    content = ""
     if p.is_file():
         try:
-            raw = json.loads(p.read_text(encoding="utf-8", errors="replace") or "{}") or {}
+            content = p.read_text(encoding="utf-8", errors="replace")
+            raw = json.loads(content or "{}") or {}
+            if not isinstance(raw, dict):
+                raise ValueError("invalid map")
         except Exception:
             raw, broken = {"nodes": [], "edges": []}, True
     nodes = [n for n in (raw.get("nodes") or []) if isinstance(n, dict) and n.get("id") and n.get("label")]
     ids = {n["id"] for n in nodes}
     edges = [e for e in (raw.get("edges") or [])
              if isinstance(e, dict) and e.get("from") in ids and e.get("to") in ids]
+    broken = broken or len(nodes) != len(ids) or len(edges) != len(raw.get("edges") or [])
+    revision = graph_revision(nodes, edges)
     linked = [n for n in nodes if n.get("type") == "note" and n.get("ref")]
     if linked:                                     # 笔记改了名 / 重读了 → 图上那行字跟着更新
         titles = {x["id"]: (x.get("title") or "") for x in db.notes(task_id)}
@@ -136,13 +144,15 @@ def map_read(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
             if brief:
                 n["detail"] = brief
     return {"path": str(p), "exists": p.is_file(), "broken": broken, "nodes": nodes, "edges": edges,
+            "revision": revision, "edit_revision": sha256(content.encode()).hexdigest(),
             "updated": raw.get("updated") or "",
             "sections": sum(1 for n in nodes if n.get("type") == "section"),
             "refs": sum(1 for n in nodes if n.get("type") != "section")}
 
 
 @_guarded_document_write
-def map_write(db: "WorkflowDB", task_id: str, data: Any, keep_positions: bool = True) -> dict[str, Any]:
+def map_write(db: "WorkflowDB", task_id: str, data: Any, keep_positions: bool = True,
+              expected_revision: str | None = None) -> dict[str, Any]:
     """整份覆盖写（和 doc_write 同口径）。不合规的节点/边直接丢掉，不报错 —— 模型给脏数据也要能落盘。
 
     keep_positions=True（agent 重写时）保留磁盘上已有的手动坐标；前端「全部重排」要清坐标，
@@ -152,10 +162,14 @@ def map_write(db: "WorkflowDB", task_id: str, data: Any, keep_positions: bool = 
         data = json.loads(data or "{}")
     if not isinstance(data, dict):
         raise ValueError("谱系要给 {nodes:[…], edges:[…]} 结构的 JSON")
+    from lineage_draft import structure
+    current = map_read(db, task_id)
+    if expected_revision is not None and expected_revision != current["edit_revision"]:
+        raise ValueError("谱系图已被其他操作更新，请刷新后重试")
     nodes, seen = [], set()
     _dragged_positions = {} if not keep_positions else {
         n["id"]: {k: n[k] for k in ("x", "y") if k in n}
-        for n in map_read(db, task_id)["nodes"] if "x" in n and "y" in n}
+        for n in current["nodes"] if "x" in n and "y" in n}
     for n in (data.get("nodes") or []):
         if not isinstance(n, dict) or not n.get("id") or not n.get("label"):
             continue
@@ -182,6 +196,7 @@ def map_write(db: "WorkflowDB", task_id: str, data: Any, keep_positions: bool = 
     edges = [{"from": str(e["from"]), "to": str(e["to"]), "label": str(e.get("label") or "")[:40]}
              for e in (data.get("edges") or [])
              if isinstance(e, dict) and str(e.get("from")) in seen and str(e.get("to")) in seen]
+    structure(nodes, edges)
     p = map_path(db, task_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     fileguard.before_write(p, "谱系图覆盖")
@@ -420,12 +435,18 @@ def map_sources(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
              and not note_catalog.is_template((note_root / f).read_text(encoding="utf-8", errors="replace"))]
     papers = [p["filename"] for p in db.papers_of(task_id)]
     data = (ls(base / "其余" / "数据") if base else []) + ls(DATA / "uploads")
-    return {"sections": [x.strip() for x in secs][:60], "notes": notes, "papers": papers[:60],
+    import asset_service
+    index = asset_service.eligibility_index(db, task_id)
+    evidence = [{"id": row["id"], "title": f"{row['field']} · {row['filename']} p.{row['page_no']}"}
+                for row in db.evidence(task_id)
+                if asset_service.legacy_context_available(db, task_id, "evidence", row["id"], index=index)]
+    return {"sections": [x.strip() for x in secs][:60], "notes": notes, "papers": papers[:60], "evidence": evidence,
             "data": list(dict.fromkeys(data))[:60], "map_path": str(map_path(db, task_id))}
 
 
 @_guarded_document_write
-def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str, mode: str = "replace") -> dict[str, Any]:
+def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str, mode: str = "replace",
+              *, lineage: bool = False) -> dict[str, Any]:
     """就地覆盖写（他要的就是「修改调整都直接在原文件改」）。
 
     空内容一律拒写：模型偶尔发一个丢参数的工具调用（args 是空的），照写就把整份正文清成 1 字节
@@ -450,7 +471,8 @@ def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str, mode: st
     corpus = "\n".join([str(r["excerpt"] or "") for r in db.evidence(task_id)]
                        + [n["markdown"][:20000] or "" for n in db.notes(task_id)[:80]
                           if not note_catalog.is_template(n["markdown"] or "")])
-    content = verify.stamp(body, verify.audit(seg, corpus=corpus, label=kind)).rstrip() + "\n"
+    content = body if lineage else verify.stamp(body, verify.audit(seg, corpus=corpus, label=kind))
+    content = content.rstrip() + "\n"
     import asset_service
     asset_service.atomic_write_text(p, content)
     asset_service.register_file(db, p, project_id=task_id, kind="document", title=(DOC_STEPS.get(kind) or DOC_STEPS["outline"])["file"],
@@ -490,26 +512,16 @@ DRAFT_TEMPLATE = """# <题目>
 
 
 def doc_seed(db: "WorkflowDB", task_id: str, kind: str = "outline") -> dict[str, Any]:
-    """起稿：大纲用固定模板；正文**按已确认的框架**生成骨架（标题层级照抄，正文留「待写」）。"""
+    """Prepare an outline template or a source-bound manuscript."""
     cur = doc_read(db, task_id, kind)
     if cur["exists"] and cur["markdown"].strip():
         return cur                                       # 已经有内容就别覆盖
     if kind == "outline":
         return doc_write(db, task_id, kind, OUTLINE_TEMPLATE)
     if kind == "write":
-        out = doc_read(db, task_id, "outline")
-        if not out["markdown"].strip():
-            return doc_write(db, task_id, kind, DRAFT_TEMPLATE)
-        body = []
-        for line in out["markdown"].splitlines():
-            if re.match(r"^#{1,3}\s+\S", line):
-                body.append(line)
-                body.append("（待写）")
-                body.append("")
-            elif line.strip().startswith("- 说明："):
-                body.append("（按框架：%s）" % line.strip()[len("- 说明："):])
-                body.append("")
-        return doc_write(db, task_id, kind, "\n".join(body) or DRAFT_TEMPLATE)
+        from workflow_runners import draft_from_lineage
+        draft_from_lineage(db, task_id)
+        return doc_read(db, task_id, kind)
     return cur
 
 
@@ -532,6 +544,8 @@ def read_attachment(path: str, chars: int = 20000) -> dict[str, Any]:
 def doc_tools(kind: str) -> list[dict[str, Any]]:
     d = DOC_STEPS.get(kind) or DOC_STEPS["outline"]
     return [
+        *([*READING_TOOLS, next(tool for tool in TOOL_SPECS
+                               if tool["function"]["name"] == "paper_evidence_record")] if kind == "outline" else []),
         _schema("doc_write", f"把**整份**{d['label']} markdown 覆盖写进项目里那一份 {d['file']}（就地改，不新建文件）。"
                              f"用户说「更新{d['label']}」「按这个改」时调用它，参数给完整全文。"
                              f"格式要求：{d['hint']}",
@@ -602,7 +616,7 @@ def outline_system(db: "WorkflowDB", task_id: str) -> str:
     return f"""你是「览籍智研」里「拟定框架」这一步的论文框架专家，用中文工作，站在合作者（懂科研、但听用户拍板）的位置。
 
 硬规则：
-1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：把这份研究的**框架（大纲）**跟用户敲定。不做文献检索/下载/精读/撰写成稿/格式转换，用户要这些就说明去别的步骤。
+1. 当前项目《{task['title']}》。先用 paper_abstracts 初筛，拟定各节的论点与证据缺口。用 knowledge_query 查创新点审查笔记与既有证据，按证据 ID 复用。缺证据时用 paper_focus 定向核查原文并登记新证据。将证据 ID 与页码写到对应章节，未解决的问题标为待核。
 2. 格式必须照这个骨架（这是这一步的产出规范，别自创层级）：
    - 大标题用 `## `（例如 `## 2. 方法`）
    - 小标题用 `### `（例如 `### 2.1 数据与体系`）

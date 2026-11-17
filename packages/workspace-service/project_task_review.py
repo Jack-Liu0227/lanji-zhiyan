@@ -109,6 +109,7 @@ def read_graph(db, task_id, project_id):
 
 def _graph(graph):
     import workflow_documents
+    from lineage_draft import structure
     if not isinstance(graph, dict) or not isinstance(graph.get('nodes'), list) or not isinstance(graph.get('edges'), list):
         raise ValueError('请提供图谱节点与连线')
     if not 1 <= len(graph['nodes']) <= 500 or len(graph['edges']) > 2000:
@@ -133,6 +134,7 @@ def _graph(graph):
             raise ValueError('连线必须指向已有节点')
         if not isinstance(edge.get('label', ''), str) or len(edge.get('label', '')) > 40:
             raise ValueError('连线说明不能超过 40 字符')
+    structure(graph["nodes"], graph["edges"])
     return json.loads(json.dumps(graph, ensure_ascii=False, allow_nan=False))
 
 

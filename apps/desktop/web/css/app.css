@@ -1110,7 +1110,8 @@ body.md-narrow .wctl button:hover { background: #eee; }
 
 /* ---- 论文翻译（工作流第 4 步：添加论文 → 元数据 → PDF 阅读器 → 中英互译 / 笔记模式 / 荧光笔） ---- */
 .tr{display:flex;flex-direction:column;gap:10px;height:100%;min-height:0}
-.tr-bar{display:flex;align-items:center;gap:10px;flex:none;height:44px}
+.tr-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;flex:none;min-height:44px}
+.tr-bar>input,.tr-bar>select{height:36px;max-width:160px;padding:0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--fg);font:inherit}
 .tr-bar>.btn,.tr-bar>.tr-pageno,.tr-bar>.tr-zoom,.tr-bar>.tr-seg,.tr-bar>.tr-grp{height:36px;display:inline-flex;align-items:center;justify-content:center;line-height:1;box-sizing:border-box;margin:0}
 .tr-bar>.btn{padding:0 14px;font-size:13px}
 .tr-bar>.tr-zoom{gap:2px;padding:0 3px;border:1px solid var(--line);border-radius:9px;background:var(--panel)}

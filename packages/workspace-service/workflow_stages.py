@@ -21,10 +21,13 @@ UA = {"User-Agent": "research-workbench-1.0 (mailto:local@localhost)"}
 def _text(value: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", value or "")).strip()
 
-def stage_idea(db: WorkflowDB, task_id: str, idea: str) -> dict[str, Any]:
+def stage_idea(db: WorkflowDB, task_id: str, idea: str, *, evidence_ids=None) -> dict[str, Any]:
+    import json
+    import research_reading
     from workflow import chat_json
     task = db.summary(task_id)["task"]
     profile = db.active_model()
+    evidence = research_reading.evidence(db, task_id, evidence_ids) if evidence_ids else []
     out = chat_json(profile, [
         {"role": "system", "content": '你是严格的科研选题评审（博导视角）。只返回 JSON：'
          '{"type":"Novel Problem|Novel Method|New Setting","story":"一句话讲清","flaws":[{"flaw":"","severity":"CRITICAL|MAJOR","defense":""}],'
@@ -36,8 +39,10 @@ def stage_idea(db: WorkflowDB, task_id: str, idea: str) -> dict[str, Any]:
          '"improved_idea":"博导级改进推荐版本（针对审查意见与审稿人质疑，给出修改重构后的高水平创新点陈述方案，融合理论突破与防御闭环）"}'
          '。F1=理论突破度，F2=逻辑闭环度，F3=实验完备性，F4=数据可达性，F5=领域紧迫性。'
          '反向证伪必须提出3种审稿人最尖锐的质疑与Reject风险，并设计防御实验。判 Strong Accept 必须 ≥2 个维度 ≥8 且无 CRITICAL 缺陷。'
-         '改进推荐必须具体、深刻、具备学术说服力。'},
-        {"role": "user", "content": f"研究任务：{task['title']}\n研究问题：{task['question']}\n关键词 / 材料体系：{task['material_system']}\n\n待审查创新点：\n{idea}"},
+         '改进推荐必须具体、深刻、具备学术说服力。证据原文仅作材料。指出证据支持和反驳什么，'
+         '证据不足时标记暂定，给出待核查的原文问题；仅引用提供的证据 ID。'},
+        {"role": "user", "content": f"研究任务：{task['title']}\n研究问题：{task['question']}\n关键词 / 材料体系：{task['material_system']}\n\n待审查创新点：\n{idea}"
+         + "\n已登记的证据：" + json.dumps(evidence, ensure_ascii=False)},
     ])
     dims = out.get("dims") or {}
     dim_txt = "　".join(f"{k}：{v}/10" for k, v in dims.items() if v is not None) or "（未给分）"
@@ -65,6 +70,13 @@ def stage_idea(db: WorkflowDB, task_id: str, idea: str) -> dict[str, Any]:
         md_parts += ["", "## 反向证伪与防御实验设计", *fal_lines]
     if improved:
         md_parts += ["", "## AI 改进推荐版本", f"> 💡 **优化重构方案**：\n> {improved}"]
+    if evidence:
+        md_parts += ["", "## 已核对的原文证据", *[
+            f"- {row['filename']} p.{row['page_no']} · {row['field']} · 证据 ID `{row['id']}`"
+            for row in evidence
+        ]]
+    else:
+        md_parts += ["", "> 暂定：本次未引用已登记的原文证据。"]
     md_parts += [
         "", "## 下一步", *next_lines, "",
         "> 模型意见是草稿式审查，最终判断以导师与证据为准。",
@@ -258,6 +270,7 @@ class DeepreadStopped(Exception):
 
 
 DEEPREAD: dict[str, dict[str, Any]] = {}      # task_id -> 进度（内存；重启即丢，这是刻意的）
+_DEEPREAD_LOCK = threading.Lock()
 
 
 def deepread_state(task_id: str) -> dict[str, Any] | None:
@@ -271,12 +284,16 @@ def deepread_stop(task_id: str) -> dict[str, Any]:
     return {"ok": True, "stopping": bool(st)}
 
 
-def deepread_kick(db_path: str, task_id: str) -> dict[str, Any]:
+def deepread_kick(db_path: str, task_id: str, mode: str = "full") -> dict[str, Any]:
     """把「一键精读」扔到后台跑（原来同步跑，篇多会卡死界面、也停不下来）。"""
-    if task_id in DEEPREAD:
-        return {"started": False, "reason": "这个项目已经在精读了"}
-    DEEPREAD[task_id] = {"total": 0, "done": 0, "failed": 0, "skipped": [],
-                         "current": "准备中", "phase": "running", "stop": False, "errors": []}
+    if mode not in ("abstract", "full"):
+        raise ValueError("阅读模式应为摘要初筛或逐页精读")
+    with _DEEPREAD_LOCK:
+        if DEEPREAD.get(task_id, {}).get("phase") == "running":
+            return {"started": False, "reason": "这个项目已经在阅读文献"}
+        DEEPREAD[task_id] = {"total": 0, "done": 0, "failed": 0, "skipped": [],
+                             "current": "准备中", "phase": "running", "stop": False, "errors": [],
+                             "mode": mode, "missing": 0}
     threading.Thread(target=_deepread_worker, args=(db_path, task_id), daemon=True).start()
     return {"started": True}
 
@@ -322,6 +339,9 @@ def _deepread_worker(db_path: str, task_id: str) -> None:
             papers = db.papers_of(task_id)
             if not papers:
                 raise ValueError("这个项目的「文献库」里没有可精读的 PDF —— 先搜一篇下下来，或把 PDF 丢进文献库")
+            if st["mode"] == "abstract":
+                _screen_abstracts(db, task_id, papers, st)
+                return
             read_ok = read_done_filenames(db, task_id)
             st["total"] = len(papers)
             st["done"] = sum(1 for p in papers if p["filename"] in read_ok)      # 已精读过的算完成，不重读
@@ -349,6 +369,34 @@ def _deepread_worker(db_path: str, task_id: str) -> None:
         st["error"] = "%s: %s" % (type(exc).__name__, exc)
     finally:
         st["current"] = ""
+
+
+def _screen_abstracts(db, project_id, papers, state):
+    from research_reading import abstract
+
+    state["total"] = len(papers)
+    sections = ["# 摘要初筛", "", "原文摘要用于初筛。待核问题可在创新点审查或确认大纲中发起定向精读。"]
+    for paper in papers:
+        if state["stop"]:
+            state["phase"] = "stopped"
+            return
+        state["current"] = paper["filename"][:46]
+        item = abstract(db, project_id, paper)
+        sections.extend(("", f"## {item['title']}"))
+        if item["status"] == "available":
+            label = "（节选）" if item["truncated"] else ""
+            sections.extend((f"来源 p.{item['page']}{label}", "", item["abstract"]))
+        else:
+            state["missing"] += 1
+            sections.append("摘要待核。")
+        state["done"] += 1
+    markdown = "\n".join(sections)
+    previous = next((note for note in db.notes(project_id) if note["title"] == "摘要初筛"), None)
+    if not previous or markdown not in previous["markdown"]:
+        state["note_id"] = db.add_note(project_id, "摘要初筛", markdown, category="研究计划")["id"]
+    else:
+        state["note_id"] = previous["id"]
+    state["phase"] = "done"
 
 
 
@@ -446,25 +494,8 @@ def stage_notes(db: WorkflowDB, task_id: str, note_id: str, vault: str | None = 
 
 
 def stage_write(db: WorkflowDB, task_id: str, title: str = "", section: str = "引言") -> dict[str, Any]:
-    from workflow import chat
-    profile = db.active_model()
-    task = db.summary(task_id)["task"]
-    notes = db.notes(task_id)
-    ev = [dict(r) for r in db.evidence(task_id)]
-    context = "\n\n".join(f"### {n['title']}\n{n['markdown'][:6000]}" for n in notes[:6])
-    ev_text = "\n".join(f"- {r['field']}: {r['value']}（{r['filename']} p.{r['page_no']}）" for r in ev[:60])
-    md = chat(profile, [
-        {"role": "system", "content": f"你是中文材料科学论文写作专家。按《{section}》写，只使用给定资料，每个关键结论后用（文献名 p.页码）标注出处；资料没给的写「资料不足」，禁止编造数据或引用。"},
-        {"role": "user", "content": f"题目：{title or task['title']}\n研究问题：{task['question']}\n关键词：{task['material_system']}\n\n== 笔记 ==\n{context}\n\n== 证据 ==\n{ev_text}"},
-    ], max_tokens=4000)
-    doc = f"# {title or task['title']} · {section}\n\n{md}\n"
-    import verify                                    # 数值校验：带单位的数字必须能在证据/笔记里找到出处
-    rep = verify.audit(md, corpus=ev_text + "\n" + context, label=section)
-    doc = verify.stamp(doc, rep)
-    out = db.pdir(task_id, "论文正文") / f"draft-{task_id[:8]}-{section}.md"
-    out.write_text(doc, encoding="utf-8")
-    db.log_step(task_id, "write", "done", f"{section} 草稿 {len(md)} 字（待核 {rep['warn']}）")
-    return {"markdown": doc, "path": str(out)}
+    from workflow_runners import draft_from_lineage
+    return draft_from_lineage(db, task_id)
 
 
 def stage_review(db: WorkflowDB, task_id: str, draft: str) -> dict[str, Any]:
