@@ -164,7 +164,11 @@ const ProjectWorkflowGraph=(()=>{
         const byId=new Map(state.layout.nodes.map(node=>[node.id,node]));
         state.layout.nodes=order.map(id=>byId.get(id)).filter(Boolean);
         state.layout.order=[...order];
-        state.layout.edges=order.slice(0,-1).map((id,index)=>({source:id,target:order[index+1]}));
+        const edges=new Map(state.layout.edges.map(edge=>[edge.source,edge]));
+        state.layout.edges=order.slice(0,-1).map((source,index)=>{
+          const target=order[index+1],existing=edges.get(source);
+          return existing?.target===target?existing:{source,target};
+        });
       }
       function refreshSaveTop(){
         const button=host.querySelector('[data-pwg-savetop]');if(!button)return;
@@ -281,7 +285,7 @@ const ProjectWorkflowGraph=(()=>{
         reorder();refreshSaveTop();
       }
       function draw(){
-         host.innerHTML=`<section class="project-workflow-graph"><div class="pwg-toolbar"><label>LangGraph 工作流<select class="control" id="pwWorkflowChoice">${state.data.layouts.map(layout=>`<option value="${h(layout.id)}" ${layout.id===state.layout.id?'selected':''}>${h(layout.name)}</option>`).join('')}</select></label><span class="pw-spacer"></span><button class="btn ghost" data-pwg-add>添加节点</button><button class="btn ghost" id="pwRoles">角色绑定</button><button class="btn" data-pwg-savetop disabled>保存到本项目</button><button class="btn ghost" data-pwg-publish>发布为全局模板</button><button class="btn btn-primary" id="pwWorkflowRun">准备 / 查看运行</button><button class="btn btn-primary" data-pwg-quick-result hidden>打开当前节点产物预览与编辑</button></div><div class="pwg-mode"><button type="button" class="pw-text-button" data-pwg-mode="config" aria-pressed="${state.mode==='config'}">节点配置 · v${state.layout.revision||0}</button><button type="button" class="pw-text-button" data-pwg-mode="run" aria-pressed="${state.mode==='run'}" ${state.run?'':'disabled'}>本次运行</button><span class="hint">配置修改用于新运行，当前运行保留原版本。</span></div><p class="pwg-notice" data-pwg-notice role="status"></p><p class="pw-error" data-pwg-error role="alert"></p><div class="pwg-layout"><div class="pwg-canvas" data-pwg-graph></div><aside class="pwg-inspector" data-pwg-inspector aria-label="所选工作流节点"></aside></div></section>`;
+         host.innerHTML=`<section class="project-workflow-graph"><div class="pwg-toolbar"><label>LangGraph 工作流<select class="control" id="pwWorkflowChoice">${state.data.layouts.map(layout=>`<option value="${h(layout.id)}" ${layout.id===state.layout.id?'selected':''}>${h(layout.name)}</option>`).join('')}</select></label><span class="pw-spacer"></span><button class="btn ghost" data-pwg-add>添加节点</button><button class="btn ghost" id="pwRoles">角色绑定</button><button class="btn" data-pwg-savetop disabled>保存到本项目</button><button class="btn ghost" data-pwg-publish>发布为全局模板</button><button class="btn btn-primary" id="pwWorkflowRun">准备 / 查看运行</button><button type="button" class="btn ghost" data-pwg-artifacts ${state.run&&options.openArtifacts?'':'hidden'}>浏览本次运行产物</button><button class="btn btn-primary" data-pwg-quick-result hidden>打开当前节点产物预览与编辑</button></div><div class="pwg-mode"><button type="button" class="pw-text-button" data-pwg-mode="config" aria-pressed="${state.mode==='config'}">节点配置 · v${state.layout.revision||0}</button><button type="button" class="pw-text-button" data-pwg-mode="run" aria-pressed="${state.mode==='run'}" ${state.run?'':'disabled'}>本次运行</button><span class="hint">配置修改用于新运行，当前运行保留原版本。</span></div><p class="pwg-notice" data-pwg-notice role="status"></p><p class="pw-error" data-pwg-error role="alert"></p><div class="pwg-layout"><div class="pwg-canvas" data-pwg-graph></div><aside class="pwg-inspector" data-pwg-inspector aria-label="所选工作流节点"></aside></div></section>`;
         drawGraph();inspector();
         el('graph').closest('.pwg-layout').insertAdjacentHTML('beforebegin','<div class="pwg-zoom"><button type="button" class="pw-text-button" data-pwg-zoom="out">− 缩小</button><button type="button" class="pw-text-button" data-pwg-zoom="fit">适应画布</button><button type="button" class="pw-text-button" data-pwg-zoom="in">＋ 放大</button></div>');
         host.querySelector('.pwg-zoom').insertAdjacentHTML('beforeend','<div class="pwg-search"><input class="control" type="search" data-pwg-search aria-label="搜索工作流节点" placeholder="搜索节点名称、执行者或 ID"><div data-pwg-search-results hidden></div></div>');
@@ -319,11 +323,7 @@ const ProjectWorkflowGraph=(()=>{
         };
         stepLibrary();
         host.querySelector('[data-pwg-savetop]').onclick=()=>state.save();
-        if(state.run&&options.openArtifacts){
-          const toolbar=host.querySelector('.pwg-toolbar');
-          toolbar.insertAdjacentHTML('beforeend','<button type="button" class="btn ghost" data-pwg-artifacts>浏览本次运行产物</button>');
-          el('artifacts').onclick=()=>options.openArtifacts(state.run.id);
-        }
+        el('artifacts').onclick=()=>state.run&&options.openArtifacts?.(state.run.id);
         host.querySelectorAll('[data-pwg-mode]').forEach(button=>button.onclick=async()=>{if(!await state.save())return;state.mode=button.dataset.pwgMode;state.selected=(state.mode==='run'?state.run.layout:state.layout).nodes[0]?.id;draw();});
       }
       draw();

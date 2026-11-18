@@ -13,7 +13,6 @@ import sys
 import json
 import time
 import workflow_layout
-from workflow_catalog import STAGE_CATALOG
 
 import service_settings as kv_store      # 轻量 KV：权限模式这类开关
 from workflow import STAGES, STAGE_LABEL, WorkflowDB, litgraph
@@ -60,7 +59,6 @@ class CoreRoutes:
                     "events": db.events(q.get("month", [None])[0]),
                     "notes": [{k: n[k] for k in ("id", "task_id", "title", "created_at")} for n in db.notes()],
                     "stages": [{"key": s, "label": STAGE_LABEL[s]} for s in STAGES],
-                    "workflow_stages": STAGE_CATALOG,
                 })
         if path == "/api/task":
             tid = q["id"][0]
@@ -68,8 +66,6 @@ class CoreRoutes:
                 try:
                     with WorkflowDB(DB_PATH) as db:
                         s = db.summary(tid)
-                        import project_library
-                        library_items = project_library.items(db, tid)
                         task = dict(s["task"] or {})
                         task["stage_now"] = db.stage_now(tid, task.get("stage") or "")
                         return self._json({
@@ -79,7 +75,6 @@ class CoreRoutes:
                             "notes": [{k: n[k] for k in ("id", "title", "created_at")} for n in db.notes(tid)],
                             "papers": s["papers"], "evidence": s["evidence"],
                             "paper_list": db.papers_of(tid),
-                            "library_items": library_items,
                             "paper_graph": db.paper_graph(tid),
                             "evidence_list": [dict(r) for r in db.evidence(tid)],
                         })
@@ -97,14 +92,14 @@ class CoreRoutes:
                 return self._json({"notes": db.notes(tid) if tid else db.notes()})
         if path == "/api/chat":
             with WorkflowDB(DB_PATH) as db:
-                from execution_conversations import read, visible_messages
+                from execution_conversations import read
                 from workspace_trajectory import safe_result
 
                 chat_id = q["id"][0]
                 execution = read(db, chat_id)
                 if execution is not None:
                     return self._json(execution)
-                messages = visible_messages(db.messages(chat_id))
+                messages = db.messages(chat_id)
                 row = db.db.execute(
                     "SELECT id, status, checkpoint, updated_at FROM tasks "
                     "WHERE owner_id=? AND kind='agent_run' ORDER BY rowid DESC LIMIT 1",

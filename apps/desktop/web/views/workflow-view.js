@@ -41,11 +41,11 @@ const DOC_UI = {
     ph: "说想法 / 贴要求 / 让 agent 改框架…（Enter 发送，Shift+Enter 换行）",
     hint: "Enter 发送 · 说「更新框架」→ 左边立刻换成新版本（文件就地覆盖）" },
   write: { ico: "✍️", file: "正文", who: "写作",
-    sub: "按已保存的谱系图生成章节和证据底稿",
-    seed: "按谱系图生成底稿", pull: "", post: "/api/write", scope: "write", hl: false, cite: false, quiet: true,
-    empty: ["✍️", "论文撰写", "在「梳理精读」调整章节和证据后，点击「按谱系图生成底稿」。"],
-    ph: "按谱系图重新生成",
-    hint: "改章节或出处请先保存谱系图，再重新生成。" },
+    sub: "与项目绑定 · 按上一步敲定的框架写正文（走本机 paper-spine / paper-writer）",
+    seed: "", pull: "↧ 用这条回复更新正文",   /* 「按框架搭骨架」按钮删了：铺骨架改成在对话里确认后由 agent 自己铺（点了会卡死页面） */ post: "/api/write", scope: "write", hl: false, cite: true, quiet: true,
+    empty: ["✍️", "这是项目的「论文撰写」", "先确认上一步的框架已经定了；再说清：有没有实验数据/图表、投哪里、篇幅要求。我按框架逐节写，缺数据的地方写「待补」，绝不编数字。"],
+    ph: "说要求 / 让它写某一节 / 讨论怎么改…（Enter 发送）",
+    hint: "Enter 发送 · 说「更新正文」→ 左边立刻换成新版本（文件就地覆盖）" },
   review: { ico: "🧐", file: "审查意见", who: "审查",
     sub: "与项目绑定 · 左边是审稿意见，正文在上一步「论文撰写」里改",
     seed: "", pull: "↧ 用这条回复更新审查意见", post: "/api/review", scope: "review", hl: false, cite: false, quiet: true,
@@ -175,7 +175,7 @@ function docShow(k, d){
       : `<div class="ol-empty">${DOC_UI[k].empty[1]} 还没有内容。<br>右边跟 agent 说一句，或点上面「${DOC_UI[k].seed || "让 agent 写"}」。</div>`;
     if(DOC_UI[k].hl) docPaintMarks(k);                    // 标注按文本重新贴回去
   }
-  const mb = docEl(k, "meta"); if(mb) mb.textContent = d.lineage_status || (md.trim() ? `${d.sections || 0} 个大标题 · ${d.subs || 0} 个小标题 · ${d.chars || 0} 字` : "");
+  const mb = docEl(k, "meta"); if(mb) mb.textContent = md.trim() ? `${d.sections || 0} 个大标题 · ${d.subs || 0} 个小标题 · ${d.chars || 0} 字` : "";
 }
 function _docStatFromMsgs(msgs){
   /* 右栏那几个数字必须能「重进这一步还在」：从历史消息里的事件重算，别只靠本次流的累加。
@@ -393,11 +393,8 @@ function docBind(k, m){
   docEl(k, "modpick").onchange = async (e)=>{ if(!e.target.value) return;
     await api("/api/models/active", { id: e.target.value }); await refreshState(false); render(); };
   docEl(k, "assist").oninput = (e)=>localStorage.setItem("rw-assist", e.target.value.trim() || "researcher");
-  if(DOC_UI[k].seed) docEl(k, "seed").onclick = async ()=>{
-    if(k === "write"){ docEl(k, "ask").value = "按谱系图重新生成"; await docSend(k); return; }
-    try{ docShow(k, await api("/api/doc/seed", {task_id:curTask, step:k})); docMsg(k, "已按模板起稿"); }
-    catch(e){ docMsg(k, "起稿失败：" + e.message); }
-  };
+  if(DOC_UI[k].seed) docEl(k, "seed").onclick = async ()=>{ try{ docShow(k, await api("/api/doc/seed", { task_id: curTask, step: k }));
+    docMsg(k, k === "write" ? "已按框架搭好骨架（标题层级照抄框架）" : "已按模板起稿"); }catch(e){ docMsg(k, "起稿失败：" + e.message); } };
   if(docEl(k, "pull")) docEl(k, "pull").onclick = async ()=>{
     const st = docState(k); if(!st.cand) return;
     try{ const r = await api("/api/doc/save", { task_id: curTask, step: k, markdown: st.cand });
@@ -575,7 +572,7 @@ function docGrow(k){
   ta.style.height = Math.min(TA_MAX, Math.max(TA_MIN, measureAsk(ta))) + "px";
 }
 async function docSend(k){
-  if(k !== "write" && !(await requireModelKey())) return;
+  if(!(await requireModelKey())) return;          // 没配 Key：先提示去设置，不发请求
   const st = docState(k);
   const ta = docEl(k, "ask"); const text = ta.value.trim();
   if(!text && !st.atts.length) return;
@@ -615,14 +612,14 @@ async function docSend(k){
   st.msgs.push({ role: "assistant", content: final, events: evs });
   st.events = st.events.concat(evs);
   const wrote = evs.some(e => e.type === "tool_call" && (e.name === "doc_write" || e.name === "outline_write" || e.name === "map_write"));
-  st.cand = wrote || k === "write" ? "" : (DOC_UI[k].quiet ? docDraft(final) : docCandidate(final));
+  st.cand = wrote ? "" : (DOC_UI[k].quiet ? docDraft(final) : docCandidate(final));   // 模型没调工具就把回复里那段收着，给个一键落盘
   btn.disabled = false; btn.textContent = "↑";
   box.scrollTop = box.scrollHeight;
   await docLoad(k);                                      // 重拉：文件可能刚被 doc_write 改过 → 左边跟着更新
   if(k === "map") await mpLoad();                          // 谱系图：聊天改完立刻重画画布
   docShowCand(k);
   let autoPulled = false;
-  if(k !== "write" && !wrote && DOC_UI[k].quiet && st.cand && st.cand.length > 300){
+  if(!wrote && DOC_UI[k].quiet && st.cand && st.cand.length > 300){
     /* 兜底：模型这轮没调写文件工具（参数被截断 / 干脆把稿子贴在回复里）→ 把回复里那份正文抠出来直接落盘，
        左边展示区才有东西。只在「像一整份正文」（≥2 个二级标题）时才动手，见 docCandidate。 */
     try{
@@ -635,7 +632,7 @@ async function docSend(k){
     docMsg(k, `本轮 ${final.length} 字已落到左侧《${DOC_UI[k].file}》—— 右栏只留过程`);
   else if(!wrote && !autoPulled && DOC_UI[k].quiet && final.trim())
     appendOne(box, { type: "assistant", content: final });  // 没落盘就是在讨论，正文得让他看见
-  if(k !== "write" && !wrote && !autoPulled && !st.cand) docMsg(k, `这轮没有改${DOC_UI[k].file} —— 说「更新${DOC_UI[k].file}」或让它「写进文件」`);
+  if(!wrote && !autoPulled && !st.cand) docMsg(k, `这轮没有改${DOC_UI[k].file} —— 说「更新${DOC_UI[k].file}」或让它「写进文件」`);
   if(errMsg) appendOne(box, { type: "error", message: errMsg });
   await refreshState(false);
 }
@@ -1362,7 +1359,7 @@ const WF_OWN_CHAT = new Set(["idea", "map", "outline", "write", "review"]);
 const WF_PLAN = {
   idea: ["把你说的创新点拆成「问题 / 做法 / 凭什么新」三块", "对着现有文献和项目记忆，指出哪一块站不住", "出一版判定：能做 / 要收窄 / 换角度"],
   search: ["把你的目标翻成检索式（关键词 + 同义词 + 排除词）", "按年限 / 来源 / 是否 OA 粗筛，重复的和跑题的剔掉", "能拿到 OA 直链的一并补上，入库到左边列表"],
-  download: ["先看队列里哪些还没全文", "有 OA 直链的直接下，没有的标成「待手动下载」给你链接", "下载后先看摘要，按创新点和框架缺口定向取证"],
+  download: ["先看队列里哪些还没全文", "有 OA 直链的直接下，没有的标成「待手动下载」给你链接", "下完逐页精读，结论写进项目笔记"],
   notes: ["按你给的口径定术语表（保留排版 / 只译正文 / 双语对照）", "逐段译，公式、图注、参考文献格式不动", "术语前后不一致的地方回头统一一遍"],
   outline: ["按题目 + 研究问题出「大标题 → 小标题 → 一句说明」", "每节标出要引哪几篇、哪个数据还缺", "定稿写进「框架.md」，左边立刻换新版"],
   map: ["把已精读的论文按大纲挂到对应节点", "同一节点下把互相打架的结论标出来", "缺文献的节点留空提示，别硬凑"],
@@ -2681,7 +2678,7 @@ function downloadPanelHTML(active){
       <p class="hint" id="dlTip" style="padding:0 14px 8px">无 OA 直链、或自动下载被挡（403/落地页）的论文都在这里；点击可复制 DOI 去机构库下载。</p>
       <div class="ws-list" id="dlList"></div>
     </div>
-    <div class="dl-foot"><div class="dl-prog" id="dlProg" hidden></div><button class="btn" id="dlRead">摘要初筛</button><button class="btn" id="dlFullRead">逐页精读</button></div>
+    <div class="dl-foot"><div class="dl-prog" id="dlProg" hidden></div><button class="btn" id="dlRead">一键精读</button></div>
   </div>`;
 }
 function dlBind(m){
@@ -2690,8 +2687,7 @@ function dlBind(m){
   if(dlStatPoll){ clearInterval(dlStatPoll); dlStatPoll=null; }
   dlStatPoll = setInterval(dlStatsRefresh, 5000);      // 计数自己走：5 秒一次，只刷数字
   dlTruthRefresh();                                    // 进面板先问一次文献库真篇数
-  $("dlRead").onclick = ()=>dlRead("abstract");
-  $("dlFullRead").onclick = ()=>dlRead("full");
+  $("dlRead").onclick = dlRead;
   const zSyncBtn = $("dlZoteroSyncBtn");
   if(zSyncBtn) zSyncBtn.onclick=()=>ProjectLiterature.open(curTask,true);
   if($("dlList")){
@@ -2715,8 +2711,7 @@ async function dlResumeIfRunning(){
     if(!dlSt || dlSt.phase !== "running") return;
     dlReadBusy = true;
     const b = $("dlRead");
-    if(b){ b.classList.add("stop"); b.textContent = "停止阅读"; }
-    if($("dlFullRead")) $("dlFullRead").disabled = true;
+    if(b){ b.classList.add("stop"); b.textContent = "停止精读"; }
     if(!dlReadTick) dlReadTick = setInterval(dlReadPoll, 2000);
   }catch(e){ /* 读不到状态就等用户自己点 */ }
 }
@@ -2816,7 +2811,7 @@ function wsKickDownload(){                     // 勾了的这批当场提交自
   return true;
 }
 let dlReadBusy = false, dlReadTick = null;
-async function dlRead(mode){
+async function dlRead(){                       // 后台精读：起完就返回；进度靠轮询；按钮再点一次=停
   if(!curTask) return;
   const btn = $("dlRead"); if(!btn) return;
   if(dlReadBusy){
@@ -2825,10 +2820,9 @@ async function dlRead(mode){
     return;
   }
   try{
-    const r = await api("/api/workflow/deepread",{task_id:curTask,mode});
+    const r = await api("/api/workflow/deepread",{task_id:curTask});
     if(!r.started){ uiNotify(r.reason || "这个项目已经在精读了"); return; }
-    dlReadBusy = true; dlSt = null; btn.classList.add("stop"); btn.textContent = "停止阅读";
-    if($("dlFullRead")) $("dlFullRead").disabled = true;
+    dlReadBusy = true; dlSt = null; btn.classList.add("stop"); btn.textContent = "停止精读";
     dlReadTick = setInterval(dlReadPoll, 2000);
   }catch(err){ uiNotify("精读失败：" + err.message); }
 }
@@ -2838,8 +2832,7 @@ async function dlReadPoll(){
     if(!st || !st.phase) return;
     dlSt = st; dlProgPaint();
     const tip = $("dlTip"), b2 = $("dlRead");
-    const head = (st.mode === "abstract" ? "摘要初筛 " : "逐页精读 ") + st.done + "/" + (st.total || "?") + " 篇" + (st.failed ? "（失败 " + st.failed + "）" : "")
-               + (st.missing ? " · 摘要待核 " + st.missing + " 篇" : "")
+    const head = "精读 " + st.done + "/" + (st.total || "?") + " 篇" + (st.failed ? "（失败 " + st.failed + "）" : "")
                + ((st.skipped && st.skipped.length) ? " · 跳过非论文 " + st.skipped.length : "");
     if(tip) tip.textContent = st.phase === "running" ? head + " · 正在读 " + (st.current || "") : head;
     if(st.phase === "running") return;
@@ -2847,9 +2840,9 @@ async function dlReadPoll(){
     dlTruthRefresh();                                  // 精读收尾：文献库篇数定稿了，重拉一次真数
     if(b2){
       b2.classList.remove("stop");
-      b2.textContent = "摘要初筛";
+      b2.textContent = st.phase === "done" ? "精读完了（去看笔记）" : (st.phase === "stopped" ? "已停止" : "精读失败");
+      setTimeout(()=>{ const b3 = $("dlRead"); if(b3 && !dlReadBusy) b3.textContent = "一键精读"; }, 5000);
     }
-    if($("dlFullRead")) $("dlFullRead").disabled = false;
     if(st.phase === "failed" && st.error) uiNotify("精读失败：" + st.error);
   }catch(e){ /* 轮询失败就等下一次 */ }
 }

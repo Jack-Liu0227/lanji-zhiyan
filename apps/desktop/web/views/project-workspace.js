@@ -1,13 +1,11 @@
-/* Project-owned discussions, task execution and document review share one surface. */
+﻿/* Project-owned discussions, task execution and document review share one surface. */
 const ProjectWorkspace = (() => {
   "use strict";
   const labels={ready:"可执行",draft:"已准备",queued:"排队中",running:"执行中",awaiting_review:"等待人工核查",delivered:"已交付",blocked:"等待处理",failed:"执行失败",cancelled:"已停止",waiting:"等待前置交付"};
-  const resources={catalog:'统一资料库',manuscripts:'论文稿件',experiments:'实验记录',outputs:'交付产物',files:"文件",papers:"文献",notes:"笔记与成果",tasks:"任务与自动化",automation:"自动化",workflow:"LangGraph 工作流",plan:"进度与计划",stars:"论文星图",overview:"项目概况",search:"搜索项目资料",'node-result':'节点产物'};
-  const surfaces={overview:'概览',library:'统一资料库',tasks:'任务与自动化',flow:'LangGraph 图流'};
-  const resourceSurface={catalog:'library',manuscripts:'library',experiments:'library',outputs:'library',files:'library',papers:'library',notes:'library',stars:'library',search:'library',tasks:'tasks',automation:'tasks',plan:'tasks',workflow:'flow',overview:'overview','task-detail':'tasks','node-result':'tasks'};
+  const resources={catalog:'统一资料库',manuscripts:'论文稿件',experiments:'实验记录',outputs:'交付产物',files:"文件",papers:"文献",notes:"笔记与成果",tasks:"任务与自动化",automation:"自动化",workflow:"LangGraph 工作流",plan:"进度与计划",stars:"论文星图",overview:"项目概况",search:"搜索项目资料",'node-result':'节点产物','run-artifacts':'本次运行产物'};
+  const surfaces={overview:'概览',chat:'目标对话',library:'统一资料库',workbench:'产物工作台',tasks:'任务与自动化',flow:'LangGraph 图流'};
+  const resourceSurface={catalog:'library',manuscripts:'library',experiments:'library',outputs:'library',files:'library',papers:'library',notes:'library',stars:'library',search:'library',tasks:'tasks',automation:'tasks',plan:'tasks',workflow:'flow',overview:'overview','task-detail':'tasks','node-result':'workbench','run-artifacts':'workbench'};
   const states=new Map(), chats=new Map();
-  resources['run-artifacts']='本次运行产物';
-  resourceSurface['run-artifacts']='tasks';
   let mounted=null, intent=null, generation=0, navigation=0, timer=null, restored=false;
   const h=value=>esc(String(value??""));
   const messageKey=value=>String(value??'').replace(/\s+/g,' ').trim();
@@ -546,14 +544,14 @@ const ProjectWorkspace = (() => {
     document.getElementById('pwFileToolbar').replaceChildren();
     const area=document.getElementById('pwResource');area.firstElementChild?.__nodeDispose?.();area.innerHTML='<div class="pw-resource-content"></div>';const host=area.firstElementChild;
     if(state.section!=='files')tree.innerHTML='';layoutPanels(state);
-    if(state.section==='run-artifacts'){
-      await showRunArtifacts(state,host,options.runId);
-      return;
-    }
     if(state.section==='overview'){
       host.innerHTML='<div class="hint">正在读取项目概况…</div>';
       try{const view=await window.SpaceOverview(state.id);if(!live(state)||state.section!=='overview')return;host.innerHTML=view.html;view.bind();}
       catch(err){host.innerHTML='<div class="msg error">'+h(err.message||'读取项目概况失败')+'</div>';}
+      return;
+    }
+    if(state.section==='run-artifacts'){
+      await showRunArtifacts(state,host,options.runId);
       return;
     }
     if(state.section==='node-result'){
