@@ -127,9 +127,7 @@ AGENT_SYSTEM = """你叫「览籍智研」，首页身份是「智研管家」�
 7. **问日程先 calendar_list**（今天/这周/这个月），别凭印象报；**要定时任务就先 schedule_manage(list) 看现状**再新建/暂停/删除。跨项目查笔记给 knowledge_query 带上 project。
 8. 配置前用 assistant_manage、team_manage、workflow_manage 的 list 读取现有配置，优先复用；调整已有团队使用 team_manage，选择已有工作流使用 workflow_manage(select)，确需新模板再 workflow_create。用户已经说清的配置直接执行，完成后核对保存结果。模型可继承当前可用模型；不得编造模型、专家或工作流 ID。
 9. 配置完成与任务执行分开报告。创建或修改团队不等于完成研究，team_assign 返回 queued 只表示排队。
-10. 一件活能拆成几件互不依赖的子任务时，用 delegate 一次派出并行跑（几个方向各查一轮、多篇文献各自精读、需要独立视角复核、单条线索会挤爆上下文），不要自己串行读完；每条 prompt 写清对象和要交的东西，子 agent 看不到这段对话。子 agent 只回摘要，判断、核对和综合由你做。
-11. 用户要做论文选题、比较研究方向或核查创新性时，优先用 delegate 安排专项子任务。文献检索与数据分析可并行，原文取证可依赖检索结果，独立评审只看候选问题和可核查的原始证据。首页已确定项目时填写 project。给每个任务明确范围、交付要求和必要依赖。同一轮有足够证据就收口，只有会改变候选排序的证据缺口才追加委派。汇总给出候选题、关键证据、最强异议和可执行的最小验证，保留未决分歧。
-12. 首轮阅读用 paper_abstracts 初筛。创新点审查和框架草案列出待核查的主张、候选论文和原文关键词，再用 paper_focus 定向取证。保存原文证据用 paper_evidence_record；已有证据 ID 用 paper_evidence_get 复用。只有用户明确要求逐页精读时调用 paper_read，全文翻译按需启动。"""
+10. 一件活能拆成几件互不依赖的子任务时，用 delegate 一次派出并行跑（几个方向各查一轮、多篇文献各自精读、需要独立视角复核、单条线索会挤爆上下文），不要自己串行读完；每条 prompt 写清对象和要交的东西，子 agent 看不到这段对话。子 agent 只回摘要，判断、核对和综合由你做。"""
 
 ZOTERO_STAGING_RULES = """文献暂存规则：
 - `paper_download` 只把 OA PDF 保存到当前项目的文献暂存目录，不写入 Zotero。
@@ -331,40 +329,22 @@ def _schema(name: str, desc: str, props: dict[str, Any], required: list[str] | N
     }
 
 
-DELEGATE_TOOL = _schema("delegate", "把最多 8 个任务交给独立上下文的子 Agent。有依赖的按阶段执行，"
-            "没有依赖的并行。角色分别为 literature（文献检索）、evidence（原文取证）、analysis（数据分析）、"
-            "review（独立评审）；可省略角色以兼容普通并行委派。评审任务的 prompt 只描述待核查的问题，"
-            "通过 depends_on 获取前置任务的证据，勿把其他 Agent 的立场、评分或多数意见写进 prompt。",
-            {"jobs": {"type": "array", "maxItems": 8, "items": {"type": "object", "properties": {
-                "id": {"type": "string", "description": "本次委派唯一 ID，可由 depends_on 引用，使用字母、数字、连字符或下划线"},
+DELEGATE_TOOL = _schema("delegate", "把 1-4 个互不依赖的子任务**并行**派给独立上下文的子 agent，各自跑完只回一份摘要。"
+            "适合：分别读/算好几篇文献或好几个方向、需要独立视角复核、单条线索太长会挤爆上下文时。"
+            "子 agent 看不到这段对话历史；能读能写产物（笔记/草稿），改不了项目结构、起不了流程、发不了对外消息。",
+            {"jobs": {"type": "array", "items": {"type": "object", "properties": {
                 "title": {"type": "string", "description": "子任务短名，用于前台分行显示"},
                 "prompt": {"type": "string", "description": "这一份要独立完成的任务，写清对象与要交的东西"},
-                "role": {"type": "string", "enum": ["literature", "evidence", "analysis", "review"]},
-                "scope_key": {"type": "string", "description": "任务对象和范围的标识，用于同一轮复用；独立复核使用不同角色或范围"},
-                "depends_on": {"type": "array", "items": {"type": "string"}, "description": "前置子任务的 ID"},
-                "max_steps": {"type": "integer", "minimum": 1, "maximum": 6, "description": "模型循环上限，默认 4"}},
+                "max_steps": {"type": "integer", "description": "最多几步工具循环，默认 4"}},
                 "required": ["prompt"]}},
-                "project": {"type": "string", "description": "项目 ID 或名称；绑定项目的对话可省略"},
-                "parallel": {"type": "integer", "minimum": 1, "maximum": 4, "description": "并行度，默认 3"}},
+                "parallel": {"type": "integer", "description": "并行度，默认 3"}},
             ["jobs"])
 
 
 import langgraph_workflow
 
-READING_TOOLS = [
-    _schema("paper_abstracts", "按页列出项目候选论文的摘要，仅用于初筛。missing 表示摘要待核，metadata 表示检索来源。",
-            {"offset": {"type": "integer"}, "limit": {"type": "integer"}, "project": {"type": "string"}}),
-    _schema("paper_focus", "根据创新主张或章节缺口，从指定论文原文检索最多 6 条带页码片段。给原文可能使用的关键词或短语，查无结果标记待核。",
-            {"question": {"type": "string"}, "paper_ids": {"type": "array", "items": {"type": "string"}},
-             "keywords": {"type": "array", "items": {"type": "string"}}, "limit": {"type": "integer"},
-             "project": {"type": "string"}}, ["question", "paper_ids", "keywords"]),
-    _schema("paper_evidence_get", "按证据 ID 读取当前项目已经登记的页码、原文与核查字段，供创新审查和框架共用。",
-            {"ids": {"type": "array", "items": {"type": "string"}}, "project": {"type": "string"}}, ["ids"]),
-]
-
 TOOL_SPECS = [
     *langgraph_workflow.LANGGRAPH_TOOL_SPECS,
-    *READING_TOOLS,
     _schema("task_create", "在当前项目创建执行任务；可选全局已启用专家或团队。plan_id 关联待办计划，子任务自动继承父任务范围。", {
         "title": {"type": "string"}, "goal": {"type": "string"}, "executor_binding_id": {"type": "string"},
         "member_id": {"type": "string"}, "inputs": {"type": "array", "items": {"type": "object"}},
@@ -380,36 +360,25 @@ TOOL_SPECS = [
     _schema("workflow_status", "读取持久化工作流状态和 review_targets。awaiting_review 时请用户打开节点编辑并核查，不可代替用户批准或重复启动。用户可能在你生成回复期间通过界面完成审查；交付 source=human 表示人工已处理，不能仅因最新状态 succeeded 或 review_targets 为空就断言流程未暂停审查。", {"id": {"type": "string"}}),
     _schema("workflow_cancel", "停止当前项目工作流，保留已生成产物。", {"id": {"type": "string"}}, ["id"]),
     DELEGATE_TOOL,
-    _schema("paper_discover", "检索 OpenAlex 和 Crossref，返回少量候选文献元数据供选题，不入库。",
-            {"query": {"type": "string"}}, ["query"]),
-    _schema("paper_excerpt", "读取当前项目已索引论文的指定页原文及版本。offset 可读取同页后续文字。",
-            {"paper_id": {"type": "string"}, "page": {"type": "integer"}, "offset": {"type": "integer"}}, ["paper_id", "page"]),
-    _schema("research_data_profile", "统计当前项目已索引 CSV 的行数、字段缺失和分组数量，可按原始列名等值筛选。",
-            {"asset_id": {"type": "string"}, "group_by": {"type": "string"}, "where": {"type": "object"}}, ["asset_id"]),
     _schema("project_list", "列出已经添加的项目、项目 ID 和文件夹，返回当前绑定项目 ID。", {}),
     _schema("library_overview", "查看当前任务的文献/检索结果/笔记/证据数量和最近条目，先调它了解现状。", {}),
     _schema("workflow_context_read", "分页读取当前项目工作流的完整输入、前序交付、产物或执行记录。输入被节选时使用。",
             {"run_id": {"type": "string"}, "node_id": {"type": "string"}, "section": {"type": "string", "enum": ["input", "history", "output", "agent"]},
              "offset": {"type": "integer"}, "limit": {"type": "integer"}}),
-    _schema("idea_review", "审查一个创新点并关联已登记的原文证据。", {
-        "idea": {"type": "string", "description": "待审查的创新点"},
-        "evidence_ids": {"type": "array", "items": {"type": "string"}}}, ["idea"]),
+    _schema("idea_review", "审查一个创新点：给新颖性/可行性/证据充分度评分、风险与待答问题。", {"idea": {"type": "string", "description": "待审查的创新点"}}, ["idea"]),
     _schema("paper_search", "在 OpenAlex/Crossref/arXiv 检索论文并入库；结果按「相关度×引用量」排序，一次最多留 100 条。", {
         "query": {"type": "string"}, "sources": {"type": "array", "items": {"type": "string", "enum": ["openalex", "crossref", "arxiv"]}},
         "rows": {"type": "integer", "description": "每源条数(1-50)，默认 30"}}, ["query"]),
     _schema("paper_download", "只把一条检索结果的开放获取(OA) PDF 下载到当前项目暂存目录；不会写入 Zotero。没有 OA 链接会失败。", {"result_id": {"type": "string"}}, ["result_id"]),
-    _schema("paper_read", "将已入库 PDF 逐页精读成中文笔记。用户明确要求逐页阅读时使用；初筛和定向核查用 paper_abstracts 或 paper_focus。", {"paper_id": {"type": "string"}}, ["paper_id"]),
+    _schema("paper_read", "把一篇已入库 PDF 逐页精读成中文要点（带 p.页码）。", {"paper_id": {"type": "string"}}, ["paper_id"]),
     _schema("paper_evidence_record", "登记当前项目 PDF 的事实与原文证据。每条记录包含物理页码、字段、数值及单位、该页连续原文。逐条校验，不确定时保留缺口。", {
         "paper_id": {"type": "string"}, "items": {"type": "array", "maxItems": 30, "items": {"type": "object",
             "properties": {"page_no": {"type": "integer"}, "field": {"type": "string"}, "value": {"type": "string"},
                            "excerpt": {"type": "string"}}, "required": ["page_no", "field", "value", "excerpt"]}}
     }, ["paper_id", "items"]),
-    _schema("paper_translate", "翻译所需 PDF 页或查询进度。pages 留空表示全文。done 表示本次请求范围完成，full_document 才表示整篇完成。",
-            {"paper_id": {"type": "string"}, "action": {"type": "string", "enum": ["start", "status"]},
-             "pages": {"type": "string", "description": "物理页码，如 3 或 2-4,8"},
-             "model_id": {"type": "string", "description": "用户指定且已配置的 OpenAI 兼容翻译模型"}}, ["paper_id"]),
+    _schema("paper_translate", "启动已入库论文的中文翻译或查询进度。返回 running 仅表示已启动，done 且有译文文件才可交付。", {"paper_id": {"type": "string"}, "action": {"type": "string", "enum": ["start", "status"]}, "pages": {"type": "string"}}, ["paper_id"]),
     _schema("notes_compose", "把一条精读笔记整理成带证据表的知识库笔记，可选写入 Obsidian。", {"note_id": {"type": "string"}, "vault": {"type": "string"}}, ["note_id"]),
-    _schema("draft_write", "按已保存的谱系图生成证据底稿。章节、顺序和出处由程序固定，证据缺失时报待核。", {}),
+    _schema("draft_write", "用当前任务的笔记与证据起草一个章节。", {"section": {"type": "string"}, "title": {"type": "string"}}),
     _schema("draft_review", "以审稿人视角审查稿件，给出结论/评分/问题清单/证据缺口。", {"draft": {"type": "string"}}),
     _schema("manuscript_translate_en", "把已验收中文正文译为学术英文并保存英文稿，供后续格式转换。",
             {"style": {"type": "string", "description": "英文稿件语体，可留空"}}, []),
@@ -534,12 +503,10 @@ TOOL_SPECS = [
 
 TOOL_NAMES = [t["function"]["name"] for t in TOOL_SPECS]
 
+# 创新点审查这一步只放开这两个工具：正式判定 + 记一条长期记忆
 IDEA_TOOLS = [
-    *READING_TOOLS,
-    next(tool for tool in TOOL_SPECS if tool["function"]["name"] == "paper_evidence_record"),
     _schema("idea_review", "对当前创新点出正式判定（五维评分 1-10 + 致命缺陷 + 三档结论），会落成项目笔记并写入长期记忆。",
-            {"idea": {"type": "string", "description": "用户要审查的创新点原文（可带上刚补充的约束）"},
-             "evidence_ids": {"type": "array", "items": {"type": "string"}, "description": "支持或反驳该主张的已登记证据"}}, ["idea"]),
+            {"idea": {"type": "string", "description": "用户要审查的创新点原文（可带上刚补充的约束）"}}, ["idea"]),
     _schema("memory", "把值得长期记住的结论/约束/用户偏好记一条（add）。",
             {"ops": {"type": "array", "description": "批量，一条也行", "items": {
                 "type": "object",

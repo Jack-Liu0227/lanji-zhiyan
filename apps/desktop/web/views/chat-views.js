@@ -944,9 +944,8 @@ function appendOne(box,ev,who){
   else if(ev.type==="sub"){
     if(ev.phase==="start"){
       el.className="sub-row"; el.id="sub-"+ev.sub;
-      const roleLabel={literature:"文献检索",evidence:"原文取证",analysis:"数据分析",review:"独立评审"}[ev.role]||"独立子任务";
       el.innerHTML=`<span class="sub-ico">⤷</span><span class="sub-title">${esc(ev.sub_title||"子任务")}</span>
-        <span class="sub-note">${esc(roleLabel)} · 独立上下文</span><span class="sub-state">运行中…</span>`;
+        <span class="sub-note">独立上下文 · 可写产物 · 跑完只回摘要</span><span class="sub-state">运行中…</span>`;
       box.appendChild(el); box.scrollTop=box.scrollHeight; return;
     }
     const row=$("sub-"+ev.sub);

@@ -1126,8 +1126,7 @@ body.md-narrow .wctl button:hover { background: #eee; }
 
 /* ---- 论文翻译（工作流第 4 步：添加论文 → 元数据 → PDF 阅读器 → 中英互译 / 笔记模式 / 荧光笔） ---- */
 .tr{display:flex;flex-direction:column;gap:10px;height:100%;min-height:0}
-.tr-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;flex:none;min-height:44px}
-.tr-bar>input,.tr-bar>select{height:36px;max-width:160px;padding:0 8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--fg);font:inherit}
+.tr-bar{display:flex;align-items:center;gap:10px;flex:none;height:44px}
 .tr-bar>.btn,.tr-bar>.tr-pageno,.tr-bar>.tr-zoom,.tr-bar>.tr-seg,.tr-bar>.tr-grp{height:36px;display:inline-flex;align-items:center;justify-content:center;line-height:1;box-sizing:border-box;margin:0}
 .tr-bar>.btn{padding:0 14px;font-size:13px}
 .tr-bar>.tr-zoom{gap:2px;padding:0 3px;border:1px solid var(--line);border-radius:9px;background:var(--panel)}
@@ -1405,7 +1404,8 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .sm-bar b{font-size:14px}
 .sm-bar .hint{color:var(--muted);font-size:12px}
 .sm-frame{flex:1;width:100%;border:1px solid var(--line);border-radius:12px;background:#05070f;min-height:0}
-.sm-back[hidden]{display:none}
+.sm-back[hidden],.sm-projects,.sm-projects [hidden]{display:none}.sm-projects{min-height:0;overflow:auto;align-content:start;gap:12px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}.sm-projects>button{display:grid;gap:12px;padding:18px;text-align:left;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--fg);font:inherit;cursor:pointer}.sm-projects>button:hover{border-color:var(--accent)}.sm-projects strong{font-size:14px;line-height:1.6;overflow-wrap:anywhere}.sm-projects span{font-size:12px;color:var(--muted);line-height:1.7}.sm-projects small{color:var(--accent)}
+@media(max-width:1000px){.sm-wrap:not(.sm-project-open) .sm-projects{display:grid;flex:1}.sm-wrap:not(.sm-project-open) .sm-frame,.sm-wrap:not(.sm-project-open) [data-sm-results]{display:none}}
 .sm-bar{flex-wrap:wrap}.sm-search{position:relative;flex:none;max-width:600px}.sm-search input{width:100%}.sm-search [data-sm-results]{position:absolute;top:100%;left:0;right:0;z-index:5;max-height:280px;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:7px;box-shadow:var(--shadow)}.sm-search button{display:block;width:100%;border:0;background:transparent;color:var(--fg);text-align:left;font:inherit;padding:12px;cursor:pointer}.sm-search button:hover,.sm-search button:focus-visible{background:var(--panel2)}.sm-search p{padding:10px;font-size:12px}.sm-search [hidden]{display:none}
 
 /* ================= 团队 · 一层办公室（微立体 + 人员栏） =================

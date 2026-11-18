@@ -867,13 +867,6 @@ def _validate_versions(db, task, run, *, outputs=True):
             if not path.is_relative_to(root) or not path.is_file() or _hash(path) != item.get("content_hash", item.get("sha256")):
                 raise ValueError("待验收产物已变化或超出项目范围")
         _validate_contract(task["output_contract"], run["output_snapshot"])
-        if task.get("metadata", {}).get("stage") == "write":
-            from lineage_draft import require_for_manuscript
-            content = run["output_snapshot"].get("content") or ""
-            require_for_manuscript(db, task["project_id"], content)
-            for item in files:
-                if Path(item.get("original_path") or item.get("name") or "").name == "正文.md":
-                    require_for_manuscript(db, task["project_id"], Path(item["path"]).read_text(encoding="utf-8"))
         function = _adapter("validate")
         if function:
             function(db, task, run)
