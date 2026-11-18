@@ -370,7 +370,7 @@ const ProjectWorkspace = (() => {
       if(m.role==="user"){const key=userInputKey(m.content);if(key)seenUserInputs.add(key);}
       append(box,{...m,events,type:m.role,replay:true,at:m.created_at});
     });
-    if(record.run?.status==="running"){const seenEvents=new Set();record.events.forEach(ev=>{const key=ev.id||ev.event_id;if(key&&seenEvents.has(key))return;if(key)seenEvents.add(key);if(ev.type==='user'&&ev.local&&history.some(item=>item.role==='user'&&userInputKey(item.content)===userInputKey(ev.content)))return;append(box,ev);});}
+    if(record.run?.status==="running"){record.events.forEach(ev=>{if(ev.type==='user'&&ev.local&&history.some(item=>item.role==='user'&&userInputKey(item.content)===userInputKey(ev.content)))return;append(box,ev);});}
     if(!box.children.length)box.innerHTML='<div class="pw-empty">这个对话已绑定当前项目，可以引用资料并提出目标。</div>';
     box.scrollTop=box.scrollHeight;
   }
@@ -398,7 +398,8 @@ const ProjectWorkspace = (() => {
       const mentionContext=mentions.length?"\n\n【@上下文】\n"+mentions.map(item=>"@"+(item.label||item.id)+"（"+item.kind+"："+item.id+"）").join("、"):"";
       const selected=state.target?targetRows(state).find(row=>row.value===state.target):null;if(state.target&&!selected)throw new Error('执行者已移除，请重新选择');
       const run={key:crypto.randomUUID(),api:"/api/agent",runId:"",cursor:0,status:"running",projectId:state.id,chatId:id,draftText:submission.text,draftImages:submission.images,request:{task_id:id,executor_binding_id:selected?.binding?.id||'',member_id:selected?.member?.id||'',image_ids:submission.images.map(item=>item.asset_id),message:goal+context+mentionContext,mentions,template_ref:submission.template,idempotency_key:""}};run.request.idempotency_key=run.key;
-      record.lastError="";record.run=run;run.base=[...record.messages];record.base=run.base;record.events=[{type:"user",content:goal+context+mentionContext}];
+      record.lastError="";record.run=run;run.base=[...record.messages];record.base=run.base;
+      record.events=[{type:"user",content:goal+context+mentionContext},{type:"chat_waiting"}];
       if(draft(state).text===submission.text){draft(state).text="";draft(state).images=[];}persist(state);paintDraft(state);drawMessages(state,id);persistRuns();follow(run,record);
     }catch(err){error(err.message,state);}finally{state.sending=false;if(live(state)){document.getElementById("pwSend").disabled=false;paintSend(state);}}
   }
@@ -409,8 +410,11 @@ const ProjectWorkspace = (() => {
       record.events.push(event);const state=get(run.projectId);
       if(live(state)&&state.chatId===run.chatId){const box=document.getElementById("pwMessages");if(["done","cancelled"].includes(event.type)){if(event.type==="done"&&!record.events.some(e=>e.type==="assistant"))append(box,{type:"assistant",content:event.content||"执行结束"});}else append(box,event);}
       if(event.type==="error")record.lastError=event.message;paintBackground();
-    },persistRuns,()=>{const state=get(run.projectId);if(live(state)&&state.chatId===run.chatId)notice("对话连接暂时中断，正在恢复；后台执行仍归属于当前对话。",state);});
+    },persistRuns,()=>{const state=get(run.projectId);if(live(state)&&state.chatId===run.chatId){
+      updateChatActivity(document.getElementById("pwMessages"),"chat_reconnecting");
+    }});
     const owner=get(run.projectId);
+    if(live(owner)&&owner.chatId===run.chatId)updateChatActivity(document.getElementById("pwMessages"),"done");
     if(!run.runId&&run.status==='failed'){
       const failedDraft=owner.drafts[run.chatId];
       if(failedDraft&&failedDraft.text.length===0&&!(failedDraft.images||[]).length){
@@ -427,7 +431,7 @@ const ProjectWorkspace = (() => {
   function restoreRuns(){
     for(const saved of read("rw-workspace-runs",[])){
       if(!saved.projectId||!(S.tasks||[]).some(p=>p.id===saved.projectId)||!(S.chats||[]).some(c=>c.id===saved.chatId&&c.task_id===saved.projectId))continue;
-      const record=chatRecord(saved.chatId);if(record.run)continue;saved.status="running";saved.cursor=0;record.run=saved;record.base=saved.base||[];record.events=[{type:'user',content:saved.request.message,local:true}];follow(saved,record);
+      const record=chatRecord(saved.chatId);if(record.run)continue;saved.status="running";saved.cursor=0;record.run=saved;record.base=saved.base||[];record.events=[{type:'user',content:saved.request.message,local:true},{type:"chat_waiting"}];follow(saved,record);
     }
     paintBackground();
   }

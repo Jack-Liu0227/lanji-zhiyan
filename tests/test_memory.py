@@ -57,7 +57,7 @@ class MemorySystemTest(unittest.TestCase):
 
     def test_write_time_dedupe_and_budget_archive(self):
         self.assertFalse(memory_store.add(self.db, "8G 显存只能小批量", scope_id=self.a).get("duplicate"))
-        self.assertTrue(memory_store.add(self.db, "8G 显存只能小批量跑", scope_id=self.a).get("duplicate"))
+        self.assertTrue(memory_store.add(self.db, "8G 显存只能小批量", scope_id=self.a).get("duplicate"))
         for i in range(50):
             memory_store.add(self.db, "条目%d：%s" % (i, chr(0x4e00 + i * 5) * 200), scope_id=self.b)
         out = memory_store.consolidate(self.db, self.b)
@@ -91,7 +91,7 @@ class MemorySystemTest(unittest.TestCase):
                 "# 全局记忆\n\n- 以后中文稿一律不用小括号\n", encoding="utf-8")
             self.assertIn("不用小括号", self.db.memory_block(self.a))      # block → sync_files 收进来
             self.assertIn("不用小括号", memory_store.block(self.db, self.b))  # 全局就该到每个项目
-            memory_store.dump(self.a)                                     # 重写文件不能把手改冲掉
+            memory_store.dump(self.db, self.a)                            # 重写文件不能把手改冲掉
             self.assertIn("不用小括号", (folder / "全局记忆.md").read_text(encoding="utf-8"))
 
     # ---- 旧库搬家
@@ -139,6 +139,71 @@ class MemorySystemTest(unittest.TestCase):
         self.assertTrue(rows)
         self.assertEqual(rows[0]["kind"], "constraint")
         self.assertEqual(rows[0]["source"], "auto")
+
+    def test_numeric_correction_survives_reopen_and_preserves_source(self):
+        old = "NFM 项目建模只纳入常规循环测试，排除涂层与复合样本，容量保持率统一取第 100 圈测得的数值"
+        row = memory_store.add(self.db, old, scope_id=self.a, kind="constraint", importance=3)
+        correction = "把第 100 圈改为第 200 圈，因为对齐数据口径。"
+        with patch.object(workflow, "chat_raw", return_value={"content": "好"}) as model:
+            workflow.run_agent(self.db, self.a, correction, profile={})
+        prompt = "\n".join(message["content"] for message in model.call_args.args[1]
+                           if message["role"] == "system")
+        self.assertIn("统一取第 200 圈", prompt)
+        self.assertNotIn("统一取第 100 圈", prompt)
+        reopened = workflow.WorkflowDB(self.root / "memory.sqlite3")
+        self.addCleanup(reopened.close)
+        self.assertIn("统一取第 200 圈", reopened.memory_block(self.a))
+        normal = workflow._tool_impl("recall", reopened, self.a, {"query": "容量保持率"})
+        self.assertEqual([item["id"] for item in normal["memory"]], [row["id"]])
+        self.assertNotIn("history", normal)
+        history = workflow._tool_impl("recall", reopened, self.a, {"query": row["id"], "include_history": True})
+        revision = history["history"][0]
+        self.assertEqual(revision["old_text"], old)
+        self.assertIn("对齐数据口径", revision["reason"])
+        self.assertEqual(revision["source_ref"], "chat:" + reopened.messages(self.a)[0]["id"])
+        self.assertEqual(memory_store.recall(reopened, old, self.b, include_history=True)["history"], [])
+        with self.assertRaisesRegex(ValueError, "口径已更新"):
+            memory_store.patch(reopened, row["id"], scope_id=self.a, text=old, expected_text=old)
+
+    def test_meaningful_differences_survive_dedup_and_archived_recall(self):
+        text = "NFM 项目只使用常规循环实验，容量保持率统一取第 100 圈测得的数值"
+        a = memory_store.add(self.db, text, scope_id=self.a, kind="constraint")
+        b = memory_store.add(self.db, text.replace("100", "200"), scope_id=self.a, kind="constraint")
+        self.assertNotEqual(a["id"], b["id"])
+        memory_store.consolidate(self.db, self.a)
+        memory_store.patch(self.db, a["id"], archived=True)
+        found = memory_store.recall(self.db, "容量保持率", self.a)["memory"]
+        self.assertEqual([(row["id"], row["archived"]) for row in found], [(b["id"], 0), (a["id"], 1)])
+        self.assertIsNone(memory_store.capture(self.db, self.a, "如果把第100圈改成第200圈？"))
+
+    def test_profile_files_reach_home_and_project_identity_without_overwrite(self):
+        root = self.root / "user"
+        identity = memory_store.profile_context()
+        self.assertIn("Agent 性格", identity)
+        (root / "soul.md").write_text("科研判断保留异议", encoding="utf-8")
+        (root / "user.md").write_text("用户研究 O3 正极", encoding="utf-8")
+        chat_id = self.db.create_chat("首页")
+        for scope_id in (chat_id, self.a):
+            with patch.object(workflow, "chat_raw", return_value={"content": "好"}) as model:
+                workflow.run_agent(self.db, scope_id, "你好", profile={})
+            identity = model.call_args.args[1][0]["content"]
+            self.assertIn("科研判断保留异议", identity)
+            self.assertIn("用户研究 O3 正极", identity)
+        self.assertEqual((root / "soul.md").read_text(encoding="utf-8"), "科研判断保留异议")
+
+    def test_team_member_reads_shared_memory_without_publishing_its_hypothesis(self):
+        memory_store.add(self.db, "共享条件：按论文留组验证", scope_id=self.a, kind="constraint")
+        first = {"content": "", "tool_calls": [{"id": "propose", "type": "function", "function": {
+            "name": "memory", "arguments": json.dumps({"ops": [
+                {"action": "add", "kind": "decision", "text": "未经确认的假设"}
+            ]})}}]}
+        with patch.object(workflow, "chat_raw", side_effect=[first, {"content": "提出假设供复核"}]) as model:
+            workflow.run_agent(self.db, self.a, "独立评估", profile={}, publish=False,
+                               member={"name": "统计专家"}, max_steps=2)
+        self.assertIn("按论文留组验证", model.call_args_list[0].args[1][1]["content"])
+        tool_message = next(message for message in model.call_args_list[1].args[1] if message["role"] == "tool")
+        self.assertIn("由用户确认后更新共享记忆", tool_message["content"])
+        self.assertEqual(memory_store.search(self.db, "未经确认的假设", self.a), [])
 
     # ---- 自我升级：模型写 skill → 下一轮被索引到
     def test_skill_write_lands_in_project_skills_and_shows_up_in_context(self):

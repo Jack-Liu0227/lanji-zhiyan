@@ -73,10 +73,11 @@ def capture(db, project_id: str, step: str) -> dict:
         payload = doc.get("markdown", "") if doc.get("exists") else ""
         valid = bool(payload.strip()) and (step != "write" or "（本节未生成 ——" not in payload)
         if valid and step == "write":
-            from lineage_draft import validate_draft
+            from lineage_draft import require_for_manuscript
             try:
-                lineage = validate_draft(db, project_id, payload)
-                result["items"]["谱系版本"] = lineage["revision"][:12]
+                lineage = require_for_manuscript(db, project_id, payload)
+                if lineage is not None:
+                    result["items"]["谱系版本"] = lineage["revision"][:12]
             except ValueError as exc:
                 valid = False
                 result["items"]["读取产物出错"] = str(exc)

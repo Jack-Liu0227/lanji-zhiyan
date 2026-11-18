@@ -341,7 +341,9 @@ def execute(db, task_run_id, cancel_check=None):
                     execution_board.publish(db, task['project_id'], kind, task_id=task['id'], run_id=run['id'], activity=event.get('name') or kind)
                     db.db.commit()
                 if getattr(db, 'project_task_emit', None): db.project_task_emit(event)
-            if stage == "write":
+            layout_nodes = (metadata.get("layout_snapshot") or {}).get("nodes", [])
+            if stage == "write" and (not owner or any(item["step"] == "map" for item in layout_nodes)
+                                     or workflow.map_read(db, task["project_id"])["exists"]):
                 from workflow_runners import draft_from_lineage
                 permission = (run["executor_snapshot"].get("runtime_config") or {}).get("permission", "auto")
                 workflow.enforce_tool_policy("draft_write", {}, permission)

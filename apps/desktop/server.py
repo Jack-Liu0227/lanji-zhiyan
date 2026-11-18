@@ -166,7 +166,7 @@ team.DB_PATH = DB_PATH              # 团队共用同一个库
 UPLOADS = paths.UPLOADS
 PORT = 8765
 APP_TITLE = "览籍智研"      # 窗口标题前缀（web/index.html 会追加 " · v<构建戳>"）
-STAMP = 0                       # web/index.html 的时间戳；无边框窗口靠它认「自己那扇窗」
+STAMP = ""
 
 
 def _app_windows() -> list[tuple[int, str]]:
@@ -528,7 +528,7 @@ class _WinBridge:
             return {"error": str(exc)}
 
 
-def _webview_window(url: str, stamp: int) -> bool:
+def _webview_window(url: str, stamp: str) -> bool:
     """自己的无边框窗口（WebView2 / pywebview）。起来就阻塞到关窗、返回 True；
     起不来（没装 pywebview / WebView2 运行时）返回 False，调用方退回 Edge --app。"""
     try:
@@ -2225,6 +2225,21 @@ def _stop_low_server() -> None:
         _LOW_SERVER = None
 
 
+def _build_stamp() -> str:
+    stamp = str((WEB / "index.html").stat().st_mtime_ns)
+    if getattr(sys, "frozen", False):
+        return stamp
+    try:
+        revision = subprocess.check_output(
+            ["git", "rev-parse", "--short=12", "HEAD"], cwd=ROOT,
+            stderr=subprocess.DEVNULL, text=True, timeout=2,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        return stamp
+    return f"{revision}-{stamp}" if revision else stamp
+
+
 def main() -> int:
     # Frozen builds launch this process as a tiny native dialog helper.  Handle
     # that mode before checking the web bundle or starting the HTTP service.
@@ -2241,7 +2256,7 @@ def main() -> int:
     busy = _port_open(port)
     # URL 带上 index.html 的时间戳：同一个 URL 的 --app 窗口会被 Edge 直接聚焦复用、
     # 不重新加载（实测：再发一次启动命令窗口数不变）→ 界面改了还看旧的。带戳就必定新开一扇。
-    stamp = int((WEB / "index.html").stat().st_mtime)
+    stamp = _build_stamp()
     global STAMP
     STAMP = stamp
     url = f"http://127.0.0.1:{port}/?v={stamp}"

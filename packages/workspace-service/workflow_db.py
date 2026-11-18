@@ -1265,10 +1265,11 @@ class WorkflowDB(ResearchDB):
                 n += 1
         return n
 
-    def memory_block(self, task_id: str, now_window: int = 10, line: int = 120) -> str:
+    def memory_block(self, task_id: str, now_window: int = 10, line: int = 120, *,
+                     include_dialogue: bool = True) -> str:
         """拼给模型看的记忆块：全局 → 项目 → 窗口外的老对话。"""
         self.seed_long_memory(task_id)                  # 新项目先种三条底子（幂等）
-        return memory_store.block(self, task_id, now_window, line)
+        return memory_store.block(self, task_id, now_window, line, include_dialogue=include_dialogue)
 
 
     def stage_map(self, task_id: str) -> dict[str, str]:
@@ -1332,6 +1333,13 @@ class WorkflowDB(ResearchDB):
                 self.db.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
             except Exception:
                 pass
+        import memory_store
+        memory_store.ready(self)
+        project_memory_ids = "SELECT id FROM memory WHERE scope='project' AND scope_id=?"
+        self.db.execute(f"DELETE FROM memory_revisions WHERE memory_id IN ({project_memory_ids})", (task_id,))
+        self.db.execute(f"DELETE FROM memory_fts WHERE mem_id IN ({project_memory_ids})", (task_id,))
+        self.db.execute("DELETE FROM memory WHERE scope='project' AND scope_id=?", (task_id,))
+        self.db.execute("DELETE FROM chat_fts WHERE task_id=?", (task_id,))
         # workflow_runs is keyed by project_id rather than task_id. Keep this
         # explicit so project deletion cannot leave orphaned resumable runs.
         try:

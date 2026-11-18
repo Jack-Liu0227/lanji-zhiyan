@@ -1930,7 +1930,7 @@ function setPanel(){
         ${opt("ask", "每次都要问", "编译、写文件、导出前先问你一句「允许这一次吗」。")}
       </div></div>
     <div class="card" style="margin-top:12px"><h3>上下文预算</h3>
-      <div class="hint">每次对话最多带多少字历史给模型。40000 字 ≈ 2 万 token，约合十几轮长对话；调大记得更多，但更慢更贵。</div>
+      <div class="hint">历史消息的字数上限。智研管家和项目对话优先保留近期消息，并按当前问题选取相关旧片段。实际 token 以「用量」页为准。</div>
       <div class="ag-row" style="margin-top:8px">
         <input class="control" id="ctxchars" type="number" min="2000" max="400000" step="1000"
                value="${Number((S.sec||{}).history_chars) || 40000}" style="max-width:160px">
