@@ -71,6 +71,72 @@ class WorkflowCheckpointsTest(unittest.TestCase):
         engine.review(self.db, run['id'], run['current_node'], True)
         self.assertEqual(engine.advance(self.db, run['id'])['status'], 'succeeded')
 
+    def test_manual_delivery_passes_the_accepted_file_to_a_fixed_tool(self):
+        layout = self.layout(['task', 'task'])
+        layout['nodes'][0]['manual_execution'] = True
+        layout['nodes'][1].update(node_kind='tool', tool_name='read_attachment', tool_args={})
+        layout['edges'][0].update(artifact='reviewed.md', argument='path')
+        workflow_layout.save_layout(self.db, layout)
+        reviewed = Path(self.db.base_dir(self.pid)) / 'reviewed.md'
+        reviewed.write_text('Checked evidence identifier MANUAL_314', encoding='utf-8')
+        run = engine.create(self.db, self.pid)
+        workflow_tasks.set_mode(self.db, run['id'], 'full_access')
+        with patch.object(workflow, 'run_agent') as model, patch('paths.project_roots', return_value=[reviewed.parent]):
+            run = engine.advance(self.db, run['id'])
+            self.assertEqual(run['status'], 'blocked', run['error'])
+            self.assertEqual(run['settings']['manual_pending']['node_id'], 'n0')
+            run = engine.route('POST', '/api/workflow/execution/submit-manual', {
+                'id': run['id'], 'project_id': self.pid, 'node_id': 'n0', 'paths': ['reviewed.md'],
+            }, {}, self.db)['run']
+            self.assertEqual(run['status'], 'awaiting_review', run['error'])
+            engine.review(self.db, run['id'], run['current_node'], True)
+            reviewed.write_text('Draft changed after acceptance', encoding='utf-8')
+            run = engine.advance(self.db, run['id'])
+            self.assertEqual(run['status'], 'succeeded', run['error'])
+            model.assert_not_called()
+        source, reader = [tasks.get(self.db, task_id) for task_id in run['settings']['task_ids'].values()]
+        handoff = reader['latest_run']['input_snapshot']['handoffs'][0]
+        self.assertEqual(handoff['delivery_id'], source['accepted_delivery_id'])
+        self.assertIn('MANUAL_314', reader['latest_run']['output_snapshot']['content'])
+        self.assertNotIn('Draft changed', reader['latest_run']['output_snapshot']['content'])
+
+    def test_independent_branch_runs_while_other_branch_waits_for_review(self):
+        layout = self.layout(['task'] * 4)
+        layout['edges'] = [{'source': source, 'target': target}
+                           for source, target in [('n0', 'n1'), ('n0', 'n2'), ('n1', 'n3'), ('n2', 'n3')]]
+        for index, node in enumerate(layout['nodes']):
+            node.update(node_kind='tool', tool_name='library_overview', tool_args={}, review_required=index == 1)
+        workflow_layout.save_layout(self.db, layout)
+        run = engine.create(self.db, self.pid)
+        run = engine.advance(self.db, run['id'])
+        ids = run['settings']['task_ids']
+        self.assertEqual(run['status'], 'awaiting_review', run['error'])
+        self.assertEqual(tasks.get(self.db, ids['n1'])['status'], 'awaiting_review')
+        self.assertEqual(tasks.get(self.db, ids['n2'])['status'], 'delivered')
+        self.assertFalse(tasks.get(self.db, ids['n3'])['latest_run_id'])
+        with workflow.WorkflowDB(self.db.path) as reopened:
+            engine.review(reopened, run['id'], run['current_node'], True)
+            run = engine.advance(reopened, run['id'])
+            self.assertEqual(run['status'], 'succeeded', run['error'])
+            tasks_after = [tasks.get(reopened, task_id) for task_id in ids.values()]
+            self.assertTrue(all(len(task['runs']) == 1 for task in tasks_after))
+            self.assertEqual({dep['task_id'] for dep in tasks_after[3]['latest_run']['input_snapshot']['dependencies']},
+                             {ids['n1'], ids['n2']})
+
+    def test_missing_bound_artifact_stops_before_downstream_execution(self):
+        layout = self.layout(['task', 'task'])
+        for node in layout['nodes']:
+            node.update(node_kind='tool', tool_name='library_overview', tool_args={}, review_required=False)
+        layout['nodes'][1].update(tool_name='read_attachment')
+        layout['edges'][0].update(artifact='missing.csv', argument='path')
+        workflow_layout.save_layout(self.db, layout)
+        run = engine.create(self.db, self.pid)
+        run = engine.advance(self.db, run['id'])
+        self.assertEqual(run['status'], 'failed')
+        self.assertIn('missing.csv', run['error'])
+        downstream = tasks.get(self.db, run['settings']['task_ids']['n1'])
+        self.assertFalse(downstream['latest_run_id'])
+
     def test_fixed_tool_cannot_bypass_allowlist_or_dispatch_workflow(self):
         layout = self.layout(['task'])
         for name, allowed in [('library_overview', []), ('workflow_start', ['workflow_start'])]:

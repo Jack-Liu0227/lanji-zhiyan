@@ -159,7 +159,7 @@
         tools:row.querySelector("[data-wfl-limit-tools]").checked ? [...row.querySelector("[data-wfl-tools]").selectedOptions].map(o=>o.value) : null,
         skills:[...row.querySelector("[data-wfl-skills]").selectedOptions].map(o=>o.value)});
       const sources=row.querySelector("[data-wfl-parents]").value.split(/[,，\s]+/).filter(Boolean);
-      sources.forEach(source=>edges.push({source,target:id}));
+      sources.forEach(source=>edges.push(draft.edges.find(edge=>edge.source===source&&edge.target===id)||{source,target:id}));
     });
     draft.nodes=nodes; draft.edges=edges; draft.order=nodes.map(node=>node.id);
   }
@@ -244,7 +244,7 @@
       while(draft.nodes.some(node=>node.id===id)) id+="_";
       draft.nodes.push({id,step,label:step==="task"?"自定义项目任务":stageLabel(step),executor_role_id:id,review_required:true}); draft.order.push(id); drawEditor(body);
     };
-    body.querySelector("[data-wfl-chain]").onclick=()=>{ captureEditor(body); draft.edges=draft.order.slice(1).map((id,index)=>({source:draft.order[index],target:id})); drawEditor(body); };
+    body.querySelector("[data-wfl-chain]").onclick=()=>{ captureEditor(body); draft.edges=draft.order.slice(1).map((target,index)=>{const source=draft.order[index];return draft.edges.find(edge=>edge.source===source&&edge.target===target)||{source,target};}); drawEditor(body); };
     body.querySelector("[data-wfl-apply-json]").onclick=()=>{
       try{
         const value=JSON.parse(body.querySelector("[data-wfl-json]").value);

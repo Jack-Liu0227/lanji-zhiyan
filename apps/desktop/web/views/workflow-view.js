@@ -2238,13 +2238,11 @@ async function showCiteModal(taskId){
       navigator.clipboard.writeText(allBibs);
       uiNotify("已复制全部 BibTeX 引用到剪贴板！");
     };
-    $("citeExportBib").onclick = ()=>{
-      const blob = new Blob([allBibs], { type: "text/plain;charset=utf-8" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "references.bib";
-      a.click();
-      uiNotify("已下载 references.bib");
+    $("citeExportBib").onclick = async ()=>{
+      try{
+        const message=await exportBlob(new Blob([allBibs],{type:"text/plain;charset=utf-8"}),"references.bib");
+        if(message)uiNotify(message);
+      }catch(error){uiNotify("导出失败："+error.message);}
     };
     body.innerHTML = `
       <div style="margin-bottom:12px;font-size:12.5px;color:var(--muted)">

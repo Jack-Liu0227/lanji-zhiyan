@@ -53,13 +53,20 @@ const ProjectWorkflowGraph=(()=>{
       function capture(){
         if(state.mode!=='config')return;const node=state.layout.nodes.find(node=>node.id===state.selected);if(!node||!el('label'))return;
         node.label=el('label').value.trim();node.step=el('step').value;node.prompt=el('prompt').value;node.review_required=el('review').checked;node.manual_review_required=el('manual-review').checked;
+        node.manual_execution=el('manual-execution').checked;
+        node.claim_audit=node.step==='review'&&!node.manual_execution&&el('claim-audit').checked;
         node.executor_binding_id=el('binding').value;node.member_id=el('member').value;
         node.node_kind=el('kind').value;
         if(node.node_kind==='tool'){node.tool_name=el('tool-name').value.trim();try{node.tool_args=JSON.parse(el('tool-args').value||'{}');}catch{throw new Error('固定工具参数须为有效 JSON 对象');}}
         if(node.node_kind==='workflow')node.workflow_template_id=el('template').value;
         for(const key of ['tools','skills']){const value=el(key).value.trim();node[key]=value?value.split(/[,，\n]/).map(value=>value.trim()).filter(Boolean):null;}
-        const parents=[...host.querySelectorAll('[data-pwg-parent]:checked')].map(input=>input.dataset.pwgParent);
-        state.layout.edges=state.layout.edges.filter(edge=>edge.target!==node.id).concat(parents.map(source=>({source,target:node.id})));
+        const incoming=[...host.querySelectorAll('[data-pwg-parent]:checked')].map(input=>{
+          const field=input.closest('[data-pwg-edge]');
+          const artifact=field.querySelector('[data-pwg-artifact]').value.trim();
+          const argument=node.node_kind==='tool'?field.querySelector('[data-pwg-argument]').value.trim():'';
+          return {source:input.dataset.pwgParent,target:node.id,...(artifact?{artifact}:{}),...(argument?{argument}:{})};
+        });
+        state.layout.edges=state.layout.edges.filter(edge=>edge.target!==node.id).concat(incoming);
         const order=[],pending=new Set(state.layout.nodes.map(node=>node.id));
         for(let pass=0;pending.size&&pass<state.layout.nodes.length;pass++)for(const id of [...pending]){
           if(state.layout.edges.filter(edge=>edge.target===id).every(edge=>order.includes(edge.source))){order.push(id);pending.delete(id);}
@@ -91,7 +98,7 @@ const ProjectWorkflowGraph=(()=>{
       function inspector(){
         const graph=graphData(),node=graph.nodes.find(node=>node.id===state.selected)||graph.nodes[0];if(!node)return;state.selected=node.id;
         const taskId=state.run?.settings?.task_ids?.[node.id],task=state.tasks.find(task=>task.id===taskId);
-        const parents=state.layout.edges.filter(edge=>edge.target===node.id).map(edge=>edge.source);
+        const parents=new Map(state.layout.edges.filter(edge=>edge.target===node.id).map(edge=>[edge.source,edge]));
         const hasResult=!!(task&&WorkflowNodeWorkbench.eligible(task));
         const quickResult=el('quick-result');
         if(quickResult){quickResult.hidden=state.mode!=='run'||!hasResult;quickResult.onclick=()=>hasResult&&options.openResult(WorkflowNodeWorkbench.availableSelection(task));}
@@ -101,7 +108,9 @@ const ProjectWorkflowGraph=(()=>{
           <label>团队成员<select class="control" data-pwg-member></select></label><label>任务要求<textarea class="control" data-pwg-prompt rows="5" placeholder="此节点需要完成什么，产物需要满足哪些条件？">${h(node.prompt||'')}</textarea></label>
           <label class="pwg-check"><input type="checkbox" data-pwg-review ${node.review_required!==false?'checked':''}>生成产物后需要人工审查</label>
           <label class="pwg-check"><input type="checkbox" data-pwg-manual-review ${node.manual_review_required?'checked':''}>强制人工核查，自动推进模式也需等待确认</label>
-          <fieldset class="pwg-dependencies"><legend>前置节点</legend>${state.layout.nodes.filter(item=>item.id!==node.id).map(item=>`<label><input type="checkbox" data-pwg-parent="${h(item.id)}" ${parents.includes(item.id)?'checked':''}>${h(item.label)}</label>`).join('')||'<span class="hint">暂无其他节点</span>'}</fieldset>
+          <label class="pwg-check"><input type="checkbox" data-pwg-manual-execution ${node.manual_execution?'checked':''}>本节点由我完成并提交产物</label>
+          <label class="pwg-check"><input type="checkbox" data-pwg-claim-audit ${node.claim_audit?'checked':''}>核查稿件结论与 PDF 原文；证据不足时暂停交付</label>
+          <fieldset class="pwg-dependencies"><legend>前置节点</legend>${state.layout.nodes.filter(item=>item.id!==node.id).map(item=>{const edge=parents.get(item.id);return `<div data-pwg-edge><label><input type="checkbox" data-pwg-parent="${h(item.id)}" ${edge?'checked':''}>${h(item.label)}</label><div data-pwg-handoff><input class="control" data-pwg-artifact aria-label="上游产物文件名 · ${h(item.label)}" placeholder="产物文件名（可选）" value="${h(edge?.artifact||'')}"><input class="control" data-pwg-argument aria-label="固定工具参数名 · ${h(item.label)}" placeholder="固定工具参数名（可选）" value="${h(edge?.argument||'')}"></div></div>`;}).join('')||'<span class="hint">暂无其他节点</span>'}</fieldset>
           <details><summary>工具与技能范围</summary><label>允许工具 ID<textarea class="control" data-pwg-tools rows="2" placeholder="留空跟随执行者配置">${h((node.tools||[]).join(', '))}</textarea></label><label>允许技能 ID<textarea class="control" data-pwg-skills rows="2" placeholder="留空跟随执行者配置">${h((node.skills||[]).join(', '))}</textarea></label></details>
           <div class="pwg-actions"><button class="btn btn-primary" data-pwg-save>保存节点</button><button class="btn ghost" data-pwg-remove ${state.layout.nodes.length<=1?'disabled':''}>删除节点</button></div>`:`<p class="hint">本次运行使用已固定的节点配置。编辑下一次运行请切换到“节点配置”。</p><h4>任务要求</h4><pre>${h(node.prompt||'跟随研究阶段要求')}</pre><p class="hint">${node.review_required!==false?'人工审查节点':'按运行策略交付'}</p>`}
           <div class="pwg-node-execution"><h4>执行与核查</h4>${task?`<p class="hint">${h(task.title)} · ${h(task.status)}</p>${task.latest_run?.error?`<p class="pw-error">${h(task.latest_run.error)}</p>`:''}${task.status==='awaiting_review'?'<p class="pwg-review-hint">当前节点需要人工核查；打开产物预览后可编辑、保存版本并决定通过或退回。</p>':''}<button type="button" class="btn" data-pwg-task="${h(task.id)}">查看节点状态</button>${hasResult?`<button type="button" class="btn btn-primary" data-pwg-result="${h(task.id)}">打开产物预览与编辑</button>`:''}`:'<p class="hint">此节点尚未准备任务。</p>'}${state.mode==='run'&&!hasResult?'<p class="hint">当前节点尚未形成可预览产物；完成执行并生成固定结果后，这里会出现“打开产物预览与编辑”。</p>':''}<button type="button" class="btn ghost" data-pw-node="${h(node.id)}" ${state.mode==='run'?'hidden':''}>按此配置准备任务</button></div>`;
@@ -109,6 +118,16 @@ const ProjectWorkflowGraph=(()=>{
           el('label').closest('label').insertAdjacentHTML('beforebegin',`<label>节点类型<select class="control" data-pwg-kind><option value="executor">专家 / 团队</option><option value="tool">固定工具</option><option value="workflow">子工作流</option></select></label><div data-pwg-tool-fields><label>工具 ID<input class="control" data-pwg-tool-name value="${h(node.tool_name||'')}"></label><label>固定参数（JSON）<textarea class="control" data-pwg-tool-args rows="4">${h(JSON.stringify(node.tool_args||{},null,2))}</textarea></label><p class="hint">使用下方执行者的工具权限，直接调用工具并保存结果。</p></div><label data-pwg-template-fields>子工作流模板<select class="control" data-pwg-template><option value="">请选择模板</option>${state.data.layouts.filter(layout=>layout.id!==state.layout.id).map(layout=>`<option value="${h(layout.id)}">${h(layout.name)}</option>`).join('')}</select><span class="hint">准备运行时固定子节点及其执行者；人工审查保留在子节点。</span></label>`);
           el('kind').value=node.node_kind||'executor';el('template').value=node.workflow_template_id||'';
           const showKind=()=>{const nested=el('kind').value==='workflow';el('tool-fields').hidden=el('kind').value!=='tool';el('template-fields').hidden=!nested;for(const key of ['binding','member','prompt'])el(key).closest('label').hidden=nested;el('tools').closest('details').hidden=nested;};showKind();el('kind').onchange=()=>{state.changed=true;showKind();if(el('kind').value==='workflow')el('step').value='task';};
+          const updateHandoffs=()=>host.querySelectorAll('[data-pwg-edge]').forEach(field=>{
+            field.querySelector('[data-pwg-handoff]').hidden=!field.querySelector('[data-pwg-parent]').checked;
+            field.querySelector('[data-pwg-argument]').hidden=el('kind').value!=='tool';
+          });
+          const updateEvidenceCheck=()=>{
+            const audit=el('claim-audit');
+            audit.closest('label').hidden=el('step').value!=='review'||el('manual-execution').checked;
+          };
+          el('inspector').onchange=()=>{updateHandoffs();updateEvidenceCheck();};
+          updateHandoffs();updateEvidenceCheck();
           drawMember(node);el('binding').onchange=()=>{state.changed=true;node.member_id='';drawMember(node);};
           el('inspector').querySelectorAll('input,select,textarea').forEach(input=>input.addEventListener('input',()=>{state.changed=true;refreshSaveTop();}));
           el('save').onclick=state.save;
@@ -300,6 +319,11 @@ const ProjectWorkflowGraph=(()=>{
         };
         stepLibrary();
         host.querySelector('[data-pwg-savetop]').onclick=()=>state.save();
+        if(state.run&&options.openArtifacts){
+          const toolbar=host.querySelector('.pwg-toolbar');
+          toolbar.insertAdjacentHTML('beforeend','<button type="button" class="btn ghost" data-pwg-artifacts>浏览本次运行产物</button>');
+          el('artifacts').onclick=()=>options.openArtifacts(state.run.id);
+        }
         host.querySelectorAll('[data-pwg-mode]').forEach(button=>button.onclick=async()=>{if(!await state.save())return;state.mode=button.dataset.pwgMode;state.selected=(state.mode==='run'?state.run.layout:state.layout).nodes[0]?.id;draw();});
       }
       draw();

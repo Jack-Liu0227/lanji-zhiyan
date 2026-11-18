@@ -25,7 +25,9 @@ const ConversationHistory=(()=>{
     try{
       let extra={};if(action==='rename'){const title=await uiPrompt('重命名对话',row.title);if(title===null)return;extra={title};}
       if(['trash','purge'].includes(action)&&!await uiConfirm(action==='purge'?'永久删除这条对话记录？关联项目文件和研究产物会保留。':'将这条对话移入最近删除？可从最近删除中恢复。'))return;
-      if(action==='export'){const data=await call(state,row.id,action);download(data);return;}
+      if(action==='export'){const data=await call(state,row.id,action);const message=await exportBlob(
+        new Blob([data.content],{type:'text/markdown;charset=utf-8'}),data.title+'.md');
+      if(message)uiNotify(message);return;}
       await call(state,row.id,action,extra);await changed(state);
     }catch(error){uiNotify(error.message);}
   }
@@ -33,7 +35,6 @@ const ConversationHistory=(()=>{
     if(row.deleted_at)return [{text:'查看记录',run:()=>preview(row,state)},{text:'恢复对话',run:()=>act(state,row,'restore')},{text:'导出 Markdown',run:()=>act(state,row,'export')},{separator:true},{text:'永久删除…',danger:true,run:()=>act(state,row,'purge')}];
     return [{text:row.pinned_at?'取消置顶':'置顶对话',run:()=>act(state,row,row.pinned_at?'unpin':'pin')},{text:'重命名…',run:()=>act(state,row,'rename')},{text:'导出 Markdown',run:()=>act(state,row,'export')},...(!row.running?[{text:row.archived_at?'取消归档':'归档对话',run:()=>act(state,row,row.archived_at?'unarchive':'archive')},{separator:true},{text:'删除对话…',danger:true,run:()=>act(state,row,'trash')}]:[{text:'打开运行中的对话',run:()=>state.options.onSelect(row.id)}])];
   }
-  function download(data){const url=URL.createObjectURL(new Blob([data.content],{type:'text/markdown;charset=utf-8'})),link=document.createElement('a');link.href=url;link.download=data.title.replace(/[<>:"/\\|?*]/g,'_')+'.md';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
   async function preview(row,state){try{const data=await call(state,row.id,'export'),dialog=document.createElement('dialog');dialog.className='pt-dialog';dialog.innerHTML=`<header class="history-preview-head"><h3>${h(row.title)}</h3><button type="button" class="pw-text-button" aria-label="关闭">×</button></header><pre class="history-preview">${h(data.content)}</pre>`;dialog.querySelector('button').onclick=()=>dialog.close();dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();}catch(error){uiNotify(error.message);}}
   return {mount,actions};
 })();

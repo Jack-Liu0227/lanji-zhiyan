@@ -28,9 +28,8 @@ def review_target(task):
             'editor': 'evidence_graph' if task['metadata'].get('stage') == 'map' else 'files'}
 
 
-def drive(db, run, execute_node):
+def _linear_graph(db, nodes, execute_node):
     graph = StateGraph(Cursor)
-    nodes = list(run['settings']['task_ids'].items())
     for index, (nid, task_id) in enumerate(nodes):
         execute, review = 'execute_' + str(index), 'review_' + str(index)
         following = 'execute_' + str(index + 1) if index + 1 < len(nodes) else END
@@ -68,7 +67,106 @@ def drive(db, run, execute_node):
         graph.add_conditional_edges(review, lambda state: state['status'],
                                     {'delivered': following, 'retry': execute, 'cancelled': END})
     graph.add_edge(START, 'execute_0' if nodes else END)
-    config = {'configurable': {'thread_id': run['id']}, 'recursion_limit': max(50, len(nodes) * 4 + 10)}
+    return graph
+
+
+class DagCursor(Cursor, total=False):
+    attempted: list[str]
+    errors: dict[str, str]
+
+
+def _dag_graph(db, run, nodes, execute_node):
+    import execution
+    import workflow_execution as engine
+    import workflow_tasks
+
+    graph = StateGraph(DagCursor)
+
+    def reset(state):
+        settings = engine.detail(db, run['id'])['settings']
+        return {'status': 'running', 'attempted': [], 'errors': settings.get('dag_errors', {})}
+
+    def dispatch(state):
+        rows = {item['id']: item for item in tasks.list_tasks(db, run['project_id'], workflow_run_id=run['id'])}
+        ordered = [(nid, rows[tid]) for nid, tid in nodes]
+        attempted = state['attempted']
+        errors = state['errors']
+        ready = [(nid, task) for nid, task in ordered
+                 if task['status'] in ('ready', 'queued', 'blocked', 'failed', 'interrupted')
+                 and all(rows[parent]['status'] == 'delivered' for parent in task['dependencies'])]
+        for nid, task in ready:
+            if nid in attempted or nid in errors or task['metadata']['node_config'].get('manual_execution'):
+                continue
+            try:
+                outcome = execute_node(nid, task['id'])
+                if outcome['status'] == 'cancelled':
+                    return {'status': 'cancelled'}
+                if outcome['status'] == 'failed':
+                    failed = tasks.get(db, task['id'])
+                    errors = {**errors, nid: (failed.get('latest_run') or {}).get('error') or '节点执行失败'}
+            except execution.Cancelled:
+                raise
+            except (ValueError, OSError) as exc:
+                errors = {**errors, nid: str(exc)}
+            return {'status': 'running', 'attempted': [*attempted, nid], 'errors': errors}
+        latest = engine.detail(db, run['id'])
+        latest['settings']['dag_errors'] = errors
+        manual = next(((nid, task) for nid, task in ready
+                       if task['metadata']['node_config'].get('manual_execution')), None)
+        if manual:
+            nid, task = manual
+            latest['settings']['manual_pending'] = {'node_id': nid, 'task_id': task['id'], 'label': task['title']}
+        else:
+            latest['settings'].pop('manual_pending', None)
+        workflow_tasks._save(db, latest)
+        for nid, task in ordered:
+            if task['status'] == 'awaiting_review':
+                workflow_tasks._sync_workflow_node(db, latest, task)
+                engine._status(db, run['id'], 'awaiting_review')
+                return {'status': 'awaiting_review', 'task_id': task['id']}
+        if all(task['status'] == 'delivered' for _, task in ordered):
+            for _, task in ordered:
+                tasks._validate_versions(db, task, task['latest_run'])
+            return {'status': 'delivered'}
+        if manual:
+            message = '等待提交人工产物：' + manual[1]['title']
+        else:
+            problem = next(((nid, task) for nid, task in ordered
+                            if nid in errors or task['status'] in ('failed', 'blocked', 'interrupted')), None)
+            if problem:
+                nid, task = problem
+                workflow_tasks._sync_workflow_node(db, latest, task)
+                message = errors.get(nid) or (task.get('latest_run') or {}).get('error') or '请检查节点状态：' + task['title']
+            else:
+                message = '工作流尚有节点未交付，请检查依赖状态'
+        engine._status(db, run['id'], 'blocked', message)
+        return {'status': 'blocked', 'task_id': manual[1]['id'] if manual else ''}
+
+    def pause(state):
+        task_id = state.get('task_id')
+        target = review_target(tasks.get(db, task_id)) if task_id else {'status': state['status']}
+        interrupt(target)
+        return {}
+
+    graph.add_node('reset', reset)
+    graph.add_node('dispatch', dispatch)
+    graph.add_node('pause', pause)
+    graph.add_edge(START, 'reset')
+    graph.add_edge('reset', 'dispatch')
+    graph.add_conditional_edges('dispatch', lambda state: state['status'], {
+        'running': 'dispatch', 'awaiting_review': 'pause', 'blocked': 'pause',
+        'delivered': END, 'cancelled': END,
+    })
+    graph.add_edge('pause', 'reset')
+    return graph
+
+
+def drive(db, run, execute_node):
+    nodes = list(run['settings']['task_ids'].items())
+    graph = _dag_graph(db, run, nodes, execute_node) if run['settings'].get('dag_scheduler') else _linear_graph(db, nodes, execute_node)
+    epoch = run['settings'].get('checkpoint_epoch', 0)
+    thread_id = run['id'] if not epoch else f"{run['id']}:rework:{epoch}"
+    config = {'configurable': {'thread_id': thread_id}, 'recursion_limit': max(50, len(nodes) * 4 + 10)}
     # LangGraph persists in background threads; never share the UI's SQLite connection.
     with closing(sqlite3.connect(db.path, check_same_thread=False, timeout=60)) as connection:
         saver = SqliteSaver(connection, serde=JsonPlusSerializer(allowed_msgpack_modules=None))
@@ -79,7 +177,7 @@ def drive(db, run, execute_node):
         result = compiled.invoke(value, config)
         snapshot = compiled.get_state(config)
         run['settings']['checkpoint'] = {
-            'thread_id': run['id'], 'checkpoint_id': snapshot.config['configurable']['checkpoint_id'],
+            'thread_id': thread_id, 'checkpoint_id': snapshot.config['configurable']['checkpoint_id'],
             'next': list(snapshot.next), 'values': dict(snapshot.values),
             'interrupts': [item.value for task in snapshot.tasks for item in task.interrupts]}
         import workflow_tasks

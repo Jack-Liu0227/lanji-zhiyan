@@ -8,7 +8,7 @@ const WorkflowNodeWorkbench=(()=>{
     return JSON.parse(JSON.stringify(value));
   };
   const textOf=value=>typeof value==='string'?value:JSON.stringify(value??{},null,2);
-  const statuses={awaiting_review:'等待人工核查',delivered:'已交付',blocked:'已退回',running:'执行中',queued:'排队中',succeeded:'已完成'};
+  const statuses={draft:'未开始',ready:'可执行',pending:'未开始',awaiting_review:'等待人工核查',delivered:'已交付',blocked:'待处理',running:'执行中',queued:'排队中',succeeded:'已完成',failed:'失败',interrupted:'中断待恢复',cancelled:'已停止'};
   let current=null;
   let windowId;
   try{windowId=sessionStorage.getItem('rw-node-window');if(!windowId){windowId=crypto.randomUUID();sessionStorage.setItem('rw-node-window',windowId);}}catch{windowId=crypto.randomUUID();}
@@ -47,7 +47,7 @@ const WorkflowNodeWorkbench=(()=>{
           <aside class="wnw-context" aria-label="工作流与阶段产物">
             <section><h4>工作流阶段</h4><nav class="wnw-steps" data-wnw-steps aria-label="工作流阶段"></nav></section>
             <section><h4>本阶段产物</h4><nav class="wnw-artifacts" data-wnw-files aria-label="节点产物列表"></nav></section>
-            <section class="wnw-requirements"><h4>节点要求</h4><p data-wnw-goal></p><details><summary>输入与前置交付</summary><div data-wnw-inputs></div></details><details><summary>核查清单</summary><div data-wnw-checks></div></details></section>
+            <section class="wnw-requirements"><h4>节点要求</h4><p data-wnw-goal></p><div data-wnw-guide hidden></div><details><summary>输入与前置交付</summary><div data-wnw-inputs></div></details><details><summary>核查清单</summary><div data-wnw-checks></div></details><div data-wnw-next hidden></div></section>
           </aside>
           <section class="wnw-document" aria-label="产物预览与编辑"><header class="wnw-document-heading"><div><strong data-wnw-file-title></strong><small data-wnw-file-meta></small></div><button type="button" class="btn" data-wnw-export-edit hidden>编辑源稿并重新生成</button><div class="wnw-modes" role="group" aria-label="产物查看方式"><button type="button" data-wnw-mode="preview" aria-pressed="true">预览</button><button type="button" data-wnw-mode="edit" aria-pressed="false">编辑</button><button type="button" data-wnw-mode="diff" aria-pressed="false">版本差异</button><button type="button" class="btn ghost" data-pw-output-edit data-wnw-file-edit hidden>人工修订</button></div></header><div data-wnw-content class="wnw-content"><p class="hint">正在读取产物…</p></div><label class="wnw-reason">修订说明<input class="control" data-wnw-reason placeholder="记录这次修改的依据"></label></section>
           <aside class="wnw-agent"><h4>节点专家</h4><p data-wnw-executor></p><p class="hint">讨论保留当前核查对象；交专家修改会基于眼前版本重做本节点。</p><button class="pw-text-button" type="button" data-wnw-quote>引用当前选区</button><blockquote data-wnw-selection hidden></blockquote><label>讨论或修改要求<textarea class="control" data-wnw-instruction rows="6" placeholder="指出需要核对或修改的内容"></textarea></label><div class="wnw-agent-buttons"><button type="button" class="btn ghost" data-wnw-discuss>讨论当前内容</button><button type="button" class="btn" data-wnw-rework>交专家修改</button></div><details data-wnw-tool-fields hidden><summary>固定工具参数</summary><p class="hint">修改参数后重新执行，原工具输出保留。</p><textarea class="control wnw-code" data-wnw-tool-args rows="7" aria-label="固定工具参数"></textarea></details><details><summary>另建关联任务</summary><p class="hint">单独处理新要求，完成后再决定是否采用。</p><button type="button" class="btn ghost" data-wnw-duplicate>按要求另建任务</button></details><details><summary>原执行回复</summary><pre data-wnw-original></pre></details></aside>
@@ -154,12 +154,16 @@ const WorkflowNodeWorkbench=(()=>{
       el('steps').querySelectorAll('[data-wnw-step]').forEach(button=>button.onclick=async()=>{if(await state.saveDraft())options.select({project_id:task.project_id,task_id:button.dataset.wnwStep});});
       el('collect').hidden=!result.can_collect;
       el('stop').hidden=!['running','queued'].includes(task.status);
-      el('start').hidden=!result.provisional||!['ready','draft','failed','interrupted','cancelled','blocked'].includes(task.status);
+      const waiting=(result.upstream||[]).filter(item=>item.status!=='delivered');
+      el('start').hidden=!result.provisional||node.manual_execution||!!waiting.length||!['ready','draft','failed','interrupted','blocked'].includes(task.status);
       const lifecycle=async(action,payload={})=>{if(state.busy)return;state.busy=true;updateButtons();try{await api('/api/project-tasks/'+action,{project_id:task.project_id,id:task.id,...payload});await load({project_id:task.project_id,task_id:task.id},false);options.changed?.();}catch(error){message(error.message,true);}finally{state.busy=false;updateButtons();}};
       el('collect').onclick=()=>lifecycle('collect-output',{task_run_id:identity.task_run_id,expected_version:identity.task_version,request_key:crypto.randomUUID()});
       el('stop').onclick=()=>lifecycle('cancel');
       el('start').onclick=()=>lifecycle('start',{request_key:crypto.randomUUID()});
       if(result.provisional)message(result.artifacts.length?'这里展示本节点已实际保存的产物。执行结束后可以固定版本、编辑内容并交付下一阶段。':'本节点尚未保存产物。开始执行后，已保存的内容会显示在这里。');
+      if(result.provisional&&waiting.length)message('等待前置节点交付：'+waiting.map(item=>item.title).join('、'));
+      else if(result.provisional&&node.manual_execution)message('此节点由人工完成。请在「准备 / 查看运行」中提交产物。');
+      if(result.provisional&&['failed','blocked','interrupted'].includes(task.status)&&result.run.error)message(result.run.error,true);
       else if(el('notice').textContent.startsWith('这里展示')||el('notice').textContent.startsWith('本节点尚未'))message('');
       el('version').disabled=!!result.provisional;
       host.querySelector('.wnw-reason').hidden=!!result.provisional;
@@ -169,7 +173,41 @@ const WorkflowNodeWorkbench=(()=>{
       let sync=host.querySelector('[data-wnw-sync]');if(!sync){sync=document.createElement('section');sync.dataset.wnwSync='';sync.className='wnw-notice';el('notice').after(sync);}
       const syncErrors=result.sync_errors||[],fileConflicts=result.fileop_conflicts||[];sync.hidden=!syncErrors.length&&!fileConflicts.length;
       if(!sync.hidden){sync.innerHTML=`<p>${fileConflicts.length?'文件写入恢复存在冲突，请核对工作文件；产物和草稿仍保留。':'交付决定已保存，部分页面的状态同步尚未完成。'}</p>${syncErrors.map(error=>`<p>${h(error.adapter||'状态同步')}：${h(error.error||error.message||'同步失败')}</p>`).join('')}<button class="btn ghost" type="button" data-wnw-reconcile>重新同步状态</button>`;sync.querySelector('button').onclick=async()=>{if(!await state.saveDraft())return;const response=await mutate('reconcile');if(response)await load(state.selection);};}
+      let quality=el('quality');
+      if(!quality){quality=document.createElement('section');quality.dataset.wnwQuality='';el('notice').after(quality);}
+      const audit=result.claim_audit,targets=result.rework_targets||[];
+      const labels={supported:'支持',partial:'部分支持',conflicting:'有冲突',missing:'缺少可定位证据'};
+      quality.hidden=!audit&&!targets.length;
+      const claimRows=(audit?.claims||[]).map(item=>`<li><b>${h(labels[item.status]||item.status)}</b> · ${h(item.text)}
+        <p class="hint">${h(item.reason)}</p>${item.sources.map(source=>`<div>
+          <a href="/api/pdf?id=${encodeURIComponent(source.paper_id)}#page=${Number(source.page)}" target="_blank" rel="noopener">
+            ${h(source.filename)} · p.${h(source.page)}</a>${source.doi?' · DOI '+h(source.doi):''}
+          ${source.anchored?'':' · 引文未在该页核实'}<blockquote>${h(source.excerpt)}</blockquote></div>`).join('')}</li>`).join('');
+      quality.innerHTML=(audit?`<details ${audit.requires_review?'open':''}><summary>结论证据核查 · ${audit.claims.length} 条</summary>
+        ${audit.warnings.map(item=>`<p class="hint">${h(item)}</p>`).join('')}
+        <ol>${claimRows}</ol></details>`:'')+(targets.length?`<div class="pw-view-head"><label>返工到前置节点 <select class="control" data-wnw-return-target>
+        <option value="">请选择</option>${targets.map(item=>`<option value="${h(item.node_id)}">${h(item.title)}</option>`).join('')}</select></label>
+        <button type="button" class="btn ghost" data-wnw-return>退回并重跑受影响节点</button></div>`:'');
+      const returnButton=el('return');
+      if(returnButton)returnButton.onclick=async()=>{
+        const target=el('return-target').value;
+        if(!target||!state.feedback.trim()){message('请选择返工节点，并在人工核查意见中填写修改要求。',true);return;}
+        if(!await state.saveDraft())return;
+        const response=await mutate('return-to-stage',{target_node_id:target,feedback:state.feedback});
+        if(response?.target_task_id){
+          options.changed?.();
+          await options.select({project_id:task.project_id,task_id:response.target_task_id});
+        }
+      };
       el('goal').textContent=node.prompt||task.goal||'';
+      el('guide').hidden=!result.guide;
+      el('guide').innerHTML=result.guide?`<dl><dt>需要的输入</dt><dd>${h(result.guide.input)}</dd><dt>本步交付</dt><dd>${h(result.guide.output)}</dd></dl>`:'';
+      const downstream=result.downstream||[];
+      el('next').hidden=!downstream.length;
+      el('next').innerHTML=downstream.length?`<h4>交付给</h4><nav class="wnw-steps">${downstream.map(step=>`<button type="button" data-wnw-next-task="${h(step.task_id)}"><span>${h(step.title)}<em>${h(statuses[step.status]||step.status)}</em></span></button>`).join('')}</nav>`:'';
+      el('next').querySelectorAll('button').forEach(button=>button.onclick=async()=>{
+        if(await state.saveDraft())options.select({project_id:task.project_id,task_id:button.dataset.wnwNextTask});
+      });
       el('inputs').innerHTML=inputMarkup(result);
       el('original').textContent=result.run.checkpoint?.reply||result.original_reply||'本次执行未单独记录文字回复。';
       const executor=result.run.executor_snapshot||result.executor||{};
@@ -184,6 +222,7 @@ const WorkflowNodeWorkbench=(()=>{
       el('files').innerHTML=(result.artifacts||[]).map((artifact,index)=>`<button type="button" class="wnw-file" data-wnw-file="${index}"><span>${h(artifact.name||artifact.id)}</span><small>${h(artifact.kind||'文件')}</small></button>`).join('');
       el('files').querySelectorAll('[data-wnw-file]').forEach(button=>button.onclick=async()=>{if(await state.saveDraft())await selectArtifact(result.artifacts[Number(button.dataset.wnwFile)]);});
       let checks=Array.isArray(result.checks)?result.checks:Object.entries(result.checks||{}).map(([name,value])=>({label:(({format:'输出格式',min_chars:'最少字数',sections:'必要章节',required_files:'必要文件'})[name]||name)+' '+textOf(value)}));
+      checks=[...(result.guide?.checks||[]),...checks];
       if(!checks.length)checks=[{label:'核对实际产物及证据来源'},{label:'核对输入、版本与修改要求'}];
       el('checks').innerHTML=checks.map(item=>`<label class="wnw-check"><input type="checkbox" ${item.passed||item.checked?'checked':''}>${h(typeof item==='string'?item:item.label||item.name||item.message)}</label>`).join('');
       const next=(result.artifacts||[]).find(item=>item.id===(keepArtifact?state.artifact?.id:selection.artifact_id))||(result.artifacts||[])[0];
@@ -195,7 +234,9 @@ const WorkflowNodeWorkbench=(()=>{
     function inputMarkup(result){
       const inputs=result.run.input_snapshot||result.inputs||{};
       const dependencies=inputs.dependencies||[];
-      return `<ul class="wnw-input-list">${dependencies.map((item,index)=>`<li><b>${h(item.title||item.label||'前置交付 '+(index+1))}</b><small>已验收的固定版本${item.outputs?.length?' · '+item.outputs.length+' 个文件':''}</small></li>`).join('')}${(inputs.assets||[]).map((item,index)=>`<li>${h(item.name||item.relative||'输入资料 '+(index+1))}<small>${h((item.content_hash||'').slice(0,12))}</small></li>`).join('')}</ul>${!dependencies.length&&!inputs.assets?.length?'<p class="hint">本节点未单独附加资料，依据已固定的任务要求执行。</p>':''}`;
+      const bound=inputs.handoffs||[];
+      const links=bound.map(item=>`<li><b>${h(item.artifact)}</b><small>${h(item.source)} · 交付 ${h(item.delivery_id)}${item.argument?' → '+h(item.argument):''}</small></li>`).join('');
+      return `<ul class="wnw-input-list">${links}${dependencies.map((item,index)=>`<li><b>${h(item.title||item.label||'前置交付 '+(index+1))}</b><small>已验收的固定版本${item.outputs?.length?' · '+item.outputs.length+' 个文件':''}</small></li>`).join('')}${(inputs.assets||[]).map((item,index)=>`<li>${h(item.name||item.relative||'输入资料 '+(index+1))}<small>${h((item.content_hash||'').slice(0,12))}</small></li>`).join('')}</ul>${!dependencies.length&&!inputs.assets?.length?'<p class="hint">本节点未单独附加资料，依据已固定的任务要求执行。</p>':''}`;
     }
     async function selectArtifact(artifact){
       const seq=++state.previewRequest||1;state.previewRequest=seq;

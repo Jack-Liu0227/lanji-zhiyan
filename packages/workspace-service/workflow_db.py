@@ -1087,17 +1087,23 @@ class WorkflowDB(ResearchDB):
 
     # ---------- 团队表（一个团队 = 一条记录；成员/记录都挂在它的 id 上） ----------
     def teams(self) -> list[dict[str, Any]]:
-        return [dict(r) for r in self.db.execute("SELECT * FROM teams WHERE id NOT IN (SELECT instance_team_id FROM team_execution_instances) ORDER BY created_at")]
+        return [dict(r) for r in self.db.execute("SELECT * FROM teams WHERE status<>'dissolved' AND id NOT IN (SELECT instance_team_id FROM team_execution_instances) ORDER BY created_at")]
 
     def team(self, tid: str) -> dict[str, Any] | None:
         row = self.db.execute("SELECT * FROM teams WHERE id=?", (tid,)).fetchone()
         return dict(row) if row else None
 
-    def team_add(self, name: str, kind: str = "fixed", project_id: str = "", purpose: str = "") -> dict[str, Any]:
+    def team_add(self, name: str, kind: str = "fixed", project_id: str = "", purpose: str = "", *, owner_chat_id: str = "") -> dict[str, Any]:
         tid = uuid.uuid4().hex
+        if owner_chat_id:
+            owner = self.db.execute("SELECT deleted_at,archived_at FROM chats WHERE id=? AND channel='conversation'", (owner_chat_id,)).fetchone()
+            if kind != 'temp' or not owner or owner['deleted_at'] or owner['archived_at']:
+                raise ValueError('临时团队必须关联仍可使用的发起对话')
         self.db.execute("INSERT INTO teams (id,name,kind,status,project_id,purpose,created_at,updated_at)"
                         " VALUES (?,?,?,?,?,?,?,?)",
                         (tid, (name or "新团队").strip(), kind, "idle", project_id or "", purpose or "", now(), now()))
+        if owner_chat_id:
+            self.db.execute("INSERT INTO conversation_temporary_teams(team_id,chat_id) VALUES (?,?)", (tid, owner_chat_id))
         # 不建同名 chats 行：团队用独立 team_sessions，混进对话列表删不掉
         self.db.commit()
         if project_id and self.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (project_id,)).fetchone():
@@ -1116,6 +1122,7 @@ class WorkflowDB(ResearchDB):
         return self.team(tid) or {}
 
     def team_delete(self, tid: str) -> None:
+        self.db.execute("DELETE FROM conversation_temporary_teams WHERE team_id=?", (tid,))
         self.db.execute("DELETE FROM teams WHERE id=?", (tid,))
         self.db.execute("DELETE FROM team_members WHERE task_id=?", (tid,))
         self.db.commit()

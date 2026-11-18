@@ -26,7 +26,7 @@ def _clip(value, text_limit, item_limit=16):
 
 def prompt(snapshot, run_id, node_id, budget=24000):
     identity = {'run_id': run_id, 'node_id': node_id, 'tool': 'workflow_context_read'}
-    priority = ('goal', 'task_goal', 'accepted_upstream', 'handoff_context', 'task_inputs', 'task_id')
+    priority = ('goal', 'task_goal', 'handoffs', 'accepted_upstream', 'handoff_context', 'task_inputs', 'task_id')
     ordered = {key: snapshot[key] for key in priority if key in snapshot}
     ordered.update({key: value for key, value in snapshot.items() if key not in ordered})
     for keep_history in (True, False):

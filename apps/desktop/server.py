@@ -7,7 +7,9 @@
 """
 from __future__ import annotations
 
+import base64
 import hashlib
+import tempfile
 import json
 import re
 import os
@@ -113,7 +115,7 @@ from handlers.starmap import StarmapRoutes          # do_GET 的路由按域分�
 from handlers.core import CoreRoutes
 from handlers.wf_routes import WorkflowRoutes
 from handlers.misc import MiscRoutes
-from handlers.update import UpdateRoutes
+from handlers.update import UpdateRoutes, install_current_release
 from run_manager import RunManager
 from api_registry import ApiRegistry
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
@@ -499,6 +501,30 @@ class _WinBridge:
         try:
             return _begin_resize(_win_hwnd(), str(edge))
         except Exception as exc:
+            return {"error": str(exc)}
+
+    def save_export(self, filename: str, encoded: str) -> dict[str, Any]:
+        import webview
+
+        name = Path(filename).name
+        if name in ("", ".", "..") or name != filename or len(encoded) > 48 * 1024 * 1024:
+            return {"error": "导出文件名无效或文件过大"}
+        try:
+            contents = base64.b64decode(encoded, validate=True)
+            selection = webview.windows[0].create_file_dialog(webview.FileDialog.SAVE, save_filename=name)
+            if not selection:
+                return {"cancelled": True}
+            target = Path(selection[0] if isinstance(selection, (list, tuple)) else selection)
+            stream = tempfile.NamedTemporaryFile(dir=target.parent, prefix=".lanji-export-", delete=False)
+            temporary = Path(stream.name)
+            try:
+                with stream:
+                    stream.write(contents)
+                temporary.replace(target)
+            finally:
+                temporary.unlink(missing_ok=True)
+            return {"path": str(target)}
+        except (OSError, TypeError, ValueError) as exc:
             return {"error": str(exc)}
 
 
@@ -1126,7 +1152,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                 import asset_service
                 with WorkflowDB(DB_PATH) as db:
                     asset=asset_service.get(db,(q.get('asset_id') or [''])[0])
-                    if not asset or asset['project_id']!=(q.get('project_id') or [''])[0] or asset['source'] not in ('image_conversion','image_caption'):
+                    if not asset or asset['project_id']!=(q.get('project_id') or [''])[0] or asset['source'] not in ('image_conversion','image_caption','document_conversion'):
                         return self._json({'error':'文件不存在或不属于当前项目'},404)
                     target=Path(asset['canonical_uri'])
                     if not target.is_file():return self._json({'error':'文件已移动'},404)
@@ -1221,7 +1247,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
         if self._mail_route("POST", path, q, data):
             return
         if path == "/api/app/update/install":
-            return self._p_update(path, data, q)
+            return self._p_update()
         if path == "/api/vault/status":            # 看板上的状态写回笔记 frontmatter
             try:
                 out = vault.set_status(str(data.get("vault") or ""), str(data.get("path") or ""),
@@ -2106,21 +2132,11 @@ def _start_grant_helper():
                         result = _win("close")
                         ok = "error" not in result
                     elif self.path == "/update":
-                        # The web server may run at Low integrity.  Start the
-                        # installer in this Medium-integrity host process so
-                        # it can replace the application directory safely.
-                        installer = Path(str(data.get("installer") or "")).resolve()
-                        install_dir = Path(str(data.get("install_dir") or "")).resolve()
-                        cache = Path(paths.CACHE).resolve()
-                        active_dir = Path(sys.executable).resolve().parent
-                        if (installer.suffix.lower() == ".exe" and installer.is_file()
-                                and installer.is_relative_to(cache)
-                                and install_dir == active_dir):
-                            import app_update
-                            app_update.start_installer(
-                                installer, install_dir=install_dir,
-                                create_shortcut=bool(data.get("create_shortcut", True)))
+                        try:
+                            result = install_current_release()
                             ok = True
+                        except (OSError, ValueError, RuntimeError) as exc:
+                            result = {"error": str(exc)}
                     elif self.path == "/app":           # 外部 GUI 程序：名字白名单，路径宿主自己解
                         if data.get("name") == "zotero":
                             import zotero
@@ -2130,7 +2146,7 @@ def _start_grant_helper():
                                 ok = True
                 except (OSError, ValueError, KeyError):
                     ok = False
-            body = json.dumps(result if self.path in ("/pick", "/tex", "/account") and 'result' in locals() else {"ok": ok}).encode()
+            body = json.dumps(result if self.path in ("/pick", "/tex", "/account", "/update") and 'result' in locals() else {"ok": ok}).encode()
             self.send_response(200 if ok else 403)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))

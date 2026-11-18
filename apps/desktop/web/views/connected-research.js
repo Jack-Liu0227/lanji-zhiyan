@@ -4,9 +4,9 @@
   const h = value => esc(String(value ?? ""));
   const statuses = {draft:"已准备",prepared:"已准备",queued:"等待执行",running:"执行中",awaiting_review:"等待人工审查",delivered:"已交付",succeeded:"全部完成",failed:"失败",cancelled:"已停止",blocked:"等待修改",interrupted:"中断待恢复",rejected:"已退回"};
   let dialog = null, currentRun = null, currentProject = "", focusedRun = "", rendered = "", pollBusy = false, calendarRendered = "";
-  const feedback = new Map(), versions = new Map(), goalDrafts = new Map(), modeDrafts = new Map();
+  const feedback = new Map(), versions = new Map(), goalDrafts = new Map(), modeDrafts = new Map(), manualDrafts = new Map();
   let nodeTasks=new Map();
-  const modeOptions=mode=>`<option value="supervised" ${mode!=="full_access"?"selected":""}>人工核查模式</option><option value="full_access" ${mode==="full_access"?"selected":""}>Full access · 自动推进</option>`;
+  const modeOptions=mode=>`<option value="supervised" ${mode!=="full_access"?"selected":""}>人工核查模式</option><option value="full_access" ${mode==="full_access"?"selected":""}>按规则自动验收</option>`;
   const style = document.createElement("style");
   style.textContent = `.connected-dialog{width:min(900px,calc(100vw - 28px));max-height:88vh;overflow:auto;border:1px solid var(--line);border-radius:14px;padding:22px;background:var(--bg);color:var(--fg)}.connected-dialog::backdrop{background:#0007}.connected-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.connected-dialog textarea{width:100%;min-height:80px}.connected-node{padding:12px 0;border-bottom:1px solid var(--line)}.connected-node pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;font-size:12px}.connected-node details{margin:8px 0}.connected-status{font-size:12px;color:var(--muted);margin:10px 0}.connected-error{color:var(--err);white-space:pre-wrap}.connected-library{font-size:12px;margin:10px 0;color:var(--muted)}`;
   document.head.append(style);
@@ -34,7 +34,9 @@
     const active=run && !["succeeded","cancelled","failed"].includes(run.status);
     const prepared=run && (["draft","prepared"].includes(run.status) || run.status==="queued" && run.settings?.prepared && !run.nodes.length);
     const mode=modeDrafts.get(run?.id || currentProject) || run?.settings?.policy?.autonomy_mode || run?.settings?.autonomy_mode || "supervised";
-    host.innerHTML=`<p class="hint">每个节点以项目任务承接上游交付、项目记忆及人工反馈。人工核查模式保留关键节点判断；Full access 在产物、依赖和版本校验通过后自动推进，并记录自动验收来源。</p>
+    const manual=active && run.settings?.manual_pending;
+    const manualDraft=manual ? (manualDrafts.get(run.id+':'+manual.node_id) || {}) : {};
+    host.innerHTML=`<p class="hint">每个节点以项目任务承接上游交付、项目记忆及人工反馈。自动验收模式会在产物和版本校验通过后继续。标为强制人工核查的节点仍需确认。</p>
       ${!active?`<label class="field"><span>本次研究目标，可选</span><textarea class="control" data-sequence-goal placeholder="例如：围绕当前项目的研究问题完成文献到成稿流程">${h(goalDrafts.get(currentProject) || "")}</textarea></label><label class="field"><span>本次执行模式</span><select class="control" data-sequence-mode>${modeOptions(modeDrafts.get(currentProject) || "supervised")}</select></label><div class="connected-row"><button class="btn" data-sequence-prepare>准备工作流任务</button><button class="btn btn-primary" data-sequence-start>开始顺序执行</button></div>`:""}
       ${run?`<div class="connected-row" style="margin-top:12px"><b>${h(run.layout.name)}</b><span class="pill">${h(statuses[run.status] || run.status)}</span>
         ${["failed","blocked","interrupted"].includes(run.status)?'<button class="btn" data-sequence-resume>从已保存进度继续</button><button class="btn ghost" data-sequence-restart>核对后重新执行当前节点</button>':""}
@@ -43,6 +45,12 @@
         ${!["succeeded","cancelled"].includes(run.status)?'<button class="btn ghost" data-sequence-cancel>停止本次运行</button>':""}</div>
         ${active?`<div class="connected-row" style="margin-top:12px"><label class="field"><span>本次运行模式</span><select class="control" data-sequence-run-mode>${modeOptions(mode)}</select></label><button class="btn" data-sequence-mode-apply>应用运行模式</button></div><p class="hint">模式调整作用于本次运行的项目任务；项目范围与专家工具权限保持各自的授权。</p>`:""}
         ${run.error?`<p class="connected-error">${h(run.error)}</p>`:""}
+        ${manual?`<article class="connected-node">
+          <h4>人工完成 · ${h(manual.label)}</h4>
+          <label class="field"><span>正文或说明</span><textarea class="control" data-manual-text>${h(manualDraft.text||'')}</textarea></label>
+          <label class="field"><span>产物的项目相对路径，每行一个</span><textarea class="control" data-manual-paths>${h(manualDraft.paths||'')}</textarea></label>
+          <button type="button" class="btn btn-primary" data-manual-submit>提交人工产物</button>
+        </article>`:''}
         <p class="connected-status">${h(run.settings.goal || "按项目研究问题执行")} · 运行 ${h(run.id)}</p>
         ${prepared?`<details open><summary>准备的节点任务</summary>${(run.layout.order || []).map(id=>{const node=run.layout.nodes.find(n=>n.id===id),taskId=run.settings.task_ids?.[id];return `<div class="connected-row" style="margin:8px 0"><span>${h(node?.label || id)}</span>${taskId?`<button class="btn ghost" data-sequence-task="${h(taskId)}">查看任务与执行者</button>`:""}</div>`;}).join("")}</details>`:""}
         ${run.nodes.map(node=>{
@@ -50,12 +58,14 @@
           const task=nodeTasks.get(checkpoint.canonical_task_id||node.canonical_task_id),resultAvailable=WorkflowNodeWorkbench.eligible(task);
           const delivery=checkpoint.delivery || node.delivery || {}, source=delivery.source || checkpoint.delivery_source;
           const deliveryMode=delivery.policy_snapshot?.autonomy_mode || checkpoint.policy_snapshot?.autonomy_mode || run.settings?.policy?.autonomy_mode || run.settings?.autonomy_mode;
+          const handoffs=task?.latest_run?.input_snapshot?.handoffs || [];
           return `<article class="connected-node"><div class="connected-row"><b>${h(config.label || node.stage)}</b><span class="pill">${h(statuses[node.status] || node.status)}</span><small>${h(input.member?.name || (S.assistants || []).find(a=>a.id===input.assistant_id)?.name || input.assistant_id || "")}</small></div>
             <details><summary>输入与记忆 · ${(input.history || []).length} 个前序结果</summary><pre>${h(JSON.stringify({goal:input.goal,upstream:input.handoff,memory:input.memory,history:(input.history || []).map(n=>({step:n.step,delivery_id:n.delivery_id,reply:n.reply,feedback:n.feedback}))},null,2))}</pre></details>
             <details ${node.status==="awaiting_review"?"open":""}><summary>执行记录</summary><pre>${h(checkpoint.reply || node.error || "正在执行")}</pre>${resultAvailable?`<pre>${h(typeof output.content==="string"?output.content:JSON.stringify(output.content || output.items || {},null,2))}</pre>`:''}</details>
             ${resultAvailable?`<button class="btn btn-primary" data-sequence-result="${h(task.id)}">查看当前节点产物</button>`:''}
+            ${handoffs.length?`<details><summary>已锁定的上游产物</summary><ul>${handoffs.map(item=>`<li>${h(item.source)} · ${h(item.artifact)} · 交付版本 ${h(item.delivery_id)}${item.argument?' → '+h(item.argument):''}</li>`).join('')}</ul></details>`:''}
             ${checkpoint.feedback?`<p>人工反馈：${h(checkpoint.feedback)}</p>`:""}
-            ${source?`<p class="connected-status" data-sequence-decision-source>${source==="human"?(delivery.decision==="rejected"?"已由人工核查退回":"已由人工核查通过"):source==="policy"?(deliveryMode==="full_access"?"已按 Full access 自动验收":"已按节点配置自动验收"):h(source)}</p>`:""}
+            ${source?`<p class="connected-status" data-sequence-decision-source>${source==="human"?(delivery.decision==="rejected"?"已由人工核查退回":"已由人工核查通过"):source==="policy"?(deliveryMode==="full_access"?"已按运行策略自动验收":"已按节点配置自动验收"):h(source)}</p>`:""}
             ${checkpoint.canonical_task_id || node.canonical_task_id?`<button class="btn ghost" data-sequence-task="${h(checkpoint.canonical_task_id || node.canonical_task_id)}">打开节点项目任务与交付</button>`:""}
             ${node.status==="awaiting_review" && run.status==="awaiting_review" && run.current_node===node.id?`<label class="field"><span>审查意见，通过时可留空，退回时必填</span><textarea class="control" data-sequence-feedback="${h(node.id)}">${h(feedback.get(node.id) || "")}</textarea></label>
               <div class="connected-row"><button class="btn btn-primary" data-sequence-approve="${h(node.id)}" data-sequence-task-run="${h(checkpoint.canonical_run_id||task?.latest_run_id||'')}" data-sequence-output-version="${Number(checkpoint.output_revision??task?.latest_run?.checkpoint?.output_revision??0)}">通过并继续</button><button class="btn ghost" data-sequence-reject="${h(node.id)}" data-sequence-task-run="${h(checkpoint.canonical_run_id||task?.latest_run_id||'')}" data-sequence-output-version="${Number(checkpoint.output_revision??task?.latest_run?.checkpoint?.output_revision??0)}">退回修改</button></div>`:""}</article>`;
@@ -64,6 +74,12 @@
     host.querySelector("[data-sequence-goal]")?.addEventListener("input",e=>goalDrafts.set(currentProject,e.target.value));
     host.querySelector("[data-sequence-mode]")?.addEventListener("change",e=>modeDrafts.set(currentProject,e.target.value));
     host.querySelector("[data-sequence-run-mode]")?.addEventListener("change",e=>modeDrafts.set(run.id,e.target.value));
+    if(manual){
+      for(const key of ['text','paths']) host.querySelector('[data-manual-'+key+']').oninput=event=>{
+        manualDraft[key]=event.target.value;
+        manualDrafts.set(run.id+':'+manual.node_id,manualDraft);
+      };
+    }
     const openNode=taskId=>{const task=nodeTasks.get(taskId);dialog.close();if(WorkflowNodeWorkbench.eligible(task))return ProjectWorkspace.openNodeResult(WorkflowNodeWorkbench.availableSelection(task),currentProject,{chatId:run.chat_id});return ProjectWorkspace.openTask(taskId,currentProject,{chatId:run.chat_id});};
     host.querySelectorAll("[data-sequence-task]").forEach(button=>button.onclick=()=>openNode(button.dataset.sequenceTask));
     host.querySelectorAll('[data-sequence-result]').forEach(button=>button.onclick=()=>{const task=nodeTasks.get(button.dataset.sequenceResult),project=currentProject;dialog.close();ProjectWorkspace.openNodeResult(WorkflowNodeWorkbench.availableSelection(task),project);});
@@ -83,6 +99,10 @@
     bind("[data-sequence-start-prepared]","start",()=>({autonomy_mode:host.querySelector("[data-sequence-run-mode]").value}));
     bind("[data-sequence-mode-apply]","mode",()=>({autonomy_mode:host.querySelector("[data-sequence-run-mode]").value}));
     bind("[data-sequence-resume]","resume");
+    bind('[data-manual-submit]','submit-manual',()=>({
+      node_id:manual.node_id,text:manualDraft.text||'',
+      paths:(manualDraft.paths||'').split(/\r?\n/).map(value=>value.trim()).filter(Boolean)
+    }));
     bind('[data-sequence-restart]','resume',()=>({restart_node:true}));
     bind("[data-sequence-cancel]","cancel");
     bind("[data-sequence-approve]","review",button=>({node_id:button.dataset.sequenceApprove,approved:true,reviewed_run_id:button.dataset.sequenceTaskRun,reviewed_output_version:Number(button.dataset.sequenceOutputVersion||0),feedback:feedback.get(button.dataset.sequenceApprove) || ""}));

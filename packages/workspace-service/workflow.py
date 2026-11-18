@@ -609,7 +609,7 @@ TOOL_RISK = {
     "paper_abstracts": "read_only", "paper_focus": "read_only", "paper_evidence_get": "read_only",
     "mail_accounts": "network_read", "mail_list": "network_read", "mail_read": "network_read",
     "zotero_collections": "network_read",
-    "delegate": "local_execution", "format_convert": "local_execution",
+    "delegate": "local_execution", "format_convert": "local_execution", "manuscript_translate_en": "workspace_write",
     "paper_download": "network_read", "download": "network_read",
     "outline_write": "workspace_write", "map_write": "workspace_write", "doc_write": "workspace_write",
     "cite_add": "workspace_write", "cite_bib": "workspace_write", "memory_save": "workspace_write", "notes": "workspace_write",
@@ -825,13 +825,16 @@ def _accepted_workflow_manuscript(db, project_id, stage):
 
 def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], scope: str = "",
                emit: Any = None, profile: dict[str, Any] | None = None, *,
-               delegation_state=None, cancel_check=None) -> Any:
+               delegation_state=None, cancel_check=None, origin_chat_id: str = "") -> Any:
     """scope = 当前步骤（''/'idea'/'outline'/'write'/'review'）—— doc_read/doc_write 据此决定动哪个文件。"""
     import team_orchestration
     team_orchestration.enforce_tool(db, name, args)
     enforce_project_scope(db, task_id, name, args)
     import asset_service
     import task_tools
+    if name in {'project_create_from_idea', 'team_create', 'team_form'} and not origin_chat_id:
+        if db.db.execute("SELECT 1 FROM chats WHERE id=? AND channel='conversation'", (task_id,)).fetchone():
+            origin_chat_id = task_id
     if name == 'paper_tool':
         import paper_toolbox
         target = _team_project(db,task_id,str(args.get('project') or '')) if args.get('project') else task_id
@@ -839,7 +842,9 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
     if name == 'project_create_from_idea':
         import research_setup
         project_id = _team_project(db, task_id, str(args.get('project') or '')) if args.get('project') or db.db.execute('SELECT 1 FROM research_tasks WHERE id=?', (task_id,)).fetchone() else ''
-        return research_setup.configure(db, args, project_id=project_id, actor_id=(profile or {}).get('assistant_id') or 'builtin-steward', default_model_id=str((profile or {}).get('id') or ''))
+        return research_setup.configure(db, args, project_id=project_id, actor_id=(profile or {}).get('assistant_id') or 'builtin-steward',
+                                        default_model_id=str((profile or {}).get('id') or ''),
+                                        origin_chat_id=origin_chat_id)
     if name in ('project_resources', 'project_resource_write'):
         import project_resources
         project_id = _team_project(db, task_id, str(args.get('project') or ''))
@@ -958,6 +963,12 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
             if not str(args.get("name") or "").strip():
                 raise ValueError("团队名称不能为空")
             assistants = [db.require_assistant(str(aid)) for aid in ids]
+            owner = origin_chat_id
+            if owner and (profile or {}).get("assistant_id", "builtin-steward") == "builtin-steward" and args.get("persistent") is not True:
+                import team
+                row, roster = team.create_temporary(db, project_id, str(args["name"]).strip(),
+                                                     str(args.get("purpose") or ""), assistants, owner_chat_id=owner)
+                return {"team": row, "members": roster, "configuration_required": False}
             team_row = db.team_add(str(args.get("name") or ""), kind="custom", project_id=project_id,
                                    purpose=str(args.get("purpose") or ""))
             members = []
@@ -1140,7 +1151,7 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
             return {**_team.board(tid, db=db), "team_id": tid,
                     "teams": shared_executors.templates(db)}
         if name == "team_form":
-            return _team.form_team(project_id, args.get("purpose", ""), args.get("members") or [])
+            return _team.form_team(project_id, args.get("purpose", ""), args.get("members") or [], db=db, owner_chat_id=origin_chat_id)
         return _team.assign(tid, args.get("member", ""), args.get("prompt", ""), trigger="leader",
                             origin="leader@" + task_id[:8], depends_on=args.get("depends_on"),
                             output_contract=args.get("output_contract"), reviewer_id=args.get("reviewer_id", ""),
@@ -1322,19 +1333,30 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         if scope == "review" and reviewed.get("markdown"):
             doc_write(db, task_id, "review", reviewed["markdown"])
         return reviewed
+    if name == "manuscript_translate_en":
+        source = _accepted_workflow_manuscript(db, task_id, "write") or doc_path(db, task_id, "write")
+        asset_service.require_path_context(db, task_id, source)
+        text = source.read_text(encoding="utf-8") if source.is_file() else ""
+        return en_run(db, task_id, text, style=str(args.get("style") or "formal"))
     if name == "format_convert":
         fmt = (args.get("format") or "docx").lower()
+        requested = str(args.get("source") or "")
         if fmt == 'tex':
             from workflow_converters import _newest_tex
-            source = Path(args['source']) if args.get('source') else _newest_tex(db, task_id)
+            source = Path(requested) if requested else _newest_tex(db, task_id)
             if source:
                 asset_service.require_path_context(db, task_id, source)
-        elif fmt in ('pdf', 'latex') or not args.get('markdown'):
-            asset_service.require_path_context(db, task_id, doc_path(db, task_id, 'write'))
+        else:
+            source = Path(requested) if requested else None
+            if not source and not args.get("markdown"):
+                source = _accepted_workflow_manuscript(db, task_id, "entrans") or _accepted_workflow_manuscript(db, task_id, "write")
+            if source or fmt in ('pdf', 'latex') or not args.get('markdown'):
+                asset_service.require_path_context(db, task_id, source or doc_path(db, task_id, 'write'))
         if fmt in ("pdf", "latex", "tex"):        # PDF / LaTeX 走本机 MiKTeX（正文 md→tex→pdf，或直接编现成 .tex）
-            return conv_run(db, task_id, fmt, str(args.get("source") or ""),
+            return conv_run(db, task_id, fmt, requested or (str(source) if source else ""),
                            str(args.get("template") or ""), str(args.get("cite_style") or ""))
-        return stage_convert(db, task_id, args.get("markdown") or compose_draft(db, task_id), fmt, args.get("name", "paper"))
+        markdown = source.read_text(encoding="utf-8") if source else args.get("markdown") or compose_draft(db, task_id)
+        return stage_convert(db, task_id, markdown, fmt, args.get("name", "paper"))
     raise ValueError(f"未知工具：{name}")
 
 
@@ -1980,7 +2002,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                                             delegation_state=_done_calls.setdefault("delegation_tasks", {}),
                                             cancel_check=cancel_check)
                     else:
-                        result = _tool_impl(name, db, ctx_id, args, scope, emit=emit, profile=profile)
+                        result = _tool_impl(name, db, ctx_id, args, scope, emit=emit, profile=profile,
+                                            **({"origin_chat_id": task_id} if chat_row and name in {'project_create_from_idea', 'team_create', 'team_form'} else {}))
                 if isinstance(result, dict) and result.get("sub_events"):
                     events.extend(result["sub_events"])      # 子 agent 的事件并进本轮 → 回放可还原
                 ok, brief = True, _brief(name, result)
@@ -2013,7 +2036,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             ev2 = {"type": "tool_result", "name": name, "ok": ok, "summary": brief,
                    "path": path or "", "id": call.get("id"),"round":turn,"duration_ms":duration_ms,
                    "result":workspace_trajectory.safe_result(event_result)}
-            if ok and name in ('workflow_prepare', 'workflow_start', 'workflow_status', 'graph_workflow_run', 'graph_workflow_status') and result.get('navigation'):
+            if ok and name in ('project_create_from_idea', 'workflow_prepare', 'workflow_start', 'workflow_status', 'graph_workflow_run', 'graph_workflow_status') and result.get('navigation'):
                 ev2['navigation'] = {**result['navigation'], 'chat_id': task_id if bound and bound != task_id else ''}
             say(ev2); events.append(ev2)
             model_result = result
@@ -2032,8 +2055,14 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             save_checkpoint(phase="tools_ready" if remaining else "model", messages=messages, events=events,
                             turn=turn if remaining else turn + 1, pending_calls=remaining, inflight=None,
                             done_tools=_done_calls, output_assets=db.asset_run["outputs"])
+            if (getattr(db, 'workflow_end_to_end', False) and step == 'idea' and name == 'idea_review'
+                    and ok and isinstance(result, dict) and result.get('note_id') and result.get('markdown')):
+                final = "创新点审查报告已保存，可在节点产物工作台核查并交付。"
+                break
         save_checkpoint(phase="model", messages=messages, events=events, turn=turn + 1,
                         output_assets=db.asset_run["outputs"], pending_calls=[], done_tools=_done_calls)
+        if final:
+            break
     else:
         outcomes = [event for event in events if event.get("type") == "tool_result"]
         lines = []

@@ -91,7 +91,9 @@ def compile_run(db, run):
     mapping = {}
     for nid in selected_ids:
         executor, node = resolved[nid]
-        deps = [mapping[e["source"]] for e in layout["edges"] if e["target"] == nid and e["source"] in mapping]
+        incoming = [e for e in layout["edges"] if e["target"] == nid and e["source"] in mapping]
+        deps = [mapping[e["source"]] for e in incoming]
+        handoffs = [{**e, "task_id": mapping[e["source"]]} for e in incoming if e.get("artifact")]
         inputs = list(run["settings"].get("task_inputs") or [])
         source = run["settings"].get("file_input")
         if source:
@@ -116,7 +118,7 @@ def compile_run(db, run):
             "executor_binding_id": executor["binding_id"], "member_id": executor.get("requested_member_id", "") if not run["settings"].get("actor") else executor.get("member_id", ""),
             "inputs": inputs, "dependencies": deps, "output_contract": node.get("output_contract") or {},
             "review_required": node.get("review_required", True), "workflow_run_id": run["id"], "workflow_node_id": nid,
-            "scope": scope, "metadata": {"stage": node["step"], "node_config": node,
+            "scope": scope, "metadata": {"stage": node["step"], "node_config": node, "handoffs": handoffs,
                 "legacy_stage_compat": compat, "layout_snapshot": layout,
                 "workflow_node": {"run_id": run["id"], "node_id": nid},
                 **({"template_ref": run["settings"]["task_template_ref"]} if run["settings"].get("task_template_ref") else {})}},
@@ -157,12 +159,18 @@ def prepare(db, project_id, goal="", idempotency_key="", template_id="", *, inpu
     for node in frozen["nodes"]:
         executor, _ = _executor(db, project_id, frozen, node)
         if node.get('node_kind') == 'tool':
-            worker.validate_fixed_tool(db, project_id, node, executor)
+            arguments = [edge['argument'] for edge in frozen['edges']
+                         if edge['target'] == node['id'] and edge.get('argument')]
+            worker.validate_fixed_tool(db, project_id, node, executor, bound_arguments=arguments)
     if any(n["step"] == "idea" for n in frozen["nodes"]) and not db.idea_input(project_id).strip():
         project = db.summary(project_id)["task"]
         db.idea_input_save(project_id, str(goal).strip() or project.get("question") or project["title"])
     run = run_service.start(db, project_id, "research-sequence", idempotency_key=idempotency_key or "workflow:" + uuid.uuid4().hex)
     settings = {"goal": str(goal)[:20000], "policy": bindings.settings(db, project_id), "prepared": True, "task_inputs": inputs or []}
+    order = frozen["order"]
+    links = {(edge["source"], edge["target"]) for edge in frozen["edges"]}
+    if links != set(zip(order, order[1:])):
+        settings["dag_scheduler"] = True
     db.db.execute("INSERT INTO workflow_executions VALUES (?,?,?,?)", (run["id"], json.dumps(frozen, ensure_ascii=False), json.dumps(settings, ensure_ascii=False), workflow.now()))
     engine._status(db, run["id"], "queued")
     compile_run(db, engine.detail(db, run["id"]))
@@ -331,6 +339,51 @@ def _accepted_history(task):
             'feedback': delivery.get('feedback', '')}
 
 
+def submit_manual(db, run, body):
+    from pathlib import Path
+    import workflow_execution as engine
+    node_id = str(body.get('node_id') or '')
+    task_id = run['settings'].get('task_ids', {}).get(node_id)
+    if not task_id:
+        raise ValueError('节点不属于本次运行')
+    task = tasks.get(db, task_id, project_id=run['project_id'])
+    pending = run['settings'].get('manual_pending', {})
+    if pending.get('node_id') != node_id or run['status'] not in ('blocked', 'awaiting_review'):
+        raise ValueError('该节点当前无法提交人工产物')
+    if task['status'] not in ('ready', 'blocked', 'failed'):
+        raise ValueError('节点已提交或尚未就绪')
+    text = str(body.get('text') or '').strip()
+    paths = body.get('paths') or []
+    if not isinstance(paths, list) or len(paths) > 20 or len(text) > 200000:
+        raise ValueError('最多提交 20 个项目文件，正文不得超过 20 万字')
+    root = tasks._root(db, run['project_id'])
+    files = []
+    for value in paths:
+        relative = Path(str(value))
+        path = (root / relative).resolve()
+        if relative.is_absolute() or not path.is_relative_to(root) or not path.is_file() or not path.stat().st_size:
+            raise ValueError('请提供存在且非空的项目相对文件：' + str(value))
+        files.append(str(path))
+    if not text and not files:
+        raise ValueError('请输入结果或提交至少一个项目文件')
+    attempt = tasks.start(db, task_id, authority=tasks.CommandContext.ui(run['project_id']), restart=True, manual_submission=True)
+    _record_attempt(db, run, node_id, task, attempt, attempt['input_snapshot'])
+    try:
+        output = worker._outputs(db, task, attempt, {}, {'content': text, 'files': files})
+        task = tasks.complete(db, attempt['id'], {'output_snapshot': output, 'reply': '已提交人工产物',
+                                                  'checkpoint': {'execution_source': 'human'}})
+    except Exception as exc:
+        task = tasks.fail(db, attempt['id'], worker._error_detail(exc))
+        _sync_workflow_node(db, run, task)
+        raise
+    _sync_workflow_node(db, run, task)
+    latest = engine.detail(db, run['id'])
+    latest['settings'].pop('manual_pending', None)
+    _save(db, latest)
+    engine._status(db, run['id'], task['status'])
+    return engine.detail(db, run['id'])
+
+
 def advance(db, run_id, cancel_check=None):
     import workflow_execution as engine
     import run_service
@@ -361,10 +414,17 @@ def advance(db, run_id, cancel_check=None):
                     return {"status": "delivered"}
                 if task["status"] == "awaiting_review":
                     _sync_workflow_node(db, run, task, task.get("latest_run"))
+                    if run["settings"].get("dag_scheduler"):
+                        return {"status": "awaiting_review"}
                     engine._status(db, run_id, "awaiting_review")
                     return {"status": engine.detail(db, run_id)["status"]}
                 node = task["metadata"]["node_config"]
                 run["settings"]["current_node_id"] = nid
+                if node.get('manual_execution'):
+                    run['settings']['manual_pending'] = {'node_id': nid, 'task_id': task_id, 'label': node['label']}
+                    _save(db, run)
+                    engine._status(db, run_id, 'blocked', '等待提交人工产物：' + node['label'])
+                    return {'status': 'blocked'}
                 _save(db, run)
                 if run["settings"].get("legacy_stage_compat"):
                     snapshot = engine._snapshot(db, run, node)
@@ -383,7 +443,13 @@ def advance(db, run_id, cancel_check=None):
                 _sync_workflow_node(db, run, task, task.get("latest_run"))
                 if task["status"] != "delivered":
                     status = task["status"] if task["status"] in ("awaiting_review", "blocked", "cancelled", "running", "queued") else "failed"
-                    engine._status(db, run_id, status, (task["latest_run"] or {}).get("error", ""))
+                    if run["settings"].get("dag_scheduler"):
+                        return {"status": status}
+                    attempt = task["latest_run"] or {}
+                    error = attempt.get("error", "")
+                    if status == "blocked" and attempt.get("checkpoint", {}).get("waiting_children"):
+                        error = "等待团队成员交付"
+                    engine._status(db, run_id, status, error)
                     return {"status": engine.detail(db, run_id)["status"]}
             _sync_workflow_node(db, run, task, task.get("latest_run"))
             return {"status": "delivered"}
@@ -412,6 +478,115 @@ def review(db, run_id, node_id, approved, feedback="",reviewed_output_version=No
     _sync_workflow_node(db, run, reviewed, reviewed.get("latest_run"))
     engine._status(db, run_id, "queued" if approved else "blocked", "" if approved else "人工审查已退回，请按修改意见重试节点")
     return engine.detail(db, run_id)
+
+
+def rework_targets(db, task):
+    """Return only direct or transitive prerequisites of this canonical task."""
+    if not task.get("workflow_run_id") or task.get("parent_task_id") or task["status"] != "awaiting_review":
+        return []
+    import workflow_execution as engine
+    run = engine.detail(db, task["workflow_run_id"])
+    allowed = set(run["settings"].get("task_ids", {}).values())
+    ancestors = {}
+    pending = list(task["dependencies"])
+    while pending:
+        task_id = pending.pop()
+        if task_id in ancestors or task_id not in allowed:
+            continue
+        parent = tasks.get(db, task_id, project_id=task["project_id"])
+        ancestors[task_id] = parent
+        pending.extend(parent["dependencies"])
+    return [{"node_id": nid, "title": ancestors[tid]["title"], "stage": ancestors[tid]["metadata"].get("stage")}
+            for nid, tid in run["settings"]["task_ids"].items()
+            if tid in ancestors and ancestors[tid]["status"] == "delivered"]
+
+
+def rework_receipt(db, task_id, request_key, request_digest):
+    row = db.db.execute(
+        "SELECT data FROM project_task_events WHERE task_id=? AND kind='returned_for_rework' "
+        "AND json_extract(data, '$.request_key')=?", (task_id, request_key)).fetchone()
+    if not row:
+        return None
+    data = json.loads(row["data"])
+    if data["request_digest"] != request_digest:
+        raise ValueError("该请求标识已用于另一次返工")
+    return {key: data[key] for key in ("workflow_run_id", "target_node_id", "target_task_id")}
+
+
+def return_for_rework(db, task, attempt, target_node, feedback, request_key, request_digest, authority):
+    """Revise a predecessor and invalidate only deliveries that consume it."""
+    import workflow_execution as engine
+
+    project_id, run_id = task["project_id"], task["workflow_run_id"]
+    tasks._authority(authority, project_id, human=True)
+    feedback = str(feedback or "").strip()[:19000]
+    if not feedback or not request_key or len(request_key) > 200:
+        raise ValueError("请选择返工节点并填写核查意见")
+    with tasks._lock, tasks._atomic(db):
+        receipt = rework_receipt(db, task["id"], request_key, request_digest)
+        if receipt:
+            return receipt
+        run = engine.detail(db, run_id)
+        task = tasks.get(db, task["id"], project_id=project_id)
+        latest = task.get("latest_run") or {}
+        if (task["status"] != "awaiting_review" or run["status"] != "awaiting_review"
+                or latest.get("id") != attempt["id"]
+                or latest.get("checkpoint", {}).get("output_revision", 0) != attempt["checkpoint"].get("output_revision", 0)):
+            raise ValueError("当前核查版本已变化，请重新打开产物")
+        if target_node not in {item["node_id"] for item in rework_targets(db, task)}:
+            raise ValueError("只能退回本次运行中已交付的前置节点")
+        mapping = run["settings"]["task_ids"]
+        target = mapping[target_node]
+        rows = {item["id"]: item for item in tasks.list_tasks(db, project_id, workflow_run_id=run_id)}
+        affected = {target}
+        for nid in run["layout"]["order"]:
+            tid = mapping.get(nid)
+            if tid and affected.intersection(rows[tid]["dependencies"]):
+                affected.add(tid)
+        pending = list(affected)
+        while pending:
+            for child in rows[pending.pop()]["children"]:
+                if child["id"] not in affected:
+                    affected.add(child["id"])
+                    rows[child["id"]] = tasks.get(db, child["id"], project_id=project_id)
+                    pending.append(child["id"])
+        if any(item["status"] in ("queued", "running") for item in rows.values()):
+            raise ValueError("本次运行仍有任务在执行，请稍后再退回")
+        tasks._decision(db, task, latest, approved=False, source="human", actor_id=authority.actor_id,
+                        feedback=feedback, request_key=request_key)
+        stamp = tasks._now()
+        for tid in affected:
+            item = rows[tid]
+            metadata = dict(item["metadata"])
+            metadata.pop("_start_error", None)
+            metadata.pop("_return_feedback", None)
+            metadata.pop("_return_base_run", None)
+            previous = item.get("latest_run") or {}
+            if previous.get("status") == "succeeded" and previous.get("output_snapshot"):
+                metadata["_return_base_run"] = previous["id"]
+            if tid == target or item["parent_task_id"] == target:
+                metadata["_return_feedback"] = feedback
+            db.db.execute("UPDATE project_tasks SET status='ready',latest_run_id='',accepted_delivery_id='',metadata=?,"
+                          "version=version+1,updated_at=? WHERE id=?", (tasks._json(metadata), stamp, tid))
+            origins = [origin["legacy_id"] for origin in item["origins"] if origin["kind"] == "workflow_node"]
+            db.db.executemany("UPDATE workflow_nodes SET status='superseded' WHERE id=?", [(oid,) for oid in origins])
+            event = {"workflow_run_id": run_id, "target_node_id": target_node, "target_task_id": target,
+                     "review_task_id": task["id"]}
+            if tid == task["id"]:
+                event.update(request_key=request_key, request_digest=request_digest)
+            tasks._event(db, tid, "returned_for_rework", event, item["latest_run_id"])
+        settings = run["settings"]
+        settings["checkpoint_epoch"] = int(settings.get("checkpoint_epoch", 0)) + 1
+        settings["current_node_id"] = target_node
+        if "dag_errors" in settings:
+            settings["dag_errors"] = {nid: error for nid, error in settings["dag_errors"].items()
+                                      if mapping.get(nid) not in affected}
+        for key in ("checkpoint", "manual_pending"):
+            settings.pop(key, None)
+        db.db.execute("UPDATE workflow_executions SET settings=?,updated_at=? WHERE run_id=?",
+                      (tasks._json(settings), stamp, run_id))
+        db.db.execute("UPDATE workflow_runs SET status='queued',current_node='',error='',ended_at='' WHERE id=?", (run_id,))
+    return {"workflow_run_id": run_id, "target_task_id": target, "target_node_id": target_node}
 
 
 def set_mode(db, run_id, mode):

@@ -198,7 +198,10 @@ def read(db, selection, *, authority, window_id='', task=None, include_content=T
             sync_errors[event['data']['adapter']] = event['data']
         elif event['kind'] == 'projection_recovered':
             sync_errors.pop(event['data']['adapter'], None)
+    from workflow_tasks import rework_targets
     return {'identity': _identity(task, run), 'task': tasks.public_view(task),
+            'claim_audit': run['checkpoint'].get('claim_audit'),
+            'rework_targets': rework_targets(db, task) if editable else [],
             'run': tasks.public_view({'latest_run': run})['latest_run'], 'node': node,
             'artifacts': artifacts, 'history': _history(db, task), 'drafts': drafts, 'editable': editable,
             'content': content, 'previous_content': (previous or {}).get('output_snapshot', {}).get('content'),
@@ -275,10 +278,11 @@ def _steps(db, task, settings):
     result = []
     for node_id in layout.get('order') or by_id:
         task_id = settings.get('task_ids', {}).get(node_id)
-        current = db.db.execute('SELECT title,status FROM project_tasks WHERE id=?', (task_id,)).fetchone()
+        current = db.db.execute('SELECT title,status,dependencies FROM project_tasks WHERE id=?', (task_id,)).fetchone()
         if current:
             result.append({'task_id': task_id, 'node_id': node_id, 'title': current['title'],
-                           'status': current['status'], 'step': by_id.get(node_id, {}).get('step', 'task')})
+                           'status': current['status'], 'step': by_id.get(node_id, {}).get('step', 'task'),
+                           'dependencies': json.loads(current['dependencies'])})
     return result
 
 
@@ -319,18 +323,26 @@ def _saved(db, task, run):
 
 
 def workspace(db, selection, *, authority, window_id='', task=None):
+    from workflow_catalog import STAGE_GUIDES
     tasks._authority(authority, selection.project_id, human=True)
     if task is None:
         task = tasks.get(db, selection.task_id, project_id=selection.project_id)
     settings = _workflow(db, task)
     if settings is None or task['metadata'].get('deleted_at'):
         raise ValueError('请选择当前项目中的工作流节点')
+    guide = STAGE_GUIDES.get(task['metadata'].get('stage'))
+    steps = _steps(db, task, settings)
+    titles = {step['task_id']: step['title'] for step in steps}
+    upstream = [{'task_id': dep, 'title': titles[dep], 'status': tasks.get(db, dep)['status']}
+                for dep in task['dependencies'] if dep in titles]
+    downstream = [step for step in steps if task['id'] in step['dependencies']]
+    stage_view = {'guide': guide, 'upstream': upstream, 'downstream': downstream, 'steps': steps}
     run = tasks.get_run(db, selection.task_run_id) if selection.task_run_id else task.get('latest_run')
     if run and run['task_id'] != task['id']:
         raise ValueError('产物不属于当前节点')
     if run and run['status'] == 'succeeded':
         result = read(db, selection, authority=authority, window_id=window_id, task=task, include_content=False)
-        return {**result, 'provisional': False, 'steps': _steps(db, task, settings)}
+        return {**result, **stage_view, 'provisional': False}
     run = run or {'id': '', 'attempt': 0, 'status': task['status'], 'checkpoint': {}, 'input_snapshot': {}, 'executor_snapshot': {}}
     output = _saved(db, task, run)
     node = task['metadata'].get('node_config') or {'step': task['metadata'].get('stage', 'task')}
@@ -345,7 +357,7 @@ def workspace(db, selection, *, authority, window_id='', task=None):
             'run': tasks.public_view({'latest_run': candidate})['latest_run'], 'node': node,
             'content': output['content'], 'artifacts': artifacts, 'history': [], 'drafts': [], 'editable': False,
             'provisional': True, 'can_collect': bool(artifacts) and task['status'] in ('failed', 'interrupted', 'cancelled', 'blocked'),
-            'steps': _steps(db, task, settings), 'origin_chat_id': settings.get('agent_invocation', {}).get('chat_id', ''),
+            **stage_view, 'origin_chat_id': settings.get('agent_invocation', {}).get('chat_id', ''),
             'checks': task['output_contract'], 'can_rework': False,
             'scheduling': '已保存的中间产物可预览，固定为核查版本后可编辑并交给下一节点'}
 
@@ -506,6 +518,18 @@ def command(db, task_id, body, *, authority):
                     tasks._digest(json.loads(old['output_versions'])) != identity['output_digest']):
                 raise ValueError('该请求标识已用于另一份核查决定')
             return {'task': tasks.get(db, task_id, project_id=authority.project_id)}
+    if action == 'return-to-stage':
+        target = str(body.get('target_node_id') or '')
+        from workflow_tasks import return_for_rework, rework_receipt
+        with tasks._lock:
+            receipt = rework_receipt(db, task_id, request_key, request_digest)
+            if receipt:
+                return receipt
+            task, run = _base(db, identity, authority)
+            result = return_for_rework(db, task, run, target, body.get('feedback'), request_key, request_digest, authority)
+        import workflow_execution
+        workflow_execution.kick(db.path, result['workflow_run_id'])
+        return result
     if action == 'draft':
         return {'draft': save_draft(db, identity, body, authority=authority)}
     if action == 'rework':

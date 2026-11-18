@@ -124,7 +124,19 @@ def create_literature_study_graph() -> GraphTemplate:
     g.set_entry_point("literature_retrieval")
     return g
 
+def create_full_research_graph() -> GraphTemplate:
+    from workflow_catalog import STAGE_CATALOG
+    graph = GraphTemplate("full_research", "完整十步科研流程")
+    for stage in STAGE_CATALOG:
+        graph.add_node(stage["id"], stage["name"], executor_hint="team", step=stage["id"])
+    stages = list(graph.nodes)
+    for source, target in zip(stages, stages[1:]):
+        graph.add_edge(source, target)
+    return graph.set_entry_point(stages[0])
+
+
 GRAPH_REGISTRY: Dict[str, Callable[[], GraphTemplate]] = {
+    "full_research": create_full_research_graph,
     "research_proposal": create_research_proposal_graph,
     "paper_writing": create_paper_writing_graph,
     "literature_study": create_literature_study_graph,
@@ -405,7 +417,7 @@ LANGGRAPH_TOOL_SPECS = [
         "name": "graph_workflow_run", "description": "启动内置科研模板；使用项目唯一 LangGraph 引擎，产物进入项目任务核查。",
         "parameters": {"type": "object", "properties": {
             "project": {"type": "string"},
-            "graph_type": {"type": "string", "enum": ["research_proposal", "paper_writing", "literature_study"]},
+            "graph_type": {"type": "string", "enum": ["full_research", "research_proposal", "paper_writing", "literature_study"]},
             "goal": {"type": "string"}, "inputs": {"type": "array", "items": {"type": "object"}}}, "required": ["graph_type", "goal"]}}},
     {"type": "function", "function": {
         "name": "graph_workflow_status", "description": "查询项目科研流程的实际运行状态与核查点。",
@@ -416,9 +428,10 @@ LANGGRAPH_TOOL_SPECS = [
         "parameters": {"type": "object", "properties": {
             "idea": {"type": "string"}, "project": {"type": "string"}, "title": {"type": "string"},
             "goal": {"type": "string"}, "material_system": {"type": "string"},
-            "graph_type": {"type": "string", "enum": ["research_proposal", "paper_writing", "literature_study"]},
+            "graph_type": {"type": "string", "enum": ["full_research", "research_proposal", "paper_writing", "literature_study"]},
             "request_key": {"type": "string", "description": "重试保留原 key；确需另建项目才换 key"},
             "auto_start_graph": {"type": "boolean", "description": "默认 true；只配置时传 false。执行模式沿用项目设置，不修改权限"},
+            "fully_automatic": {"type": "boolean", "description": "用户明确要求全流程自动完成时传 true。未指定模板时使用完整十步，产物校验通过后继续；强制人工节点仍暂停。"},
             "skills": {"type": "array", "items": {"type": "string"}, "description": "真实已安装且启用的 Skill ID"},
             "team_name": {"type": "string"}, "workflow_name": {"type": "string"},
             "experts": {"type": "array", "items": {"type": "object", "properties": {

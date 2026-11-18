@@ -60,6 +60,9 @@ def command(db,kind,identifier,action,*,title='',project_id='',team_id=''):
     if kind=='chat' and project_id and row['task_id']!=project_id: raise ValueError('会话不属于当前项目')
     if kind=='team' and row['team_id']!=team_id: raise ValueError('会话不属于当前团队')
     if action in ('archive','trash','purge') and _busy(db,kind,row): raise ValueError('请先停止并等待当前会话运行结束，再归档或删除')
+    if kind == 'chat' and (action == 'trash' or (action == 'purge' and row['deleted_at'])):
+        import team
+        team.dissolve_owned(db, identifier)
     if action=='export':
         messages=db.messages(row['id']) if kind=='chat' else db.messages(team_id,'team:'+identifier)
         if kind=='chat':

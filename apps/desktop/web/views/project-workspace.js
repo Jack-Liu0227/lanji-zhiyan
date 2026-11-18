@@ -1,4 +1,4 @@
-﻿/* Project-owned discussions, task execution and document review share one surface. */
+/* Project-owned discussions, task execution and document review share one surface. */
 const ProjectWorkspace = (() => {
   "use strict";
   const labels={ready:"可执行",draft:"已准备",queued:"排队中",running:"执行中",awaiting_review:"等待人工核查",delivered:"已交付",blocked:"等待处理",failed:"执行失败",cancelled:"已停止",waiting:"等待前置交付"};
@@ -6,6 +6,8 @@ const ProjectWorkspace = (() => {
   const surfaces={overview:'概览',library:'统一资料库',tasks:'任务与自动化',flow:'LangGraph 图流'};
   const resourceSurface={catalog:'library',manuscripts:'library',experiments:'library',outputs:'library',files:'library',papers:'library',notes:'library',stars:'library',search:'library',tasks:'tasks',automation:'tasks',plan:'tasks',workflow:'flow',overview:'overview','task-detail':'tasks','node-result':'tasks'};
   const states=new Map(), chats=new Map();
+  resources['run-artifacts']='本次运行产物';
+  resourceSurface['run-artifacts']='tasks';
   let mounted=null, intent=null, generation=0, navigation=0, timer=null, restored=false;
   const h=value=>esc(String(value??""));
   const messageKey=value=>String(value??'').replace(/\s+/g,' ').trim();
@@ -138,7 +140,7 @@ const ProjectWorkspace = (() => {
     document.getElementById('pwQuote').hidden=!material;
     document.getElementById('pwMaterialTask').hidden=!material||state.section==='files'||output;
     document.getElementById('pwFocus').hidden=!['files','notes'].includes(state.section);document.getElementById('pwFocus').textContent=state.reading?'退出专注':'专注阅读';
-    const back=document.getElementById('pwBack');back.hidden=!output&&!['task-detail','node-result'].includes(state.section)&&!inPeek&&state.inspection?.origin!=='chat';back.querySelector('span').textContent=state.section==='node-result'?'返回发起对话':output?'返回任务':state.section==='task-detail'?'任务列表':'返回对话';
+    const back=document.getElementById('pwBack');back.hidden=!output&&!['task-detail','node-result'].includes(state.section)&&!inPeek&&state.inspection?.origin!=='chat';back.querySelector('span').textContent=inPeek?'返回对话':state.section==='node-result'?'返回本次运行产物':output?'返回任务':state.section==='task-detail'?'任务列表':'返回对话';
     document.getElementById('pwCloseDoc').hidden=state.surface!=='chat';
     document.getElementById('pwTrail').textContent=state.section==='node-result'?'产物工作台 · 节点产物':output?'任务产物 · 固定版本':state.section==='task-detail'?'任务与核查':(surfaces[resourceSurface[state.section]]||'资料')+(state.fileRow&&state.section==='files'?' / '+state.fileRow.rel.split('/').slice(0,-1).join('/'):'');
     if(state.review)paintReview(state,state.review);else document.getElementById('pwReview').hidden=true;
@@ -151,8 +153,8 @@ const ProjectWorkspace = (() => {
     }
     if(state.inspection?.origin==='task')state.fileRow=state.libraryFile;
     state.navOpen=false;state.reading=false;state.peek=false;state.inspection=null;
-    if(surface==='chat'){state.resourceEpoch++;state.surface='chat';state.chatView='chat';persist(state);layoutPanels(state);paintChatView(state);document.getElementById('pwAsk').focus();return;}
-    await showResource(state.sections[surface]||{overview:'overview',library:'files',workbench:'node-result',tasks:'tasks',flow:'workflow'}[surface],state);
+    if(surface==='chat'){state.resourceEpoch++;document.getElementById('pwResource').firstElementChild?.__nodeDispose?.();state.surface='chat';state.chatView='chat';persist(state);layoutPanels(state);paintChatView(state);document.getElementById('pwAsk').focus();return;}
+    await showResource((surface==='workbench'?'run-artifacts':state.sections[surface])||{overview:'overview',library:'files',workbench:'run-artifacts',tasks:'tasks',flow:'workflow'}[surface],state);
   }
   function closeNavigator(state){state.navOpen=false;persist(state);layoutPanels(state);document.getElementById('pwToggleNav').focus();}
 
@@ -237,7 +239,7 @@ const ProjectWorkspace = (() => {
     document.getElementById('pwToggleTree').onclick=()=>{if(state.surface==='chat'){state.peekTree=!state.peekTree;}else if(narrow()){state.navOpen=!state.navOpen;state.treeHidden=false;}else{state.treeHidden=state.navHidden||state.reading?false:!state.treeHidden;if(!state.treeHidden){state.navHidden=false;state.reading=false;}}persist(state);layoutPanels(state);if(state.navOpen)document.getElementById('pwNavClose').focus();};
     document.getElementById('pwShowDoc').onclick=()=>switchSurface('library',state);
     document.getElementById('pwCloseDoc').onclick=()=>switchSurface('chat',state);
-    document.getElementById('pwBack').onclick=()=>state.section==='node-result'&&state.nodeResultSelection?.chat_id?openConversation(state.nodeResultSelection.chat_id,state.id):state.inspection?.origin==='task'?openTask(state.inspection.taskId,state.id):state.section==='task-detail'?showResource('tasks',state):switchSurface('chat',state);
+    document.getElementById('pwBack').onclick=()=>state.peek?switchSurface('chat',state):state.section==='node-result'?showResource('run-artifacts',state,{runId:state.nodeResultSelection?.workflow_run_id}):state.inspection?.origin==='task'?openTask(state.inspection.taskId,state.id):state.section==='task-detail'?showResource('tasks',state):switchSurface('chat',state);
     document.getElementById('pwFocus').onclick=async()=>{if(!await flush()||!live(state))return;if(state.surface==='chat'){state.surface='library';state.peek=false;state.inspection={origin:'chat'};state.sections.library=state.section;}state.reading=!state.reading;state.navOpen=false;persist(state);layoutPanels(state);};
     document.getElementById("pwBindings").onclick=()=>ProjectTasks.openBindings(state.id).then(d=>d?.addEventListener("close",()=>refresh(state),{once:true}));
     document.getElementById("pwMembers").onclick=()=>uiNavigate(()=>openTab("team"));
@@ -540,6 +542,10 @@ const ProjectWorkspace = (() => {
     document.getElementById('pwFileToolbar').replaceChildren();
     const area=document.getElementById('pwResource');area.firstElementChild?.__nodeDispose?.();area.innerHTML='<div class="pw-resource-content"></div>';const host=area.firstElementChild;
     if(state.section!=='files')tree.innerHTML='';layoutPanels(state);
+    if(state.section==='run-artifacts'){
+      await showRunArtifacts(state,host,options.runId);
+      return;
+    }
     if(state.section==='overview'){
       host.innerHTML='<div class="hint">正在读取项目概况…</div>';
       try{const view=await window.SpaceOverview(state.id);if(!live(state)||state.section!=='overview')return;host.innerHTML=view.html;view.bind();}
@@ -561,7 +567,7 @@ const ProjectWorkspace = (() => {
       const epoch=state.resourceEpoch;
       await WorkflowNodeWorkbench.mount(host,{selection:state.nodeResultSelection,live:()=>live(state)&&state.section==='node-result'&&state.resourceEpoch===epoch,
         selected:selection=>{state.nodeResultSelection={...state.nodeResultSelection,...selection};persist(state);},
-        select:selection=>openNodeResult(selection,state.id,{chatId:state.nodeResultSelection?.chat_id}),
+        select:selection=>openNodeResult(selection,state.id,{chatId:state.nodeResultSelection?.chat_id,peek:state.peek}),
         openConversation:chatId=>chatId?openConversation(chatId,state.id):switchSurface('chat',state),
         openTask:id=>openTask(id,state.id,{chatId:state.nodeResultSelection?.chat_id}),changed:()=>refresh(state),
         locate:identity=>{state.focusWorkflow={runId:identity.workflow_run_id,nodeId:identity.workflow_node_id};return showResource('workflow',state);}});return;
@@ -692,7 +698,32 @@ const ProjectWorkspace = (() => {
     if(!active()||mounted.id!==projectId)await openProject(projectId);
     const state=get(projectId);if(!live(state)||!await flush())return;
     state.nodeResultSelection={...selection,project_id:projectId,chat_id:options.chatId||selection.chat_id||state.reviewOrigins?.[selection.task_id]||state.chatId};
-    state.review=null;await showResource('node-result',state,{initial:true});
+    state.review=null;await showResource('node-result',state,{initial:true,peek:options.peek??state.surface==='chat'});
+  }
+  async function showRunArtifacts(state,host,runId){
+    host.innerHTML='<p class="hint">正在读取运行记录…</p>';
+    const project=encodeURIComponent(state.id);
+    try{
+      const {runs=[]}=await api('/api/workflow/execution?project_id='+project);
+      if(!host.isConnected)return;
+      const selected=runs.find(run=>run.id===(runId||state.artifactRunId))||runs[0];
+      if(!selected){host.innerHTML='<p class="hint">运行工作流后，这里会按阶段展示本次交付。</p>';return;}
+      state.artifactRunId=selected.id;
+      const {tasks=[]}=await api('/api/project-tasks?project_id='+project+'&workflow_run_id='+encodeURIComponent(selected.id));
+      if(!host.isConnected)return;
+      const stages=tasks.filter(task=>task.workflow_node_id&&!task.parent_task_id);
+      const nodes=new Map(stages.map(task=>[task.workflow_node_id,task]));
+      const order=selected.node_order||[];
+      const ordered=[...order.map(id=>nodes.get(id)).filter(Boolean),...stages.filter(task=>!order.includes(task.workflow_node_id))];
+      host.innerHTML='<div class="pw-view-head"><label>工作流运行 <select class="control" data-pw-artifact-run>'+runs.map(run=>'<option value="'+h(run.id)+'" '+(run===selected?'selected':'')+'>'+h(run.layout_name||run.name||'工作流')+' · '+h(run.started_at||run.id)+'</option>').join('')+'</select></label></div>'+
+        (ordered.map((task,index)=>'<div class="pw-output"><b>'+h(task.title)+'</b><p class="hint">'+h(labels[task.status]||task.status)+'</p><button type="button" class="btn" data-pw-artifact="'+index+'">'+(WorkflowNodeWorkbench.eligible(task)?'查看并编辑产物':'查看节点状态')+'</button></div>').join('')||'<p class="hint">本次运行尚未生成节点任务。</p>');
+      host.querySelector('[data-pw-artifact-run]').onchange=event=>showResource('run-artifacts',state,{runId:event.target.value});
+      host.querySelectorAll('[data-pw-artifact]').forEach(button=>button.onclick=()=>{
+        const task=ordered[Number(button.dataset.pwArtifact)];
+        if(WorkflowNodeWorkbench.eligible(task))return openNodeResult({...WorkflowNodeWorkbench.availableSelection(task),workflow_run_id:selected.id},state.id,{peek:false});
+        return openTask(task.id,state.id,{peek:false});
+      });
+    }catch(err){if(host.isConnected)host.textContent='读取运行产物失败：'+err.message;}
   }
   async function openWorkflowRun(projectId=curTask,runId='',nodeId=''){
     if(!projectId)return;
@@ -764,7 +795,7 @@ const ProjectWorkspace = (() => {
     await ProjectWorkflowGraph.mount(host,{
        projectId:state.id,live:()=>live(state)&&state.section==='workflow',
        focus:state.focusWorkflow,
-       saved:()=>refresh(state),reload:()=>showResource('workflow',state),openTask:id=>openTask(id,state.id),openResult:selection=>openNodeResult(selection,state.id,{chatId:state.chatId}),
+       saved:()=>refresh(state),reload:()=>showResource('workflow',state),openTask:id=>openTask(id,state.id),openArtifacts:runId=>showResource('run-artifacts',state,{runId}),openResult:selection=>openNodeResult(selection,state.id,{chatId:state.chatId}),
       handoff:async nodeId=>{
         state.scope='workflow';state.targets=await api('/api/handoff/targets?project_id='+encodeURIComponent(state.id));
         await refresh(state);if(!live(state))return;

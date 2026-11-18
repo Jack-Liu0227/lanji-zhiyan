@@ -123,7 +123,7 @@ AGENT_SYSTEM = """你叫「览籍智研」，首页身份是「智研管家」�
 3. 只下载开放获取全文；没有 OA 链接就如实说明，不做替代下载。
 4. 每一步做完用一两句中文说明你做了什么、拿到什么、下一步建议。审查/撰写产出是草稿，不是结论。
 5. 一个目标尽量用最少的工具调用完成；任务完成后直接给结论。**互不依赖的调用必须在同一次回复里一起发**（一轮就是一次往返，串着发最费时间）：探现状就 `library_overview` + `file_list` + `project_note_list` 一起发；读多篇就一次发多个 `paper_read`；下多篇就一次发多个 `paper_download`；写多条笔记就一次发多个 `project_note_write`；查多项就一次发多个 `knowledge_query`。只有「下一步要依赖上一步的结果」时才分轮。
-6. 用户给出科研目标并要求自动推进时，读取 research-steward Skill，用 project_create_from_idea 装配真实项目、专家、团队和 LangGraph 流程；后续调用带返回的 project_id。仅需空项目时用 project_create。当前项目对话默认装配本项目。不要把配置完成或排队说成研究已完成。
+6. 用户给出科研目标并要求自动推进时，读取 research-steward Skill，用 project_create_from_idea 装配真实项目、专家、团队和 LangGraph 流程；用户明确要求建好后自动跑完整科研流程时传 fully_automatic=true，使用 full_research 模板；只有明确要求长期保留时才用 persistent=true 创建对话团队。后续调用带返回的 project_id。仅需空项目时用 project_create。当前项目对话默认装配本项目。不要把配置完成或排队说成研究已完成。
 7. **问日程先 calendar_list**（今天/这周/这个月），别凭印象报；**要定时任务就先 schedule_manage(list) 看现状**再新建/暂停/删除。跨项目查笔记给 knowledge_query 带上 project。
 8. 配置前用 assistant_manage、team_manage、workflow_manage 的 list 读取现有配置，优先复用；调整已有团队使用 team_manage，选择已有工作流使用 workflow_manage(select)，确需新模板再 workflow_create。用户已经说清的配置直接执行，完成后核对保存结果。模型可继承当前可用模型；不得编造模型、专家或工作流 ID。
 9. 配置完成与任务执行分开报告。创建或修改团队不等于完成研究，team_assign 返回 queued 只表示排队。
@@ -411,9 +411,11 @@ TOOL_SPECS = [
     _schema("notes_compose", "把一条精读笔记整理成带证据表的知识库笔记，可选写入 Obsidian。", {"note_id": {"type": "string"}, "vault": {"type": "string"}}, ["note_id"]),
     _schema("draft_write", "按已保存的谱系图生成证据底稿。章节、顺序和出处由程序固定，证据缺失时报待核。", {}),
     _schema("draft_review", "以审稿人视角审查稿件，给出结论/评分/问题清单/证据缺口。", {"draft": {"type": "string"}}),
+    _schema("manuscript_translate_en", "把已验收中文正文译为学术英文并保存英文稿，供后续格式转换。",
+            {"style": {"type": "string", "description": "英文稿件语体，可留空"}}, []),
     _schema("format_convert", "把稿件导出为 docx / doc / md / html / pdf，或把一份现成的 .tex 编成 PDF（format=tex）。用户说「转成 PDF」用 pdf；说「Word」用 docx（老版本 .doc 用 doc）；说「这份 tex 转 PDF」用 tex。template 决定 PDF 走哪套期刊模板：plain=本机通用（默认）、elsevier、ieee、revtex（APS）。cite_style 决定参考文献样式（中文稿默认 gbt7714），pdf 与 docx/html/md 都按它走：正文里的 {{C3}} 这类标记会自动变成正式引用，台账里的文献从 Zotero 取元数据。模板出处见 TEMPLATES 里的 repo（bamos/latex-templates、jsk-report-template/elsarticle-template 等公开库）。",
             {"format": {"type": "string", "enum": ["docx", "doc", "md", "html", "pdf", "tex"]},
-             "source": {"type": "string", "description": "tex 才用：要编译的 .tex 绝对路径；不给就取项目里最新的 .tex"},
+             "source": {"type": "string", "description": "源文件路径。tex 传 .tex；导出正文传 Markdown。留空时工作流优先用已交付上游稿。"},
              "template": {"type": "string", "enum": ["plain", "elsevier", "ieee", "revtex"],
                           "description": "PDF 排版模板：plain 本机通用 / elsevier / ieee / revtex(APS)；用户没指定就用 plain"},
              "cite_style": {"type": "string", "enum": ["gbt7714", "gbt7714-ay", "apa", "unsrt", "plain", "ieeetr", "elsarticle", "aps"],
@@ -438,7 +440,7 @@ TOOL_SPECS = [
     _schema("prompt_template_render", "用户要求使用模板时，填写变量生成任务要求；缺信息先补齐，遵循原有工具和权限。", {"project": {"type": "string"}, "template_id": {"type": "string"}, "revision_id": {"type": "string"}, "variables": {"type": "object"}}, ["template_id"]),
     _schema("project_task_manage", "列出、创建、更新待办计划，包含验收要求和前置计划；dispatch 派给专家执行。执行状态由实际交付更新。", {"action": {"type": "string", "enum": ["list", "create", "update", "dispatch"]}, "project": {"type": "string"}, "id": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"}, "acceptance": {"type": "string"}, "dependencies": {"type": "array", "items": {"type": "string"}}, "status": {"type": "string"}, "priority": {"type": "string"}, "assistant_id": {"type": "string"}, "due_date": {"type": "string"}, "stage": {"type": "string"}, "reviewer_id": {"type": "string"}}, ["action"]),
     _schema("assistant_manage", "列出专家或创建、更新专家档案。", {"action": {"type": "string", "enum": ["list", "create", "update"]}, "id": {"type": "string"}, "name": {"type": "string"}, "rules": {"type": "string"}, "description": {"type": "string"}, "model_id": {"type": "string"}}, ["action"]),
-    _schema("team_create", "为项目创建持久团队并添加已有专家，首位专家担任负责人；智研管家不能担任团队负责人。", {"project": {"type": "string"}, "name": {"type": "string"}, "purpose": {"type": "string"}, "assistant_ids": {"type": "array", "items": {"type": "string"}}}, ["name"]),
+    _schema("team_create", "为项目创建真实团队，首位专家担任负责人。管家对话中默认临时；仅用户明确要求长期保留时传 persistent=true。", {"project": {"type": "string"}, "name": {"type": "string"}, "purpose": {"type": "string"}, "persistent": {"type": "boolean"}, "assistant_ids": {"type": "array", "items": {"type": "string"}}}, ["name"]),
     _schema("team_manage", "读取或配置项目已有团队，复用 team_id 和 member_id。支持改名与职责、添加或修改成员、指定专业负责人。", {"project": {"type": "string"}, "action": {"type": "string", "enum": ["list", "update", "add_member", "update_member", "set_leader"]}, "team_id": {"type": "string"}, "member_id": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}, "prompt": {"type": "string"}, "assistant_id": {"type": "string"}, "model_id": {"type": "string"}, "reasoning": {"type": "string"}}, ["action"]),
     _schema("workflow_manage", "列出真实工作流模板与步骤，或把已有模板选择为项目工作流。", {"project": {"type": "string"}, "action": {"type": "string", "enum": ["list", "select"]}, "layout_id": {"type": "string"}}, ["action"]),
     _schema("workflow_create", "创建并绑定项目唯一 LangGraph 流程；可提供 nodes/edges 自定义任务 DAG，或 steps 复用科研步骤。", {"project": {"type": "string"}, "name": {"type": "string"}, "description": {"type": "string"}, "nodes": {"type": "array", "items": {"type": "object"}}, "edges": {"type": "array", "items": {"type": "object"}}, "steps": {"type": "array", "items": {"type": "string", "enum": ["idea", "search", "download", "notes", "outline", "map", "write", "review", "entrans", "convert"]}}}, ["name"]),
