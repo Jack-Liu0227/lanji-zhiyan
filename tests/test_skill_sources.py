@@ -16,7 +16,7 @@ from test_skill_installation import archive, skill
 
 class SkillSourceTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="skill-sources-")
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="skill-sources-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.db_path = self.root / "app.sqlite3"

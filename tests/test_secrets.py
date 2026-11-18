@@ -41,7 +41,7 @@ class SecureStoreTest(unittest.TestCase):
 
 class DatabaseSecretsTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.path = Path(self.tmp.name) / "t.sqlite3"
         self.db = workflow.WorkflowDB(self.path)
 
@@ -90,7 +90,7 @@ class DatabaseSecretsTest(unittest.TestCase):
 
 class MailSecretsTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.old = mail.MAIL_FILE
         mail.MAIL_FILE = Path(self.tmp.name) / "mail.json"
 

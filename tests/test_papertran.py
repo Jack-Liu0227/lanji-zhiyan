@@ -22,7 +22,7 @@ from _pdf_fixture import write_text_pdf
 
 class NativeEngineSetupTest(unittest.TestCase):
     def test_uninitialized_low_service_does_not_create_a_running_translation(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
             root = pathlib.Path(directory)
             missing = root / 'missing.exe'
             output = root / 'output'

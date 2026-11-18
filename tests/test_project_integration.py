@@ -25,7 +25,7 @@ import workflow
 
 class ProjectIntegrationTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.db_path = Path(self.tmp.name) / "research.sqlite3"
         with workflow.WorkflowDB(self.db_path) as db:

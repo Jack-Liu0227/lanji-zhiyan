@@ -11,7 +11,7 @@ import workflow
 
 class TaskCenterTest(unittest.TestCase):
     def test_global_and_project_filters_return_the_same_execution_ids(self):
-        with tempfile.TemporaryDirectory(prefix='rw-task-center-') as temp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix='rw-task-center-') as temp:
             with workflow.WorkflowDB(Path(temp)/'test.sqlite3') as db:
                 db.assistant_save('center-writer',name='Center writer',enabled=1)
                 ids={}

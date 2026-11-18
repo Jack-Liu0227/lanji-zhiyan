@@ -695,8 +695,8 @@ def _smtp_client(acc: dict[str, Any]):
         raise ValueError("该账户未配置 SMTP 服务器，无法发信（可在邮箱管理中补填）")
     host = str(acc["smtpHost"])
     port = int(acc.get("smtpPort") or 465)
-    server = (smtplib.SMTP_SSL(host, port, timeout=25, context=_ssl_context(acc)) if acc.get("smtpSecure", True)
-              else smtplib.SMTP(host, port, timeout=25))
+    server = (smtplib.SMTP_SSL(host, port, timeout=25, context=_ssl_context(acc), local_hostname="localhost") if acc.get("smtpSecure", True)
+              else smtplib.SMTP(host, port, timeout=25, local_hostname="localhost"))
     try:
         if not acc.get("smtpSecure", True):
             try:
@@ -723,7 +723,7 @@ def send_mail(acc: dict[str, Any], to: str = "", cc: str = "", subject: str = ""
     if cc:
         msg["Cc"] = cc
     msg["Subject"] = str(subject or "(无主题)")
-    msg["Message-ID"] = email.utils.make_msgid()
+    msg["Message-ID"] = email.utils.make_msgid(domain="localhost")   # 主机名可能是中文，头字段只能 ASCII
     msg["Date"] = email.utils.formatdate(localtime=True)
     if text:
         msg.set_content(str(text))

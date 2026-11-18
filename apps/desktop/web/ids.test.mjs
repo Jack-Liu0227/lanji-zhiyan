@@ -20,7 +20,6 @@ const sources = [];
 
 const defined = new Set();
 const refs = new Map();
-
 // Render the pure shared controls with the prefixes used by their callers.
 const runtimeSource = sources.find(source => source.name === "views/agent-runtime.js");
 if (runtimeSource) {

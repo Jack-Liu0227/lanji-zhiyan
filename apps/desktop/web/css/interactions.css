@@ -48,13 +48,19 @@ select,select option,select optgroup{background:var(--panel2);color:var(--fg)}
 .modal-close{min-width:28px;min-height:28px;border-radius:5px}
 .modal-close:hover{background:var(--panel2);color:var(--fg)}
 .global-todo{position:relative;flex:none;z-index:30;border-bottom:1px solid var(--line);background:var(--panel)}
-.todo-capture{display:flex;align-items:center;gap:12px;padding:7px 14px;min-height:48px}
-.todo-toggle{flex:none;display:flex;align-items:center;gap:7px;border:0;background:transparent;color:var(--fg);font-weight:600;padding:6px;cursor:pointer;white-space:nowrap}
-#todoCount{font-size:11px;min-width:18px;border-radius:10px;background:var(--panel2);color:var(--muted);padding:2px 5px}
+.todo-capture{display:flex;align-items:center;gap:10px;padding:8px 12px;min-height:44px}
+.todo-toggle{flex:none;display:flex;align-items:center;gap:7px;height:28px;padding:0 10px;border:1px solid color-mix(in srgb,var(--accent) 32%,transparent);border-radius:7px;background:color-mix(in srgb,var(--accent) 14%,var(--panel2));color:var(--fg);font-weight:700;font-size:12px;cursor:pointer;white-space:nowrap;transition:all .15s ease}
+.todo-toggle:hover,.todo-toggle[aria-expanded="true"]{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 24%,var(--panel2))}
+.todo-cbx{width:15px;height:15px;border-radius:4px;border:1.5px solid color-mix(in srgb,var(--accent) 62%,var(--line));background:color-mix(in srgb,var(--panel) 55%,transparent);flex:none}
+#todoCount{font-size:11px;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums}
 #todoCaptureForm{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
 #todoCaptureInput,.todo-list-filters input[type="search"]{flex:1;min-width:80px;border:1px solid var(--line);border-radius:7px;padding:7px 10px;background:var(--panel2);color:var(--fg);font:inherit;font-size:13px}
-#todoCaptureProject{width:155px;max-width:25%;padding:6px;border:1px solid var(--line);border-radius:6px;font-size:12px}
-#todoCaptureAdd{font-size:12px;white-space:nowrap;background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+#todoCaptureInput{border-style:dashed;background:transparent}
+#todoCaptureInput:focus{border-style:solid;border-color:var(--accent);background:var(--panel2);outline:none}
+#todoCaptureProject{width:132px;max-width:22%;height:28px;padding:0 2px;border:0;background:transparent;color:var(--muted);font-size:11.5px;cursor:pointer}
+#todoCaptureProject:hover{color:var(--fg)}
+#todoCaptureAdd{width:28px;min-width:28px;height:28px;padding:0;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--muted);font-size:13px;line-height:1;display:inline-flex;align-items:center;justify-content:center;flex:none;transition:all .15s ease}
+#todoCaptureAdd:hover{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
 #todoCaptureStatus{font-size:12px;color:var(--muted);max-width:200px;overflow-wrap:anywhere}
 .todo-panel-popover{position:absolute;top:100%;right:12px;width:min(640px,calc(100% - 24px));max-height:min(560px,70vh);display:flex;flex-direction:column;padding:14px;border:1px solid var(--line);border-radius:0 0 12px 12px;box-shadow:var(--shadow);background:var(--panel)}
 .todo-panel-popover[hidden]{display:none}

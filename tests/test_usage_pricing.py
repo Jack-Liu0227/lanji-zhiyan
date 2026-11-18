@@ -58,7 +58,7 @@ class UsagePricingTest(unittest.TestCase):
         self.assertEqual(usage_stats.context_sizes([],[])['tools'],0)
 
     def test_report_manual_reset_currency_and_missing_usage(self):
-        with tempfile.TemporaryDirectory() as folder, workflow.WorkflowDB(Path(folder)/'test.sqlite3') as db:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder, workflow.WorkflowDB(Path(folder)/'test.sqlite3') as db:
             model=db.add_model('DeepSeek','https://api.deepseek.com/v1','deepseek-flash','DONT_RETURN_SECRET')
             usage_stats.record(model,[],[],30,{'prompt':1000,'completion':200,'cached':0,'exact':True},'ok',0)
             usage_stats.record(model,[],[],30,{},'error',0)

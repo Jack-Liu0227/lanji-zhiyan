@@ -32,7 +32,7 @@ def archive(files):
 
 class SkillInstallationTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="skill-install-")
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="skill-install-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.project = self.root / "project"

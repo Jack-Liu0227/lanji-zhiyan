@@ -17,7 +17,7 @@ import workflow_documents  # noqa: E402
 
 class MapStepTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db_path = Path(self.tmp.name) / "t.sqlite3"
         os.environ["RESEARCH_WORKBENCH_DB"] = str(self.db_path)
         self.db = workflow.WorkflowDB(self.db_path)

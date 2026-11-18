@@ -11,7 +11,7 @@ import workflow
 
 class PromptLibraryTest(unittest.TestCase):
     def setUp(self):
-        temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup)
+        temporary=tempfile.TemporaryDirectory(ignore_cleanup_errors=True);self.addCleanup(temporary.cleanup)
         self.root=Path(temporary.name);self.db=workflow.WorkflowDB(self.root/'db.sqlite3');self.addCleanup(self.db.close)
         project=self.root/'project';project.mkdir();self.pid=self.db.create_task('Library',base_dir=str(project))
         other=self.root/'other';other.mkdir();self.other=self.db.create_task('Other',base_dir=str(other))

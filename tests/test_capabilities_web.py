@@ -26,7 +26,7 @@ EDGE = next((path for base in (os.environ.get("ProgramFiles(x86)"), os.environ.g
 class CapabilityWebTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        temporary = tempfile.TemporaryDirectory(prefix="rw-capabilities-web-")
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-capabilities-web-")
         cls.addClassCleanup(temporary.cleanup)
         home = Path(temporary.name) / "home"
         cls.skill = home / ".agents/skills/demo/SKILL.md"

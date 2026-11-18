@@ -21,7 +21,7 @@ import workspace_chat
 
 class WorkspaceProductUpdatesTest(unittest.TestCase):
     def setUp(self):
-        temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
+        temp=tempfile.TemporaryDirectory(ignore_cleanup_errors=True);self.addCleanup(temp.cleanup)
         self.root=Path(temp.name);self.db=workflow.WorkflowDB(self.root/'app.sqlite3');self.addCleanup(self.db.close)
         self.project=self.root/'project';self.project.mkdir()
         self.pid=self.db.create_task('Image project',base_dir=str(self.project))

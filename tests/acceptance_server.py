@@ -22,7 +22,7 @@ REPORT = ROOT / "output/acceptance/2026-10-21"
 
 
 def main():
-    with tempfile.TemporaryDirectory(prefix="rw-browser-acceptance-") as temporary:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-browser-acceptance-") as temporary:
         os.environ["LANJI_ZHIYAN_HOME"] = temporary
         os.environ["LANJI_ZHIYAN_DB"] = str(Path(temporary) / "data/research.sqlite3")
         os.environ["NO_PROXY"] = "localhost,127.0.0.1"

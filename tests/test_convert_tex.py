@@ -57,7 +57,7 @@ class FormatToolRoutingTest(unittest.TestCase):
     def setUp(self):
         import tempfile
         import workflow
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db = workflow.WorkflowDB(Path(self._tmp.name) / "t.sqlite3")
         base = Path(self._tmp.name) / "proj"
         (base / "论文正文").mkdir(parents=True)
@@ -91,7 +91,7 @@ class ConvertOpeningTest(unittest.TestCase):
     def setUp(self):
         import tempfile
         import workflow
-        self._tmp = tempfile.TemporaryDirectory()
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.db = workflow.WorkflowDB(Path(self._tmp.name) / "t.sqlite3")
         base = Path(self._tmp.name) / "proj"
         (base / "论文正文").mkdir(parents=True)

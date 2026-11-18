@@ -16,7 +16,7 @@ import workflow
 
 class AgentJobsTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "app.sqlite3"
         self.manager = RunManager()

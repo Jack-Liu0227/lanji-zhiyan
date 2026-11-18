@@ -9,7 +9,7 @@ import workflow
 
 class ReadOnlyProjectNotesTest(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="rw-readonly-notes-")
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-readonly-notes-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.db = workflow.WorkflowDB(self.root / "notes.sqlite3")

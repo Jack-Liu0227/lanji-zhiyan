@@ -9,10 +9,32 @@
     .wfl-graph{border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden}
     .wfl-graph-scroll{overflow:auto;background-image:radial-gradient(var(--line) .8px,transparent .8px);background-size:16px 16px}
     .wfl-graph-svg{display:block}.wfl-edge{fill:none;stroke:var(--muted);stroke-width:1.4;opacity:.65}
-    .wfl-node{cursor:pointer;outline:none}.wfl-node rect{fill:var(--panel);stroke:var(--line);stroke-width:1.4}
-    .wfl-node text{fill:var(--fg);font-size:12px;font-family:inherit}.wfl-node .wfl-node-status{font-size:10px;fill:var(--muted)}
-    .wfl-node circle{fill:var(--muted)}.wfl-node.running circle,.wfl-node.ready circle{fill:var(--accent)}.wfl-node.done circle{fill:#388c68}.wfl-node.failed circle{fill:var(--err)}
-    .wfl-node.selected rect,.wfl-node:focus rect{stroke:var(--accent);stroke-width:2.4}.wfl-node.running rect{stroke:var(--accent)}
+    .wfl-node{cursor:pointer;outline:none;font-family:inherit}
+    .wfl-row{display:flex;align-items:center;gap:10px;height:62px;padding:0 12px 0 0;position:relative;overflow:hidden;box-sizing:border-box;border-radius:9px;background:var(--panel);border:1px solid var(--line);color:var(--fg);cursor:pointer}
+    .wfl-row-state{position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--line)}
+    .wfl-row-no{width:30px;flex:none;text-align:center;font-size:9.5px;letter-spacing:.12em;color:var(--muted)}
+    .wfl-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;padding-left:2px}
+    .wfl-row-title{font-size:13px;font-weight:550;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .wfl-row-sub{font-size:10px;line-height:1.3;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .wfl-row-out{flex:none;font-size:10px;color:var(--muted);border:1px solid var(--line);border-radius:5px;padding:2px 7px;white-space:nowrap}
+    .wfl-row-pill{flex:none;font-size:9.5px;padding:3px 8px;border-radius:5px;white-space:nowrap;color:var(--muted);background:color-mix(in srgb,var(--muted) 10%,transparent);border:1px solid color-mix(in srgb,var(--muted) 22%,transparent)}
+    .wfl-node.done .wfl-row-state{background:#388c68}
+    .wfl-node.running .wfl-row-state,.wfl-node.ready .wfl-row-state{background:var(--accent)}
+    .wfl-node.failed .wfl-row-state{background:var(--err)}
+    .wfl-node.done .wfl-row{border-color:color-mix(in srgb,#388c68 34%,transparent)}
+    .wfl-node.done .wfl-row-pill{color:#4f9d7e;background:color-mix(in srgb,#388c68 14%,transparent);border-color:color-mix(in srgb,#388c68 30%,transparent)}
+    .wfl-node.running .wfl-row{border-color:color-mix(in srgb,var(--accent) 52%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 16%,transparent)}
+    .wfl-node.running .wfl-row-pill{color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent);border-color:color-mix(in srgb,var(--accent) 32%,transparent)}
+    .wfl-rail{stroke:var(--line);stroke-width:2}
+    .wfl-rail-done{stroke:#388c68;stroke-width:2}
+    .wfl-mark{fill:var(--panel);stroke:var(--line);stroke-width:1.6}
+    .wfl-mark.done,.wfl-mark.delivered,.wfl-mark.succeeded{fill:color-mix(in srgb,#388c68 20%,var(--panel));stroke:#388c68}
+    .wfl-mark.running,.wfl-mark.ready{fill:color-mix(in srgb,var(--accent) 18%,var(--panel));stroke:var(--accent);filter:drop-shadow(0 0 5px color-mix(in srgb,var(--accent) 50%,transparent))}
+    .wfl-mark.failed{fill:color-mix(in srgb,var(--err) 18%,var(--panel));stroke:var(--err)}
+    .wfl-check{fill:none;stroke:#57a985;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+    .wfl-mark-no{fill:var(--muted);font-size:9.5px;font-weight:700;font-family:inherit}
+    .wfl-mark-no.running,.wfl-mark-no.ready{fill:var(--accent)}
+    .wfl-node.selected .wfl-row,.wfl-node:focus-visible .wfl-row{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 22%,transparent)}
     .wfl-note{padding:7px 13px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);line-height:1.5}
     .wfl-error{color:var(--err);font-size:12px;white-space:pre-wrap}.wfl-editor-grid{display:grid;grid-template-columns:185px minmax(0,1fr);gap:14px;margin-top:12px}
     .wfl-editor .field{display:block;margin:10px 0}.wfl-editor input,.wfl-editor textarea,.wfl-editor select{max-width:100%;width:100%;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:7px;font:inherit}
@@ -25,39 +47,71 @@
     @media(max-width:700px){.wfl-project-dialog .row{grid-template-columns:1fr}}
   `;
   document.head.appendChild(root);
-  const labels = {awaiting_review:"待人工审查",queued:"已准备",pending:"未开始",ready:"可开始",waiting:"等待依赖",running:"运行中",done:"执行完成",succeeded:"待验收",delivered:"已交付",stale:"需重新确认",failed:"失败",cancelled:"已停止",blocked:"被阻塞"};
+  const labels = {config:"已配置",awaiting_review:"待人工审查",queued:"已准备",pending:"待开始",ready:"可开始",waiting:"等待依赖",running:"运行中",done:"执行完成",succeeded:"待验收",delivered:"已交付",stale:"需重新确认",failed:"失败",cancelled:"已停止",blocked:"被阻塞"};
   let settingsData = null, draft = null, projectNotice = "", settingsRequest = 0;
   const byId = id => document.getElementById(id);
   const clone = value => JSON.parse(JSON.stringify(value));
   const stageLabel = step => settingsData?.stages.find(stage=>stage.id===step)?.name || step;
 
-  function graph(data, interactive = true){
-    const groups = new Map(), positions = new Map();
+  function graph(data, interactive = true, rowWidth = 720){
+    const GAP = 12, RAIL = 46, NODE_X = 74, PAD_R = 16, H = 62;
+    const lanes = new Map();
     for(const node of data.nodes || []){
       const level = Number.isFinite(node.level) ? node.level : 0;
-      const row = groups.get(level) || 0;
-      positions.set(node.id, {x:18 + level * 190, y:16 + row * 86});
-      groups.set(level, row + 1);
+      if(!lanes.has(level)) lanes.set(level, []);
+      lanes.get(level).push(node);
     }
-    const width = Math.max(220, ...[...positions.values()].map(p=>p.x + 182));
-    const height = Math.max(100, ...[...positions.values()].map(p=>p.y + 80));
-    const paths = (data.edges || []).map(edge=>{
+    // 一行一步：单节点撑满可用宽度；同层多节点（并行分支）平分并排
+    const laneWidth = Math.max(240, Math.round(rowWidth) - NODE_X - PAD_R);
+    const positions = new Map();
+    for(const [level, lane] of lanes){
+      const w = Math.floor((laneWidth - (lane.length - 1) * GAP) / lane.length);
+      lane.forEach((node, index) => positions.set(node.id, {x: NODE_X + index * (w + GAP), y: 18 + level * 88, w}));
+    }
+    const width = NODE_X + laneWidth + PAD_R;
+    const height = Math.max(140, ...[...positions.values()].map(p => p.y + H + 18));
+    const paths = (data.edges || []).map(edge => {
       const a = positions.get(edge.source), b = positions.get(edge.target);
       if(!a || !b) return "";
-      const x = a.x + 164, y = a.y + 31, end = b.x - 4, ey = b.y + 31;
-      return `<path class="wfl-edge" d="M ${x} ${y} C ${x+14} ${y}, ${end-14} ${ey}, ${end} ${ey}" marker-end="url(#wfl-arrow)"/>`;
+      const x = a.x + a.w / 2, y = a.y + H, end = b.x + b.w / 2, ey = b.y - 4;
+      return `<path class="wfl-edge" d="M ${x} ${y} C ${x} ${y+26}, ${end} ${ey-26}, ${end} ${ey}" marker-end="url(#wfl-arrow)"/>`;
     }).join("");
-    const nodes = (data.nodes || []).map(node=>{
-      const p = positions.get(node.id), status = labels[node.status] || labels.pending;
-      const label = node.label.length > 12 ? node.label.slice(0,11) + "…" : node.label;
-      return `<g class="wfl-node ${esc(node.status || "pending")} ${node.id===data.selected_node?"selected":""}" transform="translate(${p.x},${p.y})" ${interactive?`data-wfl-node="${esc(node.id)}" role="button" tabindex="0" aria-label="${esc(node.label + "：" + status)}"`:""}>
-        <title>${esc(node.label + " · " + status + "\n" + (node.summary || "") + (node.source ? "\n来源：" + node.source + " / " + node.record_id : "") + (node.updated_at ? "\n" + fmtDate(node.updated_at) : ""))}</title>
-        <rect width="164" height="62" rx="9"/><circle cx="13" cy="18" r="3.5"/>
-        <text x="24" y="22">${esc(label)}</text><text class="wfl-node-status" x="13" y="45">${esc(status)}</text></g>`;
+    const nodeList = data.nodes || [];
+    const ys = nodeList.map(node => positions.get(node.id).y);
+    const railTop = Math.min(...ys) + H / 2, railBottom = Math.max(...ys) + H / 2;
+    const doneYs = nodeList.filter(node => node.status === "done").map(node => positions.get(node.id).y + H / 2);
+    const rail = `<line class="wfl-rail" x1="${RAIL}" y1="${railTop}" x2="${RAIL}" y2="${railBottom}"/>` +
+      (doneYs.length ? `<line class="wfl-rail-done" x1="${RAIL}" y1="${railTop}" x2="${RAIL}" y2="${Math.max(...doneYs)}"/>` : "");
+    const marksOf = {done: 1, delivered: 1, succeeded: 1};
+    const marks = nodeList.map((node, index) => {
+      const p = positions.get(node.id), key = node.status || "pending", cy = p.y + H / 2;
+      const mark = `<circle class="wfl-mark ${esc(key)}" cx="${RAIL}" cy="${cy}" r="10"/>`;
+      return mark + (marksOf[key]
+        ? `<path class="wfl-check" d="M ${RAIL - 4.2} ${cy} l 3.1 3.1 l 6.2 -6.2"/>`
+        : `<text class="wfl-mark-no ${esc(key)}" x="${RAIL}" y="${cy + 3.4}" text-anchor="middle">${index + 1}</text>`);
     }).join("");
-    return `<div class="wfl-graph-scroll"><svg class="wfl-graph-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="工作流节点及依赖状态图"><defs><marker id="wfl-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M 0 0 L 7 3.5 L 0 7 z" fill="var(--muted)"/></marker></defs>${paths}${nodes}</svg></div>`;
+    const nodes = (data.nodes || []).map((node, index) => {
+      const p = positions.get(node.id);
+      const key = node.status || "pending";
+      const status = labels[key] || labels.pending;
+      const sub = node.owner_name || "未绑定执行者";
+      const pill = status;
+      const label = node.label.length > 30 ? node.label.slice(0, 29) + "…" : node.label;
+      return `<g class="wfl-node ${esc(key)} ${node.id === data.selected_node ? "selected" : ""}" transform="translate(${p.x},${p.y})" ${interactive ? `data-wfl-node="${esc(node.id)}" role="button" tabindex="0" aria-label="${esc(node.label + "：" + status)}"` : ""}>
+        <title>${esc([node.label, status, node.review_required === false ? "" : "需人工审查"].filter(Boolean).join(" · "))}</title>
+        <foreignObject width="${p.w}" height="${H}">
+          <div xmlns="http://www.w3.org/1999/xhtml" class="wfl-row">
+            <i class="wfl-row-state"></i>
+            <span class="wfl-row-no">${String(index + 1).padStart(2, "0")}</span>
+            <span class="wfl-row-main"><span class="wfl-row-title">${esc(label)}</span><span class="wfl-row-sub">${esc(sub)}</span></span>
+            ${node.output_label ? `<span class="wfl-row-out">${esc(node.output_label)}</span>` : ""}
+            <span class="wfl-row-pill">${esc(pill)}</span>
+          </div>
+        </foreignObject>
+      </g>`;
+    }).join("");
+    return `<div class="wfl-graph-scroll"><svg class="wfl-graph-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="工作流节点及依赖状态图"><defs><marker id="wfl-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M 0 0 L 7 3.5 L 0 7 z" fill="var(--muted)"/></marker></defs>${rail}${paths}${marks}${nodes}</svg></div>`;
   }
-
   window.WorkflowGraph={render:graph};
   if(!SET_SECS.some(section=>section[0]==="workflows")) SET_SECS.push(["workflows","🔀","工作流"]);
   const originalSettings = renderSettings;

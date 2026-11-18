@@ -17,7 +17,7 @@ import workflow_tasks
 
 class ResearchSetupTest(unittest.TestCase):
     def setUp(self):
-        tmp = tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True);self.addCleanup(tmp.cleanup)
         self.db = workflow.WorkflowDB(Path(tmp.name) / 'app.sqlite3');self.addCleanup(self.db.close)
         self.chat = self.db.create_chat('Global steward')
 

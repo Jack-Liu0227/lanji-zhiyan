@@ -13,7 +13,7 @@ import workflow_layout
 
 class ProjectBindingsTest(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="rw-project-bindings-")
+        self.temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-project-bindings-")
         self.addCleanup(self.temporary.cleanup)
         self.db = workflow.WorkflowDB(Path(self.temporary.name) / "app.sqlite3")
         self.addCleanup(self.db.close)
@@ -63,7 +63,7 @@ class ProjectBindingsTest(unittest.TestCase):
             self.assertEqual(bindings.settings(self.db, self.project)["autonomy_mode"], "supervised")
             self.assertTrue(bindings.list_roles(self.db, self.project, template["id"])[0]["available"])
         finally:
-            self.db.db.set_authorizer(None)
+            self.db.db.set_authorizer(lambda *_: sqlite3.SQLITE_OK)   # py3.10: set_authorizer(None) 会把连接变成全拒
 
     def test_legacy_reimport_never_revives_a_disabled_or_restricted_grant(self):
         grant = bindings.register(self.db, self.project, "assistant", "binding-writer", tools=["doc_read"], enabled=False)

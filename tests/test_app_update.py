@@ -44,7 +44,7 @@ class AppUpdateTest(unittest.TestCase):
             app_update.version_key("nightly")
 
     def test_source_mode_reports_version_without_network_or_install_support(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             (root / "VERSION").write_text("0.4.0\n", encoding="utf-8")
             with patch.object(app_update, "_fetch_json", side_effect=AssertionError("network")):
@@ -73,7 +73,7 @@ class AppUpdateTest(unittest.TestCase):
                 return _Response(json.dumps(release).encode("utf-8"))
             return _Response(payload)
 
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             (root / "VERSION").write_text("0.4.0", encoding="utf-8")
             info = app_update.release_info(root, frozen=True, opener=opener)
@@ -93,13 +93,13 @@ class AppUpdateTest(unittest.TestCase):
             "asset_name": "setup.exe",
             "asset_digest": "sha256:" + "0" * 64,
         }
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             with self.assertRaisesRegex(app_update.UpdateError, "校验失败"):
                 app_update.download_update(info, Path(tmp), opener=lambda *_args, **_kwargs: _Response(b"bad"))
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
     def test_installer_receives_active_directory_and_shortcut_policy(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             installer = Path(tmp) / "setup.exe"
             installer.write_bytes(b"stub")
             with patch.object(app_update.subprocess, "Popen") as popen:

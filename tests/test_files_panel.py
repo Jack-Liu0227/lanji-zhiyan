@@ -21,7 +21,7 @@ from workflow_converters import file_hand, tree_list
 
 class FilesPanelTest(unittest.TestCase):
     def setUp(self):
-        td = tempfile.TemporaryDirectory(prefix="rw-files-")
+        td = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-files-")
         self.addCleanup(td.cleanup)
         self.root = Path(td.name)
         self.old_db = paths.DB_PATH

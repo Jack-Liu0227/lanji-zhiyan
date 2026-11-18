@@ -10,7 +10,7 @@ import workflow
 
 class RSSSettingsTest(unittest.TestCase):
     def setUp(self):
-        temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup)
+        temporary=tempfile.TemporaryDirectory(ignore_cleanup_errors=True);self.addCleanup(temporary.cleanup)
         self.db=workflow.WorkflowDB(Path(temporary.name)/'db.sqlite3');self.addCleanup(self.db.close)
 
     def test_edit_disable_refresh_and_delete_preserve_articles(self):

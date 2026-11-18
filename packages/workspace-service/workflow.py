@@ -421,7 +421,7 @@ def _fuse_literal(out: dict[str, Any], literal: list[dict[str, Any]]) -> dict[st
     """
     hits = {(h["kind"], h["id"], h.get("page_no") or 0): dict(h) for h in out["hits"]}
     for rank, h in enumerate(literal):
-        key = (h["kind"], h["id"], 0)                    # 笔记/证据没有页码，按源合并
+        key = (h["kind"], h["id"], h.get("page_no") or 0)   # 与语义腿同构，同一条不会被算成两条
         gain = 1.0 / (60 + rank + 1)
         if key in hits:
             hits[key]["rrf"] = round(hits[key]["rrf"] + gain, 5)
@@ -429,9 +429,16 @@ def _fuse_literal(out: dict[str, Any], literal: list[dict[str, Any]]) -> dict[st
                 hits[key]["matched"].append("literal")
         else:
             hits[key] = dict(h, rrf=round(gain, 5), matched=["literal"])
-    merged = sorted(hits.values(), key=lambda h: -h["rrf"])[:20]
+    import semantic as _sem
+
+    merged = _sem.mark_weak(sorted(hits.values(), key=lambda h: -h["rrf"])[:20])
     mode = "hybrid" if literal else out["mode"]
-    return {**out, "hits": merged, "total": len(merged), "mode": mode}
+    result = {**out, "hits": merged, "total": len(merged), "mode": mode,
+              "weak": sum(1 for h in merged if h["weak"])}
+    if merged and result["weak"] == len(merged):     # 一条字面证据都没有
+        result["note"] = ("全是语义相似命中（weak=true），原文里没有这些词：不要当原文引用，"
+                          "没查到就说没查到，别凭相似度写。")
+    return result
 
 
 def _knowledge_query_literal(db: "WorkflowDB", q: str, scope: list[tuple[str, str]],
@@ -457,6 +464,7 @@ def _knowledge_query_literal(db: "WorkflowDB", q: str, scope: list[tuple[str, st
                 continue
             if q in (e["value"] or "").lower() or q in (e["excerpt"] or "").lower() or q in (e["field"] or "").lower():
                 hits.append({"kind": "evidence", "project": ptitle, "field": e["field"], "value": e["value"],
+                             "id": e["id"], "page_no": e["page_no"] or 0, "title": e["filename"],
                              "citation": f"{e['filename']} p.{e['page_no']}", "context": e["excerpt"]})
     scope_ids = dict(scope)
     for note in db.md_notes():                                  # 笔记页那批「大笔记」
@@ -573,9 +581,18 @@ def _schedule_manage(db: "WorkflowDB", args: dict[str, Any], project_id: str = "
     raise ValueError("action 只支持 list / create / toggle / delete")
 
 
-# 子 agent 只给只读工具（写操作留在父对话手里，子 agent 不许越权）
-_SUB_TOOL_NAMES = ("library_overview", "knowledge_query", "paper_search", "paper_read")
-_SUB_TOOLS = [t for t in TOOL_SPECS if t.get("function", {}).get("name") in _SUB_TOOL_NAMES]
+# 子 agent 与父共用写产物工具；只卡住「递归委派 / 结构配置 / 起流程 / 对外发送」这几类
+_SUB_DENY = {
+    "delegate",                                              # 防递归：一层就够，别翻倍烧钱
+    "project_create", "task_create", "task_start", "task_cancel", "task_handoff",
+    "workflow_create", "workflow_prepare", "workflow_start", "workflow_cancel",
+    "team_create", "team_form", "team_manage", "team_assign",
+    "schedule_manage", "calendar_add", "assistant_manage", "project_task_manage",
+    "mcp_register", "skill_create",
+}
+_SUB_TOOLS = [t for t in TOOL_SPECS if t.get("function", {}).get("name") not in _SUB_DENY]
+_SUB_SUMMARY_MAX = 6000            # 超了就落盘只回摘要+路径，别把父的上下文挤爆
+# ponytail: 并发写靠 WAL + busy_timeout=60s 串行，子 agent 之间不共享写锁；真要吞吐再排队
 
 
 TOOL_RISK = {
@@ -735,7 +752,14 @@ def _delegate(db: "WorkflowDB", task_id: str, jobs: list[dict[str, Any]], emit: 
                                    cancel_check=cancel_check, **kwargs)
                 events = answer.get("events") or []
                 summary = (answer.get("reply") or "").strip()
-                result["summary"] = summary[:2000 if role == "general" else 1200]
+                if role == "general" and len(summary) > _SUB_SUMMARY_MAX:
+                    try:
+                        target = child_db.pdir(task_id, "其余") / f"{sid}-summary.md"
+                        target.write_text(summary, encoding="utf-8")
+                        summary = f"{summary[:_SUB_SUMMARY_MAX]}\n…（已截断，见 {target}）"
+                    except OSError as exc:
+                        summary = f"{summary[:_SUB_SUMMARY_MAX]}\n…（已截断，落盘失败：{exc}）"
+                result["summary"] = summary if role == "general" else summary[:1200]
                 result["steps"] = len(events) if role == "general" else sum(
                     event.get("type") == "tool_call" for event in events)
                 result["run_id"] = answer.get("run_id", "")

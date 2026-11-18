@@ -32,7 +32,7 @@ class _Reply:
 
 class ZoteroLocalWriteTest(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="zotero-local-")
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="zotero-local-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.db = workflow.WorkflowDB(self.root / "app.sqlite3")

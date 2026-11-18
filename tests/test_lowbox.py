@@ -22,7 +22,7 @@ class LowBoxTest(unittest.TestCase):
         import tempfile
         from pathlib import Path
         from unittest.mock import patch
-        temporary = tempfile.TemporaryDirectory(prefix='lowbox-label-')
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix='lowbox-label-')
         self.addCleanup(temporary.cleanup)
         folder = Path(temporary.name)
         self.assertTrue(lowbox.mark_low(folder, recursive=True))
@@ -42,7 +42,7 @@ class LowBoxTest(unittest.TestCase):
     def test_granted_directory_writable_protected_directory_denied(self) -> None:
         import tempfile
         from pathlib import Path
-        temporary = tempfile.TemporaryDirectory(prefix="lowbox_t_", dir=os.environ.get("LOCALAPPDATA"))
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="lowbox_t_", dir=os.environ.get("LOCALAPPDATA"))
         self.addCleanup(temporary.cleanup)
         base = str(Path(temporary.name) / "granted")
         protected = Path(temporary.name) / "protected"

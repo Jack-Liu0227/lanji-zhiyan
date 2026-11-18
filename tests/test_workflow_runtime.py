@@ -19,7 +19,7 @@ from run_manager import RunManager
 class WorkflowRuntimeTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        tmp = tempfile.TemporaryDirectory(prefix="rw-workflow-browser-")
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-workflow-browser-")
         cls.addClassCleanup(tmp.cleanup)
         cls.path = Path(tmp.name) / "app.sqlite3"
         sys.path.insert(0, str(runtime.ROOT / "apps/desktop"))

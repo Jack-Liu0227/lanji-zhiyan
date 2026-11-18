@@ -65,7 +65,7 @@ class TestLangGraphWorkflow(unittest.TestCase):
     def test_new_graph_shares_canonical_execution_and_versioned_inputs(self):
         import workflow_execution
         import project_tasks
-        with tempfile.TemporaryDirectory(prefix='rw-unified-graph-') as folder:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix='rw-unified-graph-') as folder:
             with workflow.WorkflowDB(self.db_path) as db:
                 project=db.create_task('Unified graph',base_dir=folder)
                 (Path(folder)/'evidence.md').write_text('# Actual evidence',encoding='utf-8')

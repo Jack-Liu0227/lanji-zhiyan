@@ -190,7 +190,7 @@ const NAV = [
     {id:"assistants",label:"专家",ico:"👨‍🔬"},
     {id:"team",label:"团队",ico:"👥"},
     {id:"workspace",label:"项目工作区",ico:"🧭"},
-    {id:"task-center",label:"任务与自动化",ico:"☑"},
+    {id:"workbench",label:"科研工作台",ico:"🔬"},
     {id:"toolbox",label:"论文工具箱",ico:"🧰"},
     {id:"calendar",label:"日历",ico:"📅"}]},
   {g:"solo",items:[
@@ -200,9 +200,10 @@ const NAV = [
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {usage:"用量统计","task-center":"任务与自动化",toolbox:"论文工具箱",assistants:"专家",team:"团队",agent:"智研管家",workspace:"项目工作区",calendar:"日历",tasks:"项目管理",workflow:"项目工作区",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时自动化",space:"项目工作区",settings:"设置"};
+const TITLES = {usage:"用量统计",workbench:"科研工作台","task-center":"任务与自动化",toolbox:"论文工具箱",assistants:"专家",team:"团队",agent:"智研管家",workspace:"项目工作区",calendar:"日历",tasks:"任务与自动化",workflow:"项目工作区",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时自动化",space:"项目工作区",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 function uiRouteIs(kind){
+  if(kind==="workflow" && route()==="workbench") return true;   // 全局「科研工作台」也是那张图流页
   return route()===kind || (route()==="workspace" && !!window.ProjectWorkspace?.hasSurface(kind));
 }
 
@@ -217,7 +218,7 @@ async function uiNavigate(action){
 
 function openTab(r, title){
   if(r==="schedules"){TaskCenter.requestView('automation');r='task-center';title='任务与自动化';}
-  if(r==="tasks"&&window.ProjectManager){ProjectManager.open();return;}
+  if(r==="tasks"){TaskCenter.requestView("board");r="task-center";title="任务与自动化";}   // 老「项目管理」页已删，路由并入任务与自动化
   if(["workspace","space","workflow","notes"].includes(r) && window.ProjectWorkspace){
     ProjectWorkspace.requestRoute(r);r="workspace";title="项目工作区";
   }
@@ -294,13 +295,36 @@ function renderSidebar(){
 const FRAMELESS = new URLSearchParams(location.search).has("pw");
 let winZoom = true;                    // 窗口现在是不是铺满工作区 → 决定右上那个键画「最大化」还是「还原」
 let winStateAsked = false;
+if(FRAMELESS) mountResizeEdges();   // 页面接管边缘：WebView2 填满客户区，命中测试到不了主窗口
+function mountResizeEdges(){
+  if(!FRAMELESS || document.getElementById("rz")) return;
+  const EDGES = ["top","bottom","left","right","topleft","topright","bottomleft","bottomright"];
+  const box = document.createElement("div");
+  box.id = "rz";
+  box.innerHTML = EDGES.map(e=>`<i data-e="${e}"></i>`).join("");
+  document.body.append(box);
+  box.querySelectorAll("i").forEach(el=>{          // 按下时才找 api：pywebviewready 可能在启动之后
+    el.addEventListener("mousedown", ev=>{
+      ev.preventDefault(); ev.stopPropagation();
+      const py = window.pywebview && window.pywebview.api;
+      if(py && py.resize) py.resize(el.dataset.e).catch(()=>{});
+    });
+  });
+}
 function winCommand(action){
-  // 关闭时页面会消失，JS 桥接无法再回传结果；通过宿主 HTTP 通道关闭。
-  if(action === "close") return api("/api/win/close", {});
-  // 其余窗口命令优先走 pywebview js_api（=宿主进程）。HTTP 服务跑在 Low IL 沙箱里，
-  // UIPI 会静默拦掉它对中完整性窗口的 ShowWindow / SetWindowPos / WM_CLOSE（全是「点了没反应」）。
+  // 窗口命令一律先走 pywebview js_api（=宿主进程，Medium）。HTTP 服务跑在 Low IL 沙箱里，
+  // UIPI 会**静默丢掉**它对中完整性窗口的 ShowWindow / SetWindowPos / WM_CLOSE ——
+  // 症状就是「点了没反应」，而且 HTTP 还回 200（实测 2026-11-15）。
+  // 关闭时页面会立刻消失、回执拿不到，所以 close 不等返回，直接当成功。
   const py = window.pywebview && window.pywebview.api;
-  return Promise.resolve(py && py.win ? py.win(action) : api("/api/win/" + action, {}));
+  if(py && py.win){
+    if(action === "close"){
+      try{ const r = py.win(action); if(r && r.catch) r.catch(()=>{}); }catch(e){}
+      return Promise.resolve({ok:action});
+    }
+    return Promise.resolve(py.win(action)).catch(()=>api("/api/win/" + action, {}));
+  }
+  return api("/api/win/" + action, {});      // 桥没起来（极早期点击）才退回 HTTP
 }
 function renderTopbar(){
   $("topbar").innerHTML = `

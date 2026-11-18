@@ -246,9 +246,12 @@ def _run(args: list[str], prompt: str, timeout: int, cancel_check=None) -> str:
             finally:
                 if process.poll() is None:
                     if os.name == "nt":
-                        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True,
-                                       timeout=5, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                    else:
+                        try:
+                            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True,
+                                           timeout=5, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                        except (OSError, subprocess.TimeoutExpired):
+                            pass
+                    if process.poll() is None:
                         process.kill()
                 process.wait()
                 if process.stdin and not process.stdin.closed:

@@ -13,7 +13,7 @@ from _pdf_fixture import write_text_pdf
 
 class ReproductionRoutesTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-test-repr-", ignore_cleanup_errors=True)
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-test-repr-")
         self.db_path = Path(self.tmp.name) / "test_repr.sqlite3"
         self.db = WorkflowDB(self.db_path)
         self.pdf_file = write_text_pdf(Path(self.tmp.name) / "sample.pdf", ["Page 1 content on lithium kinetics", "Page 2 data"])

@@ -16,7 +16,7 @@ import workflow  # noqa: E402
 
 class ProjectNoteCategoryTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         db_path = Path(self.tmp.name) / "t.sqlite3"
         os.environ["RESEARCH_WORKBENCH_DB"] = str(db_path)
         self.base = Path(self.tmp.name) / "proj"

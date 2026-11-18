@@ -18,7 +18,7 @@ import workflow
 
 class AssetGraphTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-assets-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-assets-")
         self.db = workflow.WorkflowDB(Path(self.tmp.name) / "research.sqlite3")
         self.project = self.db.create_task("资产项目", "问题", "关键词")
 

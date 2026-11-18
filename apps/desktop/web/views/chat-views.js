@@ -27,6 +27,7 @@ function render(){
   else if(r==='task-center') return TaskCenter.renderGlobal(m);
   else if(r==='usage') return UsageView.render(m);
   else if(r==='toolbox') return PaperToolbox.render(m);
+  else if(r==="workbench") return renderWorkflow(m);
   else if(r==="workflow") { if(window.ProjectWorkspace) { ProjectWorkspace.requestRoute("workflow"); return ProjectWorkspace.render(m); } else return renderWorkflow(m); }
   else if(r==="tasks") renderTasks(m);
   else if(r==="space" || r==="notes") { if(window.ProjectWorkspace) { ProjectWorkspace.requestRoute("notes"); return ProjectWorkspace.render(m); } else return renderSpace(m); }

@@ -5,10 +5,10 @@ const GlobalTodos = (() => {
   const labels = {TODO:'待办', IN_PROGRESS:'进行中', REVIEW:'待审核', DONE:'已完成'};
   host.className = 'global-todo';
   host.innerHTML = `<div class="todo-capture">
-    <button type="button" id="todoToggle" class="todo-toggle" aria-expanded="false" aria-controls="todoPanel">☑ To do <span id="todoCount">…</span></button>
+    <button type="button" id="todoToggle" class="todo-toggle" aria-expanded="false" aria-controls="todoPanel"><span class="todo-cbx" aria-hidden="true"></span>待办 <span id="todoCount">…</span></button>
     <form id="todoCaptureForm"><input id="todoCaptureInput" aria-label="随手记一条待办" placeholder="有什么想做的？记下来，Enter 保存" maxlength="500" autocomplete="off">
       <select id="todoCaptureProject" aria-label="待办归属"><option value="">个人待办</option></select>
-      <button type="submit" id="todoCaptureAdd" class="btn">添加</button></form>
+      <button type="submit" id="todoCaptureAdd" class="btn" aria-label="添加待办">＋</button></form>
     <span id="todoCaptureStatus" role="status" aria-live="polite"></span>
   </div>
   <section id="todoPanel" class="todo-panel-popover" aria-label="待办清单" hidden>

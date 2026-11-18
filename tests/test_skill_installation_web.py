@@ -21,7 +21,7 @@ from test_web_runtime import EDGE, ROOT, sync_playwright
 class SkillInstallationWebTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        temporary = tempfile.TemporaryDirectory(prefix="skill-install-web-")
+        temporary = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="skill-install-web-")
         cls.addClassCleanup(temporary.cleanup)
         cls.root = Path(temporary.name)
         cls.home = cls.root / "home"

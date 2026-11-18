@@ -83,7 +83,9 @@ for _p in ("database", "workspace-core", "workspace-service", "connectors", "ai-
 import fileguard                  # 文件安全：写前快照 / 打开白名单 / 审计
 import papertran                 # 论文翻译页：PDF 服务 / 元数据 / BabelDOC 任务
 import starmap                   # 知识星图：项目 → 文献/笔记/知识点/候选/工作流
-import rss                       # 情报日报：RSS 抓取/解析
+import rss_routes                # RSS 来源管理与抓取 API
+import literature_import         # 情报条目 / 手动题录 → 项目文献库
+import literature_import_routes  # 上者 + 情报列表 GET（/api/rss/items、/api/library/project）
 import vault                     # 知识库：Obsidian Vault 扫描 / 状态写回
 import workflow
 import schedule                  # 定时任务：只在应用活着时调度
@@ -100,7 +102,10 @@ import zotero_sync
 import agent_integrations
 import reproduction_routes
 import feature_routes
-import langgraph_workflow
+import easyscholar_routes
+import zotero_mcp_routes
+import module_composition
+import langgraph_workflow        # 项目工作流图（LangGraph）执行与断点恢复
 # handlers/ 是本目录下的包：被 importlib 按文件加载（测试）或从别处 import 时，本目录不一定在 sys.path 上
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -110,6 +115,7 @@ from handlers.wf_routes import WorkflowRoutes
 from handlers.misc import MiscRoutes
 from handlers.update import UpdateRoutes
 from run_manager import RunManager
+from api_registry import ApiRegistry
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
                       discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
@@ -121,6 +127,20 @@ from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STA
                       en_state, en_run, _safe_path, step_plan, step_done, step_delivery,
                       stage_download_selected, stage_zotero_import, test_provider,
                       deepread_kick, deepread_state, deepread_stop)
+
+# Built-in API modules are registered here; registry order preserves existing route precedence.
+API_ROUTES = ApiRegistry(available_capabilities=("database",))
+API_ROUTES.register("module-composition", module_composition.route_for(API_ROUTES), version="1.0.0", requires=("database",))
+for _module_id, _module in (
+    ("agent-settings", agent_settings), ("capabilities", capabilities),
+    ("workflow-layout", workflow_layout), ("feishu", feishu),
+    ("zotero-sync", zotero_sync), ("reproduction", reproduction_routes),
+    ("easyscholar", easyscholar_routes), ("zotero-mcp", zotero_mcp_routes),
+    ("rss", rss_routes), ("literature-import", literature_import_routes),
+    ("langgraph", langgraph_workflow),
+    ("project-features-core", feature_routes),
+):
+    API_ROUTES.register(_module_id, _module.route, version="1.0.0", requires=("database",))
 
 HERE = Path(__file__).resolve().parent
 WEB = HERE / "web"
@@ -312,8 +332,13 @@ def _fit_side(h: int, width: int = 580) -> None:
 
 
 def _resizable(h: int) -> bool:
-    """给无边框窗补上缩放边框 WS_THICKFRAME —— 只加边框、不加 WS_CAPTION，所以黑标题栏不会回来。
-    缺了它窗口就没法拖边改宽窄（实测样式 0x16010000 里没有 THICKFRAME）。"""
+    """给无边框窗补上 WS_THICKFRAME —— 系统 resize 循环只认这个样式（没有它，
+    连自己发 WM_NCLBUTTONDOWN + HTxxx 都会被 DefWindowProc 直接丢掉）。
+
+    它带来的副作用是窗口矩形每边比客户区大 7px，那圈非客户区就是用户反复报的
+    「上面一条黑边」。所以这里补样式，紧接着 `_strip_nc_frame` 把那圈从客户区计算里抹掉 ——
+    两个一起用才有「能拖边 + 没黑边」。只用一个的话：有边框就没黑边，有黑边就没边框。
+    """
     import ctypes
     u = ctypes.windll.user32
     GWL_STYLE, THICK = -16, 0x00040000
@@ -322,6 +347,58 @@ def _resizable(h: int) -> bool:
         u.SetWindowLongW(h, GWL_STYLE, st | THICK)
         u.SetWindowPos(h, 0, 0, 0, 0, 0, 0x0020 | 0x0002 | 0x0001 | 0x0004)   # FRAMECHANGED|NOMOVE|NOSIZE|NOZORDER
     return bool(u.GetWindowLongW(h, GWL_STYLE) & THICK)
+
+
+_WNDPROC = None          # 必须模块级持有，否则回调被 GC 掉 → 窗口进程直接崩
+_OLD_WNDPROC = None
+
+
+def _strip_nc_frame(h: int) -> bool:
+    """换掉窗口过程，让 WM_NCCALCSIZE 返回 0：客户区 == 整个窗口矩形。
+
+    WS_THICKFRAME 留着（系统 resize 只认它），但那一圈 7px 非客户区被从客户区计算里
+    抹掉，页面因此铺到窗口边 —— Chrome / VS Code 这类无边框窗口的标准做法。
+
+    试过但没用的两条路，别再走：
+    - `DwmSetWindowAttribute(DWMWA_BORDER_COLOR, 页面色)`：hr=0 但像素没变，那 7px 不是
+      DWM 边框线，是窗口自己的非客户区。
+    - `comctl32.SetWindowSubclass`：在这台机器上直接返回 0（挂不上）。
+    所以只能用 SetWindowLongPtrW 换过程，并在 proc 里把消息转给旧过程（不然 .NET
+    那套 WinForms 逻辑就收不到消息了）。64 位指针必须显式声明 argtypes/restype，
+    否则 ctypes 按 c_int 截断，CallWindowProc 立刻 access violation。
+    """
+    global _WNDPROC, _OLD_WNDPROC
+    if _WNDPROC is not None:
+        return True
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    GWLP_WNDPROC, WM_NCCALCSIZE = -4, 0x0083
+    u.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+    u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+    u.CallWindowProcW.argtypes = [ctypes.c_ssize_t, wintypes.HWND, ctypes.c_uint,
+                                  ctypes.c_size_t, ctypes.c_ssize_t]
+    u.CallWindowProcW.restype = ctypes.c_ssize_t
+    u.DefWindowProcW.argtypes = [wintypes.HWND, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+    u.DefWindowProcW.restype = ctypes.c_ssize_t
+    WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, ctypes.c_uint,
+                                ctypes.c_size_t, ctypes.c_ssize_t)
+
+    def proc(hwnd, msg, wp, lp):
+        if msg == WM_NCCALCSIZE and wp:
+            return 0                      # 客户区 = 窗口矩形（wParam=TRUE 时返回值才被采用）
+        if _OLD_WNDPROC:
+            return u.CallWindowProcW(_OLD_WNDPROC, hwnd, msg, wp, lp)
+        return u.DefWindowProcW(hwnd, msg, wp, lp)
+
+    _WNDPROC = WNDPROC(proc)
+    old = u.SetWindowLongPtrW(h, GWLP_WNDPROC, ctypes.cast(_WNDPROC, ctypes.c_void_p).value)
+    if not old:
+        _WNDPROC = None
+        return False
+    _OLD_WNDPROC = old
+    u.SetWindowPos(h, 0, 0, 0, 0, 0, 0x0027)      # FRAMECHANGED 让新规则立刻重算客户区
+    return True
 
 
 def _win(action: str) -> dict[str, Any]:
@@ -349,7 +426,7 @@ def _win(action: str) -> dict[str, Any]:
     elif action == "close":
         u.PostMessageW(h, 0x0010, 0, 0)                        # WM_CLOSE
     elif action == "narrow":
-        _resizable(h)                                          # 顺手把缩放边框补上，之后也能手拖
+        _resizable(h); _strip_nc_frame(h)                      # 补 resize 样式 + 抹掉那圈非客户区
         _fit_side(h, 580)
         return {"ok": action, "narrow": True}
     elif action == "wide":
@@ -358,6 +435,51 @@ def _win(action: str) -> dict[str, Any]:
     else:
         return {"error": f"不认识的动作 {action}"}
     return {"ok": action}
+
+
+_HT = {"left": 10, "right": 11, "top": 12, "topleft": 13, "topright": 14,
+       "bottom": 15, "bottomleft": 16, "bottomright": 17}
+
+
+def _begin_resize(h: int, edge: str) -> dict[str, Any]:
+    """页面边缘按下时由前端调：自己给自己发 WM_NCLBUTTONDOWN + HTxxx，DefWindowProc
+    就会跑标准的窗口 resize 循环（拖到松手为止）。
+
+    为什么要绕这一圈：`WS_THICKFRAME` 是系统 resize 的唯一来源，但它会让窗口矩形每边
+    比客户区大 7px（页面顶上露一条非客户区色带，见 `_resizable`）。而删掉 THICKFRAME 后，
+    边缘命中测试也到不了主窗口 —— WebView2 是填满客户区的子窗口，鼠标永远在它上面。
+    所以只能由页面自己铺一圈热区，按下时把这条消息塞回主窗口。
+    """
+    ht = _HT.get(str(edge))
+    if not h or ht is None:
+        return {"error": f"不认识的方向 {edge}"}
+    import ctypes
+    from ctypes import wintypes
+    u = ctypes.windll.user32
+    k = ctypes.windll.kernel32
+    # 64 位句柄必须显式声明，否则 ctypes 按 c_int 传，hwnd 被截断 → 消息发不出去
+    u.SendMessageW.argtypes = [wintypes.HWND, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+    u.SendMessageW.restype = ctypes.c_ssize_t
+    u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
+    u.GetWindowThreadProcessId.restype = wintypes.DWORD
+    u.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+    u.AttachThreadInput.restype = wintypes.BOOL
+    # 关键在于鼠标捕获归 UI 线程所有，而 js_api 回调跑在 pywebview 的线程池里 ——
+    # 不 AttachThreadInput 的话 ReleaseCapture 调用成功但什么也没放掉，DefWindowProc
+    # 随后 SetCapture 失败，resize 循环立刻退出（这就是 SendMessage 和 PostMessage
+    # 两种发法都不动窗口的原因）。attach 后两边共享输入状态，捕获才真的转到主窗口。
+    tid_ui = u.GetWindowThreadProcessId(h, None)
+    tid_me = k.GetCurrentThreadId()
+    attached = False
+    if tid_ui and tid_ui != tid_me:
+        attached = bool(u.AttachThreadInput(tid_me, tid_ui, True))
+    try:
+        u.ReleaseCapture()
+        u.SendMessageW(h, 0x00A1, ht, 0)     # WM_NCLBUTTONDOWN —— 同步到这次拖拽结束
+    finally:
+        if attached:
+            u.AttachThreadInput(tid_me, tid_ui, False)
+    return {"ok": True, "edge": str(edge), "attached": attached}
 
 
 class _WinBridge:
@@ -373,6 +495,12 @@ class _WinBridge:
         except Exception as exc:
             return {"error": str(exc)}
 
+    def resize(self, edge: str) -> dict[str, Any]:
+        try:
+            return _begin_resize(_win_hwnd(), str(edge))
+        except Exception as exc:
+            return {"error": str(exc)}
+
 
 def _webview_window(url: str, stamp: int) -> bool:
     """自己的无边框窗口（WebView2 / pywebview）。起来就阻塞到关窗、返回 True；
@@ -382,7 +510,6 @@ def _webview_window(url: str, stamp: int) -> bool:
     except Exception:
         return False
     # 打包后图标在 exe 目录的 build/icon.ico（spec 把 tools/build 打进去），源码跑在 tools/build/icon.ico
-    webview.settings['ALLOW_DOWNLOADS'] = True
     icon = ROOT / "build" / "icon.ico"
     if not icon.is_file():
         icon = ROOT / "tools" / "build" / "icon.ico"
@@ -424,7 +551,7 @@ def _show_pinned(win: Any) -> None:
                 break
             time.sleep(0.02)
         if h:
-            _resizable(h)                  # 先补缩放边框（会把客户区缩掉 20px），再按客户区钉
+            _resizable(h); _strip_nc_frame(h)   # 先补 resize 样式并抹掉非客户区，再按客户区钉
             _fit(h, True)
     except Exception:
         pass                               # 隐藏态钉歪了没事，_fit_after 会重钉
@@ -476,7 +603,7 @@ def _fit_after() -> None:
     """窗口起来后把矩形钉到工作区。WinForms 的 AutoScaleMode.Dpi 会在窗口 show 之后
     自己重排一次尺寸（实测 2488x1600 被打回 1866x1200 居中），所以 4 秒内每隔 100ms
     检查一次，偏了就再钉一次；钉住了就不再碰（避免反复重排把页面刷花）。
-    **补边框要排在任何钉框之前**：_resizable 会把客户区缩掉 20px，先钉后补边框等于白跳一下。"""
+    **去边框要排在任何钉框之前**：边框一变客户区就变，先钉后去等于白跳一下。"""
     framed = False
     first = True
     for _ in range(40):
@@ -484,6 +611,7 @@ def _fit_after() -> None:
         if h:
             if not framed:
                 framed = _resizable(h)
+                _strip_nc_frame(h)
             if first or not _at_work_area(h):
                 _fit(h, True)              # 拿到窗口后先无条件钉一次：隐藏态那次钉的不作数
             first = False
@@ -634,33 +762,41 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
 
     def _extension_route(self, method: str, path: str, body: dict, query: dict) -> bool:
         prefixes = (
-            "/api/rss/import", "/api/usage", "/api/message-channels",
-            "/api/execution-board", "/api/execution-conversations", "/api/plans", "/api/conversation-history", "/api/paper-toolbox",
             "/api/agent-settings", "/api/capabilities", "/api/workflow/layouts", "/api/feishu/", "/api/zotero/web/",
             "/api/projects", "/api/papers/", "/api/chats", "/api/assistants", "/api/teams/", "/api/runs/",
-            "/api/mcp/", "/api/audit/", "/api/easyscholar/", "/api/zotero/mcp/", "/api/todos", "/api/kanban", "/api/space/",
-            "/api/project-tasks", "/api/project/files/", "/api/project/resources", "/api/assets", "/api/workflow/run", "/api/workflow/runs", "/api/workflow/recover", "/api/workflow/execution", "/api/workflow/reviews", "/api/handoff/", "/api/library/", "/api/calendar/linked", "/api/langgraph/",
+            "/api/mcp/", "/api/audit/", "/api/modules", "/api/easyscholar/", "/api/zotero/mcp/", "/api/rss/", "/api/library/", "/api/todos", "/api/kanban", "/api/space/",
+            "/api/assets", "/api/workflow/run", "/api/workflow/runs", "/api/workflow/recover",
+            "/api/paper-toolbox",
+            # 2.0 项目工作区：项目任务 / 图流 / 资料库 / 计划 / 产物交接 / 用量
+            "/api/project-tasks", "/api/project/files/", "/api/project/resources",
+            "/api/workflow/execution", "/api/workflow/reviews", "/api/langgraph/",
+            "/api/plans", "/api/execution-board", "/api/execution-conversations",
+            "/api/handoff/", "/api/calendar/linked", "/api/conversation-history",
+            "/api/usage", "/api/message-channels",
         )
         if not path.startswith(prefixes):
+            return False
+        # GET /api/rss/sources、GET /api/rss/items 归 MiscRoutes：那边要带 literature_import.annotate
+        # 算「是否已导入项目」，扩展路由这套只有 POST 的 save/delete/defaults/import。
+        if method == "GET" and path.startswith("/api/rss/"):
             return False
         # 建 / 改名 / 解散团队走 do_POST 里那段（这里只有 <id>/members 这些），别被扩展路由吃掉
         if method == "POST" and path.startswith("/api/teams/"):
             return False
         try:
             with WorkflowDB(DB_PATH) as db:
-                for extension in (agent_settings, capabilities, workflow_layout, feishu, zotero_sync, reproduction_routes, feature_routes, langgraph_workflow):
-                    result = extension.route(method, path, body, query, db)
-                    if result is not None:
-                        # These explicit user actions may reveal credentials; never put them in general state.
-                        reveal = path.endswith(("/provider-secret", "/mcp/reveal"))
-                        if reveal:
-                            self._send(200, json.dumps(result, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8")
-                        elif path == "/api/feishu/callback":
-                            message = "飞书授权完成，可以关闭此页面并返回览籍智研。机器人发送仍需应用已发布及相应权限。"
-                            self._send(200, ("<!doctype html><html lang='zh-CN'><meta charset='utf-8'><title>飞书授权完成</title><h2>" + message + "</h2></html>").encode("utf-8"), "text/html; charset=utf-8")
-                        else:
-                            self._json(result)
-                        return True
+                result = API_ROUTES.dispatch(method, path, body, query, db)
+                if result is not None:
+                    # These explicit user actions may reveal credentials; never put them in general state.
+                    reveal = path.endswith(("/provider-secret", "/mcp/reveal"))
+                    if reveal:
+                        self._send(200, json.dumps(result, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8")
+                    elif path == "/api/feishu/callback":
+                        message = "飞书授权完成，可以关闭此页面并返回览籍智研。机器人发送仍需应用已发布及相应权限。"
+                        self._send(200, ("<!doctype html><html lang='zh-CN'><meta charset='utf-8'><title>飞书授权完成</title><h2>" + message + "</h2></html>").encode("utf-8"), "text/html; charset=utf-8")
+                    else:
+                        self._json(result)
+                    return True
             self._json({"error": "not found"}, 404)
         except (ValueError, KeyError) as exc:
             self._json({"error": str(exc)}, 400)
@@ -1500,6 +1636,37 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                                           (tid, step, step))
                             db.db.commit()
                         return self._json({"ok": True, "task_id": tid, "step": step})
+                if path == "/api/zotero/collection/create": # 新建 Zotero 分类
+                    with WorkflowDB(DB_PATH) as db:
+                        name = str(data.get("name") or "").strip()
+                        parent = str(data.get("parent") or "").strip()
+                        return self._json(zotero.create_collection(db, name, parent))
+                if path == "/api/zotero/import_project_papers": # 导入项目下载文献至 Zotero
+                    tid = str(data.get("task_id") or "").strip()
+                    col_key = str(data.get("collection_key") or "").strip()
+                    with WorkflowDB(DB_PATH) as db:
+                        task = db.summary(tid)["task"]
+                        papers = db.papers(tid)
+                        imported = []
+                        for p in papers:
+                            title = p.get("title") or Path(p.get("filename", "")).stem
+                            item = {
+                                "itemType": "journalArticle",
+                                "title": title,
+                                "DOI": p.get("doi") or "",
+                                "tags": [{"tag": f"项目:{task['title']}"}, {"tag": "览籍智研"}],
+                            }
+                            if col_key:
+                                item["collections"] = [col_key]
+                            try:
+                                created = zotero.add_item(db, item)
+                                pdf_file = db.pdir(tid, "文献库") / p.get("filename", "")
+                                if pdf_file.is_file() and created.get("key"):
+                                    zotero.link_pdf(db, created["key"], str(pdf_file), title=f"PDF - {title[:60]}")
+                                imported.append(created)
+                            except Exception:
+                                pass
+                        return self._json({"ok": True, "count": len(imported), "total": len(papers)})
                 if path == "/api/outline/save":           # 手动改框架（左边直接编辑时用）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(outline_write(db, (data.get("task_id") or "").strip(),

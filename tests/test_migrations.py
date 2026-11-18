@@ -13,7 +13,7 @@ import migrations
 
 class MigrationsTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-test-mig-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-test-mig-")
         self.db_path = Path(self.tmp.name) / "test_mig.sqlite3"
         self.conn = sqlite3.connect(self.db_path)
 

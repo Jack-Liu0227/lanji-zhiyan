@@ -269,6 +269,13 @@ class ResearchDB:
             # Asset indexing is a recoverable projection; paper ingestion itself
             # must remain usable for legacy databases and offline repairs.
             pass
+        try:
+            # 入库即建索引：否则这篇在下次重启前连关键词都查不到（字面腿扫的也是 sem_chunks）。
+            # 后台线程 + 内容哈希跳过未变源，不阻塞导入。
+            import semantic
+            semantic.warm_async(str(self.path))
+        except Exception:
+            pass                                          # 索引是派生数据，失败不影响入库
         return self.paper(paper_id)
 
     def paper(self, paper_id: str) -> dict[str, Any]:

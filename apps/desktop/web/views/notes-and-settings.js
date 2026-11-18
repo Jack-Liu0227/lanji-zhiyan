@@ -838,6 +838,13 @@ function spLoadPaperBadges(container){
     });
 }
 
+/* 项目工作区「概览」页签直接复用这一页（KPI + 十步管道 + 项目边界 + 步骤记录），避免两套概览 */
+window.SpaceOverview = async function(projectId){
+  spTab = "overview"; spId = projectId;
+  const d = await api("/api/task?id=" + encodeURIComponent(projectId));
+  return { html: spBodyHTML(d), bind: () => spBind(d) };
+};
+
 async function renderSpace(m){
   if(m.id==='main' && route()==='workspace') return ProjectWorkspace.render(m);
   m.style.padding = "";

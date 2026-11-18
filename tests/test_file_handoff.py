@@ -43,7 +43,7 @@ class FileHandoffTest(unittest.TestCase):
         try:
             data = handoff.targets(self.db, self.pid)
         finally:
-            self.db.db.set_authorizer(None)
+            self.db.db.set_authorizer(lambda *_: sqlite3.SQLITE_OK)   # py3.10: set_authorizer(None) 会把连接变成全拒
         self.assertEqual(before, self.db.db.total_changes)
         self.assertEqual({a["assistant_id"] for n in data["nodes"] for a in n["actors"]}, {"writer"})
         self.assertEqual(len(data["nodes"]), 2)
@@ -212,7 +212,7 @@ class FileHandoffTest(unittest.TestCase):
         try:
             data = handoff.targets(self.db, self.pid)
         finally:
-            self.db.db.set_authorizer(None)
+            self.db.db.set_authorizer(lambda *_: sqlite3.SQLITE_OK)   # py3.10: set_authorizer(None) 会把连接变成全拒
         self.assertEqual({a["team_id"] for n in data["nodes"] for a in n["actors"]}, {literature["id"], writing["id"]})
         self.assertEqual({a["assistant_id"] for n in data["nodes"] for a in n["actors"]},
                          {"builtin-literature-lead", "builtin-writing-lead", "builtin-searcher"})

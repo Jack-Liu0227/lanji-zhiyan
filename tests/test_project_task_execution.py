@@ -13,7 +13,7 @@ import workflow
 
 class ProjectTaskExecutionTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="rw-project-worker-")
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-project-worker-")
         self.addCleanup(self.temp.cleanup)
         self.db = workflow.WorkflowDB(Path(self.temp.name) / "app.sqlite3")
         self.addCleanup(self.db.close)

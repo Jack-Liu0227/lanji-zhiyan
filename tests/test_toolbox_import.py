@@ -34,7 +34,7 @@ class ToolboxImportTest(unittest.TestCase):
         writer=PdfWriter();writer.add_blank_page(width=300,height=400);buffer=io.BytesIO();writer.write(buffer);raw=buffer.getvalue()
         with self.assertRaises(ValueError):self.read('bad.pdf',b'not a pdf')
         with self.assertRaisesRegex(ValueError,'没有可提取'):self.read('scan.pdf',raw)
-        with tempfile.TemporaryDirectory() as folder, workflow.WorkflowDB(Path(folder)/'app.sqlite3') as db:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder, workflow.WorkflowDB(Path(folder)/'app.sqlite3') as db:
             project=Path(folder)/'project';project.mkdir();pid=db.create_task('Import',base_dir=str(project))
             with self.assertRaisesRegex(ValueError,'选择结果归属'):self.read('paper.pdf',raw,'pdf_translate',db)
             imported=self.read('paper.pdf',raw,'pdf_translate',db,project_id=pid)

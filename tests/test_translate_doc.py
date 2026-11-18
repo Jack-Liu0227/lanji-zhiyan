@@ -20,7 +20,7 @@ import workflow_runners as runners  # noqa: E402
 
 class TranslateDocTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.base = Path(self.tmp.name) / "proj"
         self.base.mkdir(parents=True)
         self.db = workflow.WorkflowDB(Path(self.tmp.name) / "t.sqlite3")

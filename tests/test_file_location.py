@@ -8,7 +8,7 @@ import file_location
 
 class FileLocationTest(unittest.TestCase):
     def setUp(self):
-        temp = tempfile.TemporaryDirectory(prefix="rw-location-")
+        temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-location-")
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name).resolve()
         self.project = self.root / "项目 with spaces"

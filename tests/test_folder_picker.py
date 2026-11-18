@@ -73,7 +73,7 @@ sys.modules['tkinter.filedialog'] = fd
         self.assertFalse(used[0].exists())
 
     def test_frozen_helper_handles_cancellation_and_tk_failure(self):
-        with tempfile.TemporaryDirectory(prefix="rw-picker-test-") as directory:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-picker-test-") as directory:
             output = Path(directory) / "result.json"
             with patch.object(folder_picker, "_select_folder", return_value=""):
                 self.assertEqual(folder_picker.helper_main([str(output), "", "Pick"]), 0)

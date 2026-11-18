@@ -19,7 +19,7 @@ import zotero_sync
 
 class FollowupAuditTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="rw-followup-")
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-followup-")
         self.addCleanup(self.tmp.cleanup)
         for replacement in (patch.object(paths, "DATA", Path(self.tmp.name) / "data"),
                             patch.object(workflow_db, "NOTES", Path(self.tmp.name) / "notes")):
