@@ -40,9 +40,7 @@ class MigrationCompatTest(unittest.TestCase):
     def test_legacy_channel_column_does_not_stop_the_chain(self):
         conn = self.seeded("ok")
         applied = migrations.run_migrations(conn, self.stage("ok-full", self.all))
-        self.assertIn("024_execution_workspace", applied)
-        self.assertIn("035_zotero_staging_compat", applied)
-        self.assertEqual(len(applied), 12, "024 到 035 共 12 个迁移都要落地")
+        self.assertEqual(applied, [file.stem for file in self.all if file.name >= "024"])
 
     def test_without_the_guard_the_chain_would_break(self):
         """反证：把守卫换成恒等函数，同一场景必须炸 —— 否则上面那条测试什么也没保住。"""
