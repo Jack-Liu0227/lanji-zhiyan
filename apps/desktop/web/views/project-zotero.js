@@ -5,22 +5,22 @@
   const mounts = new WeakMap();
   const controls = new WeakMap();
   const pending = new WeakMap();
-  function mount(container, projectId, onChange = async () => {}) {
+  function mount(container, projectId, onChange = async () => {}, active=()=>uiRouteIs('space')&&spTab==='papers') {
     const ticket = {};
     mounts.set(container, ticket);
-    const promise = render(container, projectId, onChange, ticket).catch(err => {
+    const promise = render(container, projectId, onChange, ticket, active).catch(err => {
       if (mounts.get(container) === ticket && container.isConnected && curTask === projectId) {
         container.innerHTML = `<p class="integration-error" role="alert">读取文献管理配置失败：${e(err.message)}</p><button class="btn ghost" data-zs-reload>重新读取</button>`;
-        container.querySelector('[data-zs-reload]').onclick = () => mount(container, projectId, onChange).catch(()=>{});
+        container.querySelector('[data-zs-reload]').onclick = () => mount(container, projectId, onChange, active).catch(()=>{});
       }
       throw err;
     });
     pending.set(container,promise);
     return promise;
   }
-  async function render(container, projectId, onChange, ticket) {
+  async function render(container, projectId, onChange, ticket, active) {
     const field = id => container.querySelector('#' + id);
-    const isCurrent = () => mounts.get(container) === ticket && container.isConnected && curTask === projectId && uiRouteIs('space') && spTab === 'papers';
+    const isCurrent = () => mounts.get(container) === ticket && container.isConnected && curTask === projectId && active();
     const error = message => { if (isCurrent() && field('integration-error')) field('integration-error').textContent = String(message?.message || message || ''); };
     async function call(path, body) {
       if (!isCurrent()) throw new Error('项目已切换，请在当前项目重新操作');
@@ -47,18 +47,22 @@
     const activeProject = projectId;
     let sourceDraft = (bound.sources || []).map(source => ({...source}));
     let collectionNames = new Map(), preview = null;
-    const loadZotero = () => isCurrent() ? mount(container, projectId, onChange) : undefined;
-    container.innerHTML = `<p class="hint">${result.config?.transport === 'local' ? '本机 Zotero' : 'Zotero Web API'} · ${result.local?.readable ? '本机已连接' : '本机未连接'} · ${result.local?.authorized ? '已有写入授权' : '首次写入时由 Zotero 授权'}</p>
+    const loadZotero = () => isCurrent() ? mount(container, projectId, onChange, active) : undefined;
+    container.innerHTML = `<div class="zs-views" role="group" aria-label="Zotero 管理">
+          <button type="button" class="btn ghost" data-zs-view="sources">来源与选文</button>
+          <button type="button" class="btn ghost" data-zs-view="sync">同步设置</button>
+          <button type="button" class="btn ghost" data-zs-view="history">移除与恢复</button>
+        </div><p class="hint">${result.config?.transport === 'local' ? '本机 Zotero' : 'Zotero Web API'} · ${result.local?.readable ? '本机已连接' : '本机未连接'} · ${result.local?.authorized ? '已有写入授权' : '首次写入时由 Zotero 授权'}</p>
         <div class="integration-status">当前文献库：${bound.library ? `<code>${e(bound.library)}</code>` : "未设置"}<span id="zs-last-sync">${bound.last_sync ? ` · 最近同步 ${e(new Date(Number(bound.last_sync) * 1000).toLocaleString())}` : ""}</span></div>
-        <fieldset style="border:1px solid var(--line);padding:12px;margin:12px 0"><legend>项目文献来源</legend>
+        <section data-zs-panel="sources" aria-label="来源与选文"><fieldset class="zs-section"><legend>项目文献来源</legend>
           <p class="hint">可添加多个 Collection，默认逐篇勾选加入项目。来源可以被多个项目共用；移除来源不会移除已加入的文献。不添加来源时，可从整个文献库勾选。</p>
           <div class="integration-actions"><button class="btn ghost" id="zs-load">读取 Collections</button><select class="control" id="zs-collection" aria-label="文献来源 Collection"><option value="">先读取 Collections</option></select><button class="btn ghost" id="zs-add-source">添加来源</button></div>
           <div id="zs-sources"></div><button class="btn" id="zs-save-sources">保存项目来源</button>
           <p class="hint">“全部跟随”会将该 Collection 当前及以后新增的文献纳入项目，请按需开启。子 Collection 需单独添加。</p>
           <div class="integration-actions"><button class="btn ghost" id="zs-browse" ${bound.library?'':'disabled'}>从已保存来源选择文献</button><input class="control" id="zs-filter" aria-label="筛选来源文献" placeholder="筛选标题、作者或 DOI"></div>
-          <div id="zs-candidates" style="max-height:360px;overflow:auto"></div><button class="btn" id="zs-select" disabled>加入所选文献并预览同步</button>
-        </fieldset>
-        <fieldset style="border:1px solid var(--line);border-radius:8px;padding:12px;margin:12px 0"><legend>自动同步到工作流与项目空间</legend>
+          <p class="hint" id="zs-candidate-count" role="status"></p><div id="zs-candidates"></div><button class="btn" id="zs-select" disabled>加入所选文献并预览同步</button>
+        </fieldset></section>
+        <section data-zs-panel="sync" aria-label="同步设置" hidden><fieldset class="zs-section"><legend>自动同步到工作流与项目空间</legend>
           <label><input type="checkbox" id="zs-auto-enabled" ${autoSync.enabled ? "checked" : ""}> 应用运行期间自动同步</label>
           <div class="integration-actions"><select class="control" id="zs-auto-mode" aria-label="自动同步方向"><option value="merge" ${autoSync.mode==="merge"?"selected":""}>双向合并</option><option value="pull" ${autoSync.mode==="pull"?"selected":""}>仅拉取 Zotero</option><option value="push" ${autoSync.mode==="push"?"selected":""}>仅推送项目</option></select>
           <label>间隔 <input class="control" type="number" min="10" max="3600" id="zs-auto-interval" value="${Number(autoSync.interval_seconds)||15}" style="width:90px"> 秒</label><button class="btn" id="zs-auto-save">保存自动同步</button></div>
@@ -67,11 +71,18 @@
         <div class="integration-actions"><select class="control" id="zs-mode" aria-label="本次同步方向"><option value="merge">双向合并元数据</option><option value="pull">拉取 Zotero 到项目</option><option value="push">推送项目到 Zotero</option></select><button class="btn" id="zs-preview">预览同步</button><button class="btn ghost" id="zs-apply" disabled>确认执行预览</button></div>
         <div id="zs-plan" aria-live="polite"></div>
         <div id="zs-conflicts"></div>
-        <fieldset style="border:1px solid var(--line);padding:12px;margin:12px 0"><legend>按项目标签批量移除关联</legend><p class="hint">双向合并或推送时，为项目成员添加 <code>rw:project:${e(projectId)}</code>。移除时仅清理当前项目标签和关联，并从当前项目文献列表隐藏；保留全部 Collection 归属、其他项目关联、文件及历史笔记。可恢复本次移除。</p><button class="btn ghost" id="zs-unlink-preview" ${bound.library?'':'disabled'}>预览当前项目标签关联</button><div id="zs-unlink"></div><div id="zs-batches"></div></fieldset>
+        </section><section data-zs-panel="history" aria-label="移除与恢复" hidden><fieldset class="zs-section"><legend>按项目标签批量移除关联</legend><p class="hint">双向合并或推送时，为项目成员添加 <code>rw:project:${e(projectId)}</code>。移除时仅清理当前项目标签和关联，并从当前项目文献列表隐藏；保留全部 Collection 归属、其他项目关联、文件及历史笔记。可恢复本次移除。</p><button class="btn ghost" id="zs-unlink-preview" ${bound.library?'':'disabled'}>预览当前项目标签关联</button><div id="zs-unlink"></div><div id="zs-batches"></div></fieldset></section>
         <p class="hint">工作流与项目空间共享项目成员题录。现有条目保留原 Collection 归属；移动 Collection 不影响项目关联。仅拉取不会写入项目标签。两端同时修改或远端删除会显示冲突。${bound.collection?'新建 Zotero 条目存入 '+e(bound.collection)+'。':'新建 Zotero 条目存入文献库根目录并打项目标签。'}</p>
 
       <div id="integration-error" class="integration-error" role="alert"></div>
       <div id="integration-result" class="integration-result" aria-live="polite"></div>`;
+    function show(view){
+      container.dataset.zsActive=view;
+      container.querySelectorAll('[data-zs-view]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.zsView===view)));
+      container.querySelectorAll('[data-zs-panel]').forEach(panel=>panel.hidden=panel.dataset.zsPanel!==view);
+    }
+    show(container.dataset.zsActive||'sources');
+    container.querySelectorAll('[data-zs-view]').forEach(button=>button.onclick=()=>show(button.dataset.zsView));
     field("zs-auto-save").onclick = event => action(event.target, async () => {
       await call("/api/zotero/web/auto",{task_id:projectId,enabled:field("zs-auto-enabled").checked,
         mode:field("zs-auto-mode").value,interval_seconds:Number(field("zs-auto-interval").value)});
@@ -110,9 +121,20 @@
     function renderCandidates(){
       const query=field('zs-filter').value.trim().toLocaleLowerCase();
       const visible=candidateRows.filter(r=>[r.title,r.authors,r.doi,r.key].join(' ').toLocaleLowerCase().includes(query));
-      field('zs-candidates').innerHTML=`<p class="hint">${visible.length} 条候选 · 已勾选 ${chosenKeys.size} 条</p>`+visible.map(r=>`<label style="display:block;margin:8px 0"><input type="checkbox" data-zs-member="${e(r.key)}" ${chosenKeys.has(r.key)?'checked':''} ${r.selected||r.status==='removing'?'disabled':''}> ${e(r.title)} <small>${e(r.doi||r.key)} · ${e(r.collections.map(k=>collectionNames.get(k)||k).join('、'))}${r.status==='selected'?' · 已选，待同步':r.selected?' · 已加入项目':r.status==='excluded'?' · 已移除，可重新加入':r.status==='removing'?' · 正在移除':''}</small></label>`).join('');
-      field('zs-select').disabled=!chosenKeys.size;
-      field('zs-candidates').querySelectorAll('[data-zs-member]').forEach(el=>el.onchange=()=>{el.checked?chosenKeys.add(el.dataset.zsMember):chosenKeys.delete(el.dataset.zsMember);renderCandidates();});
+      function updateCount(){
+        field('zs-candidate-count').textContent=`${visible.length} 条候选 · 已勾选 ${chosenKeys.size} 条`;
+        field('zs-select').disabled=!chosenKeys.size;
+      }
+      field('zs-candidates').innerHTML=visible.map(row=>{
+        const status={selected:'已选待同步',excluded:'已移除，可重新勾选',removing:'正在移除'}[row.status]||(row.selected?'已加入项目':'');
+        const collections=(row.collections||[]).map(key=>collectionNames.get(key)||key).join('、');
+        return `<label class="zs-candidate"><input type="checkbox" data-zs-member="${e(row.key)}" ${chosenKeys.has(row.key)?'checked':''} ${row.selected||row.status==='removing'?'disabled':''}><span><strong>${e(row.title)}</strong><small>${[row.doi||row.key,collections,status].filter(Boolean).map(e).join(' · ')}</small></span></label>`;
+      }).join('');
+      updateCount();
+      field('zs-candidates').querySelectorAll('[data-zs-member]').forEach(input=>input.onchange=()=>{
+        if(input.checked)chosenKeys.add(input.dataset.zsMember);else chosenKeys.delete(input.dataset.zsMember);
+        updateCount();
+      });
     }
     field('zs-filter').oninput=renderCandidates;
     field('zs-browse').onclick=event=>action(event.target,async()=>{
@@ -127,7 +149,7 @@
       chosenKeys.clear();renderCandidates();
       const plan=await call('/api/zotero/web/sync',{task_id:activeProject,mode:'merge',dry_run:true});
       if(!isCurrent()) return;
-      preview=plan;field('zs-mode').value='merge';
+      preview=plan;field('zs-mode').value='merge';show('sync');
       field('integration-result').textContent='已保存选择，请核对同步预览。自动同步已启用时，也会按所设方向处理。';
       renderPlan(plan);
       field('zs-apply').disabled=!!plan.conflicts.length||!plan.actions.length;showConflicts(plan.conflicts);
@@ -176,6 +198,7 @@
       const data=await call('/api/zotero/web/links/preview',{task_id:projectId,...(keys ? {keys} : {})});
       if(!isCurrent()) return;
       const batch=data.batch;
+      show('history');
       field('zs-unlink').innerHTML=`<p>${batch.data.items.length} 条关联。取消勾选可以保留对应文献。</p>${batch.data.items.map((r,i)=>`<label style="display:block;margin:6px 0"><input type="checkbox" data-zs-unlink-key="${e(r.key)}" checked> ${e(r.title)} <small>其他项目：${e((r.shared_projects||[]).join('、')||'无')} · 笔记 ${r.references?.notes||0} · 工作流 ${(r.references?.runs||[]).length}</small></label>`).join('')}<button class="btn" id="zs-unlink-apply" ${batch.data.items.length?'':'disabled'}>移除所选项目关联</button>`;
       field('zs-unlink-apply').onclick=event=>action(event.target,async()=>{
         const keys=[...field('zs-unlink').querySelectorAll('[data-zs-unlink-key]:checked')].map(el=>el.dataset.zsUnlinkKey);
@@ -224,14 +247,14 @@
         field('zs-last-sync').textContent=last?' · 最近同步 '+new Date(Number(last)*1000).toLocaleString():'';
       } finally {statusBusy=false;}
     }
-    controls.set(container, {previewRemoval,refreshStatus});
+    controls.set(container, {previewRemoval,refreshStatus,show});
     await loadBatches();
     if (sourceDraft.length && isCurrent()) {
       try { await loadCollections(); } catch (err) { if (isCurrent()) error(err); }
     }
     return { previewRemoval };
   }
-  window.ProjectZotero = { mount, refreshStatus: container => controls.get(container)?.refreshStatus(), async previewRemoval(container, keys) {
+  window.ProjectZotero = { mount, show: (container,view) => controls.get(container)?.show(view), refreshStatus: container => controls.get(container)?.refreshStatus(), async previewRemoval(container, keys) {
     await pending.get(container);
     if(!controls.has(container)) throw new Error('请先读取项目来源配置');
     return controls.get(container).previewRemoval(keys);

@@ -21,7 +21,7 @@ const TaskActions=(()=>{
   function actions(row,refresh){
     if(row.deleted_at)return [removal(row,refresh)];
     if(row.kind!=='task')return [
-      {text:row.channel==='toolbox'?'查看工具处理结果':'打开对话',run:()=>row.channel==='toolbox'?PaperToolbox.openResult(row.run_id,row.project_id):ProjectWorkspace.openConversation(row.chat_id,row.project_id)},
+      {text:'打开对话',run:()=>row.channel==='toolbox'?PaperToolbox.openResult(row.run_id,row.project_id):ProjectWorkspace.openConversation(row.chat_id,row.project_id)},
       ...(['running','queued','waiting_input'].includes(row.status)?[{text:'停止执行',run:async()=>{await stop(row);await refresh();}}]:[]),
       ...(['failed','interrupted'].includes(row.status)?[{text:'继续执行',run:async()=>{await api(row.execution_kind==='workflow'?'/api/workflow/execution/resume':'/api/execution-board/conversation-action',{id:row.run_id,project_id:row.project_id,run_id:row.run_id,action:'resume'});await refresh();}}]:[]),
       {separator:true},removal(row,refresh)

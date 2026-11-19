@@ -747,8 +747,14 @@ def rebuild_project_index(db, project_id: str, *, include_files: bool = True) ->
                         body = path.read_text(encoding="utf-8")
                     except (OSError, UnicodeError):
                         continue
-                    register_file(db, path, project_id=project_id, kind="document",
-                                  title=path.stem, source="legacy_rebuild", body=body,
+                    existing = conn.execute(
+                        "SELECT kind,title,source FROM assets WHERE canonical_uri=? AND project_id=?",
+                        (str(path.resolve()), project_id),
+                    ).fetchone()
+                    register_file(db, path, project_id=project_id,
+                                  kind=existing["kind"] if existing else "document",
+                                  title=existing["title"] if existing else path.stem,
+                                  source=existing["source"] if existing else "legacy_rebuild", body=body,
                                   metadata={"legacy_path": str(path)})
                     counts["documents"] += 1
     return {"project_id": project_id, "indexed": counts,

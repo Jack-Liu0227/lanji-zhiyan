@@ -26,7 +26,7 @@ def detail(db, run_id):
         raise ValueError("工作流执行不存在")
     run.update(layout=json.loads(saved["layout_snapshot"]), settings=json.loads(saved["settings"]))
     import execution_conversations
-    run['chat_id']=(execution_conversations.link(db,'workflow',run_id) or {}).get('chat_id','')
+    run['chat_id']=execution_conversations.ensure(db,'workflow',run_id)
     for node in run["nodes"]:
         for key in ("checkpoint", "acceptance", "input_assets", "output_assets"):
             node[key] = json.loads(node[key])

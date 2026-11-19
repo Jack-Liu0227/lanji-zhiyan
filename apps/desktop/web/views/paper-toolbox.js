@@ -207,7 +207,11 @@ const PaperToolbox=(()=>{
   }
   async function openResult(runId,project){
     try{const data=await api('/api/paper-toolbox/result?run_id='+encodeURIComponent(runId)+'&project_id='+encodeURIComponent(project||'')),dialog=document.createElement('dialog');dialog.className='pt-dialog';dialog.setAttribute('aria-label','论文工具处理记录');
-      dialog.innerHTML=`<header class="history-preview-head"><h3>${h(data.title)}</h3><button type="button" class="pw-text-button" data-result-close>关闭</button></header><p class="hint">${h({done:'处理完成',running:'正在处理',pending:'等待处理',failed:'处理失败',cancelled:'已停止'}[data.status]||data.status)}</p><pre class="history-preview">${h(data.content||'处理结果将在完成后保存。可关闭此窗口，在看板中跟踪进度。')}</pre>${data.path?'<button type="button" class="btn" data-result-file>打开转换文件</button>':''}`;
+      dialog.innerHTML=`<header class="history-preview-head"><h3>${h(data.title)}</h3><button type="button" class="pw-text-button" data-result-close>关闭</button></header>
+        <p class="hint">${h({done:'处理完成',running:'正在处理',pending:'等待处理',failed:'处理失败',cancelled:'已停止'}[data.status]||data.status)}</p>
+        ${data.input?`<p class="hint">输入</p><pre class="history-preview" data-toolbox-input>${h(data.input)}</pre>`:''}
+        <p class="hint" data-toolbox-result-label>处理结果</p><pre class="history-preview">${h(data.content||'处理结果将在完成后保存。可关闭此窗口，在看板中跟踪进度。')}</pre>
+        ${data.path?'<button type="button" class="btn" data-result-file>打开转换文件</button>':''}`;
       dialog.querySelector('[data-result-close]').onclick=()=>dialog.close();const file=dialog.querySelector('[data-result-file]');if(file)file.onclick=()=>api('/api/conv/open',{path:data.path}).catch(err=>uiNotify(err.message));dialog.onclose=()=>dialog.remove();document.body.append(dialog);dialog.showModal();
       for(const result of data.files||[]){
         if(!Object.hasOwn(result,'project_id'))continue;
@@ -215,7 +219,7 @@ const PaperToolbox=(()=>{
         download.className='btn ghost';download.download='';download.href=fileUrl(result,data.project_id);
         download.textContent='下载 '+result.name;dialog.append(download);
       }
-      if(data.prompt)dialog.querySelector('.history-preview').insertAdjacentHTML('beforebegin',`<details class="pt-preview"><summary>本次提示词 · ${h(data.prompt.title)}${data.prompt.revision?' · v'+h(data.prompt.revision):''}${data.prompt.modified?' · 本次已修改':''}</summary><pre>${h(data.prompt.text)}</pre></details>`);
+      if(data.prompt)dialog.querySelector('[data-toolbox-result-label]').insertAdjacentHTML('beforebegin',`<details class="pt-preview"><summary>本次提示词 · ${h(data.prompt.title)}${data.prompt.revision?' · v'+h(data.prompt.revision):''}${data.prompt.modified?' · 本次已修改':''}</summary><pre>${h(data.prompt.text)}</pre></details>`);
     }catch(err){uiNotify(err.message);}
   }
   return {open,openResult,render:host=>open({host})};

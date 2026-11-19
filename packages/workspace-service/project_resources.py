@@ -39,6 +39,7 @@ def catalog(db, project_id, kind='', query='', *, review_status=''):
         path = Path(asset['canonical_uri']) if asset['storage'] == 'file' else None
         if path and path.name.lower() == 'readme.md': continue
         relative = path.relative_to(root).as_posix() if path and path.is_relative_to(root) else ''
+        if relative == '笔记/分类配置.json': continue
         item = {'id': asset['id'], 'asset_id': asset['id'], 'title': asset['title'],
                 'kind': category(str(path or ''), asset['kind'], metadata),
                 'path': str(path or ''), 'relative': relative, 'paper_id': metadata.get('paper_id', ''),
@@ -77,18 +78,24 @@ def catalog(db, project_id, kind='', query='', *, review_status=''):
         item.update(asset_service.eligibility(db, {'id': item['id'], 'project_id': project_id,
             'kind': item['kind'], 'storage': 'file' if uri else 'virtual', 'canonical_uri': uri,
             'metadata': item.get('metadata', {}), 'content_hash': digest, 'status': 'active'}, index=eligibility_index))
+    catalog_total = len(values)
     # "交付产物" means accepted output. Drafts remain available through an explicit status filter.
+    if review_status and review_status != 'all':
+        values = [item for item in values if item['review_status'] == review_status]
+    count_values = values
+    if not review_status:
+        count_values = [item for item in values if item['kind'] != 'output' or
+                        item['review_status'] == 'delivered' and item['consumable']]
+    counts = {key: sum(item['kind'] == key for item in count_values) for key in KINDS}
     if kind == 'output' and not review_status:
         values = [item for item in values if item['kind'] != 'output' or
                   item['review_status'] == 'delivered' and item['consumable']]
-    elif review_status and review_status != 'all':
-        values = [item for item in values if item['review_status'] == review_status]
-    counts = {key: sum(item['kind'] == key for item in values) for key in KINDS}
     needle = query.casefold().strip()
     values = [item for item in values if (not kind or item['kind'] == kind) and
               (not needle or needle in (str(item.get('title', '')) + ' ' + item.get('relative', '') + ' ' + json.dumps(item.get('metadata', {}), ensure_ascii=False)).casefold())]
     values.sort(key=lambda item: (str(item.get('updated_at', '')), item.get('title') or ''), reverse=True)
-    return {'project_id': project_id, 'items': values, 'counts': counts, 'total': len(values)}
+    return {'project_id': project_id, 'items': values, 'counts': counts,
+            'catalog_total': catalog_total, 'total': len(values)}
 
 
 def index(db, project_id):

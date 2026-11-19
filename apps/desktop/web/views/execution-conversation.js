@@ -12,7 +12,6 @@ const ExecutionConversation=(()=>{
     return normalized;
   };
   async function open(kind,id,project){
-    if(kind==='workflow'&&ProjectWorkspace.openWorkflowRun)return ProjectWorkspace.openWorkflowRun(project,id);
     const data=await api('/api/execution-conversations?kind='+encodeURIComponent(kind)+'&entity_id='+encodeURIComponent(id)+'&project_id='+encodeURIComponent(project));
     await ProjectWorkspace.openConversation(data.execution.chat_id,project);
   }
@@ -49,9 +48,12 @@ const ExecutionConversation=(()=>{
     }
     if(execution.children?.length){
       const nodes=document.createElement('details');nodes.className='execution-chat-nodes';nodes.dataset.executionDetail='nodes';nodes.open=opened.has('nodes');
-      nodes.innerHTML=`<summary>${flow?'工作流节点':'派生任务'} · ${execution.children.length}</summary><div>${execution.children.map(child=>`<article><span><b>${h(child.title)}</b><small>${h(labels[child.status]||child.status)}</small></span><button type="button" class="pw-text-button" data-child-chat="${h(child.id)}">${child.node_result?.available?'查看节点产物':'查看节点状态'}</button><button type="button" class="btn ghost" data-child-task="${h(child.id)}">${child.node_result?.available?'打开编辑入口':child.status==='awaiting_review'?'审查产物':'任务详情'}</button></article>`).join('')}</div>`;
+      nodes.innerHTML=`<summary>${flow?'工作流节点':'派生任务'} · ${execution.children.length}</summary><div>${execution.children.map(child=>`<article><span><b>${h(child.title)}</b><small>${h(labels[child.status]||child.status)}</small></span><button type="button" class="pw-text-button" data-child-chat="${h(child.id)}">打开对话</button><button type="button" class="btn ghost" data-child-task="${h(child.id)}">${child.node_result?.available?'查看节点产物':child.status==='awaiting_review'?'审查产物':'任务详情'}</button></article>`).join('')}</div>`;
       const openChild=id=>{const child=(execution.children||[]).find(item=>item.id===id);if(child?.node_result?.available)return ProjectWorkspace.openNodeResult({...child.node_result,task_id:child.id,project_id:project},project,{chatId:execution.chat_id});return ProjectWorkspace.openTask(id,project,{chatId:execution.chat_id});};
-      nodes.querySelectorAll('[data-child-chat]').forEach(button=>button.onclick=()=>openChild(button.dataset.childChat));
+      nodes.querySelectorAll('[data-child-chat]').forEach(button=>button.onclick=async()=>{
+        try{await open('task',button.dataset.childChat,project);}
+        catch(error){box.querySelector('[data-execution-error]').textContent=error.message;}
+      });
       nodes.querySelectorAll('[data-child-task]').forEach(button=>button.onclick=()=>openChild(button.dataset.childTask));box.append(nodes);
     }
     let canonicalGoalRendered=false;

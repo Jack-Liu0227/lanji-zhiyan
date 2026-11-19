@@ -74,19 +74,56 @@ def link(db, kind, entity_id):
     return dict(row) if row else None
 
 
-def ensure(db, kind, entity_id):
-    saved=link(db,kind,entity_id)
-    if saved:return saved['chat_id']
+def ensure(db, kind, entity_id, *, project_id=''):
+    saved = link(db, kind, entity_id)
+    if saved and project_id and saved['project_id'] != project_id:
+        raise ValueError('对话不属于当前项目')
+    chat_id = saved['chat_id'] if saved else 'execution-' + entity_id
+    if saved and db.db.execute('SELECT 1 FROM chats WHERE id=?', (chat_id,)).fetchone():
+        return chat_id
     if kind=='task':
         row=db.db.execute('SELECT project_id,title,created_at,updated_at FROM project_tasks WHERE id=?',(entity_id,)).fetchone()
     elif kind=='workflow':
         row=db.db.execute("SELECT r.project_id,COALESCE(json_extract(e.layout_snapshot,'$.name'),'工作流') AS title,r.started_at AS created_at,e.updated_at FROM workflow_runs r JOIN workflow_executions e ON e.run_id=r.id WHERE r.id=?",(entity_id,)).fetchone()
     else:raise ValueError('执行类型无效')
     if not row:raise ValueError('执行记录不存在')
-    cid='execution-'+entity_id
-    db.db.execute('INSERT OR IGNORE INTO chats(id,title,task_id,created_at,updated_at) VALUES (?,?,?,?,?)',(cid,row['title'],row['project_id'],row['created_at'],row['updated_at']))
-    db.db.execute('INSERT OR IGNORE INTO execution_conversations VALUES (?,?,?,?)',(cid,row['project_id'],kind,entity_id))
-    return cid
+    if project_id and row['project_id'] != project_id:
+        raise ValueError('对话不属于当前项目')
+    lifecycle = db.db.execute("""
+        SELECT kind, created_at FROM execution_board_events
+        WHERE project_id=? AND task_id=? AND kind IN
+            ('conversation_trash','conversation_restore','conversation_archive','conversation_unarchive','conversation_purge')
+        ORDER BY id DESC LIMIT 1
+    """, (row['project_id'], chat_id)).fetchone()
+    if lifecycle and lifecycle['kind'] == 'conversation_purge':
+        return chat_id
+    deleted_at = lifecycle['created_at'] if lifecycle and lifecycle['kind'] == 'conversation_trash' else ''
+    archived_at = lifecycle['created_at'] if lifecycle and lifecycle['kind'] == 'conversation_archive' else ''
+    was_in_transaction = db.db.in_transaction
+    db.db.execute('INSERT OR IGNORE INTO chats(id,title,task_id,created_at,updated_at,deleted_at,archived_at) VALUES (?,?,?,?,?,?,?)',
+                  (chat_id,row['title'],row['project_id'],row['created_at'],row['updated_at'],deleted_at,archived_at))
+    if not saved:
+        db.db.execute('INSERT OR IGNORE INTO execution_conversations VALUES (?,?,?,?)', (chat_id,row['project_id'],kind,entity_id))
+    if not was_in_transaction:
+        db.db.commit()
+    return chat_id
+
+
+def ensure_project(db, project_id):
+    """Repair execution projections before a project view reads them."""
+    missing = db.db.execute("""
+        WITH executions(kind, entity_id) AS (
+            SELECT 'task', id FROM project_tasks WHERE project_id=?
+            UNION ALL
+            SELECT 'workflow', r.id FROM workflow_runs r
+            JOIN workflow_executions e ON e.run_id=r.id WHERE r.project_id=?
+        )
+        SELECT e.kind, e.entity_id FROM executions e
+        LEFT JOIN execution_conversations x ON x.kind=e.kind AND x.entity_id=e.entity_id
+        LEFT JOIN chats c ON c.id=x.chat_id WHERE c.id IS NULL
+    """, (project_id, project_id)).fetchall()
+    for row in missing:
+        ensure(db, row['kind'], row['entity_id'])
 
 
 def by_chat(db, chat_id):
@@ -206,9 +243,10 @@ def _task_messages(db, task):
 def read(db, chat_id, project_id=''):
     binding=by_chat(db,chat_id)
     if not binding:return None
+    if project_id and binding['project_id']!=project_id:raise ValueError('对话不属于当前项目')
+    ensure(db,binding['kind'],binding['entity_id'])
     chat=db.db.execute('SELECT title FROM chats WHERE id=?',(chat_id,)).fetchone()
     if not chat:return None
-    if project_id and binding['project_id']!=project_id:raise ValueError('对话不属于当前项目')
     import project_tasks
     if binding['kind']=='task':
         task=project_tasks.get(db,binding['entity_id']);tasks=[task]
@@ -274,6 +312,10 @@ def route(method,path,body,query,db):
     if path!='/api/execution-conversations':return None
     def q(name):return str(body.get(name) or (query.get(name) or [''])[0])
     if method!='GET':raise ValueError('不支持的对话操作')
+    if not q('chat_id') and q('kind') and q('entity_id'):
+        ensure(db,q('kind'),q('entity_id'),project_id=q('project_id'))
     saved=by_chat(db,q('chat_id')) if q('chat_id') else link(db,q('kind'),q('entity_id'))
     if not saved:raise ValueError('未找到关联执行对话')
-    return read(db,saved['chat_id'],q('project_id'))
+    result = read(db,saved['chat_id'],q('project_id'))
+    if not result:raise ValueError('未找到关联执行对话')
+    return result

@@ -160,7 +160,7 @@ class MiscRoutes:
                 except ValueError as exc:
                     return self._json({"error": str(exc)}, 400)
             return self._json(papertran.status(paper_id, out_dir))
-        if path in ("/api/rss/sources", "/api/rss/items", "/api/library/project"):
+        if path in ("/api/rss/sources", "/api/rss/items"):
             import rss_routes, literature_import_routes
             mod = rss_routes if path == "/api/rss/sources" else literature_import_routes
             with WorkflowDB(DB_PATH) as db:

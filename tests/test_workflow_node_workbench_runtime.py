@@ -265,13 +265,20 @@ class WorkflowNodeWorkbenchRuntimeTest(unittest.TestCase):
                 self.assertEqual(current['status'], 'delivered')
                 self.assertIn(marker, Path(current['outputs'][0]['path']).read_text(encoding='utf-8'))
             self.assertEqual(len(model.node_requests), 4)
-            # The task board projects the same canonical node results and must
-            # expose a direct workbench action instead of an execution-status
-            # detour.
+            # The run has a conversation and direct links to each saved node result.
             self.page.evaluate("async()=>ProjectWorkspace.showResource('tasks')")
             self.page.locator('[data-ec-view="board"]').wait_for()
             self.page.locator('[data-ec-open-artifact]').first.wait_for()
             self.assertGreaterEqual(self.page.locator('[data-ec-open-artifact]').count(), 4)
+            card = self.page.locator('[data-ec-task="execution-' + model.run_id + '"]')
+            card.locator('[data-ec-open-chat]').click()
+            self.page.locator('[data-execution-id="' + model.run_id + '"]').wait_for()
+            self.page.locator('.execution-chat-nodes summary').click()
+            self.page.locator(f'[data-child-chat="{current["id"]}"]').click()
+            self.page.locator(f'[data-execution-id="{current["id"]}"]').wait_for()
+            self.page.evaluate("async()=>ProjectWorkspace.showResource('tasks')")
+            card.locator('[data-ec-open-artifact]').first.click()
+            self.page.locator('.wnw').wait_for()
 
             # The graph is also a direct artifact entry point once a node has
             # a fixed result; clicking the node must open the workbench rather

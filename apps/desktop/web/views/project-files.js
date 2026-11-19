@@ -1,6 +1,6 @@
 const FL_TEXT = new Set(["md","markdown","txt","tex","bib","json","py","csv","yaml","yml","log","sh","js","css"]);
 let flRel = "", flSel = "", flRows = [];
-let flTreeCache = {};         // rel -> array of {name, rel, path, dir, ext, size, count, at}
+let flTreeCache = Object.create(null);
 let flExpanded = (() => {
   try {
     const raw = localStorage.getItem("rw-fl-tree-expanded");
@@ -13,7 +13,7 @@ function flSaveExpanded() {
     localStorage.setItem("rw-fl-tree-expanded", JSON.stringify([...flExpanded]));
   } catch(_) {}
 }
-let flTreeLoading = new Set();// set of currently loading rel strings
+let flTreeLoading = new Map();
 let flTreeRoot = "";
 let flTreeProject = "", flTreeGeneration = 0;
 
@@ -84,22 +84,21 @@ function filesPanelHTML(active){
     </div></section>`;
 }
 
-async function flLoadNode(rel){
-  rel = rel || "";
+function flLoadNode(rel=""){
   const project=flTreeProject || curTask, generation=flTreeGeneration, loading=flTreeLoading;
-  if(loading.has(rel)) return;
-  loading.add(rel);
-  try{
-    const d = await api(`/api/tree?id=${encodeURIComponent(project)}&rel=${encodeURIComponent(rel)}`);
+  if(loading.has(rel)) return loading.get(rel);
+  const request=api(`/api/tree?id=${encodeURIComponent(project)}&rel=${encodeURIComponent(rel)}`).then(d=>{
     if(generation!==flTreeGeneration || project!==curTask) return;
     if(d.root) flTreeRoot = d.root;
     if(d.rows) flTreeCache[rel] = d.rows.map(row=>({...row,project_id:project}));
-  }catch(e){
+  }).catch(e=>{
     console.error("加载文件夹内容失败", rel, e);
-  }finally{
+  }).finally(()=>{
     loading.delete(rel);
     if(generation===flTreeGeneration && project===curTask) flFlattenRows();
-  }
+  });
+  loading.set(rel,request);
+  return request;
 }
 
 async function flInitTree(){
@@ -107,9 +106,9 @@ async function flInitTree(){
   if(!curTask){ list.innerHTML = `<p class="fl-empty">先选一个项目</p>`; return; }
   const generation=++flTreeGeneration, project=curTask;
   if(flTreeProject!==project){flSel="";flTreeRoot="";}
-  flTreeProject=project;flTreeLoading=new Set();
+  flTreeProject=project;flTreeLoading=new Map();
   list.innerHTML = `<p class="fl-empty">读目录…</p>`;
-  flTreeCache = {};
+  flTreeCache = Object.create(null);
   await flLoadNode("");
   if(generation!==flTreeGeneration || project!==curTask || !list.isConnected) return;
   const tag = $("flRoot");
@@ -129,6 +128,8 @@ async function flInitTree(){
 
 function flRenderTree(){
   const list = $("flList"); if(!list) return;
+  const focused=document.activeElement;
+  const focusedRel=list.contains(focused)?focused.dataset.rel:undefined;
   const rootRows = flTreeCache[""] || [];
   if(!rootRows.length){
     list.innerHTML = `<p class="fl-empty">这个项目文件夹为空</p>`;
@@ -145,7 +146,7 @@ function flRenderTree(){
       if(isDir){
         const isLoading = flTreeLoading.has(r.rel);
         html += `
-          <div class="fl-tree-row dir ${isOpen ? 'open' : ''} ${isSel ? 'on' : ''}" data-project-id="${esc(r.project_id)}" data-rel="${esc(r.rel)}" data-dir="1" aria-expanded="${isOpen}" aria-busy="${isLoading}" style="padding-left:${padLeft}px" title="${esc(r.name)}">
+          <div class="fl-tree-row dir ${isOpen ? 'open' : ''} ${isSel ? 'on' : ''}" data-project-id="${esc(r.project_id)}" data-rel="${esc(r.rel)}" data-dir="1" aria-current="${isSel}" aria-expanded="${isOpen}" aria-busy="${isLoading}" style="padding-left:${padLeft}px" title="${esc(r.name)}">
             <span class="fl-chevron">${isLoading ? '⌛' : (isOpen ? '▾' : '▸')}</span>
             <span class="fl-folder-ico">${isOpen ? '📂' : '📁'}</span>
             <span class="fl-name">${esc(r.name)}</span>
@@ -160,7 +161,7 @@ function flRenderTree(){
         }
       } else {
         html += `
-          <div class="fl-tree-row file ${isSel ? 'on' : ''}" data-project-id="${esc(r.project_id)}" data-rel="${esc(r.rel)}" data-dir="0" style="padding-left:${padLeft}px" title="${esc(r.name)}">
+          <div class="fl-tree-row file ${isSel ? 'on' : ''}" data-project-id="${esc(r.project_id)}" data-rel="${esc(r.rel)}" data-dir="0" aria-current="${isSel}" style="padding-left:${padLeft}px" title="${esc(r.name)}">
             <span class="fl-indent-spacer"></span>
             <span class="fl-file-ico">${flGetIcon(r.ext)}</span>
             <span class="fl-name">${esc(r.name)}</span>
@@ -171,6 +172,10 @@ function flRenderTree(){
     return html;
   }
   list.innerHTML = `<div class="fl-tree-box">${renderSubTree("", 0)}</div>`;
+  if(focusedRel!==undefined){
+    const row=list.querySelector(`[data-rel="${CSS.escape(focusedRel)}"]`);
+    if(row){row.tabIndex=0;row.focus({preventScroll:true});}
+  }
 }
 
 function flBind(){
@@ -222,7 +227,7 @@ function flBind(){
   });
   const saveBtn = $("flSaveBtn");
   if(saveBtn) saveBtn.onclick = () => flSaveCurrent();
-  flInitTree();
+  return flInitTree();
 }
 
 let flCurrentFile = null;
@@ -236,7 +241,10 @@ async function flShow(row){
   $("flHand").title="交给当前工作流中的节点、团队或专家（Alt+Shift+H）";
   $("flHandoffHistory").disabled=false;
   FileHandoff.preview({project_id:project,relative:row.rel});
-  document.querySelectorAll("#flList .fl-tree-row").forEach(x => x.classList.toggle("on", x.dataset.rel === flSel));
+  document.querySelectorAll("#flList .fl-tree-row[data-rel]").forEach(el=>{
+    const selected=el.dataset.rel===flSel;
+    el.classList.toggle('on',selected);el.setAttribute('aria-current',String(selected));
+  });
   if($("flName")) $("flName").textContent = row.name;
   flMsg([flFmtSize(row.size), row.at, row.rel.split("/").slice(0,-1).join("/")].filter(Boolean).join(" · "));
   const stage = $("flStage"); if(!stage) return;

@@ -81,6 +81,38 @@ class ExecutionConversationsTest(unittest.TestCase):
         conversation_history.command(self.db,'chat',task['chat_id'],'purge')
         self.assertFalse(execution_board.snapshot(self.db,self.pid)['items'])
         self.assertTrue(conversations.link(self.db,'task',task['id']))
+        self.assertIsNone(conversations.read(self.db,task['chat_id']))
+        self.assertIsNone(self.db.db.execute('SELECT id FROM chats WHERE id=?',(task['chat_id'],)).fetchone())
+
+    def test_board_repairs_missing_chat_and_keeps_its_saved_result(self):
+        task = self.create()
+        run = tasks.start(self.db, task['id'], authority=self.ui)
+        tasks.complete(self.db, run['id'], self.result(run, 'SAVED_RESULT'))
+        with self.db.db:
+            self.db.db.execute('DELETE FROM chats WHERE id=?', (task['chat_id'],))
+        history = conversation_history.route('GET', '/api/conversation-history', {}, {'project_id': [self.pid]}, self.db)
+        conversation, = history['conversations']
+        self.assertEqual((conversation['id'], conversation['execution_kind']), (task['chat_id'], 'task'))
+        item, = execution_board.snapshot(self.db, self.pid)['items']
+        self.assertEqual(item['chat_id'], task['chat_id'])
+        with workflow.WorkflowDB(self.db.path) as reopened:
+            self.assertEqual(reopened.chat(item['chat_id'])['task_id'], self.pid)
+            self.assertIn('SAVED_RESULT', json.dumps(conversations.read(reopened, item['chat_id'])))
+
+    def test_upgrade_restores_missing_chat_and_leaves_permanently_deleted_chat_absent(self):
+        import migrations
+        missing = self.create()
+        purged = self.create()
+        conversation_history.command(self.db, 'chat', purged['chat_id'], 'trash')
+        conversation_history.command(self.db, 'chat', purged['chat_id'], 'purge')
+        with self.db.db:
+            self.db.db.execute('DELETE FROM chats WHERE id=?', (missing['chat_id'],))
+            self.db.db.execute('DELETE FROM execution_conversations WHERE chat_id=?', (missing['chat_id'],))
+            self.db.db.execute('DROP INDEX execution_board_conversation_lifecycle')
+            self.db.db.execute("DELETE FROM schema_migrations WHERE version='038_execution_conversation_guarantees'")
+        self.assertEqual(migrations.run_migrations(self.db.db), ['038_execution_conversation_guarantees'])
+        self.assertEqual(self.db.chat(missing['chat_id'])['task_id'], self.pid)
+        self.assertIsNone(self.db.db.execute('SELECT id FROM chats WHERE id=?', (purged['chat_id'],)).fetchone())
 
     def test_multiple_normal_turns_have_one_board_card(self):
         cid=self.db.create_chat('Conversation',task_id=self.pid)
@@ -127,6 +159,11 @@ class ExecutionConversationsTest(unittest.TestCase):
         run=workflow_tasks.prepare(self.db,self.pid,'Workflow goal','workflow-once',template['id'])
         again=workflow_tasks.prepare(self.db,self.pid,'Workflow goal','workflow-once',template['id'])
         self.assertEqual(run['chat_id'],again['chat_id'])
+        with self.db.db:
+            self.db.db.execute('DELETE FROM chats WHERE id=?', (run['chat_id'],))
+        import workflow_execution
+        self.assertEqual(workflow_execution.detail(self.db, run['id'])['chat_id'], run['chat_id'])
+        self.assertEqual(self.db.chat(run['chat_id'])['task_id'], self.pid)
         data=conversations.read(self.db,run['chat_id'],self.pid)
         self.assertEqual(len(data['execution']['children']),2)
         self.assertEqual(len({row['chat_id'] for row in data['execution']['children']}),2)

@@ -84,6 +84,7 @@ class CollaborationCompletionRuntimeTest(unittest.TestCase):
         self.load_page()
         pid=self.project('Local Zotero controls')
         self.page.evaluate("pid => ProjectLiterature.open(pid,true)",pid)
+        self.page.locator('[data-zs-view="history"]').click()
         self.page.locator('#zs-unlink-preview').click()
         self.page.locator('[data-zs-unlink-key]').wait_for()
         self.assertIn('Project B',self.page.locator('#zs-unlink').inner_text())
@@ -109,8 +110,9 @@ class CollaborationCompletionRuntimeTest(unittest.TestCase):
         workspace_section(self.page, 'papers')
         self.page.locator('#plManagement > summary').click()
         self.page.wait_for_function('pid => document.querySelector("#pwProject")?.value===pid',arg=second)
-        self.page.locator('#zs-load').wait_for()
-        self.assertIn('rw:project:'+second,self.page.locator('#projectLiterature').inner_text())
+        self.page.locator('[data-zs-view="history"]').click()
+        tag=self.page.locator('[data-zs-panel="history"] code')
+        self.assertEqual(tag.inner_text(),'rw:project:'+second)
         # These payloads cannot create a Zotero item even if a legacy route regresses.
         for path,payload in (('/api/zotero/import_project_papers',{'task_id':second}),('/api/zotero/collection/create',{})):
             response=self.page.request.post(self.url.rstrip('/')+path,data=payload)

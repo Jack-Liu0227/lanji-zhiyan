@@ -4,28 +4,25 @@
   const h = value => esc(String(value ?? ''));
   const fields = [['title','标题'],['authors','作者（用分号分隔）'],['year','年份'],['doi','DOI'],['url','链接'],['abstract','摘要']];
   let current = null, openManagerFor = '';
-  const style = document.createElement('style');
-  style.textContent = `.project-literature .pl-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0}.project-literature .pl-tools input[type=search]{flex:1;min-width:180px}.project-literature .pl-list{border-top:1px solid var(--line)}.project-literature .pl-row{display:flex;gap:12px;align-items:flex-start;padding:16px 0;border-bottom:1px solid var(--line)}.project-literature .pl-row>input{margin-top:6px}.project-literature .pl-main{flex:1;min-width:0;overflow-wrap:anywhere}.project-literature .pl-main h4{margin:0 0 6px;font-size:14px}.project-literature .pl-main p{margin:4px 0;color:var(--muted);font-size:12px}.project-literature .pl-actions{display:flex;gap:8px;flex-wrap:wrap}.project-literature details>summary{cursor:pointer;padding:12px 0}.project-literature .pl-editor{padding:16px;border:1px solid var(--line);border-radius:10px;margin:12px 0;background:var(--panel)}.project-literature .pl-editor label{display:grid;gap:5px}.project-literature .pl-editor textarea{min-height:100px}.project-literature .pl-error{color:var(--err);white-space:pre-wrap}.project-literature #zs-plan ul{max-height:230px;overflow:auto}.project-literature #zs-candidates{border:1px solid var(--line);border-radius:8px;padding:0 12px}@media(max-width:700px){.project-literature .pl-row{flex-wrap:wrap}.project-literature .pl-actions{width:100%;padding-left:28px}}`;
-  document.head.append(style);
-  style.textContent += `.project-literature .pl-tools input[type=search]{flex:1 1 260px;width:auto}.project-literature .pl-tools>select{flex:0 1 180px;width:auto}.project-literature .sch-head>.pl-tools{margin:0}`;
-
   function html() {
-    return `<section class="card project-literature" id="projectLiterature" style="margin-top:12px">
-      <div class="sch-head"><div><h3>项目文献 <span class="pill" id="plCount"></span></h3><p class="hint">下载的 PDF 先进入项目暂存目录。只有点击“写入 Zotero”并确认后，才交给 Zotero 附件管理插件。</p></div>
-        <div class="pl-tools"><button class="btn btn-primary" id="spZoteroBtn">从 Zotero 选择文献</button><button class="btn ghost" id="plLinkImport">链接 / DOI 导入</button><button class="btn ghost" id="plIntelligence">从情报日报选取</button><button class="btn ghost" id="plSync">同步与来源</button><button class="btn ghost" id="spToLib">打开知识库</button></div></div>
+    return `<section class="card project-literature" id="projectLiterature" aria-label="项目文献">
+      <header class="pl-header">
+        <div class="pl-tools"><button class="btn btn-primary" id="spZoteroBtn">从 Zotero 选文</button><button class="btn ghost" id="plLinkImport">链接 / DOI 导入</button><button class="btn ghost" id="plIntelligence">从情报日报选取</button></div>
+        <span class="pill" id="plCount"></span></header>
+      <details id="plManagement"><summary>管理 Zotero</summary><div class="pl-manager-settings"><button class="btn ghost" id="plConnection">Zotero 连接设置</button></div><div id="plZotero"><p class="hint">正在读取同步配置…</p></div></details>
       <div class="pl-tools"><input class="control" type="search" id="plSearch" aria-label="搜索项目文献" placeholder="搜索标题、作者、DOI 或 Zotero Key"><select class="control" id="plFilter" aria-label="筛选项目文献"><option value="all">全部文献</option><option value="zotero">已关联 Zotero</option><option value="pdf">有 PDF</option><option value="metadata">仅题录</option></select><button class="btn ghost" id="plRefresh">刷新</button></div>
-      <div class="pl-tools"><label><input type="checkbox" id="plSelectAll"> 勾选当前筛选下的 Zotero 文献</label><span class="hint" id="plSelected">已选 0 篇</span><button class="btn ghost" id="plRemove" disabled>移除所选项目关联</button><button class="btn ghost" id="plHistory">恢复关联 / 操作记录</button><button class="btn ghost" id="plConnection">Zotero 连接设置</button></div>
+      <div class="pl-tools pl-selection" id="plSelection" hidden><label><input type="checkbox" id="plSelectAll"> 全选 Zotero 关联</label><span class="hint" id="plSelected">已选 0 篇</span><button class="btn ghost" id="plRemove" disabled>移除所选项目关联</button></div>
       <div id="plMessage" role="status" aria-live="polite"></div><div id="plError" class="pl-error" role="alert"></div>
-      <details id="plManagement"><summary>文献来源、同步与项目关联管理</summary><div id="plZotero"><p class="hint">正在读取同步配置…</p></div></details>
       <section id="plEditor" class="pl-editor" hidden aria-label="编辑文献题录"></section>
       <div id="plList" class="pl-list"></div></section>`;
   }
 
-  function mount(container, project, initialRows) {
+  function mount(container, project, initialRows, isActive=()=>uiRouteIs('space')&&spTab==='papers') {
     const selected = new Set();
     let rows = initialRows || [], editorRow = null, managerPromise = null, saving = false;
+    let revision, request = 0, inFlight = null;
     const $ = id => container.querySelector('#'+id);
-    const live = () => current?.container === container && container.isConnected && curTask === project && uiRouteIs('space') && spTab === 'papers';
+    const live = () => current?.container === container && container.isConnected && curTask === project && isActive();
     const message = (text, error=false) => { if(live()) $(error?'plError':'plMessage').textContent=text; };
     const filtered = () => {
       const query=$('plSearch').value.trim().toLocaleLowerCase(), filter=$('plFilter').value;
@@ -40,6 +37,7 @@
     }
     function updateSelection() {
       const keys=filtered().filter(r=>r.zotero_key).map(r=>r.zotero_key);
+      $('plSelection').hidden=!keys.length&&!selected.size;
       $('plSelected').textContent=`已选 ${selected.size} 篇`;
       $('plRemove').disabled=!selected.size;
       $('plSelectAll').disabled=!keys.length;
@@ -95,19 +93,28 @@
       if(typeof spLoadPaperBadges==='function') spLoadPaperBadges($('plList'));
       updateSelection();
     }
-    async function refresh() {
-      const data=await api('/api/library/project?task_id='+encodeURIComponent(project));
-      if(live()){rows=data.items;paint();}
+    function refresh({poll=false}={}) {
+      if(!live())return;
+      if(poll&&inFlight)return inFlight;
+      const ticket=++request;
+      inFlight=api('/api/library/project?task_id='+encodeURIComponent(project)).then(data=>{
+        if(!live()||ticket!==request||revision===data.version)return;
+        revision=data.version;rows=data.items;paint();
+      }).finally(()=>{if(ticket===request)inFlight=null;});
+      return inFlight;
     }
     $('plLinkImport').onclick=()=>LiteratureImport.open({projectId:project,onImported:refresh});
     $('plIntelligence').onclick=()=>openTab('intel');
     async function management(target='sources') {
       $('plManagement').open=true;
       if(!managerPromise) {
-        managerPromise=ProjectZotero.mount($('plZotero'),project,refresh).catch(err=>{managerPromise=null;throw err;});
+        managerPromise=ProjectZotero.mount($('plZotero'),project,refresh,live).catch(err=>{managerPromise=null;throw err;});
       }
       await managerPromise;
-      if(live()) $(target==='history'?'zs-batches':'zs-sources')?.scrollIntoView({block:'nearest'});
+      if(live()){
+        ProjectZotero.show($('plZotero'),target);
+        $('plManagement').scrollIntoView({block:'nearest'});
+      }
     }
     function edit(row) {
       editorRow={...row};$('plEditor').hidden=false;
@@ -133,26 +140,31 @@
       $('plEditForm').querySelector('[name=title]').focus();
       $('plEditor').scrollIntoView({block:'nearest'});
     }
-    current={container,project,update(data){if(live()){rows=data.items;paint();}},management,
+    current={container,project,refresh,live,management,
       refreshStatus(){if(live()&&$('plManagement').open)return ProjectZotero.refreshStatus($('plZotero'));}};
     $('plSearch').oninput=paint;$('plFilter').onchange=paint;
     $('plSelectAll').onchange=event=>{filtered().filter(r=>r.zotero_key).forEach(r=>event.target.checked?selected.add(r.zotero_key):selected.delete(r.zotero_key));paint();};
     $('plRefresh').onclick=event=>run(event.target,refresh);
-    for(const id of ['spZoteroBtn','plSync']) $(id).onclick=event=>run(event.target,()=>management());
-    $('plHistory').onclick=event=>run(event.target,()=>management('history'));
+    $('spZoteroBtn').onclick=event=>run(event.target,()=>management('sources'));
     $('plManagement').ontoggle=()=>{if($('plManagement').open&&!managerPromise)management().catch(err=>message(err.message,true));};
     $('plRemove').onclick=event=>run(event.target,async()=>{const keys=[...selected];await management('history');if(live())await ProjectZotero.previewRemoval($('plZotero'),keys);});
     $('plConnection').onclick=()=>IntegrationSettings.openZotero(project);
-    $('spToLib').onclick=()=>openTab('library');
     paint();
     if(openManagerFor===project){openManagerFor='';management().catch(err=>message(err.message,true));}
+    return refresh().catch(err=>message(err.message,true));
   }
   async function open(project, manage=false) {
     if(!project || !await pnSaveCurrent())return;
-    curTask=project;spId=project;spTab='papers';localStorage.setItem('rw-task',project);
+    if(current?.project===project&&current.live())return manage?current.management():current.refresh();
+    await ProjectWorkspace.openProject(project);
+    if(curTask!==project)return;
     openManagerFor=manage?project:'';
-    openTab('space');
+    await ProjectWorkspace.showResource('papers');
   }
-  window.ProjectLiterature={html,mount,open,update(project,data){if(current?.project===project)current.update(data);},
-    async refreshStatus(project){if(current?.project===project)await current.refreshStatus();}};
+  window.ProjectLiterature={html,mount,open,async poll(){
+    const panel=current;
+    if(!panel?.live())return;
+    await panel.refresh({poll:true});
+    await panel.refreshStatus();
+  }};
 })();

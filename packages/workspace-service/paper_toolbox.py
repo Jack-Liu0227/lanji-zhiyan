@@ -249,14 +249,18 @@ def route(method,path,body,query,db):
         identifier=(query.get('run_id') or [''])[0];pid=(query.get('project_id') or [''])[0]
         run=db.get_async_task(identifier);chat=db.chat(run['owner_id']) if run else None
         if not chat or chat['channel']!='toolbox' or (pid and chat['task_id']!=pid):raise ValueError('工具处理记录不存在或不属于当前项目')
+        spec=run.get('checkpoint',{}).get('request',{}).get('toolbox_spec',{})
+        input_text=spec.get('text','')
         content='';result_path='';result_files=[];result_errors=[]
         if run['status']=='done':
-            content=next((m['content'] for m in reversed(db.messages(chat['id'],'agent')) if m['role']=='assistant'),'')
+            messages=db.messages(chat['id'],'agent')
+            input_text=next((m['content'] for m in reversed(messages) if m['role']=='user'),input_text)
+            content=next((m['content'] for m in reversed(messages) if m['role']=='assistant'),'')
             event=db.db.execute("SELECT payload FROM run_events WHERE run_id=? AND kind='toolbox_result' ORDER BY event_id DESC LIMIT 1",(identifier,)).fetchone()
             if event:
                 payload=json.loads(event['payload']);result_path=payload.get('path','');result_files=payload.get('files',[]);result_errors=payload.get('errors',[])
-        return {'id':identifier,'title':chat['title'],'project_id':chat['task_id'],'status':run['status'],'content':content,'path':result_path,'files':result_files,'errors':result_errors,
-                'prompt':_prompt_record(run.get('checkpoint',{}).get('request',{}).get('toolbox_spec',{}))}
+        return {'id':identifier,'title':chat['title'],'project_id':chat['task_id'],'status':run['status'],'input':input_text,
+                'content':content,'path':result_path,'files':result_files,'errors':result_errors,'prompt':_prompt_record(spec)}
     if method=='POST' and path.endswith('/upload'):
         import image_tools
         return image_tools.upload(db,body)

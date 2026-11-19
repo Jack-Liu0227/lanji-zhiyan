@@ -49,6 +49,8 @@ class FrontendAuditRuntimeTest(unittest.TestCase):
             self.page.locator('#flList [data-rel="nested"] .fl-chevron').click()
             if self.page.locator('#pwNavShade').is_visible():
                 self.page.locator('#pwNavClose').click()
+        self.page.locator('[data-pw-file-entry="nested/child"]').click()
+        self.page.locator('[data-pw-file-entry="nested/child/example.md"]').click()
         self.page.locator('#pwFocus').click()
         self.assertTrue(self.page.locator('#flList').is_hidden())
         self.page.locator('#pwToggleTree').click()
@@ -81,7 +83,7 @@ class FrontendAuditRuntimeTest(unittest.TestCase):
             self.assertTrue(self.page.locator('#flList').is_visible())
             self.page.locator('#pwToggleNav').click()
             self.assertTrue(self.page.locator('.pw-sidebar').is_hidden())
-            self.assertTrue(self.page.locator('#flList').is_hidden())
+            self.assertTrue(self.page.locator('#flList').is_visible())
             self.page.locator('#pwToggleNav').click()
             self.page.locator('#pwTab-chat').click()
             self.page.locator('#pwShowDoc').click()
@@ -141,11 +143,14 @@ class FrontendAuditRuntimeTest(unittest.TestCase):
         with workflow.WorkflowDB(self.database_path) as db:
             db.assistant_save('audit-task-expert',name='任务专家',enabled=1)
             binding=project_bindings.register(db,self.pid,'assistant','audit-task-expert')
+        for relative in ('nested','nested/child','nested/child/example.md'):
+            self.page.locator(f'[data-pw-file-entry="{relative}"]').click()
         self.page.locator('#pwFocus').click()
         self.page.evaluate("""async d=>{const made=await api('/api/project-tasks/create',{project_id:d.pid,goal:'查看目录保存',executor_binding_id:d.binding});await ProjectWorkspace.openTask(made.task.id,d.pid);}""",{'pid':self.pid,'binding':binding['id']})
         self.page.locator('#pwTab-library').click()
         workspace_section(self.page, 'files')
         self.page.locator('#flList [data-rel="nested"]').wait_for(state='visible')
+        self.page.locator('#flStage .md-render').filter(has_text='FOLDER_FILE').wait_for()
         self.assertEqual(self.errors,[])
 
     def test_new_chat_and_new_task_buttons_open_actual_objects(self):

@@ -19,6 +19,4 @@ def route(method: str, path: str, body: dict[str, Any],
         pid = (query.get("project_id") or [""])[0]
         return {"items": literature_import.annotate(db, db.rss_items(sid, kw, yr), pid),
                 "total": db.rss_count(sid, kw, yr)}
-    if method == "GET" and path == "/api/library/project":
-        return {"items": db.results((query.get("task_id") or [""])[0])}
     return literature_import.route(method, path, body, query, db)

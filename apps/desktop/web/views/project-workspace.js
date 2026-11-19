@@ -25,14 +25,14 @@ const ProjectWorkspace = (() => {
   const live=state=>active() && mounted===state && curTask===state.id && root()?.dataset.projectId===state.id;
   const get=id=>{
     if(!states.has(id)){
-      const saved=read("rw-workspace:"+id,{});if(saved.section==='tools')saved.section='workflow';if(saved.sections?.flow==='tools')saved.sections.flow='workflow';
+      const saved=read("rw-workspace:"+id,{});if(saved.section==='tools')saved.section='workflow';if(saved.sections?.flow==='tools')saved.sections.flow='workflow';if(saved.surface==='workbench'&&saved.section==='files'){saved.surface='library';saved.section='files';saved.sections={...saved.sections,library:'files',workbench:'run-artifacts'};}
       const nodePeek=saved.surface==='chat'&&saved.section==='node-result'&&!!saved.nodeResultSelection&&saved.nodePeek===true;
       states.set(id,{id,chatId:saved.chatId||"",section:saved.section||"overview",surface:surfaces[saved.surface]?saved.surface:'chat',sections:{library:'catalog',tasks:'tasks',flow:'workflow',workbench:'run-artifacts',...saved.sections},peek:nodePeek,navOpen:false,inspection:null,mode:saved.mode||"supervised",modeTouched:!!saved.modeTouched,scope:saved.scope||"project",target:saved.target||"",reading:false,
-        searchQuery:saved.searchQuery||"",navHidden:!!saved.navHidden,treeHidden:!!saved.treeHidden,drafts:read("rw-workspace-drafts:"+id,{}),fileRow:saved.fileRow||null,libraryFile:saved.libraryFile||saved.fileRow||null,nodeResultSelection:saved.nodeResultSelection||null,artifactRunId:saved.artifactRunId||'',tasks:[],bindings:[],teams:[],targets:null,layout:null,project:null,review:null,filter:"",epoch:0,resourceEpoch:0,refreshing:false});
+        searchQuery:saved.searchQuery||"",navHidden:!!saved.navHidden,treeHidden:!!saved.treeHidden,drafts:read("rw-workspace-drafts:"+id,{}),fileDirectory:saved.fileDirectory||'',fileRow:saved.fileRow||null,libraryFile:saved.libraryFile||saved.fileRow||null,nodeResultSelection:saved.nodeResultSelection||null,artifactRunId:saved.artifactRunId||'',tasks:[],bindings:[],teams:[],targets:null,layout:null,project:null,review:null,filter:"",epoch:0,resourceEpoch:0,refreshing:false});
     }
     return states.get(id);
   };
-  function persist(state){write("rw-workspace:"+state.id,{chatId:state.chatId,section:state.section,surface:state.surface,sections:state.sections,searchQuery:state.searchQuery,mode:state.mode,modeTouched:state.modeTouched,scope:state.scope,target:state.target,navHidden:state.navHidden,treeHidden:state.treeHidden,fileRow:state.fileRow,libraryFile:state.libraryFile,nodeResultSelection:state.nodeResultSelection,artifactRunId:state.artifactRunId,nodePeek:state.surface==='chat'&&state.section==='node-result'&&state.peek});write("rw-workspace-drafts:"+state.id,state.drafts);}
+  function persist(state){write("rw-workspace:"+state.id,{chatId:state.chatId,section:state.section,surface:state.surface,sections:state.sections,searchQuery:state.searchQuery,mode:state.mode,modeTouched:state.modeTouched,scope:state.scope,target:state.target,navHidden:state.navHidden,treeHidden:state.treeHidden,fileDirectory:state.fileDirectory,fileRow:state.fileRow,libraryFile:state.libraryFile,nodeResultSelection:state.nodeResultSelection,artifactRunId:state.artifactRunId,nodePeek:state.surface==='chat'&&state.section==='node-result'&&state.peek});write("rw-workspace-drafts:"+state.id,state.drafts);}
   function draft(state){const key=state.chatId||"new";return state.drafts[key]||(state.drafts[key]={text:"",refs:[]});}
   function currentChat(state){return (S.chats||[]).find(c=>c.id===state.chatId && c.task_id===state.id);}
   function chatRecord(id){if(!chats.has(id))chats.set(id,{messages:[],events:[],run:null,loaded:false,request:0});return chats.get(id);}
@@ -116,8 +116,7 @@ const ProjectWorkspace = (() => {
     const node=root(),small=narrow(),chat=document.querySelector('.pw-chat'),doc=document.getElementById('pwDocumentPane');
     node.dataset.surface=state.surface;node.dataset.section=state.section;node.dataset.fileMode=typeof flCurrentMode!=='undefined'?flCurrentMode:'preview';
     node.classList.toggle('pw-reading',state.reading);
-    const workbenchFiles=state.surface==='workbench'&&state.section==='files';
-    const hasSidebar=state.surface==='library'||workbenchFiles||(state.surface==='chat'&&!state.peek);
+    const hasSidebar=state.surface==='library'||(state.surface==='chat'&&!state.peek);
     node.dataset.pwSidebar=hasSidebar?'on':'off';
     if(!hasSidebar)state.navOpen=false;
     node.classList.toggle('pw-nav-closed',state.navHidden);node.classList.toggle('pw-nav-open',state.navOpen);node.classList.toggle('pw-peek',state.surface==='chat'&&state.peek);node.classList.toggle('pw-narrow',small);
@@ -136,19 +135,28 @@ const ProjectWorkspace = (() => {
     if(small&&state.navOpen){nav.setAttribute('role','dialog');nav.setAttribute('aria-modal','true');doc.removeAttribute('aria-modal');}else{nav.removeAttribute('role');nav.removeAttribute('aria-modal');}
     const tree=document.getElementById('pwFileTree'),inline=document.getElementById('pwInlineTree'),slot=document.getElementById('pwSidebarTreeSlot');
     const inPeek=state.surface==='chat'&&state.peek;
-    if(tree&&slot){const target=state.section==='files'&&inPeek&&inline?inline:slot;if(tree.parentElement!==target)target.append(tree);slot.hidden=state.section!=='files'||target!==slot||!hasSidebar;tree.hidden=state.treeHidden||(inPeek&&!state.peekTree);if(inline)inline.hidden=!inPeek||!state.peekTree;}
+    const fileBrowser=state.section==='files'&&state.surface==='library';
+    if(tree&&slot){
+      const target=state.section==='files'&&(fileBrowser||inPeek)&&inline?inline:slot;
+      if(tree.parentElement!==target)target.append(tree);
+      slot.hidden=true;
+      const showTree=fileBrowser?!state.treeHidden&&!state.reading:inPeek&&!!state.peekTree;
+      tree.hidden=!showTree;
+      if(inline)inline.hidden=!showTree;
+    }
     const material=['files','notes'].includes(state.section)&&!!currentFile(),output=state.inspection?.origin==='task';
-    const treeVisible=inPeek?!!state.peekTree:small?state.navOpen:!state.treeHidden&&!state.navHidden&&!state.reading;
-    const toggle=document.getElementById('pwToggleTree');toggle.hidden=state.section!=='files'||output;toggle.textContent=small&&!inPeek?'项目目录':treeVisible?'收起目录':'显示目录';toggle.setAttribute('aria-expanded',String(treeVisible));
-    document.getElementById('pwFileToolbar').hidden=state.section!=='files';
+    const treeVisible=inPeek?!!state.peekTree:!state.treeHidden&&!state.reading;
+    const toggle=document.getElementById('pwToggleTree');toggle.hidden=state.section!=='files'||output;toggle.textContent=treeVisible?'收起目录':'显示目录';toggle.setAttribute('aria-expanded',String(treeVisible));
+    document.getElementById('pwFileToolbar').hidden=state.section!=='files'||!state.fileRow;
+    document.querySelector('[data-pw-root-folder]')?.setAttribute('aria-current',String(!state.fileRow&&!state.fileDirectory));
     document.getElementById('pwUseMaterial').hidden=!material;
     document.getElementById('pwQuote').hidden=!material;
     document.getElementById('pwMaterialTask').hidden=!material||state.section==='files'||output;
-    document.getElementById('pwFocus').hidden=!['files','notes'].includes(state.section);document.getElementById('pwFocus').textContent=state.reading?'退出专注':'专注阅读';
+    document.getElementById('pwFocus').hidden=state.section!=='notes'&&!material;document.getElementById('pwFocus').textContent=state.reading?'退出专注':'专注阅读';
     const back=document.getElementById('pwBack');
-    const returnToRun=state.section==='node-result'||workbenchFiles;
-    back.hidden=!output&&!returnToRun&&state.section!=='task-detail'&&!inPeek&&state.inspection?.origin!=='chat';
-    back.querySelector('span').textContent=inPeek?'返回对话':returnToRun?'返回运行产物':output?'返回任务':state.section==='task-detail'?'任务列表':'返回对话';
+    const returnToRun=state.section==='node-result';
+    back.hidden=!output&&!returnToRun&&state.section!=='task-detail'&&!inPeek&&!(fileBrowser&&state.fileRow)&&state.inspection?.origin!=='chat';
+    back.querySelector('span').textContent=inPeek?'返回对话':returnToRun?'返回运行产物':output?'返回任务':fileBrowser?'返回文件列表':state.section==='task-detail'?'任务列表':'返回对话';
     document.getElementById('pwCloseDoc').hidden=state.surface!=='chat';
     document.getElementById('pwTrail').textContent=state.section==='node-result'?'产物工作台 · 节点产物':output?'任务产物 · 固定版本':state.section==='task-detail'?'任务与核查':(surfaces[resourceSurface[state.section]]||'资料')+(state.fileRow&&state.section==='files'?' / '+state.fileRow.rel.split('/').slice(0,-1).join('/'):'');
     if(state.review)paintReview(state,state.review);else document.getElementById('pwReview').hidden=true;
@@ -244,14 +252,14 @@ const ProjectWorkspace = (() => {
     document.getElementById("pwRenameChat").onclick=async()=>{const row=currentChat(state);if(!row)return notice("发送第一条消息后可以给对话改名。",state);const title=await uiPrompt("对话名称",row.title);if(title===null)return;await api("/api/chat/rename",{id:row.id,title});await refreshState(false);if(live(state)){paintSessions(state);document.getElementById("pwChatTitle").textContent=currentChat(state)?.title||"课题讨论";}};
     document.getElementById('pwToggleNav').onclick=()=>{if(narrow())state.navOpen=!state.navOpen;else{state.navHidden=state.reading?false:!state.navHidden;state.reading=false;}persist(state);layoutPanels(state);if(state.navOpen)document.getElementById('pwNavClose').focus();};
     document.getElementById('pwNavShade').onclick=()=>closeNavigator(state);document.getElementById('pwNavClose').onclick=()=>{if(narrow())closeNavigator(state);else{state.navHidden=true;persist(state);layoutPanels(state);}};
-    document.getElementById('pwToggleTree').onclick=()=>{if(state.surface==='chat'){state.peekTree=!state.peekTree;}else if(narrow()){state.navOpen=!state.navOpen;state.treeHidden=false;}else{state.treeHidden=state.navHidden||state.reading?false:!state.treeHidden;if(!state.treeHidden){state.navHidden=false;state.reading=false;}}persist(state);layoutPanels(state);if(state.navOpen)document.getElementById('pwNavClose').focus();};
+    document.getElementById('pwToggleTree').onclick=()=>{if(state.surface==='chat')state.peekTree=!state.peekTree;else{state.treeHidden=state.reading?false:!state.treeHidden;state.reading=false;}persist(state);layoutPanels(state);};
     document.getElementById('pwShowDoc').onclick=()=>switchSurface('library',state);
     document.getElementById('pwCloseDoc').onclick=()=>switchSurface('chat',state);
     document.getElementById('pwBack').onclick=()=>{
       if(state.peek)return switchSurface('chat',state);
       if(state.section==='node-result')return showResource('run-artifacts',state,{runId:state.nodeResultSelection?.workflow_run_id});
-      if(state.surface==='workbench'&&state.section==='files')return showResource('run-artifacts',state);
       if(state.inspection?.origin==='task')return openTask(state.inspection.taskId,state.id);
+      if(state.surface==='library'&&state.section==='files')return browseDirectory(state,state.fileRow?.rel.split('/').slice(0,-1).join('/')||'');
       if(state.section==='task-detail')return showResource('tasks',state);
       return switchSurface('chat',state);
     };
@@ -303,7 +311,12 @@ const ProjectWorkspace = (() => {
   async function selectChat(state,id){
     if(state.sending||state.creating)return notice('正在保存当前请求，请稍后切换对话。',state);
     if(!live(state)||!await flush())return;
-    if(id && !((String(id).startsWith('execution-')||((S.chats||[]).some(c=>c.id===id&&c.task_id===state.id)))))return error("对话不属于当前项目。",state);
+    const belongsToProject=()=>S.chats?.some(chat=>chat.id===id&&chat.task_id===state.id);
+    if(id&&!String(id).startsWith('execution-')&&!belongsToProject()){
+      try{await refreshState(false);}catch(err){return error(err.message,state);}
+      if(!live(state))return;
+      if(!belongsToProject())return error('对话不属于当前项目。',state);
+    }
     state.chatId=id;persist(state);paintSessions(state);paintDraft(state);paintChat(state);error("",state);
   }
   async function newChat(state){
@@ -507,7 +520,7 @@ const ProjectWorkspace = (() => {
       if(result[1].status==='fulfilled'){state.bindings=result[1].value.bindings||[];state.teams=result[1].value.teams||[];}
       if(result[2].status==='fulfilled')state.targets=result[2].value;
       if(result[3].status==='fulfilled'&&!state.modeTouched){state.mode=result[3].value.policy.autonomy_mode||'supervised';if(live(state))document.getElementById('pwMode').value=state.mode;}
-      if(live(state)){paintTargets(state);paintTasks(state);paintBackground();if(!state.optionSaving&&!document.activeElement?.closest('#pwRuntime'))paintChatOptions(state);if(result[0].status==='rejected')error('任务读取失败：'+result[0].reason.message,state);
+      if(live(state)){if(state.surface==='chat'&&!state.peek)paintSessions(state);paintTargets(state);paintTasks(state);paintBackground();if(!state.optionSaving&&!document.activeElement?.closest('#pwRuntime'))paintChatOptions(state);if(result[0].status==='rejected')error('任务读取失败：'+result[0].reason.message,state);
         const updated=state.tasks.find(t=>t.id===state.review?.id);
         if(updated&&(updated.version!==state.review.version||updated.status!==state.review.status)){
           const oldRun=state.review.latest_run,newRun=updated.latest_run,changedOutput=!!oldRun&&(oldRun.id!==newRun?.id||(oldRun.checkpoint?.output_revision||0)!==(newRun?.checkpoint?.output_revision||0));
@@ -548,15 +561,16 @@ const ProjectWorkspace = (() => {
     try{const result=await api('/api/project-tasks/'+action,{id,project_id:state.id,...(action==='start'?{autonomy_mode:state.mode,request_key:crypto.randomUUID()}:{})});state.tasks=state.tasks.map(t=>t.id===id?result.task:t);if(live(state)){error('',state);paintTasks(state);if(state.surface==='tasks'&&state.section==='task-detail'&&state.review?.id===id)await openTask(id,state.id);}}catch(err){error(err.message,state);}
   }
   async function showResource(section,state=mounted,options={}){
+    if(options.surface==='workbench'&&section==='files')options={...options,surface:'library'};
     if(section==='tools')section='workflow';
     if(!live(state))return;if(section==='discussion')return switchSurface('chat',state);
     if(!options.initial&&!await flush())return;if(!live(state))return;notice('',state);error('',state);
     state.section=resources[section]?section:'overview';state.surface=options.peek?'chat':options.surface||resourceSurface[state.section];state.peek=!!options.peek;state.peekTree=false;state.navOpen=false;state.reading=state.section==='node-result';state.inspection=options.inspection||null;
     if(state.section==='node-result')state.navHidden=true;
     if(state.surface===resourceSurface[state.section])state.sections[state.surface]=state.section;
-    if(['library','workbench'].includes(state.surface)&&state.section==='files')state.fileRow=state.libraryFile;
+    if(state.surface==='library'&&state.section==='files')state.fileRow=state.libraryFile;
     state.resourceEpoch++;persist(state);document.getElementById('pwProjectSettings').open=false;
-    document.getElementById('pwResourceTitle').textContent=resources[state.section];
+    document.getElementById('pwResourceTitle').textContent=state.section==='catalog'?'全部资料':resources[state.section];
     const tree=document.getElementById('pwFileTree');if(tree?.parentElement!==document.getElementById('pwSidebarTreeSlot'))document.getElementById('pwSidebarTreeSlot').append(tree);
     document.getElementById('pwFileToolbar').replaceChildren();
     const area=document.getElementById('pwResource');area.firstElementChild?.__nodeDispose?.();area.innerHTML='<div class="pw-resource-content"></div>';const host=area.firstElementChild;
@@ -592,6 +606,12 @@ const ProjectWorkspace = (() => {
         locate:identity=>{state.focusWorkflow={runId:identity.workflow_run_id,nodeId:identity.workflow_node_id};return showResource('workflow',state);}});return;
     }
     if(state.section==='files'){await mountFiles(state,host);return;}
+    if(state.section==='papers'){
+      const epoch=state.resourceEpoch;
+      host.innerHTML=ProjectLiterature.html();
+      await ProjectLiterature.mount(host.firstElementChild,state.id,[],()=>live(state)&&state.resourceEpoch===epoch&&host.isConnected);
+      return;
+    }
     if(['catalog','manuscripts','experiments','outputs'].includes(state.section)){const epoch=state.resourceEpoch;await ProjectResources.mount(host,state.id,{kind:{manuscripts:'manuscript',experiments:'experiment',outputs:'output'}[state.section]||'',live:()=>live(state)&&state.resourceEpoch===epoch&&host.isConnected});return;}
     if(['tasks','automation','plan'].includes(state.section)){state.taskCenterHost=host;await TaskCenter.render(host,{projectId:state.id,view:state.section==='automation'?'automation':state.section==='plan'?'plans':'board',filter:state.filter,live:()=>live(state)&&state.surface==='tasks',onSnapshot:rows=>{state.executionRows=rows;paintExecutionCounts(state);}});return;}
     if(state.section==='workflow'){await mountWorkflow(state,host);return;}
@@ -634,6 +654,7 @@ const ProjectWorkspace = (() => {
     const state=get(projectId),matches=rel=>rel===oldRelative||rel?.startsWith(oldRelative+'/');
     const change=row=>{if(!row||!matches(row.rel))return row;if(!newRelative)return null;const rel=newRelative+row.rel.slice(oldRelative.length);return {...row,rel,path:row.path.slice(0,-row.rel.length)+rel.replaceAll('/',row.path.includes('\\')?'\\':'/'),name:rel.split('/').pop(),ext:rel.split('.').pop()};};
     const changed=matches(state.fileRow?.rel);state.fileRow=change(state.fileRow);state.libraryFile=change(state.libraryFile);
+    if(matches(state.fileDirectory))state.fileDirectory=newRelative?newRelative+state.fileDirectory.slice(oldRelative.length):oldRelative.split('/').slice(0,-1).join('/');
     if(live(state)){for(const rel of [...flExpanded])if(matches(rel)){flExpanded.delete(rel);if(newRelative)flExpanded.add(newRelative+rel.slice(oldRelative.length));}flSaveExpanded();}
     if(newRelative)Object.values(state.drafts).forEach(value=>(value.refs||[]).forEach(ref=>{if(matches(ref.relative)){ref.relative=newRelative+ref.relative.slice(oldRelative.length);ref.name=ref.relative.split('/').pop();}}));
     persist(state);if(!live(state))return;
@@ -643,21 +664,69 @@ const ProjectWorkspace = (() => {
   }
   async function mountFiles(state,host){
     const previous=typeof flCurrentFile!=='undefined'&&flCurrentFile?.projectId===state.id&&state.fileRow?.path===flCurrentFile.row.path&&!state.fileRow.read_only?flCurrentFile:null;
-    host.innerHTML='<div id="pwInlineTree" class="pw-inline-tree"></div>'+filesPanelHTML(true);const tree=host.querySelector('.fl-grid>.fl-col');document.getElementById('pwFileTree').replaceChildren(tree);
+    host.innerHTML='<div id="pwInlineTree" class="pw-inline-tree"></div>'+filesPanelHTML(true);
+    const tree=host.querySelector('.fl-grid>.fl-col'), fileBrowser=state.surface==='library';
+    document.getElementById('pwFileTree').replaceChildren(tree);
+    if(fileBrowser)tree.querySelector('.fl-h').insertAdjacentHTML('afterend','<button type="button" class="pw-file-root pw-text-button" data-pw-root-folder>项目根目录</button>');
     document.getElementById('pwFileToolbar').replaceChildren(host.querySelector('.fl-grid>.fl-col:last-child>.fl-h'));
     document.getElementById('flHand').textContent='交由专家/团队处理';document.getElementById('flHand').title='指派给当前项目专家、专家或多智能体团队执行';document.getElementById('flHandoffHistory').textContent='任务记录';
-    flBind();
+    const treeReady=flBind();
     // Open the target picker first.  The previous direct ``project`` shortcut
     // attempted to save and create a task before the user could enter a goal,
     // which also discarded the handoff dialog when a file-save barrier fired.
     document.getElementById('flHand').onclick=()=>FileHandoff.open({project_id:state.id,relative:flSel});
     layoutPanels(state);
     const list=document.getElementById('flList');
-    list.onclick=async e=>{const el=e.target.closest('.fl-tree-row');if(!el||!live(state))return;const rel=el.dataset.rel,row=flFindRow(rel);if(el.dataset.dir==='1'){if(flExpanded.has(rel))flExpanded.delete(rel);else flExpanded.add(rel);flSaveExpanded();flRenderTree();if(flExpanded.has(rel)&&!flTreeCache[rel]){const pending=flLoadNode(rel);flRenderTree();await pending;if(live(state)&&list.isConnected)flRenderTree();}}else if(row)await openFile(row,state.id);};
+    list.onclick=async event=>{
+      const el=event.target.closest('[data-rel]');if(!el||!live(state))return;
+      const row=flFindRow(el.dataset.rel);if(!row)return;
+      if(!row.dir)return openFile(row,state.id);
+      if(fileBrowser&&(state.fileRow||row.rel!==state.fileDirectory))return browseDirectory(state,row.rel);
+      if(flExpanded.has(row.rel))flExpanded.delete(row.rel);else flExpanded.add(row.rel);
+      flSaveExpanded();flRenderTree();
+      if(flExpanded.has(row.rel)&&!flTreeCache[row.rel]){await flLoadNode(row.rel);if(list.isConnected)flRenderTree();}
+    };
+    tree.querySelector('[data-pw-root-folder]')?.addEventListener('click',()=>browseDirectory(state,''));
     if(previous){flCurrentFile=previous;flSel=previous.row.rel;document.getElementById('flName').textContent=previous.row.name;document.getElementById('pwResourceTitle').textContent=previous.row.name;document.getElementById('flModeTabs').style.display='inline-flex';document.getElementById('flSaveBtn').style.display='';document.getElementById('flHand').disabled=false;document.getElementById('flHandoffHistory').disabled=false;flUpdateModeTabs();flRenderContent();layoutPanels(state);}
     else if(state.fileRow)await displayFile(state,state.fileRow);
-    document.getElementById('flReload').onclick=async()=>{if(await flush()&&live(state))await flInitTree();};
+    else if(fileBrowser){await treeReady;if(host.isConnected&&!state.fileRow)await browseDirectory(state,state.fileDirectory||'');}
+    if(!host.isConnected)return;
+    document.getElementById('flReload').onclick=async()=>{if(await flush()&&live(state)){await flInitTree();if(host.isConnected&&fileBrowser&&!state.fileRow)await browseDirectory(state,state.fileDirectory||'');}};
     document.getElementById('flOpen').onclick=async()=>{if(!state.fileRow)return;try{if(await flush())await api('/api/conv/open',{path:state.fileRow.path});}catch(err){error(err.message,state);}};
+  }
+  async function browseDirectory(state,relative){
+    const stage=document.getElementById('flStage');
+    if(!stage||!live(state)||!await flush()||!stage.isConnected)return;
+    const ticket=state.fileRequest=(state.fileRequest||0)+1;
+    state.fileDirectory=relative;state.fileRow=null;state.libraryFile=null;state.reading=false;
+    const parts=relative?relative.split('/'):[];
+    for(let i=1;i<=parts.length;i++)flExpanded.add(parts.slice(0,i).join('/'));
+    flSaveExpanded();
+    flCurrentFile=null;flSel=relative;
+    document.getElementById('pwResourceTitle').textContent='目录与文件';
+    persist(state);layoutPanels(state);flRenderTree();
+    stage.innerHTML='<p class="hint">正在读取目录…</p>';
+    if(!flTreeCache[relative])await flLoadNode(relative);
+    if(!live(state)||!stage.isConnected||ticket!==state.fileRequest)return;
+    const rows=flTreeCache[relative];
+    const breadcrumbs=['项目根目录',...parts].map((name,index)=>`<button type="button" class="pw-text-button" data-pw-folder-path="${index}">${h(name)}</button>`).join('<span aria-hidden="true">/</span>');
+    stage.innerHTML=`<section class="pw-directory"><nav class="pw-directory-path" aria-label="当前目录">${breadcrumbs}</nav><div class="pw-directory-heading"><h3>${h(parts.at(-1)||'项目根目录')} <small>${rows?.length??0} 项</small></h3><input type="search" class="control" aria-label="筛选当前目录" placeholder="筛选当前目录"></div><div data-pw-folder-rows></div></section>`;
+    stage.querySelectorAll('[data-pw-folder-path]').forEach(button=>button.onclick=()=>browseDirectory(state,parts.slice(0,Number(button.dataset.pwFolderPath)).join('/')));
+    const search=stage.querySelector('input'), results=stage.querySelector('[data-pw-folder-rows]');
+    function paint(){
+      const query=search.value.trim().toLocaleLowerCase();
+      const visible=(rows||[]).filter(row=>row.name.toLocaleLowerCase().includes(query));
+      results.innerHTML=visible.map(row=>`<button type="button" class="pw-directory-row" data-pw-file-entry="${h(row.rel)}"><span aria-hidden="true">${row.dir?'📁':flGetIcon(row.ext)}</span><strong>${h(row.name)}</strong><small>${row.dir?'文件夹':h(flFmtSize(row.size)||row.ext.toUpperCase())}</small><time>${h(row.at)}</time></button>`).join('')||`<p class="hint pw-directory-empty">${!rows?'无法读取此目录，请刷新后重试。':query?'当前目录没有匹配的项目。':'当前目录为空。'}</p>`;
+      results.onclick=event=>{
+        const button=event.target.closest('[data-pw-file-entry]');
+        const row=visible.find(item=>item.rel===button?.dataset.pwFileEntry);
+        if(!row)return;
+        if(!row.dir)return openFile(row,state.id,{peek:false});
+        return browseDirectory(state,row.rel);
+      };
+    }
+    search.oninput=paint;
+    paint();flRenderTree();
   }
   function relative(path,base){const normal=v=>String(v||'').replaceAll('\\','/').replace(/\/+$/,'');const p=normal(path),b=normal(base);return p.toLowerCase().startsWith(b.toLowerCase()+'/')?p.slice(b.length+1):'';}
   async function openFile(row,projectId=curTask,options={}){
@@ -720,14 +789,8 @@ const ProjectWorkspace = (() => {
     state.review=null;await showResource('node-result',state,{initial:true,peek:options.peek??state.surface==='chat'});
   }
   async function showRunArtifacts(state,host,runId){
-    host.innerHTML=`<div class="pw-view-head"><div data-pw-run-picker></div><button class="btn" type="button" data-pw-workbench-files>项目文件</button></div><div data-pw-run-list><p class="hint">正在读取运行记录…</p></div>`;
+    host.innerHTML=`<div class="pw-view-head"><div data-pw-run-picker></div><span class="pw-workbench-scope">工作流运行与节点产物</span></div><div data-pw-run-list><p class="hint">正在读取运行记录…</p></div>`;
     const isCurrent=()=>host.isConnected&&live(state)&&state.surface==='workbench'&&state.section==='run-artifacts';
-    host.querySelector('[data-pw-workbench-files]').onclick=async()=>{
-      if(!await flush()||!isCurrent())return;
-      state.navHidden=false;
-      state.treeHidden=false;
-      await showResource('files',state,{surface:'workbench',initial:true});
-    };
     const list=host.querySelector('[data-pw-run-list]');
     const project=encodeURIComponent(state.id);
     try{

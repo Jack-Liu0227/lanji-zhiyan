@@ -154,7 +154,7 @@ def get(db, task_id, *, project_id=""):
     if project_id and task["project_id"] != project_id:
         raise ValueError("任务不属于当前项目")
     import execution_conversations
-    task['chat_id']=(execution_conversations.link(db,'task',task_id) or {}).get('chat_id','')
+    task['chat_id']=execution_conversations.ensure(db,'task',task_id)
     task["latest_run"] = get_run(db, task["latest_run_id"]) if task["latest_run_id"] else None
     task["runs"] = [_decode(r, _RUN_JSON) for r in db.db.execute("SELECT * FROM project_task_runs WHERE task_id=? ORDER BY attempt", (task_id,))]
     task["deliveries"] = [_decode(r, ("input_versions", "output_versions", "policy_snapshot")) for r in db.db.execute("SELECT * FROM project_task_deliveries WHERE task_id=? ORDER BY rowid", (task_id,))]

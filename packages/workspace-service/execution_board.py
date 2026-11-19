@@ -55,16 +55,15 @@ def events(db, project_id, after=0, *, task_id='', run_id='', limit=200, latest=
 
 def snapshot(db, project_id, *, include_deleted=False):
     project_tasks._project(db, project_id)
+    import execution_conversations
+    execution_conversations.ensure_project(db, project_id)
     cursor=db.db.execute('SELECT COALESCE(MAX(id),0) FROM execution_board_events WHERE project_id=?',(project_id,)).fetchone()[0]
     rows=[]
     hidden={(row['item_kind'],row['item_id']):row['deleted_at'] for row in db.db.execute('SELECT * FROM execution_board_hidden WHERE project_id=?',(project_id,))}
     hidden_task_filter = '' if include_deleted else " AND NOT EXISTS (SELECT 1 FROM execution_board_hidden h WHERE h.project_id=t.project_id AND h.item_kind='task' AND h.item_id=t.id)"
-    task_chat_filter = " AND c.deleted_at=''"
-    # Execution projections are internal status records; their hidden chat
-    # rows must not make a task disappear from the status board. The
-    # include_deleted flag only restores board-hidden records, not chats that
-    # were deleted from conversation history.
-    for row in db.db.execute("SELECT t.*,c.id AS chat_id,c.title AS conversation_title FROM project_tasks t JOIN execution_conversations x ON x.kind='task' AND x.entity_id=t.id JOIN chats c ON c.id=x.chat_id" + task_chat_filter + " WHERE t.project_id=? AND t.workflow_run_id=''" + hidden_task_filter + " ORDER BY t.updated_at DESC LIMIT 300", (project_id,)):
+    # Board history can restore hidden cards. Conversation history owns archived and deleted chats.
+    active_chat_filter = " AND c.deleted_at='' AND c.archived_at=''"
+    for row in db.db.execute("SELECT t.*,c.id AS chat_id,c.title AS conversation_title FROM project_tasks t JOIN execution_conversations x ON x.kind='task' AND x.entity_id=t.id JOIN chats c ON c.id=x.chat_id" + active_chat_filter + " WHERE t.project_id=? AND t.workflow_run_id=''" + hidden_task_filter + " ORDER BY t.updated_at DESC LIMIT 300", (project_id,)):
         task=dict(row);run=project_tasks.get_run(db,task['latest_run_id']) if task['latest_run_id'] else {}
         actor=run.get('executor_snapshot',{})
         if not actor:
@@ -83,8 +82,7 @@ def snapshot(db, project_id, *, include_deleted=False):
             'assistant_name':assistant.get('name',''),'model_id':actor.get('runtime_config',{}).get('model_id',''),
             'executor_kind':grant['kind'] if grant else actor.get('kind',''), 'activity':latest['activity'] if latest else '',
             'updated_at':task['updated_at'],'error':run.get('error') or meta.get('_start_error',''),'plans':[r[0] for r in db.db.execute('SELECT plan_id FROM plan_task_links WHERE task_id=?',(task['id'],))]})
-    legacy_chat_filter = " AND c.deleted_at=''"
-    for row in db.db.execute("SELECT t.*,c.title,c.channel,c.task_id AS project_id,c.deleted_at AS chat_deleted_at FROM tasks t JOIN chats c ON c.id=t.owner_id WHERE c.task_id=?" + legacy_chat_filter + " AND t.kind='agent_run' AND NOT EXISTS (SELECT 1 FROM execution_conversations x WHERE x.chat_id=c.id) AND t.id=(SELECT r.id FROM tasks r WHERE r.owner_id=c.id AND r.kind='agent_run' ORDER BY CASE r.status WHEN 'running' THEN 0 WHEN 'pending' THEN 1 WHEN 'suspended' THEN 2 ELSE 3 END,r.rowid DESC LIMIT 1) ORDER BY t.updated_at DESC LIMIT 100",(project_id,)):
+    for row in db.db.execute("SELECT t.*,c.title,c.channel,c.task_id AS project_id,c.deleted_at AS chat_deleted_at FROM tasks t JOIN chats c ON c.id=t.owner_id WHERE c.task_id=?" + active_chat_filter + " AND t.kind='agent_run' AND NOT EXISTS (SELECT 1 FROM execution_conversations x WHERE x.chat_id=c.id) AND t.id=(SELECT r.id FROM tasks r WHERE r.owner_id=c.id AND r.kind='agent_run' ORDER BY CASE r.status WHEN 'running' THEN 0 WHEN 'pending' THEN 1 WHEN 'suspended' THEN 2 ELSE 3 END,r.rowid DESC LIMIT 1) ORDER BY t.updated_at DESC LIMIT 100",(project_id,)):
         request=json.loads(row['checkpoint'] or '{}').get('request',{})
         cfg=request.get('_runtime_snapshot',{})
         assistant=db.assistant(cfg.get('assistant_id','builtin-steward')) or {}
@@ -97,8 +95,7 @@ def snapshot(db, project_id, *, include_deleted=False):
             'activity':event.get('name') or (latest['kind'] if latest else ''),'updated_at':row['updated_at'],
             'error':event.get('message','') if row['status']=='failed' else '', 'attempt':1})
     hidden_conversation_filter = '' if include_deleted else " AND NOT EXISTS (SELECT 1 FROM execution_board_hidden h WHERE h.project_id=x.project_id AND h.item_kind='conversation' AND h.item_id=x.chat_id)"
-    workflow_chat_filter = " AND c.deleted_at=''"
-    for row in db.db.execute("SELECT r.*,x.chat_id,c.title,c.updated_at,c.deleted_at AS chat_deleted_at FROM workflow_runs r JOIN execution_conversations x ON x.kind='workflow' AND x.entity_id=r.id JOIN chats c ON c.id=x.chat_id WHERE x.project_id=?" + workflow_chat_filter + hidden_conversation_filter + " ORDER BY c.updated_at DESC LIMIT 100",(project_id,)):
+    for row in db.db.execute("SELECT r.*,x.chat_id,c.title,c.updated_at,c.deleted_at AS chat_deleted_at FROM workflow_runs r JOIN execution_conversations x ON x.kind='workflow' AND x.entity_id=r.id JOIN chats c ON c.id=x.chat_id WHERE x.project_id=?" + active_chat_filter + hidden_conversation_filter + " ORDER BY c.updated_at DESC LIMIT 100",(project_id,)):
         workflow_nodes=[]
         for child in project_tasks.list_tasks(db, project_id, workflow_run_id=row['id']):
             result=child.get('node_result') or {}

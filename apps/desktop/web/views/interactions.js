@@ -166,6 +166,7 @@ const AppInteractions = (() => {
       const readOnly = isFileTree ? false : mdDashReadOnly;
 
       return [
+        ...(isDir && isFileTree ? [{text:'打开目录',run:()=>row.click()},{separator:true}] : []),
         ...(!isDir ? [{text:"打开文件",run:()=>row.click()}, {text:"交给当前工作流…",shortcut:"Alt+Shift+H",run:()=>FileHandoff.open(fileReference(row))},
           {text:"交接记录与回执",run:()=>FileHandoff.history(fileReference(row))}, {separator:true}] : []),
         {

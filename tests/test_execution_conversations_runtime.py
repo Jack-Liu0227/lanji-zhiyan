@@ -48,6 +48,10 @@ class ExecutionConversationsRuntimeTest(unittest.TestCase):
             self.assertEqual(self.page.locator('[data-ec-task]').count(),1)
             card.dblclick();self.page.locator('[data-execution-id="'+data['id']+'"]').wait_for()
             self.assertEqual(self.page.locator('#pwMessages').get_attribute('data-chat-id'),cid)
+            self.page.locator('#pwNewChat').click()
+            self.page.locator('#pwSessions [data-pw-chat="'+cid+'"]').click()
+            self.page.locator('[data-execution-id="'+data['id']+'"]').wait_for()
+            self.assertIn('Explain the saved result',self.page.locator('#pwMessages').inner_text())
             self.shot('dispatched-task-conversation')
 
     def test_workflow_conversation_shows_real_tools_experts_and_review_progress(self):
@@ -86,6 +90,11 @@ class ExecutionConversationsRuntimeTest(unittest.TestCase):
             self.page.locator('#pwMessages .tool-card summary').first.click()
             self.assertIn('输入参数',self.page.locator('#pwMessages .tool-card').first.inner_text())
             self.shot('workflow-conversation-tools')
+            self.page.locator('#pwSessions [data-pw-chat="'+task['chat_id']+'"]').click()
+            self.page.locator('[data-execution-id="'+task['id']+'"]').wait_for()
+            self.assertEqual(self.page.locator('#pwMessages').get_attribute('data-chat-id'),task['chat_id'])
+            self.page.locator('#pwSessions [data-pw-chat="'+run['chat_id']+'"]').click()
+            self.page.wait_for_function("document.querySelectorAll('#pwMessages .tool-card').length===2")
             self.page.emulate_media(reduced_motion='reduce');self.page.set_viewport_size({'width':900,'height':850});self.page.evaluate("setTheme('light')")
             self.page.locator('[data-execution-id]').wait_for();self.shot('workflow-conversation-light')
             self.assertTrue(self.page.locator('#main').evaluate('e=>e.scrollWidth<=e.clientWidth+1'))

@@ -48,10 +48,9 @@ def _publish_change(db,kind,row,action):
                 item_id=binding['entity_id'] if item_kind=='task' else row['id']
                 if action in ('trash','archive'):
                     db.db.execute('INSERT OR IGNORE INTO execution_board_hidden(project_id,item_kind,item_id,deleted_at) VALUES (?,?,?,?)',(row['task_id'],item_kind,item_id,datetime.now(timezone.utc).isoformat()))
-                elif action in ('restore','unarchive','purge'):
+                elif action in ('restore','unarchive'):
                     db.db.execute('DELETE FROM execution_board_hidden WHERE project_id=? AND item_kind=? AND item_id=?',(row['task_id'],item_kind,item_id))
         execution_board.publish(db,row['task_id'],'conversation_'+action,task_id=row['id'],source='conversation',activity='会话记录已更新')
-        db.db.commit()
 
 
 @synchronized
@@ -79,12 +78,13 @@ def command(db,kind,identifier,action,*,title='',project_id='',team_id=''):
         if not row['deleted_at']:raise ValueError('请先将会话移入最近删除')
         with db.db:
             if kind=='chat':
-                db.clear_messages(identifier);db.delete_chat(identifier)
+                db.db.execute('DELETE FROM chat WHERE task_id=?',(identifier,))
+                db.db.execute('DELETE FROM chats WHERE id=?',(identifier,))
+                _publish_change(db,kind,row,action)
             else:
                 db.db.execute('DELETE FROM chat WHERE task_id=? AND scope=?',(team_id,'team:'+identifier))
                 db.db.execute('DELETE FROM team_sessions WHERE id=?',(identifier,))
                 db.db.execute("DELETE FROM conversation_flags WHERE kind='team' AND id=?",(identifier,))
-        _publish_change(db,kind,row,action)
         return {'ok':True}
     else:
         stamp=datetime.now(timezone.utc).isoformat()
@@ -96,7 +96,8 @@ def command(db,kind,identifier,action,*,title='',project_id='',team_id=''):
                 db.db.execute('INSERT OR IGNORE INTO conversation_flags(kind,id) VALUES (?,?)',('team',identifier))
                 db.db.execute("UPDATE conversation_flags SET "+','.join(key+'=?' for key in fields)+" WHERE kind='team' AND id=?",[*fields.values(),identifier])
                 if action in ('trash','archive'):db.db.execute('UPDATE team_sessions SET active=0 WHERE id=?',(identifier,))
-    _publish_change(db,kind,row,action)
+    with db.db:
+        _publish_change(db,kind,row,action)
     return {'ok':True,'conversation':_flags(db,kind,identifier)}
 
 
@@ -106,7 +107,21 @@ def route(method,path,body,query,db):
     kind=str(body.get('kind') or q('kind','chat'));project=str(body.get('project_id') or q('project_id'));team_id=str(body.get('team_id') or q('team_id'))
     if method=='POST':return command(db,kind,str(body.get('id') or ''),str(body.get('action') or ''),title=body.get('title',''),project_id=project,team_id=team_id)
     if kind=='chat':
-        rows=[dict(row) for row in db.db.execute("SELECT * FROM chats WHERE channel='conversation' AND id NOT LIKE 'execution-%' "+('AND task_id=? ' if project else '')+'ORDER BY pinned_at DESC,updated_at DESC',([project] if project else []))]
+        if project:
+            import execution_conversations
+            execution_conversations.ensure_project(db, project)
+            rows = [dict(row) for row in db.db.execute("""
+                SELECT c.id,c.title,c.channel,c.pinned_at,c.archived_at,c.deleted_at,c.updated_at,
+                       x.kind AS execution_kind, x.entity_id,
+                       CASE WHEN c.channel='toolbox' THEN (
+                           SELECT id FROM tasks WHERE owner_id=c.id AND kind='agent_run' ORDER BY rowid DESC LIMIT 1
+                       ) END AS run_id
+                FROM chats c LEFT JOIN execution_conversations x ON x.chat_id=c.id AND x.project_id=c.task_id
+                WHERE c.task_id=? AND c.channel IN ('conversation','toolbox')
+                ORDER BY c.pinned_at DESC,c.updated_at DESC,c.id
+            """, (project,))]
+        else:
+            rows = [dict(row) for row in db.db.execute("SELECT * FROM chats WHERE channel='conversation' AND id NOT LIKE 'execution-%' ORDER BY pinned_at DESC,updated_at DESC")]
     elif kind=='team':
         if not team_id or not db.team(team_id):raise ValueError('请选择有效团队')
         rows=[_flags(db,'team',row[0]) for row in db.db.execute('SELECT id FROM team_sessions WHERE team_id=? ORDER BY updated_at DESC',(team_id,))]

@@ -4,7 +4,7 @@
   const h = value => esc(String(value ?? ""));
   const statuses = {draft:"已准备",prepared:"已准备",queued:"等待执行",running:"执行中",awaiting_review:"等待人工审查",delivered:"已交付",succeeded:"全部完成",failed:"失败",cancelled:"已停止",blocked:"等待修改",interrupted:"中断待恢复",rejected:"已退回"};
   let dialog = null, currentRun = null, currentProject = "", focusedRun = "", rendered = "", pollBusy = false, calendarRendered = "";
-  const feedback = new Map(), versions = new Map(), goalDrafts = new Map(), modeDrafts = new Map(), manualDrafts = new Map();
+  const feedback = new Map(), goalDrafts = new Map(), modeDrafts = new Map(), manualDrafts = new Map();
   let nodeTasks=new Map();
   const modeOptions=mode=>`<option value="supervised" ${mode!=="full_access"?"selected":""}>人工核查模式</option><option value="full_access" ${mode==="full_access"?"selected":""}>按规则自动验收</option>`;
   const style = document.createElement("style");
@@ -123,13 +123,7 @@
   }
 
   async function refreshLibrary() {
-    const project=curTask, tab=route();
-    if(!project || !uiRouteIs("space") || spTab!=="papers") return;
-    const data=await api("/api/library/project?task_id="+encodeURIComponent(project));
-    if(curTask!==project || route()!==tab || !uiRouteIs("space") || spTab!=="papers") return;
-    const key=project+":"+tab, previous=versions.get(key); versions.set(key,data.version);
-    if(previous!==data.version) ProjectLiterature.update(project,data);
-    ProjectLiterature.refreshStatus(project).catch(()=>{});
+    await ProjectLiterature.poll();
   }
   const originalCalendar=renderCalendar;
   renderCalendar=function(container){ originalCalendar(container); calendarRendered=JSON.stringify(S.events); };
