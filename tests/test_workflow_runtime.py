@@ -93,7 +93,7 @@ class WorkflowRuntimeTest(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
     def open_workflow(self):
-        self.page.evaluate("pid => { curTask=pid; localStorage.setItem('rw-task',pid); wfStep='search'; openTab('workspace'); }", self.project)
+        self.page.evaluate("pid => ProjectWorkspace.openProject(pid)", self.project)
         self.page.wait_for_selector("#pwAsk")
         self.page.wait_for_function("document.querySelector('#pwSend')?.onclick != null")
 

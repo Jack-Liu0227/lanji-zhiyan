@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import threading
 import unittest
-from unittest.mock import patch
 
 import workflow
 from tests import test_web_runtime as web
@@ -35,7 +34,7 @@ class SearchWorkflowModelFixture:
                     fixture.calls.append('paper_search')
                     delta = {'tool_calls': [{'index': 0, 'id': 'workflow-paper-search', 'type': 'function',
                         'function': {'name': 'paper_search', 'arguments': json.dumps({
-                            'query': 'evidence research report', 'sources': ['crossref'], 'rows': 1})}}]}
+                            'query': 'Verified literature', 'sources': ['crossref'], 'rows': 1})}}]}
                 else:
                     delta = {'content': '# Search results\n\nThe deterministic search completed.'}
                 value = {'choices': [{'delta': delta, 'finish_reason': 'tool_calls' if call else 'stop'}]}
@@ -57,6 +56,8 @@ class SearchWorkflowModelFixture:
 
 @unittest.skipUnless(web.sync_playwright and web.EDGE,'Requires Playwright and Edge')
 class WorkspaceConsolidationRuntimeTest(unittest.TestCase):
+    source_server_args = ('-c', 'from tests.test_workflow_node_workbench_runtime import run_fixture_server; '
+                               'raise SystemExit(run_fixture_server())')
     setUpClass=classmethod(web.WebRuntimeTest.setUpClass.__func__)
     setUp=web.WebRuntimeTest.setUp
     load_page=web.WebRuntimeTest.load_page
@@ -141,12 +142,7 @@ class WorkspaceConsolidationRuntimeTest(unittest.TestCase):
 
     def test_agent_graph_entry_starts_the_same_project_workflow(self):
         self.seed()
-        import workflow_stages
-        with patch.object(workflow_stages, 'search', return_value=[{
-                    'source': 'crossref', 'title': 'Evidence research report fixture',
-                    'authors': 'Test Author', 'year': '2025', 'doi': '', 'url': 'https://example.test/paper',
-                    'pdf_url': '', 'abstract': 'A deterministic evidence research report result.', 'citations': 0,
-                }]), SearchWorkflowModelFixture() as model:
+        with SearchWorkflowModelFixture() as model:
             self.use_model(model.url)
             response=self.page.request.post(self.url+'api/langgraph/start',data={
                 'project_id':self.pid,'graph_type':'literature_study','goal':'Read evidence and deliver a report'})
@@ -163,6 +159,8 @@ class WorkspaceConsolidationRuntimeTest(unittest.TestCase):
             tasks=self.page.request.get(self.url+'api/project-tasks?project_id='+self.pid).json()['tasks']
             self.assertEqual(len(tasks),4)
             self.assertTrue(all(task['workflow_run_id']==saved['id'] for task in tasks))
+            search=next(task for task in tasks if task['workflow_node_id']=='literature_retrieval')
+            self.assertEqual(search['latest_run']['output_snapshot']['content'][0]['title'], 'Verified literature')
         self.assertEqual(self.errors,[])
 
     def test_global_chat_runtime_is_per_conversation_and_used_by_model(self):

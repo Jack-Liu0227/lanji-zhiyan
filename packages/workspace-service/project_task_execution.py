@@ -232,7 +232,8 @@ def execute(db, task_run_id, cancel_check=None):
     known_stage = stage in workflow.STAGES
     names = ("runtime_model", "project_task_context", "job_checkpoint", "save_agent_checkpoint", "resuming",
              "template_snapshot", "template_resolved", "template_request", "workflow_end_to_end",
-             "workflow_context_run_id", "workflow_context_node_id", "template_schedule_id")
+             "workflow_context_run_id", "workflow_context_node_id", "template_schedule_id",
+             "workflow_node_search_capture")
     previous = {name: getattr(db, name, _MISSING) for name in names}
     owner_thread = threading.get_ident()
     cancelled = threading.Event()
@@ -315,6 +316,7 @@ def execute(db, task_run_id, cancel_check=None):
                 # Never fail the node merely because the handoff was compacted.
             else:
                 context_text = json.dumps(context, ensure_ascii=False, default=str)
+            db.workflow_node_search_capture = bool(owner and stage == 'search')
             if member and member.get("prompt"):
                 context_text += "\n【团队成员职责】\n" + member["prompt"]
             for skill in skills:
@@ -370,7 +372,15 @@ def execute(db, task_run_id, cancel_check=None):
                 any(child['status'] != 'delivered' for child in current['children']) or team_orchestration.needs_aggregation(current, run))
             if known_stage and not waiting_for_team:
                 import workflow_state
-                capture = workflow_state.capture(db, task["project_id"], stage)
+                if stage == 'search' and owner:
+                    checkpoint = tasks.get_run(db, run['id'])['checkpoint']
+                    rows = workflow_state.search_rows(task['project_id'], checkpoint)
+                    if node.get('node_kind') == 'tool' and node.get('tool_name') in ('search', 'paper_search'):
+                        result = checkpoint.get('fixed_tool_result') or {}
+                        rows = workflow_state.search_result_rows(task['project_id'], result)
+                    capture = workflow_state.search_capture(rows)
+                else:
+                    capture = workflow_state.capture(db, task["project_id"], stage)
                 if stage == "download" and capture["valid"] and not capture["reading_note_count"]:
                     raise ValueError("PDF 已入库，仍缺对应的逐页精读笔记。请在本节点对已入库论文执行精读后重试。")
                 if not capture["valid"]:

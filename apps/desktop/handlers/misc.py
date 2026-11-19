@@ -152,7 +152,14 @@ class MiscRoutes:
             with WorkflowDB(DB_PATH) as db:
                 return self._json(papertran.paper_meta(db, (q.get("id") or [""])[0]))
         if path == "/api/trans/status":
-            return self._json(papertran.status((q.get("id") or [""])[0]))
+            paper_id = (q.get("id") or [""])[0]
+            project_id = (q.get("task") or [""])[0]
+            with WorkflowDB(DB_PATH) as db:
+                try:
+                    out_dir = papertran.output_dir(db, paper_id, project_id)
+                except ValueError as exc:
+                    return self._json({"error": str(exc)}, 400)
+            return self._json(papertran.status(paper_id, out_dir))
         if path in ("/api/rss/sources", "/api/rss/items", "/api/library/project"):
             import rss_routes, literature_import_routes
             mod = rss_routes if path == "/api/rss/sources" else literature_import_routes

@@ -21,6 +21,33 @@ CALL = re.compile(r"fetch\((.*?)\)", re.S)
 EXEMPT = "/api/upload"          # 唯一豁免：它走原始字节 body（仍要过 Origin 校验，但不收 JSON 头）
 
 
+class SourceVersionTest(unittest.TestCase):
+    def test_source_version_changes_for_python_and_javascript_edits_without_index_edit(self):
+        import runpy
+        from unittest.mock import patch
+
+        build_stamp = runpy.run_path(str(ROOT / 'apps' / 'desktop' / 'server.py'))['_build_stamp']
+        with tempfile.TemporaryDirectory() as directory:
+            source = pathlib.Path(directory)
+            web = source / 'web'
+            handlers = source / 'handlers'
+            web.mkdir()
+            handlers.mkdir()
+            (web / 'index.html').write_text('<main></main>', encoding='utf-8')
+            client = web / 'workbench.js'
+            handler = handlers / 'misc.py'
+            client.write_text('let value = 1;', encoding='utf-8')
+            handler.write_text('status = 200', encoding='utf-8')
+            with patch.dict(build_stamp.__globals__, HERE=source, WEB=web, ROOT=source):
+                original = build_stamp()
+                self.assertEqual(build_stamp(), original)
+                handler.write_text('status = 400\n', encoding='utf-8')
+                backend_updated = build_stamp()
+                self.assertNotEqual(backend_updated, original)
+                client.write_text('let value = 42;', encoding='utf-8')
+                self.assertNotEqual(build_stamp(), backend_updated)
+
+
 class WebFetchTest(unittest.TestCase):
     def test_post_fetches_carry_json_header(self) -> None:
         bad = []
@@ -161,13 +188,10 @@ class ModelKeyGuardTest(unittest.TestCase):
 
     def test_发送入口都挂了守卫(self) -> None:
         chat = (JS / "chat-views.js").read_text(encoding="utf-8")
-        wf = (JS / "workflow-view.js").read_text(encoding="utf-8")
         core = (JS / "app-core.js").read_text(encoding="utf-8")
         self.assertIn("function hasModelKey", core)
         self.assertIn("async function requireModelKey", core)
         self.assertEqual(chat.count("requireModelKey()"), 1, "主页聊天发送缺守卫")
-        self.assertEqual(wf.count("requireModelKey()"), 3, "右栏发送 / 文档步发送 / 中译英 三处守卫")
-        self.assertIn("if(hasModelKey())", wf, "出步骤计划前也要判 Key，否则一直显示「正在读上一步的交付」")
 
 
 class MainScriptSyntaxTest(unittest.TestCase):

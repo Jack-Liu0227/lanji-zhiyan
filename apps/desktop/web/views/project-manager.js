@@ -14,8 +14,8 @@ const ProjectManager=(()=>{
       const remove=document.createElement('button');remove.type='button';remove.className='pw-text-button';remove.dataset.pmDelete='';remove.textContent='删除项目记录';
       dialog.querySelector('form footer').prepend(remove);
       remove.onclick=async()=>{
-        if(!await uiConfirm('删除项目「'+project.title+'」及其关联记录？此操作不可撤销。'))return;
-        try{await api('/api/task/delete',{id:project.id});await refreshState(false);needTask();dialog.close();await render();}
+        if(window.ProjectWorkspace?.active()&&!await ProjectWorkspace.flush())return;
+        try{if(await confirmDelete(project.id)){dialog.close();await render();}}
         catch(error){dialog.querySelector('[data-pm-error]').textContent=error.message;}
       };
     }
@@ -33,5 +33,63 @@ const ProjectManager=(()=>{
     };
     document.body.appendChild(dialog);dialog.addEventListener('close',()=>dialog.remove(),{once:true});dialog.showModal();dialog.querySelector('#t-title').focus();return dialog;
   }
-  window.ProjectManager={open};return window.ProjectManager;
+  async function confirmDelete(id){
+    const project = await api('/api/task/delete-preview?id=' + encodeURIComponent(id));
+    const dialog = document.createElement('dialog');
+    dialog.className = 'modal';
+    dialog.setAttribute('aria-label', '删除项目记录');
+    const conversations = project.conversations
+      ? `保留 ${project.conversations} 个普通会话，并将它们移到智研管家的历史记录。`
+      : '';
+    dialog.innerHTML = `<div class="modal-mask"></div><div class="modal-dialog data-delete-dialog">
+      <div class="modal-head"><h3>删除「${h(project.title)}」的项目记录</h3></div>
+      <div class="modal-body">
+        <p>永久删除项目的任务、执行记录、文献索引和笔记记录。${conversations}</p>
+        <p>保留本地文件和备份。可在「设置 → 数据管理」找到项目文件夹。</p>
+        ${project.base_dir ? `<div class="data-location-path"><code>${h(project.base_dir)}</code></div>
+          <button class="btn ghost" data-open-project>打开项目文件夹</button>` : ''}
+        <p class="hint" role="status">${project.running ? '项目有正在运行或排队的任务。请先停止任务，再重新打开此窗口。' : ''}</p>
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost" data-cancel-delete autofocus>取消</button>
+        <button class="btn danger" data-confirm-delete ${project.running ? 'disabled' : ''}>删除记录</button>
+      </div>
+    </div>`;
+    const status = dialog.querySelector('[role="status"]');
+    const confirm = dialog.querySelector('[data-confirm-delete]');
+    const cancel = dialog.querySelector('[data-cancel-delete]');
+    const openFolder = dialog.querySelector('[data-open-project]');
+    if (openFolder) openFolder.onclick = async () => {
+      try { await api('/api/settings/data/open', {kind:'project', id}); }
+      catch (error) { status.textContent = error.message; }
+    };
+    const origin = document.activeElement;
+    document.body.appendChild(dialog);
+    return new Promise(resolve => {
+      let deleted = false;
+      dialog.addEventListener('close', () => {
+        dialog.remove();
+        if (origin?.isConnected) origin.focus();
+        resolve(deleted);
+      }, {once:true});
+      dialog.addEventListener('cancel', event => { if (cancel.disabled) event.preventDefault(); });
+      cancel.onclick = () => dialog.close();
+      confirm.onclick = async () => {
+        confirm.disabled = cancel.disabled = true;
+        status.textContent = '正在删除项目记录…';
+        try { await api('/api/task/delete', {id}); }
+        catch (error) {
+          status.textContent = error.message;
+          confirm.disabled = cancel.disabled = false;
+          return;
+        }
+        deleted = true;
+        try { await refreshState(false); needTask(); }
+        catch (error) { uiNotify('项目记录已删除。刷新列表失败：' + error.message); }
+        dialog.close();
+      };
+      dialog.showModal();
+    });
+  }
+  window.ProjectManager={open,confirmDelete};return window.ProjectManager;
 })();

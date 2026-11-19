@@ -20,6 +20,7 @@ class WorkflowModel:
         self.calls = []
         self.node_requests = []
         self.run_id = ''
+        self.search_via_tool = False
 
     def __enter__(self):
         fixture = self
@@ -33,7 +34,15 @@ class WorkflowModel:
                 name, args = '', {}
                 if any(f'执行当前项目任务「{fixture.artifact_marker}' in str(m.get('content')) for m in payload['messages'] if m['role'] == 'system'):
                     fixture.node_requests.append(payload)
-                    delta = {'content': '# Research report\n\nBROWSER_GENERATED_REPORT'}
+                    is_search = fixture.search_via_tool and any(
+                        '执行当前项目任务「Stage search' in str(m.get('content'))
+                        for m in payload['messages'] if m['role'] == 'system')
+                    if is_search and not (last.get('role') == 'tool' and last.get('name') == 'paper_search'):
+                        name, args = 'paper_search', {'query': 'Verified literature'}
+                        delta = {'tool_calls': [{'index': 0, 'id': 'call-paper-search', 'type': 'function',
+                            'function': {'name': name, 'arguments': json.dumps(args)}}]}
+                    else:
+                        delta = {'content': '# Research report\n\nBROWSER_GENERATED_REPORT'}
                 else:
                     previous = last.get('name', '')
                     if last['role'] == 'user':

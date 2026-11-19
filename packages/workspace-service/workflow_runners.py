@@ -75,6 +75,9 @@ def translate_doc(db: Any, task_id: str, style: str = "formal") -> dict[str, Any
     asset_service.atomic_write_text(dest, out["text"] + "\n")
     asset_service.register_file(db, dest, project_id=task_id, kind="document", source="translation",
                                 body=out["text"], metadata={"document_kind": "entrans"})
+    import service_settings
+    service_settings.write(db, "translation:" + task_id, {"result_path": str(dest), "source_text": md,
+                           "segments": out.get("segments", []), "custom_source": False})
     db.log_step(task_id, "entrans", "done",
                 "整篇译成 %s（%d 字 / %d 片 / %.0f 秒）" % (dest.name, len(out["text"]), out["chunks"], out["ms"] / 1000))
     return {"path": str(dest), "name": dest.name, "src_chars": len(md), "chars": len(out["text"]),

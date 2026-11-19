@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 
 
+AUTHOR_SECTION = "\n\n<!-- lineage-author-revision -->\n\n"
 SEQUENCE = {"下一章", "下一节"}
 
 
@@ -189,5 +190,33 @@ def require_for_manuscript(db, project, markdown):
     from workflow_documents import map_read
     graph = map_read(db, project)
     if graph["exists"] or str(markdown or "").startswith("<!-- lineage:"):
+        if isinstance(markdown, str) and AUTHOR_SECTION in markdown:
+            from service_settings import read
+
+            base, _, _ = markdown.partition(AUTHOR_SECTION)
+            lineage = validate_draft(db, project, base)
+            key = 'lineage-author:' + sha256(markdown.strip().encode('utf-8')).hexdigest()
+            if read(db, key, owner=project).get('lineage') == lineage['revision']:
+                return lineage
         return validate_draft(db, project, markdown)
     return None
+
+
+def author_revision(db, project, old_text, new_text):
+    import service_settings
+
+    lineage = require_for_manuscript(db, project, old_text)
+    if lineage is None:
+        return []
+    base = lineage['markdown'].strip()
+    if new_text.strip() == base:
+        return []
+    before, separator, prose = new_text.partition(AUTHOR_SECTION)
+    if not separator or before != base or not prose.strip() or AUTHOR_SECTION in prose:
+        raise ValueError('谱系正文及证据为只读，请在作者修订区编辑')
+    service_settings.ensure(db)
+    key = {'service': 'lineage-author:' + sha256(new_text.strip().encode('utf-8')).hexdigest(), 'owner': project}
+    row = db.db.execute('SELECT * FROM service_settings WHERE service=? AND owner=?',
+                        (key['service'], project)).fetchone()
+    return [{'table': 'service_settings', 'key': key, 'before': dict(row) if row else None,
+             'after': {**key, 'data': json.dumps({'lineage': lineage['revision']})}}]

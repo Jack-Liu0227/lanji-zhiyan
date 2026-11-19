@@ -1662,37 +1662,6 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                                           (tid, step, step))
                             db.db.commit()
                         return self._json({"ok": True, "task_id": tid, "step": step})
-                if path == "/api/zotero/collection/create": # 新建 Zotero 分类
-                    with WorkflowDB(DB_PATH) as db:
-                        name = str(data.get("name") or "").strip()
-                        parent = str(data.get("parent") or "").strip()
-                        return self._json(zotero.create_collection(db, name, parent))
-                if path == "/api/zotero/import_project_papers": # 导入项目下载文献至 Zotero
-                    tid = str(data.get("task_id") or "").strip()
-                    col_key = str(data.get("collection_key") or "").strip()
-                    with WorkflowDB(DB_PATH) as db:
-                        task = db.summary(tid)["task"]
-                        papers = db.papers(tid)
-                        imported = []
-                        for p in papers:
-                            title = p.get("title") or Path(p.get("filename", "")).stem
-                            item = {
-                                "itemType": "journalArticle",
-                                "title": title,
-                                "DOI": p.get("doi") or "",
-                                "tags": [{"tag": f"项目:{task['title']}"}, {"tag": "览籍智研"}],
-                            }
-                            if col_key:
-                                item["collections"] = [col_key]
-                            try:
-                                created = zotero.add_item(db, item)
-                                pdf_file = db.pdir(tid, "文献库") / p.get("filename", "")
-                                if pdf_file.is_file() and created.get("key"):
-                                    zotero.link_pdf(db, created["key"], str(pdf_file), title=f"PDF - {title[:60]}")
-                                imported.append(created)
-                            except Exception:
-                                pass
-                        return self._json({"ok": True, "count": len(imported), "total": len(papers)})
                 if path == "/api/outline/save":           # 手动改框架（左边直接编辑时用）
                     with WorkflowDB(DB_PATH) as db:
                         return self._json(outline_write(db, (data.get("task_id") or "").strip(),
@@ -1743,7 +1712,19 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                             (title, str(data.get("question") or "")[:20000], str(data.get("material_system") or "")[:2000], workflow.now(), tid))
                     return self._json({"task": db.summary(tid)["task"]})
                 if path == "/api/task/delete":
-                    return self._json(db.delete_task(data.get("id", "")))
+                    return self._json(db.delete_task(data.get("id", ""), require_idle=True))
+                if path == "/api/settings/data/open":
+                    import project_data
+                    project_data.open_location(db, data.get("kind", ""), data.get("id", ""))
+                    return self._json({"ok": True})
+                if path == "/api/settings/data/forget":
+                    import project_data
+                    project_data.forget_location(db, data.get("id", ""))
+                    return self._json({"ok": True})
+                if path == "/api/settings/data/clean-history":
+                    import project_data
+                    project_data.clean_historical_execution(db, data.get("id", ""))
+                    return self._json({"ok": True})
                 if path == "/api/task/papergraph/build":          # 论文星图：点「生成」才编译一次，结果落库
                     return self._json(db.build_paper_graph(data.get("id", "")))
                 if path == "/api/chat/create":
@@ -1985,13 +1966,15 @@ def _semantic_boot() -> None:
 def _start_inproc(port: int, url: str) -> None:
     """老路径：HTTP 服务跟窗口在同一个（Medium）进程里。沙箱起不来时用它兜底。"""
     with WorkflowDB(DB_PATH) as _db:
-        if not _db.tasks():
-            _db.create_task(
-                "锂金属固态电池界面反应动力学与多尺度演化研究",
-                "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
-                "固态锂电池, 复合固态电解质, 锂金属负极",
-            )
-            _db.seed_welcome()          # 新用户首启：种一条「小智」欢迎对话（能正常删掉，删了不再出现）
+        if not kv_store.read(_db, "workspace_initialized"):
+            if not (_db.tasks() or _db.chats() or _db.db.execute("SELECT 1 FROM deleted_project_locations LIMIT 1").fetchone()):
+                _db.create_task(
+                    "锂金属固态电池界面反应动力学与多尺度演化研究",
+                    "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
+                    "固态锂电池, 复合固态电解质, 锂金属负极",
+                )
+                _db.seed_welcome()
+            kv_store.write(_db, "workspace_initialized", {"done": True})
     import mail
     mail.encrypt_legacy()              # 老 mail.json 里的明文授权码 → DPAPI 密文（幂等，干净时是空转）
     # 低完整性写边界：把 data/ 和项目目录标成 Low（Low 子进程只能写这些地方）。
@@ -2226,9 +2209,23 @@ def _stop_low_server() -> None:
 
 
 def _build_stamp() -> str:
-    stamp = str((WEB / "index.html").stat().st_mtime_ns)
     if getattr(sys, "frozen", False):
-        return stamp
+        return str((WEB / "index.html").stat().st_mtime_ns)
+
+    source_files = [Path(__file__).resolve()]
+    for directory in (WEB, HERE / "handlers", ROOT / "packages", ROOT / "migrations"):
+        source_files.extend(
+            path for path in directory.rglob("*")
+            if path.suffix != ".pyc" and path.is_file()
+        )
+    fingerprint = hashlib.sha256()
+    for path in sorted(source_files):
+        try:
+            metadata = path.stat()
+        except FileNotFoundError:
+            continue
+        fingerprint.update(f"{path}\0{metadata.st_mtime_ns}\0{metadata.st_size}\n".encode("utf-8"))
+    stamp = fingerprint.hexdigest()[:16]
     try:
         revision = subprocess.check_output(
             ["git", "rev-parse", "--short=12", "HEAD"], cwd=ROOT,

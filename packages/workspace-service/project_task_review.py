@@ -24,7 +24,7 @@ def can_edit_file(task, item):
     structured = not isinstance((task.get('latest_run') or {}).get('output_snapshot', {}).get('content', ''), str)
     summary = name in ('result.md', 'reviewed-result.json')
     return (not _tool(task) and stage in _TEXT_STAGES and Path(name).suffix.lower() in TEXT and
-            not (stage in DOCUMENT_STAGES | {'notes', 'entrans'} and summary and structured))
+            not (structured and (stage in {'entrans', 'review'} or summary and stage in DOCUMENT_STAGES | {'notes'})))
 
 
 def _current(db, task_id, body, authority):
@@ -135,7 +135,7 @@ def _graph(graph):
         if not isinstance(edge.get('label', ''), str) or len(edge.get('label', '')) > 40:
             raise ValueError('连线说明不能超过 40 字符')
     structure(graph["nodes"], graph["edges"])
-    return json.loads(json.dumps(graph, ensure_ascii=False, allow_nan=False))
+    return json.loads(json.dumps({'nodes': graph['nodes'], 'edges': graph['edges']}, ensure_ascii=False, allow_nan=False))
 
 
 def revise_graph(db, task_id, body, *, authority):
@@ -151,6 +151,13 @@ def revise_graph(db, task_id, body, *, authority):
         current = workflow_state.capture(db, task['project_id'], 'map')
         if current['fingerprint'] != run['checkpoint']['output'].get('fingerprint'):
             raise ValueError('项目图谱已在其他页面修改，请重试节点后再核查')
+        original_refs = {node['id']: node.get('ref') for node in current['content']['nodes'] if node.get('type') == 'evidence'}
+        changed_refs = [node.get('ref') for node in graph['nodes'] if node.get('type') == 'evidence'
+                        and (node['id'] not in original_refs or node.get('ref') != original_refs[node['id']])]
+        if changed_refs:
+            evidence = workflow_state.graph_evidence(db, task['project_id'])
+            if any(ref not in evidence for ref in changed_refs):
+                raise ValueError('新增或改挂的页级证据须引用当前项目中已有的证据 ID')
         tasks._validate_contract(task['output_contract'], {**run['output_snapshot'], 'content': graph})
         revision = int(run['checkpoint'].get('output_revision', 0)) + 1
         folder = _folder(db, task, run)
@@ -256,8 +263,13 @@ def revise(db, task_id, body, *, authority):
             output['files'][file_index] = changed
         if stage in DOCUMENT_STAGES and not replacements:
             raise ValueError('没有找到对应的研究文档，请在研究工具中编辑')
+        rows = []
+        if stage == 'write' and primary:
+            from lineage_draft import author_revision
+
+            rows = author_revision(db, task['project_id'], old_text, text)
         versions.remember(db, task, run)
-        operation = versions.begin(db, task, run, revision, replacements)
+        operation = versions.begin(db, task, run, revision, replacements, rows=rows)
         try:
             versions.apply(db, task, operation)
             if replacements:
@@ -293,26 +305,41 @@ def revise_structured(db, task_id, body, *, authority):
         if stage == 'map':
             return revise_graph(db, task_id, {**body, 'graph': body.get('content')}, authority=authority)
         output = json.loads(tasks._json(run['output_snapshot']))
-        content = node_output_editors.parse_content(stage, body.get('content'), output.get('content'))
+        search_attempt = stage == 'search' and run['checkpoint'].get('output', {}).get('search_attempt')
+        baseline = node_output_editors.search_editor_rows(output) if search_attempt else output.get('content')
+        reviewed = node_output_editors.parse_content(stage, body.get('content'), baseline, keep_excluded=search_attempt)
+        content = [row for row in reviewed if row['included']] if search_attempt else reviewed
         output['content'] = content
-        output['review_annotations'] = body.get('content')
+        output['review_annotations'] = reviewed if search_attempt else body.get('content')
         tasks._validate_contract(task['output_contract'], output)
         revision = int(run['checkpoint'].get('output_revision', 0)) + 1
         folder = _folder(db, task, run)
         index = next((i for i, file in enumerate(output['files'])
-                      if (file.get('name') or Path(file['path']).name) in ('result.md', 'reviewed-result.json')), 0)
+                      if (file.get('name') or Path(file['path']).name) in ('result.md', 'reviewed-result.json')), None)
+        if index is None and stage == 'notes':
+            raise ValueError('当前版本缺少可修订的精读笔记文件')
+        index = index if index is not None else 0
         output['files'][index] = _candidate_file(db, task, run, output['files'][index], folder / 'reviewed-result.json',
                                                 json.dumps(content, ensure_ascii=False, indent=2), revision)
         output['files'][index]['name'] = 'reviewed-result.json'
+        if stage == 'entrans':
+            translation_path = baseline.get('result_path')
+            for file_index, file in enumerate(output['files']):
+                if file_index != index and translation_path and file.get('original_path') == translation_path:
+                    destination = folder / (str(file_index) + '-' + Path(file['path']).name)
+                    output['files'][file_index] = _candidate_file(db, task, run, file, destination, content['result'], revision)
         rows = []
-        if task['metadata'].get('legacy_stage_compat'):
+        if task['metadata'].get('legacy_stage_compat') and not search_attempt:
             baseline = run['checkpoint'].get('output', {}).get('content', run['output_snapshot'].get('content'))
             rows.append(node_output_editors.overlay_change(db, task['project_id'], stage, baseline, content))
         versions.remember(db, task, run)
         operation = versions.begin(db, task, run, revision, [], rows=rows)
         try:
             versions.apply(db, task, operation)
-            capture = workflow_state.capture(db, task['project_id'], stage) if rows else output
+            if search_attempt:
+                capture = workflow_state.search_capture(reviewed)
+            else:
+                capture = workflow_state.capture(db, task['project_id'], stage) if rows else output
             checkpoint = {**run['checkpoint'], 'output': capture, 'output_revision': revision}
             return _commit(db, task, run, output, checkpoint, body, authority, operation, index, node_output_editors.kind(task['metadata'].get('node_config') or {'step': stage}, content))
         except Exception as exc:

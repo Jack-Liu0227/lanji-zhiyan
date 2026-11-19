@@ -418,7 +418,6 @@ function zotBind(){
     try{
       const d = await api("/api/workflow/zotero", body);
       $("zotStatus").textContent = `✓ 成功导入 ${d.total} 条（已入库 ${d.downloaded} 篇，PDF 已就绪）。知识星图已同步更新！`;
-      if(typeof dlRefresh === "function") dlRefresh().catch(()=>{});
       try{
         await api("/api/task/papergraph/build", {id: curTask});
         const fr = document.getElementById("kbFrame");
@@ -764,8 +763,7 @@ function spBodyHTML(d){
         <div class="sp-kv"><span>项目位置</span><b>${esc(t.base_dir||"未设置（产出落工作区默认目录）")}</b></div>
         <div class="sp-kv"><span>关键词 / 体系</span><b>${esc(t.material_system||"—")}</b></div>
         <div class="sp-kv"><span>最近更新</span><b>${esc(spWhen(t.updated_at))}</b></div>
-        <div class="hint" style="margin-top:10px">这一页只读聚合：不会改动文献、笔记、日程；写操作都在各自页面里。删除项目会连带它的文献、证据、笔记、会话、步骤。</div>
-        <div class="pf-actions" style="margin-top:10px"><button class="btn ghost" id="spDel" style="color:var(--err)">删除项目</button></div></div>
+        <div class="pf-actions" style="margin-top:10px"><button class="btn ghost" id="spDel" style="color:var(--err)">删除项目记录</button></div></div>
       <div class="card"><div class="sch-head"><div><p class="inst-label">STEP LOG</p><h3>步骤记录</h3></div>
       <span class="pill">${(d.steps||[]).length} 条</span></div>
       ${recent.length?recent.map(r=>`<div class="sp-row"><span class="sp-ic">•</span><div class="sp-main">
@@ -788,10 +786,8 @@ function spBind(d){
   };
   const del = $("spDel");
   if(del) del.onclick = async ()=>{
-    const t = d.task||{};
-    if(!await uiConfirm(`删除项目「${t.title||""}」？\n它的文献、证据、笔记、会话、日程、步骤都会一起删掉，不可撤销。`)) return;
-    try{ await api("/api/task/delete", {id: curTask}); }catch(e){ return uiNotify("删除失败："+e.message); }
-    curTask = null; localStorage.removeItem("rw-task"); await refreshState(false); openTab("tasks");
+    try { if (await ProjectManager.confirmDelete(d.task.id)) openTab("workspace"); }
+    catch (error) { uiNotify(error.message); }
   };
 
   // ---------- easyScholar 期刊等级标签（文献页） ----------
@@ -1102,9 +1098,7 @@ function pnMapHit(file){
 }
 
 function pnJumpMap(){
-  if(mdDashProject && curTask !== mdDashProject){ curTask = mdDashProject; localStorage.setItem("rw-task", curTask); }
-  wfStep = "map"; localStorage.setItem("rw-wf-step", wfStep);
-  openTab("workflow");
+  ProjectWorkspace.openStage(mdDashProject || curTask, 'map').catch(error => uiNotify(error.message));
 }
 
 function pnRenderTreeNode(node, depth = 0, q = ""){
@@ -1886,7 +1880,7 @@ function bindSwatches(host){
 let setSec = "theme";                    // 设置左列分区（照工作流中间可选栏）
 let setMeta = null;                      // /api/settings/meta 缓存：tool 在 S.tools，skill / MCP 在这
 let setUpdate = null;
-const SET_SECS = [["theme", "🎨", "主题色"], ["perm", "🛡", "权限"], ["models", "🔌", "模型列表"], ["tools", "🧰", "Tool"], ["skills", "⚡", "Skill"], ["mcp", "🔗", "MCP"], ["about", "ⓘ", "版本与更新"]];
+const SET_SECS = [["theme", "🎨", "主题色"], ["perm", "🛡", "权限"], ["models", "🔌", "模型列表"], ["tools", "🧰", "Tool"], ["skills", "⚡", "Skill"], ["mcp", "🔗", "MCP"], ["data", "▤", "数据管理"], ["about", "ⓘ", "版本与更新"]];
 const formatUpdateSize = bytes => {
   const n = Number(bytes || 0);
   if (!(n > 0)) return "";
@@ -1907,6 +1901,7 @@ async function loadAppUpdate(force = false){
   render();
 }
 function setPanel(){
+  if (setSec === 'data') return '<div data-storage-panel aria-live="polite">正在读取存储位置…</div>';
   if(setSec === "theme") return `<div class="card"><h3>主题色</h3>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn" id="th">${document.documentElement.dataset.theme==="dark"?"切到浅色":"切到深色"}</button>
@@ -1976,6 +1971,7 @@ function renderSettings(m){
       <div class="set-body" id="set-body">${setPanel()}</div></div>`;
   m.querySelectorAll("[data-set]").forEach(b=>b.onclick=()=>{ setSec = b.dataset.set; render(); });
   const ta = $("to-assist"); if(ta) ta.onclick = ()=>openTab("assistants");
+  if (setSec === 'data') renderStoragePanel(m.querySelector('[data-storage-panel]'));
   if(setSec === "perm"){
     m.querySelectorAll('input[name="permmode"]').forEach(r => r.onchange = async () => {
       await setPermissionMode(r.value); render();
@@ -2024,6 +2020,81 @@ function renderSettings(m){
     api("/api/settings/meta").then(r=>{ setMeta = r; render(); }).catch(e=>{ setMeta = {__err:e.message}; render(); });
   }
 }
+
+async function renderStoragePanel(panel) {
+  const labels = {data:'应用数据目录', database:'当前数据库', projects:'默认项目目录', backups:'应用备份目录'};
+  const row = (label, path, kind, id = '', historical = null) => `<li class="data-location">
+    <div class="data-location-path"><strong>${esc(label)}</strong><code>${esc(path)}</code></div>
+    <div class="data-location-actions">
+      ${kind ? `<button class="btn ghost" data-location-open="${kind}" data-location-id="${esc(id)}">${kind === 'database' ? '打开所在文件夹' : '打开文件夹'}</button>` : ''}
+      <button class="btn ghost" data-location-copy="${esc(path)}">复制路径</button>
+      ${id ? `<button class="btn ghost" data-location-forget="${esc(id)}">移除此条记录</button>` : ''}
+      ${historical?.execution_records ? `<button class="btn ghost" data-history-clean="${esc(historical.project_id)}">清理残留执行记录（${historical.execution_records}）</button>` : ''}
+    </div>
+  </li>`;
+  let storage;
+  try { storage = await api('/api/settings/data'); }
+  catch (error) { panel.textContent = error.message; return; }
+  if (!panel.isConnected) return;
+  panel.innerHTML = `<div class="card"><h3>存储位置</h3>
+      <ul class="data-locations">${Object.entries(labels).map(([kind, label]) => row(label, storage.paths[kind], kind)).join('')}</ul>
+    </div><div class="card"><h3>已删除项目的文件夹</h3>
+      <p class="hint">删除项目记录后，文件仍在原位置。打开文件夹可在资源管理器中核对和清理。</p>
+      ${storage.retained_projects.length ? `<ul class="data-locations">${storage.retained_projects.map(item => row(item.title, item.base_dir, 'project', item.project_id)).join('')}</ul>` : '<p class="hint">暂无保留的文件夹记录。</p>'}
+      <p class="hint" role="status"></p>
+    </div><div class="card"><h3>从旧备份查找项目文件夹</h3>
+      <p class="hint">之前删除的项目可能仍记录在旧备份中。查找会显示备份登记的路径。</p>
+      <button class="btn ghost" data-storage-history>查找旧项目</button>
+      <div data-storage-history-results aria-live="polite"></div>
+    </div>`;
+  const status = panel.querySelector('[role="status"]');
+  panel.querySelectorAll('[data-location-open]').forEach(button => button.onclick = async () => {
+    status.textContent = '';
+    try { await api('/api/settings/data/open', {kind:button.dataset.locationOpen, id:button.dataset.locationId}); }
+    catch (error) { status.textContent = error.message; }
+  });
+  panel.addEventListener('click', copyLocation);
+  async function copyLocation(event) {
+    const button = event.target.closest('[data-location-copy]');
+    if (!button) return;
+    try { await navigator.clipboard.writeText(button.dataset.locationCopy); status.textContent = '路径已复制。'; }
+    catch { status.textContent = '复制失败，可选中路径手动复制。'; }
+  }
+  const historyButton = panel.querySelector('[data-storage-history]');
+  historyButton.onclick = showHistory;
+  async function showHistory() {
+    const results = panel.querySelector('[data-storage-history-results]');
+    historyButton.disabled = true;
+    results.textContent = '正在查找…';
+    try {
+      const {projects} = await api('/api/settings/data/history');
+      results.innerHTML = projects.length
+        ? `<ul class="data-locations">${projects.map(item => row(item.title, item.base_dir, '', '', item)).join('')}</ul>`
+        : '<p class="hint">近期备份中没有找到其他已删除项目。</p>';
+      results.querySelectorAll('[data-history-clean]').forEach(button => button.onclick = async () => {
+        const item = projects.find(project => project.project_id === button.dataset.historyClean);
+        const confirmed = await uiConfirm(`永久删除「${item.title}」在当前库里残留的执行会话、工作流运行、看板事件、模型请求和相关审计记录？本地文件和备份保留。`,
+          {title:'清理旧项目', ok:'清理执行记录'});
+        if (!confirmed) return;
+        button.disabled = true;
+        try {
+          await api('/api/settings/data/clean-history', {id:item.project_id});
+          await showHistory();
+          uiNotify('旧项目的残留执行记录已清理。');
+        } catch (error) { button.disabled = false; uiNotify(error.message); }
+      });
+    } catch (error) { results.textContent = error.message; }
+    finally { historyButton.disabled = false; }
+  }
+  panel.querySelectorAll('[data-location-forget]').forEach(button => button.onclick = async () => {
+    if (!await uiConfirm('移除这条文件夹记录？本地文件会保留在原位置。', {title:'移除文件夹记录', ok:'移除'})) return;
+    try {
+      await api('/api/settings/data/forget', {id:button.dataset.locationForget});
+      panel.removeEventListener('click', copyLocation);
+      await renderStoragePanel(panel);
+    } catch (error) { status.textContent = error.message; }
+  });
+}
 const FONTS={compact:"13px",comfortable:"14px",large:"16px"};
 function setTheme(t){ document.documentElement.dataset.theme=t; localStorage.setItem("rw-theme",t);
   applyTheme(currentPrimary()); render(); }   // 换明暗要重推导主色（深色底得提亮）
@@ -2039,7 +2110,6 @@ async function refreshState(rerender=true){
   const st = await api("/api/state");
   const seen = S.loaded ? new Set((S.events||[]).map(e=>e.id)) : null;          // 首屏不算「新增」，免得一进来就跳走
   S.tasks=st.tasks; S.chats=st.chats||[]; S.assistants=st.assistants||[]; S.models=st.models; S.active=st.active; S.events=st.events; S.stages=st.stages||[];
-  wfApplyCatalog(st.workflow_stages || []);
   const fresh = seen ? (st.events||[]).filter(e=>!seen.has(e.id)) : [];
   if(fresh.length){                                                            // 刚加的日程（agent 或别的窗口）：日历停到那一天
     const d = fresh[fresh.length-1].date || "";
@@ -2063,8 +2133,8 @@ function initTheme(){
 }
 initTheme();
 const savedRoute = localStorage.getItem("rw-route");
-if(savedRoute && TITLES[savedRoute] && savedRoute !== "agent"){
-  tabs.push({id:"restored",route:savedRoute,title:TITLES[savedRoute]}); activeTab="restored";
+if(savedRoute && (TITLES[savedRoute]||savedRoute==='workbench') && savedRoute !== "agent"){
+  tabs.push({id:"restored",route:savedRoute,title:TITLES[savedRoute]||TITLES.workspace}); activeTab="restored";
 }
 setInterval(()=>{ const el=document.querySelector(".topbar .date"); if(el) el.textContent=clock();
   const g=$("calHelloText"); if(g) g.textContent=helloText(); }, 30000);   // 顶栏日期/时间自己走；问候语跟着时间变
@@ -2072,7 +2142,8 @@ refreshState().catch(e=>{ $("main").innerHTML=`<div class="msg error">加载失�
 
 // 深链：#library 这样带 hash 打开就直达那一页（书签/外部链接用）
 const _hashRoute = (location.hash || "").replace(/^#\/?/, "");
-if (_hashRoute && TITLES[_hashRoute]) openTab(_hashRoute);
+if (_hashRoute==='workbench') document.addEventListener('DOMContentLoaded',()=>openTab('workbench'),{once:true});
+else if (_hashRoute && TITLES[_hashRoute]) openTab(_hashRoute);
 
 /* Intelligence discovery and imports share the project bibliography. */
 async function renderIntel(container){return IntelligenceView.render(container);}

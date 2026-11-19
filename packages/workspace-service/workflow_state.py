@@ -27,6 +27,38 @@ def definition(db, project_id: str) -> dict:
     return project_workflows.effective(db,project_id,workflow_layout._public(row))
 
 
+def search_result_rows(project_id, result):
+    if not isinstance(result, dict):
+        return []
+    rows = result.get('matches') or result.get('saved') or []
+    return [row for row in rows if isinstance(row, dict) and row.get('id')
+            and row.get('task_id') == project_id]
+
+
+def search_rows(project_id, checkpoint):
+    rows = {}
+    for signature, result in (checkpoint.get('done_tools') or {}).items():
+        if signature.split('\0', 1)[0] not in ('search', 'paper_search'):
+            continue
+        for row in search_result_rows(project_id, result):
+            rows[row['id']] = row
+    return list(rows.values())
+
+
+def search_capture(rows):
+    return {'search_attempt': True, 'valid': bool(rows), 'content': rows, 'files': [], 'file_versions': [],
+            'items': {'检索结果': f'{len(rows)} 条', '来源': '、'.join(sorted({row.get('source', '') for row in rows if row.get('source')}))},
+            'fingerprint': digest({'payload': rows, 'files': []})}
+
+
+def graph_evidence(db, project_id):
+    import asset_service
+    index = asset_service.eligibility_index(db, project_id)
+    return {row['id']: {field: row[field] for field in ('paper_id', 'filename', 'page_no', 'excerpt')}
+            for row in db.evidence(project_id)
+            if asset_service.legacy_context_available(db, project_id, 'evidence', row['id'], index=index)}
+
+
 def capture(db, project_id: str, step: str) -> dict:
     import workflow
     import asset_service
@@ -42,10 +74,10 @@ def capture(db, project_id: str, step: str) -> dict:
     elif step == "download":
         from workflow_stages import MIN_READ_NOTE_CHARS, READ_NOTE_TITLE
         import research_reading
-        abstracts = {p["id"]: research_reading.abstract(db, project_id, p)
-                     for p in research_reading._available(db, project_id)}
+        source_papers = db.papers_of(project_id)
+        abstracts = {paper["id"]: research_reading.abstract(db, project_id, paper) for paper in source_papers}
         payload = sorted([{"id": p["id"], "title": p.get("title"), "sha256": p.get("sha256"),
-                           "text_chars": p.get("text_chars"), "filename": p.get("filename")} for p in db.papers_of(project_id)],
+                           "text_chars": p.get("text_chars"), "filename": p.get("filename")} for p in source_papers],
                          key=lambda r: r["id"])
         valid = bool(payload)
         # Freeze the reading evidence alongside the PDF inventory. Older
@@ -68,10 +100,34 @@ def capture(db, project_id: str, step: str) -> dict:
         payload = papertran.deliveries(db, project_id)
         valid = bool(payload)
         result["files"] = [path for item in payload for path in item["files"]]
+        papers = {paper["id"]: paper for paper in payload}
+        for paper in payload:
+            paper["reading_notes"] = []
+        for note in db.notes(project_id):
+            if paper := papers.get(note.get("paper_id")):
+                paper["reading_notes"].append({
+                    "id": note["id"], "title": note["title"], "markdown": note["markdown"],
+                })
+        for note in db.db.execute(
+            "SELECT id,paper_id,title,content FROM md_notes WHERE task_id=? ORDER BY id", (project_id,)
+        ):
+            if paper := papers.get(note["paper_id"]):
+                paper["reading_notes"].append({
+                    "id": note["id"], "title": note["title"], "markdown": note["content"],
+                })
+        for paper in payload:
+            if not paper["reading_notes"]:
+                paper["reading_notes"].append({"id": "", "title": "精读笔记", "markdown": ""})
     elif step in ("outline", "write", "review"):
         doc = workflow.doc_read(db, project_id, step)
         payload = doc.get("markdown", "") if doc.get("exists") else ""
         valid = bool(payload.strip()) and (step != "write" or "（本节未生成 ——" not in payload)
+        if valid and step == "review":
+            import service_settings
+
+            saved = service_settings.read(db, 'review-checklist', owner=project_id)
+            if saved.get('document_digest') == digest(payload) and saved.get('checklist'):
+                payload = saved['checklist']
         if valid and step == "write":
             from lineage_draft import require_for_manuscript
             try:
@@ -85,9 +141,18 @@ def capture(db, project_id: str, step: str) -> dict:
         data = workflow.map_read(db, project_id)
         payload = {"nodes": data.get("nodes", []), "edges": data.get("edges", [])}
         valid = bool(payload["nodes"])
+        refs = {node.get('ref') for node in payload['nodes'] if node.get('type') == 'evidence'}
+        if refs:
+            sources = {ref: source for ref, source in graph_evidence(db, project_id).items() if ref in refs}
+            if sources:
+                payload['sources'] = sources
     elif step == "entrans":
         data = workflow.en_state(db, project_id)
         payload = {"source": data.get("source_text", ""), "result": data.get("result_text", "")}
+        if data.get("segments"):
+            payload["segments"] = data["segments"]
+        if data.get("result_exists"):
+            payload["result_path"] = data["result_path"]
         valid = bool(payload["result"].strip())
     elif step == "convert":
         payload = result["files"]
@@ -185,7 +250,11 @@ def states(db, project_id: str, layout: dict | None = None) -> dict[str, dict]:
         elif entry["status"] in ("running", "failed", "cancelled"):
             pass
         elif row.get("status") in ("delivered", "done") and delivery:
-            current = capture(db, project_id, step)
+            if step == 'search' and delivery.get('search_attempt'):
+                current = delivery
+                entry['items'] = dict(delivery.get('items') or entry.get('items', {}))
+            else:
+                current = capture(db, project_id, step)
             upstream = {p: result[p].get("delivery_id", "") for p in parents}
             accepted = (delivery.get("fingerprint") == current["fingerprint"] and current["valid"]
                         and delivery.get("upstream", {}) == upstream and not blocked

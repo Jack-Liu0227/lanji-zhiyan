@@ -81,8 +81,7 @@ window.addEventListener("message", e => {
     if(param) api("/api/paper/open" + param).catch(err => uiNotify("打开失败：" + err.message));
   } else if(d.kind === "note") { spTab = "notes"; openTab("space"); }
   else if(d.kind === "draft") {
-    if(d.step) { wfStep = d.step; localStorage.setItem("rw-wf-step", wfStep); }
-    openTab("workflow");
+    ProjectWorkspace.openStage(curTask, d.step).catch(error => uiNotify(error.message));
   }
 });
 

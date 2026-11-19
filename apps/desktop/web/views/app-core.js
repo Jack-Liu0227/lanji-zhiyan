@@ -213,7 +213,6 @@ const NAV = [
     {id:"assistants",label:"专家",ico:"👨‍🔬"},
     {id:"team",label:"团队",ico:"👥"},
     {id:"workspace",label:"项目工作区",ico:"🧭"},
-    {id:"workbench",label:"科研工作台",ico:"🔬"},
     {id:"toolbox",label:"论文工具箱",ico:"🧰"},
     {id:"calendar",label:"日历",ico:"📅"}]},
   {g:"solo",items:[
@@ -223,10 +222,9 @@ const NAV = [
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {usage:"用量统计",workbench:"科研工作台","task-center":"任务与自动化",toolbox:"论文工具箱",assistants:"专家",team:"团队",agent:"智研管家",workspace:"项目工作区",calendar:"日历",tasks:"任务与自动化",workflow:"项目工作区",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时自动化",space:"项目工作区",settings:"设置"};
+const TITLES = {usage:"用量统计","task-center":"任务与自动化",toolbox:"论文工具箱",assistants:"专家",team:"团队",agent:"智研管家",workspace:"项目工作区",calendar:"日历",tasks:"任务与自动化",workflow:"项目工作区",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时自动化",space:"项目工作区",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 function uiRouteIs(kind){
-  if(kind==="workflow" && route()==="workbench") return true;   // 全局「科研工作台」也是那张图流页
   return route()===kind || (route()==="workspace" && !!window.ProjectWorkspace?.hasSurface(kind));
 }
 
@@ -242,7 +240,7 @@ async function uiNavigate(action){
 function openTab(r, title){
   if(r==="schedules"){TaskCenter.requestView('automation');r='task-center';title='任务与自动化';}
   if(r==="tasks"){TaskCenter.requestView("board");r="task-center";title="任务与自动化";}   // 老「项目管理」页已删，路由并入任务与自动化
-  if(["workspace","space","workflow","notes"].includes(r) && window.ProjectWorkspace){
+  if(["workspace","space","workflow","notes","workbench"].includes(r) && window.ProjectWorkspace){
     ProjectWorkspace.requestRoute(r);r="workspace";title="项目工作区";
   }
   if(window.ProjectWorkspace?.active() && r!=="workspace" && ProjectWorkspace.hasDirty()){
@@ -280,7 +278,7 @@ function renderSidebar(){
   $("sidebar").className = "sidebar"+(sidebarCollapsed?" collapsed":"");
   $("sidebar").innerHTML = `
     <div class="brand"><img class="mark" src="/mark.png" alt="">
-      <div class="lbl" style="min-width:0"><b>览籍智研</b><small>科研工作台</small></div>
+      <div class="lbl" style="min-width:0"><b>览籍智研</b><small>项目研究空间</small></div>
       <button class="collapse" title="${sidebarCollapsed?"展开侧栏":"折叠侧栏"}">${sidebarCollapsed?"›":"‹"}</button></div>
     <button type="button" class="profile-card" id="profileCard" title="点击编辑个人资料">
       <span class="profile-avatar" id="profileAvatar">🎓</span>

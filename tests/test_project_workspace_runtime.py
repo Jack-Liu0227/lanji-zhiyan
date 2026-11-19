@@ -1,6 +1,8 @@
 """Project-owned workspace behavior in a real isolated desktop server and Edge."""
 from pathlib import Path
+from contextlib import closing
 import http.server
+import sqlite3
 import threading
 import unittest
 from tests.test_web_runtime import workspace_section
@@ -9,6 +11,7 @@ from tests import test_web_runtime as runtime
 from tests import test_project_tasks_runtime as tasks_runtime
 from tests import test_connected_research_runtime as connected
 import workflow
+import workflow_execution
 import project_bindings
 import workflow_layout
 
@@ -33,6 +36,146 @@ class ProjectWorkspaceRuntimeTest(unittest.TestCase):
         self.load_page()
         self.page.evaluate("pid=>{curTask=pid;localStorage.setItem('rw-task',pid);openTab('workspace');}", self.pid)
         self.page.locator("#projectWorkspace").wait_for()
+
+    def test_project_chat_and_artifact_workbench_tabs_open_a_prepared_node(self):
+        self.seed()
+
+        with workflow.WorkflowDB(self.database_path) as db:
+            workflow_layout.ensure_schema(db)
+            layout = workflow_layout.save_layout(db, {
+                'name': 'Prepared node workbench',
+                'nodes': [{'id': 'node-search', 'step': 'search', 'label': 'Prepared search',
+                           'executor_binding_id': self.binding}],
+                'edges': [],
+            })['layout']
+            workflow_layout.select_layout(db, {'task_id': self.pid, 'layout_id': layout['id']})
+            first_run = workflow_execution.create(db, self.pid, 'Prepare a searchable evidence set')
+            workflow_execution._status(db, first_run['id'], 'cancelled')
+            alternate = workflow_layout.save_layout(db, {
+                'name': 'Alternate search workbench',
+                'nodes': [{'id': 'node-search', 'step': 'search', 'label': 'Alternate search',
+                           'executor_binding_id': self.binding}],
+                'edges': [],
+            })['layout']
+            workflow_layout.select_layout(db, {'task_id': self.pid, 'layout_id': alternate['id']})
+            second_run = workflow_execution.create(db, self.pid, 'Prepare another searchable evidence set')
+
+        self.assertTrue(self.page.locator('#pwTab-chat').is_visible())
+        self.assertTrue(self.page.locator('#pwTab-workbench').is_visible())
+        self.assertTrue(self.page.locator('#pwAsk').is_visible())
+        self.assertFalse(self.page.evaluate(
+            "value=>ProjectWorkspace.openWorkflowNode(value.projectId,value.nodeId,'different-layout')",
+            {'projectId': self.pid, 'nodeId': 'node-search'}))
+        self.assertTrue(self.page.evaluate(
+            "value=>ProjectWorkspace.openWorkflowNode(value.projectId,value.nodeId,value.layoutId)",
+            {'projectId': self.pid, 'nodeId': 'node-search', 'layoutId': layout['id']}))
+        self.page.locator('.wnw').wait_for()
+        self.assertIn('Prepared search', self.page.locator('[data-wnw-title]').inner_text())
+        self.page.locator('[data-wnw-origin]').click()
+        self.assertTrue(self.page.evaluate(
+            "value=>ProjectWorkspace.openWorkflowNode(value.projectId,value.nodeId,value.layoutId)",
+            {'projectId': self.pid, 'nodeId': 'node-search', 'layoutId': alternate['id']}))
+        self.page.locator('.wnw').wait_for()
+        self.assertIn('Alternate search', self.page.locator('[data-wnw-title]').inner_text())
+        self.page.locator('#pwTab-workbench').click()
+        self.assertEqual(self.page.locator('#projectWorkspace').get_attribute('data-surface'), 'workbench')
+        run_picker = self.page.locator('[data-pw-artifact-run]')
+        run_picker.select_option(first_run['id'])
+        self.page.locator('[data-pw-run-list]').get_by_text('Prepared search', exact=True).wait_for()
+        run_picker.select_option(second_run['id'])
+        self.page.locator('[data-pw-run-list]').get_by_text('Alternate search', exact=True).wait_for()
+        first_nodes_url = self.url + 'api/project-tasks?project_id=' + self.pid + '&workflow_run_id=' + first_run['id']
+        delayed = []
+        self.page.route(first_nodes_url, lambda route: delayed.append(route))
+        run_picker.focus()
+        with self.page.expect_request(first_nodes_url):
+            run_picker.select_option(first_run['id'])
+        run_picker.select_option(second_run['id'])
+        self.page.locator('[data-pw-run-list]').get_by_text('Alternate search', exact=True).wait_for()
+        with self.page.expect_response(first_nodes_url):
+            delayed[0].continue_()
+        self.page.unroute(first_nodes_url)
+        self.assertEqual(run_picker.input_value(), second_run['id'])
+        self.assertNotIn('Prepared search', self.page.locator('[data-pw-run-list]').inner_text())
+        self.assertEqual(self.page.locator('[data-pw-artifact-run]:focus').count(), 1)
+        self.page.locator('[data-pw-workbench-files]').click()
+        self.page.locator('#flList [data-rel="evidence.md"]').click()
+        self.page.locator('#flStage').get_by_role('heading', name='Workspace evidence').wait_for()
+        self.assertEqual(self.page.locator('#projectWorkspace').get_attribute('data-surface'), 'workbench')
+        self.page.locator('#pwBack').click()
+        self.page.locator('[data-pw-run-list]').get_by_text('Alternate search', exact=True).wait_for()
+        self.page.locator('#pwTab-chat').click()
+        self.assertTrue(self.page.locator('#pwAsk').is_visible())
+        self.assertEqual(self.errors, [])
+
+    def test_legacy_workbench_bookmark_and_saved_route_open_project_artifacts(self):
+        self.seed()
+        self.load_page('?bookmark=1#workbench')
+        self.page.locator('[data-pw-workbench-files]').wait_for()
+        self.assertEqual(self.page.locator('#projectWorkspace').get_attribute('data-project-id'), self.pid)
+        self.assertEqual(self.page.locator('#sidebar [data-nav="workbench"]').count(), 0)
+        self.assertEqual(self.page.locator('#wfPage').count(), 0)
+        self.page.evaluate("localStorage.setItem('rw-route','workbench')")
+        self.load_page('?restore=1')
+        self.page.locator('[data-pw-workbench-files]').wait_for()
+        self.assertEqual(self.page.evaluate('route()'), 'workspace')
+        self.assertEqual(self.page.locator('#projectWorkspace').get_attribute('data-surface'), 'workbench')
+        self.assertEqual(self.errors, [])
+
+    def test_project_deletion_keeps_files_and_exposes_their_location(self):
+        self.seed()
+        root = self.temporary_root / self._testMethodName
+        self.page.locator('#pwProjectSettings summary').click()
+        self.page.locator('#pwProjectEdit').click()
+        self.page.locator('[data-pm-delete]').click()
+        removal = self.page.get_by_role('dialog', name='删除项目记录')
+        removal.get_by_text(str(root), exact=True).wait_for()
+        removal.get_by_role('button', name='取消').click()
+        self.assertTrue((root / 'evidence.md').is_file())
+        self.page.locator('[data-pm-delete]').click()
+        removal.get_by_role('button', name='删除记录').click()
+        removal.wait_for(state='detached')
+        self.page.wait_for_function('id => !S.tasks.some(task => task.id === id)', arg=self.pid)
+        self.page.evaluate("openTab('settings')")
+        self.page.locator('[data-set="data"]').click()
+        location = self.page.locator('.data-location').filter(has_text=str(root))
+        location.get_by_role('button', name='打开文件夹').wait_for()
+        location.get_by_role('button', name='移除此条记录').click()
+        self.page.get_by_role('dialog', name='移除文件夹记录').get_by_role('button', name='移除', exact=True).click()
+        location.wait_for(state='detached')
+        self.assertTrue((root / 'evidence.md').is_file())
+        self.assertEqual(self.errors, [])
+
+    def test_find_old_project_and_clean_only_its_execution_records(self):
+        self.seed()
+        with workflow.WorkflowDB(self.database_path) as db:
+            old = db.create_task('Archived experiment')
+            old_root = db.base_dir(old)
+            for project in (old, self.other):
+                db.db.execute('INSERT INTO execution_board_events(project_id,source,kind,created_at) VALUES (?,?,?,?)',
+                              (project, 'task', 'started', '2026-11-18'))
+            db.db.commit()
+            backup = self.database_path.with_name(self.database_path.name + '.bak-1000')
+            self.addCleanup(backup.unlink, missing_ok=True)
+            with closing(sqlite3.connect(backup)) as snapshot:
+                db.db.backup(snapshot)
+            db.db.execute('DELETE FROM research_tasks WHERE id=?', (old,))
+            db.db.commit()
+        self.page.evaluate("openTab('settings')")
+        self.page.locator('[data-set="data"]').click()
+        self.page.get_by_role('button', name='查找旧项目').click()
+        record = self.page.locator('.data-location').filter(has_text='Archived experiment')
+        record.get_by_text(str(old_root), exact=True).wait_for()
+        record.get_by_role('button', name='清理残留执行记录（1）').click()
+        self.page.get_by_role('dialog', name='清理旧项目').get_by_role('button', name='清理执行记录').click()
+        record.locator('[data-history-clean]').wait_for(state='detached')
+        self.assertTrue(old_root.is_dir())
+        self.assertTrue(backup.is_file())
+        with workflow.WorkflowDB(self.database_path) as db:
+            ids = {row[0] for row in db.db.execute('SELECT project_id FROM execution_board_events')}
+            self.assertNotIn(old, ids)
+            self.assertIn(self.other, ids)
+        self.assertEqual(self.errors, [])
 
     def test_task_prepare_execute_output_review_and_full_access(self):
         self.seed()

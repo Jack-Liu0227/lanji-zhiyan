@@ -1287,103 +1287,11 @@ class WorkflowDB(ResearchDB):
         return {"definition": STAGE_LABEL["idea"], "reading": STAGE_LABEL["download"]}.get(fallback, "未开始")
 
     @project_notes.synchronized
-    def delete_task(self, task_id: str) -> dict[str, Any]:
-        """删掉一个项目连带它的全部数据。SQLite 默认不启用外键约束，子表得自己清
-        （paper_pages / evidence 没有 task_id，只能经 papers 关联）。
-        磁盘上只删 data/papers 里我们自己存的 PDF 副本，用户自己的原文件不动。"""
-        if self.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone() is None:
-            raise KeyError(task_id)
-        from run_manager import RunManager
-        manager = RunManager.get_instance()
-        async_ids = [r["id"] for r in self.db.execute("SELECT id FROM tasks WHERE owner_id=?", (task_id,))]
-        for rid in async_ids:
-            manager.cancel_run(rid)
-        import team
-        import schedule
-        for row in self.db.execute("SELECT id FROM schedules WHERE project_id=?", (task_id,)):
-            schedule.cancel_run(row["id"], self.path)
-        for row in self.db.execute("SELECT id FROM team_tasks WHERE task_id=?", (task_id,)):
-            signal = team._cancel_signals.get(row["id"])
-            if signal:
-                signal.set()
-        import semantic
-        semantic.invalidate_project(self, task_id)
-        self.db.execute("DELETE FROM task_attempts WHERE task_id IN (SELECT id FROM tasks WHERE owner_id=?)", (task_id,))
-        self.db.execute("DELETE FROM run_events WHERE run_id IN (SELECT id FROM tasks WHERE owner_id=?)", (task_id,))
-        self.db.execute("DELETE FROM tasks WHERE owner_id=?", (task_id,))
-        self.db.execute("DELETE FROM schedule_workflow_runs WHERE schedule_run_id IN (SELECT r.id FROM schedule_runs r JOIN schedules s ON s.id=r.schedule_id WHERE s.project_id=?)", (task_id,))
-        self.db.execute("DELETE FROM schedule_workflows WHERE schedule_id IN (SELECT id FROM schedules WHERE project_id=?)", (task_id,))
-        self.db.execute("DELETE FROM schedule_runs WHERE schedule_id IN (SELECT id FROM schedules WHERE project_id=?)", (task_id,))
-        self.db.execute("DELETE FROM schedules WHERE project_id=?", (task_id,))
-        self.db.execute("DELETE FROM task_links WHERE project_id=?", (task_id,))
-        files = [r["source_path"] for r in self.db.execute("SELECT source_path FROM papers WHERE task_id=?", (task_id,))]
-        self.db.execute("DELETE FROM paper_pages WHERE paper_id IN (SELECT id FROM papers WHERE task_id=?)", (task_id,))
-        self.db.execute("DELETE FROM evidence WHERE paper_id IN (SELECT id FROM papers WHERE task_id=?)", (task_id,))
-        tables_to_clean = (
-            "papers", "artifacts", "runs", "calendar_events", "notes", "steps",
-            "search_cache", "chat", "paper_graph", "kb_graph", "project_memory",
-            "md_notes", "dl_queue", "zotero_staging", "team_tasks", "team_events",
-            "project_workflow_layouts", "zotero_bindings", "zotero_project_sources", "zotero_item_links", "zotero_project_memberships", "zotero_link_batches",
-            "project_paper_links",
-            "task_attempts", "audit_events", "project_todos", "background_jobs",
-            "idea_input", "tr_hl",
-        )
-        for table in tables_to_clean:
-            try:
-                self.db.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
-            except Exception:
-                pass
-        import memory_store
-        memory_store.ready(self)
-        project_memory_ids = "SELECT id FROM memory WHERE scope='project' AND scope_id=?"
-        self.db.execute(f"DELETE FROM memory_revisions WHERE memory_id IN ({project_memory_ids})", (task_id,))
-        self.db.execute(f"DELETE FROM memory_fts WHERE mem_id IN ({project_memory_ids})", (task_id,))
-        self.db.execute("DELETE FROM memory WHERE scope='project' AND scope_id=?", (task_id,))
-        self.db.execute("DELETE FROM chat_fts WHERE task_id=?", (task_id,))
-        # workflow_runs is keyed by project_id rather than task_id. Keep this
-        # explicit so project deletion cannot leave orphaned resumable runs.
-        try:
-            run_ids = [r["id"] for r in self.db.execute(
-                "SELECT id FROM workflow_runs WHERE project_id=?", (task_id,))]
-            if run_ids:
-                marks = ",".join("?" for _ in run_ids)
-                self.db.execute(f"DELETE FROM review_reminders WHERE node_id IN (SELECT id FROM workflow_nodes WHERE run_id IN ({marks}))", run_ids)
-                self.db.execute(f"DELETE FROM schedule_workflow_runs WHERE workflow_run_id IN ({marks})", run_ids)
-                self.db.execute(f"DELETE FROM workflow_nodes WHERE run_id IN ({marks})", run_ids)
-                self.db.execute(f"DELETE FROM workflow_executions WHERE run_id IN ({marks})", run_ids)
-                self.db.execute(f"DELETE FROM workflow_runs WHERE id IN ({marks})", run_ids)
-        except Exception:
-            pass
-        try:
-            asset_ids = [r["id"] for r in self.db.execute("SELECT id FROM assets WHERE project_id=?", (task_id,))]
-            if asset_ids:
-                marks = ",".join("?" for _ in asset_ids)
-                self.db.execute(f"DELETE FROM asset_fts WHERE asset_id IN ({marks})", asset_ids)
-                self.db.execute(f"DELETE FROM asset_provenance WHERE asset_id IN ({marks})", asset_ids)
-                self.db.execute(f"DELETE FROM asset_relations WHERE from_asset_id IN ({marks}) OR to_asset_id IN ({marks})", asset_ids * 2)
-                self.db.execute(f"DELETE FROM asset_revisions WHERE asset_id IN ({marks})", asset_ids)
-                self.db.execute(f"DELETE FROM assets WHERE id IN ({marks})", asset_ids)
-        except Exception:
-            pass
-        try:
-            self.db.execute("UPDATE chats SET task_id='' WHERE task_id=?", (task_id,))
-        except Exception:
-            pass
-        self.db.execute("DELETE FROM research_tasks WHERE id=?", (task_id,))
-        self.db.commit()
-        removed = 0
-        for raw in files:
-            p = Path(raw)
-            try:
-                if p.is_file() and PAPERS in p.resolve().parents:
-                    p.unlink()
-                    fileguard.audit("delete_paper_file", p, task_id=task_id)
-                    removed += 1
-            except OSError:
-                pass
-        return {"deleted": True, "id": task_id, "files_removed": removed}
+    def delete_task(self, task_id: str, *, require_idle: bool = False) -> dict[str, Any]:
+        import project_data
 
-    # ---------- 日历 ----------
+        return project_data.delete(self, task_id, require_idle=require_idle)
+
     def add_event(self, title: str, date: str, task_id: str | None = None, kind: str = "milestone",
                   note: str = "", time: str = "") -> dict[str, Any]:
         if not title.strip() or not re.match(r"^\d{4}-\d{2}-\d{2}$", date or ""):
@@ -1603,7 +1511,7 @@ class WorkflowDB(ResearchDB):
         return {"provider_id": None, "model": m["model"]}
 
     # ---------- 检索缓存 ----------
-    def cache_results(self, task_id: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def cache_results(self, task_id: str, items: list[dict[str, Any]], *, matches=None) -> list[dict[str, Any]]:
         saved = []
         for it in items:
             title = (it.get("title") or "").strip()
@@ -1635,6 +1543,8 @@ class WorkflowDB(ResearchDB):
                     self.db.execute(f"UPDATE search_cache SET {set_clause} WHERE id=?", (*updates.values(), rid))
                     import project_library
                     project_library.index_record(self, task_id, rid)
+                if matches is not None:
+                    matches.append({**row_dict, **updates})
                 continue
             rid = uuid.uuid4().hex
             row = (rid, task_id, it.get("source", ""), title, it.get("authors", ""), str(it.get("year") or ""),
@@ -1644,6 +1554,8 @@ class WorkflowDB(ResearchDB):
                 "INSERT INTO search_cache (id,task_id,source,title,authors,year,doi,url,pdf_url,abstract,score,created_at)"
                 " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row)
             saved.append(self.result(rid))
+            if matches is not None:
+                matches.append(saved[-1])
         self.db.commit()
         import project_library
         for item in saved:

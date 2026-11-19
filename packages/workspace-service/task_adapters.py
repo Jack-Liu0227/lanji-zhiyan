@@ -35,7 +35,7 @@ def validate(db, task, run):
     if (incoming.get("upstream_hash") and digest != incoming["upstream_hash"]) or workflow_state.gate(db, project_id, stage,frozen)["blocked"]:
         raise ValueError("上游交付已变化，请重新执行当前节点")
     expected = (run.get("checkpoint") or {}).get("output") or {}
-    if expected.get("fingerprint"):
+    if expected.get("fingerprint") and not expected.get('search_attempt'):
         capture = workflow_state.capture(db, project_id, stage)
         if not capture["valid"] or capture["fingerprint"] != expected["fingerprint"]:
             raise ValueError("待审查产物已变化，请重新执行当前节点后审查")

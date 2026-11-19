@@ -14,6 +14,11 @@ function render(){
     TaskCenter.requestView('automation');
     retired.route='task-center';retired.title='任务与自动化';
   }
+  if(retired?.route==='workbench'&&window.ProjectWorkspace){
+    ProjectWorkspace.requestRoute('workbench');
+    retired.route='workspace';
+    retired.title=TITLES.workspace;
+  }
   renderSidebar(); renderTopbar(); renderTabs(); renderStatus();
   if(typeof GlobalTodos !== 'undefined') GlobalTodos.syncProjects();
   const r = route(); const m = $("main");
@@ -27,9 +32,8 @@ function render(){
   else if(r==='task-center') return TaskCenter.renderGlobal(m);
   else if(r==='usage') return UsageView.render(m);
   else if(r==='toolbox') return PaperToolbox.render(m);
-  else if(r==="workbench") return renderWorkflow(m);
-  else if(r==="workflow") { if(window.ProjectWorkspace) { ProjectWorkspace.requestRoute("workflow"); return ProjectWorkspace.render(m); } else return renderWorkflow(m); }
-  else if(r==="tasks") renderTasks(m);
+  else if(r==="workflow") { ProjectWorkspace.requestRoute("workflow"); return ProjectWorkspace.render(m); }
+  else if(r==="tasks") ProjectManager.open();
   else if(r==="space" || r==="notes") { if(window.ProjectWorkspace) { ProjectWorkspace.requestRoute("notes"); return ProjectWorkspace.render(m); } else return renderSpace(m); }
   else if(r==="calendar") renderCalendar(m);
   else if(r==="mail") renderMail(m);

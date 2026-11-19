@@ -218,7 +218,8 @@ def route(method, path, body, query, db):
         project_id = (query.get("project_id") or [""])[0]
         if path == prefix and project_id and not query.get("id"):
             rows = db.db.execute(
-                "SELECT r.id, r.started_at, r.status, json_extract(e.layout_snapshot, '$.name') AS layout_name, "
+                "SELECT r.id, r.started_at, r.status, json_extract(e.layout_snapshot, '$.id') AS layout_id, "
+                "json_extract(e.layout_snapshot, '$.name') AS layout_name, "
                 "json_extract(e.layout_snapshot, '$.order') AS node_order "
                 "FROM workflow_runs r JOIN workflow_executions e ON e.run_id=r.id "
                 "WHERE r.project_id=? ORDER BY r.started_at DESC, r.rowid DESC LIMIT 100", (project_id,))

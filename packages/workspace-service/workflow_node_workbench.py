@@ -4,6 +4,7 @@ import csv
 import io
 import json
 from pathlib import Path
+from urllib.parse import urlencode
 import re
 
 import project_tasks as tasks
@@ -120,6 +121,17 @@ def _editable(task, run):
             latest.get('checkpoint', {}).get('output_revision', 0) == run['checkpoint'].get('output_revision', 0))
 
 
+def _structured_editable(node, content):
+    if node.get('node_kind') == 'tool' or node.get('step') == 'convert':
+        return False
+    if node.get('step') == 'notes':
+        from node_output_editors import reading_note_editable
+        return isinstance(content, list) and bool(content) and all(
+            reading_note_editable(row) for row in content
+        )
+    return True
+
+
 def _kind(node, content):
     import node_output_editors
     if node.get('node_kind') == 'tool':
@@ -134,6 +146,8 @@ def _file_kind(item):
         return 'markdown'
     if suffix == '.csv':
         return 'table'
+    if suffix in ('.html', '.htm'):
+        return 'html'
     if suffix in TEXT:
         return 'text'
     if suffix == '.pdf':
@@ -141,6 +155,33 @@ def _file_kind(item):
     if suffix in ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.svg'):
         return 'image'
     return 'files'
+
+
+def _file_preview(path, kind, editable):
+    import workflow
+
+    result = {'kind': kind, 'editable': editable, 'download_url': '/api/file?' + urlencode({'path': str(path)})}
+    text_file = path.suffix.lower() in TEXT and path.stat().st_size <= MAX_TEXT
+    if text_file and (kind != 'html' or editable):
+        text = path.read_text(encoding='utf-8')
+        result['text'] = text
+        if kind == 'table':
+            result['data'] = list(csv.DictReader(io.StringIO(text)))
+    else:
+        result['editable'] = False
+    if kind == 'html' or not text_file:
+        media = workflow.conv_preview(str(path))
+        result['preview'] = media
+        if path.suffix.lower() == '.docx' and media['kind'] == 'docx':
+            from docx import Document
+
+            document = Document(path)
+            result.update(kind='text', text='\n'.join([paragraph.text for paragraph in document.paragraphs] +
+                ['\t'.join(cell.text for cell in row.cells) for table in document.tables for row in table.rows]))
+            result['preview_note'] = '当前设备未生成 PDF 排版预览，此处展示 Word 文件中的文字与表格内容。'
+        elif media['kind'] in ('docx', 'other'):
+            result['preview_note'] = '此格式不支持工作台预览。可以下载该版本的文件。'
+    return result
 
 
 def _history(db, task):
@@ -173,18 +214,20 @@ def read(db, selection, *, authority, window_id='', task=None, include_content=T
     kind = _kind(node, raw_content)
     if raw_content and kind != 'files' and (kind != 'text' or not isinstance(raw_content, str) or not run['output_snapshot'].get('files')):
         artifacts.append({'id': 'structured', 'name': node.get('label') or task['title'], 'kind': kind,
-                          'editable': editable and node.get('node_kind') != 'tool' and node.get('step') != 'convert'})
+                          'editable': editable and _structured_editable(node, raw_content)})
     for index, item in enumerate(run['output_snapshot'].get('files') or []):
         can_edit = project_task_review.can_edit_file(task, item) if hasattr(project_task_review, 'can_edit_file') else (task['metadata'].get('stage', 'task') in ('', 'task', 'outline', 'write', 'review') and Path(item['path']).suffix.lower() in TEXT)
         artifacts.append({'id': 'file:' + str(index), 'name': item.get('name') or Path(item['path']).name,
                           'kind': _file_kind(item), 'content_hash': item.get('content_hash', item.get('sha256')),
                           'editable': editable and can_edit and node.get('node_kind') != 'tool',
                           'size': Path(item['path']).stat().st_size})
+        if node.get('step') == 'notes' and artifacts[-1]['kind'] == 'pdf':
+            artifacts[-1]['source_path'] = item.get('original_path', '')
     if node.get('step') == 'convert':
         import workflow_export_revision
         if workflow_export_revision.source(db, task, run):
             artifacts.append({'id': 'export-source', 'name': '排版源稿 · 编辑并重新生成', 'kind': 'export', 'editable': editable})
-    if node.get('step') in ('notes', 'convert'):
+    if node.get('step') == 'convert':
         artifacts.sort(key=lambda item: 0 if item['kind'] == 'pdf' else 1)
     drafts = [dict(row) for row in db.db.execute('SELECT * FROM workflow_node_drafts WHERE task_run_id=? AND owner_id=? ORDER BY updated_at DESC', (run['id'], authority.actor_id))
               if not window_id or row['window_id'] == window_id]
@@ -238,36 +281,29 @@ def preview(db, selection, artifact_id, *, authority, task=None):
     index = _artifact(run, artifact_id)
     previous = _previous(db, task, run)
     if index is None:
-        content = run['output_snapshot'].get('content', '')
+        output = run['output_snapshot']
+        content = output.get('content', '')
+        prior_output = (previous or {}).get('output_snapshot', {})
+        prior_content = prior_output.get('content')
+        if node.get('step') == 'search' and run['checkpoint'].get('output', {}).get('search_attempt'):
+            from node_output_editors import search_editor_rows
+            content = search_editor_rows(output)
+            if previous and previous.get('checkpoint', {}).get('output', {}).get('search_attempt'):
+                prior_content = search_editor_rows(prior_output)
         return {'kind': _kind(node, content), 'data': content,
-                'editable': _editable(task, run) and node.get('node_kind') != 'tool' and node.get('step') != 'convert',
-                'previous_content': (previous or {}).get('output_snapshot', {}).get('content')}
+                'editable': _editable(task, run) and _structured_editable(node, content),
+                'previous_content': prior_content}
     item = run['output_snapshot']['files'][index]
     path = Path(item['path'])
     kind = _file_kind(item)
     import project_task_review
     can_edit = project_task_review.can_edit_file(task, item) if hasattr(project_task_review, 'can_edit_file') else task['metadata'].get('stage', 'task') in ('', 'task', 'outline', 'write', 'review')
-    result = {'kind': kind, 'name': item.get('name') or path.name, 'content_hash': tasks._hash(path),
-              'editable': _editable(task, run) and can_edit and node.get('node_kind') != 'tool' and path.stat().st_size <= MAX_TEXT}
-    if path.suffix.lower() in TEXT and path.stat().st_size <= MAX_TEXT:
-        text = path.read_text(encoding='utf-8')
-        result['text'] = text
-        if path.suffix.lower() == '.csv':
-            result['data'] = list(csv.DictReader(io.StringIO(text)))
-        if previous and index < len(previous['output_snapshot'].get('files', [])):
-            old = Path(previous['output_snapshot']['files'][index]['path'])
-            if old.is_file() and old.suffix.lower() in TEXT and old.stat().st_size <= MAX_TEXT:
-                result['previous_content'] = old.read_text(encoding='utf-8')
-    else:
-        import workflow
-        result['preview'] = workflow.conv_preview(str(path))
-        result['editable'] = False
-        if path.suffix.lower() == '.docx' and result['preview'].get('kind') == 'docx':
-            from docx import Document
-            document = Document(path)
-            result.update(kind='text', text='\n'.join([paragraph.text for paragraph in document.paragraphs] +
-                ['\t'.join(cell.text for cell in row.cells) for table in document.tables for row in table.rows]))
-            result['preview_note'] = '当前设备未生成 PDF 排版预览，此处展示 Word 文件中的文字与表格内容。'
+    result = _file_preview(path, kind, _editable(task, run) and can_edit and node.get('node_kind') != 'tool')
+    result.update(name=item.get('name') or path.name, content_hash=tasks._hash(path))
+    if 'text' in result and previous and index < len(previous['output_snapshot'].get('files', [])):
+        old = Path(previous['output_snapshot']['files'][index]['path'])
+        if old.is_file() and old.suffix.lower() in TEXT and old.stat().st_size <= MAX_TEXT:
+            result['previous_content'] = old.read_text(encoding='utf-8')
     return result
 
 
@@ -292,14 +328,9 @@ def _saved(db, task, run):
     checkpoint = run.get('checkpoint') or {}
     content = ''
     stage = task['metadata'].get('stage', 'task')
-    saved_rows = {}
-    for signature, result in (checkpoint.get('done_tools') or {}).items():
-        if signature.split('\0', 1)[0] in ('search', 'paper_search') and isinstance(result, dict):
-            for row in result.get('saved') or []:
-                if isinstance(row, dict) and row.get('id') and row.get('task_id') == task['project_id']:
-                    saved_rows[row['id']] = row
-    if stage == 'search' and saved_rows:
-        content = list(saved_rows.values())
+    if stage == 'search':
+        import workflow_state
+        content = workflow_state.search_rows(task['project_id'], checkpoint)
     root = tasks._root(db, task['project_id'])
     files = []
     for asset_id in dict.fromkeys(checkpoint.get('output_assets') or []):
@@ -376,15 +407,7 @@ def workspace_preview(db, selection, artifact_id, *, authority, task=None):
     output = result['run']['output_snapshot']
     item = next(item for item in output['files'] if 'asset:' + item['asset_id'] == artifact_id)
     path = Path(item['path'])
-    value = {'kind': _file_kind(item), 'editable': False, 'content_hash': item['content_hash']}
-    if path.suffix.lower() in TEXT and path.stat().st_size <= MAX_TEXT:
-        value['text'] = path.read_text(encoding='utf-8')
-        if path.suffix.lower() == '.csv':
-            value['data'] = list(csv.DictReader(io.StringIO(value['text'])))
-    else:
-        import workflow
-        value['preview'] = workflow.conv_preview(str(path))
-    return value
+    return {**_file_preview(path, _file_kind(item), False), 'content_hash': item['content_hash']}
 
 
 def collect(db, task_id, body, *, authority):
@@ -419,9 +442,13 @@ def collect(db, task_id, body, *, authority):
         try:
             capture = {'content': source['content'], 'files': [item['path'] for item in source['files']]}
             output = worker._outputs(db, task, attempt, {}, capture)
+            checkpoint_output = output
+            if task['metadata'].get('stage') == 'search' and source['content']:
+                import workflow_state
+                checkpoint_output = workflow_state.search_capture(source['content'])
             return tasks.complete(db, attempt['id'], {'output_snapshot': output,
                 'reply': '已将本节点实际保存的产物固定为人工核查版本。',
-                'checkpoint': {'output': output, 'collected_from': body['task_run_id']}})
+                'checkpoint': {'output': checkpoint_output, 'collected_from': body['task_run_id']}})
         except Exception as exc:
             tasks.fail(db, attempt['id'], str(exc))
             raise

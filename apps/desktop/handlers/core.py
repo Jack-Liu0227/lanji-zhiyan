@@ -42,13 +42,6 @@ class CoreRoutes:
         if path == "/api/state":
             with WorkflowDB(DB_PATH) as db:
                 all_tasks = db.tasks()
-                if not all_tasks:
-                    db.create_task(
-                        "锂金属固态电池界面反应动力学与多尺度演化研究",
-                        "如何解决高倍率循环下固态电解质/金属锂界面的接触失效与副反应演化问题？",
-                        "固态锂电池, 复合固态电解质, 锂金属负极",
-                    )
-                    all_tasks = db.tasks()
                 active = db.active_model()
                 return self._json({
                     "tasks": [{**dict(t), "stage_now": db.stage_now(t["id"], t["stage"])} for t in all_tasks],
@@ -62,6 +55,17 @@ class CoreRoutes:
                     "stages": [{"key": s, "label": STAGE_LABEL[s]} for s in STAGES],
                     "workflow_stages": STAGE_CATALOG,
                 })
+        if path in ("/api/task/delete-preview", "/api/settings/data", "/api/settings/data/history"):
+            import project_data
+
+            with WorkflowDB(DB_PATH) as db:
+                if path == "/api/task/delete-preview":
+                    payload = project_data.preview(db, q.get("id", [""])[0])
+                elif path == "/api/settings/data/history":
+                    payload = {"projects": project_data.historical_locations(db)}
+                else:
+                    payload = project_data.locations(db)
+                return self._json(payload)
         if path == "/api/task":
             tid = q["id"][0]
             for attempt in range(4):

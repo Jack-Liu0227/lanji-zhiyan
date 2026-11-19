@@ -1221,7 +1221,9 @@ def en_translate(profile: dict[str, Any], md: str, style: str = "formal") -> dic
     missing = [str(i + 1) for i, part in enumerate(parts) if not part.strip()]
     if missing:
         raise RuntimeError("翻译分片返回空内容（第 " + "、".join(missing) + " 段），原译文保留，请重试")
-    return {"text": "\n\n".join(p for p in parts if p), "chunks": len(chunks),
+    segments = [{"id": f"segment-{index}", "source": source, "target": target}
+                for index, (source, target) in enumerate(zip(chunks, parts), start=1)]
+    return {"text": "\n\n".join(parts), "chunks": len(chunks), "segments": segments,
             "ms": int((time.time() - t0) * 1000), "style": style}
 
 
@@ -1236,10 +1238,15 @@ def en_state(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
         if candidate.parent == src.parent.resolve():
             res = candidate
     source = src.read_text(encoding="utf-8", errors="replace") if src.is_file() else ""
-    if saved.get("custom_source") or (res.is_file() and "source_text" in saved):
+    result = res.read_text(encoding="utf-8", errors="replace") if res.is_file() else ""
+    segments = saved.get("segments") or []
+    saved_path = saved.get("result_path")
+    aligned = bool(segments and saved_path and Path(saved_path).resolve() == res.resolve() and
+                   "\n\n".join(segment["target"] for segment in segments) == result.rstrip("\n"))
+    if aligned or (not segments and (saved.get("custom_source") or (res.is_file() and "source_text" in saved))):
         source = saved.get("source_text", "")
     return {"source_path": str(src), "source_text": source,
-            "result_path": str(res), "result_text": res.read_text(encoding="utf-8", errors="replace") if res.is_file() else "",
+            "result_path": str(res), "result_text": result, "segments": segments if aligned else [],
             "source_exists": src.is_file(), "result_exists": res.is_file()}
 
 
@@ -1265,7 +1272,7 @@ def en_run(db: "WorkflowDB", task_id: str, text: str, name: str = "", style: str
     asset_service.register_file(db, dest, project_id=task_id, kind="document", source="translation",
                                 body=out["text"], metadata={"document_kind": "entrans"})
     import service_settings
-    service_settings.write(db, "translation:" + task_id, {"result_path": str(dest), "source_text": md,
+    service_settings.write(db, "translation:" + task_id, {"result_path": str(dest), "source_text": md, "segments": out.get("segments", []),
                            "custom_source": stem != doc_path(db, task_id, "write").stem})
     db.log_step(task_id, "entrans", "done", f"译成 {dest.name}")
     return {"path": str(dest), "name": dest.name, "text": out["text"], "chars": len(out["text"]),

@@ -113,12 +113,14 @@ def stage_search(db: WorkflowDB, task_id: str, query: str, sources: list[str] | 
     filled = enrich_oa(found)                  # 按 DOI 反查 OpenAlex，尽量把 OA 直链补全
     import execution
     execution.check()
-    saved = db.cache_results(task_id, found)
+    matches = []
+    saved = db.cache_results(task_id, found, matches=matches)
     db.log_step(task_id, "search", "done",
                 f"检索到 {len(found)} 条（原始 {len(raw)}，去重排序后限 {limit} 条，排序：{sort_by}），"
                 f"新增 {len(saved)} 条，补 OA 直链 {filled} 条")
     return {"query": query, "found": len(found), "raw": len(raw), "filtered": len(raw) - len(rel),
-            "limit": limit, "sort_by": sort_by, "saved": saved, "enriched": filled, "results": db.results(task_id)}
+            "limit": limit, "sort_by": sort_by, "saved": saved, "matches": matches,
+            "enriched": filled, "results": matches if getattr(db, "workflow_node_search_capture", False) else db.results(task_id)}
 
 
 def stage_download(db: WorkflowDB, task_id: str, result_id: str) -> dict[str, Any]:

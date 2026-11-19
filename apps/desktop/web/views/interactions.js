@@ -12,7 +12,6 @@ const AppInteractions = (() => {
     const field = document.activeElement;
     if(!editable(field)) return null;
     const button = field.id==='tcSay' ? document.getElementById('tcSend') : field.closest('.composer, .at-dock, .ol-grid, .wv-composer')?.querySelector('.send-btn, #send, #pwSend, [id$="-send"]');
-    if(button?.id==='wv-send' && wfActiveRun()?.status==='running') return null;
     return visible(button) && !button.disabled && !button.classList.contains("stop") ? button : null;
   };
   const commands = [

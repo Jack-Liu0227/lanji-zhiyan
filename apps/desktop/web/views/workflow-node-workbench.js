@@ -28,7 +28,7 @@ const WorkflowNodeWorkbench=(()=>{
 
   async function mount(host,options){
     dispose();
-    const state={host,options,result:null,artifact:null,preview:null,value:'',baseline:'',reason:'',feedback:'',draftVersion:0,draftDirty:false,busy:false,mode:'preview',paperView:{query:'',filter:'all',page:0},request:0,autosave:null,savePromise:null,disposed:false};
+    const state={host,options,result:null,artifact:null,preview:null,value:'',baseline:'',reason:'',feedback:'',draftVersion:0,draftDirty:false,busy:false,mode:'preview',rendererView:{},request:0,autosave:null,savePromise:null,disposed:false};
     const el=name=>host.querySelector('[data-wnw-'+name+']');
     state.alive=()=>!state.disposed&&host.isConnected&&options.live();
     state.dispose=()=>{state.disposed=true;clearTimeout(state.autosave);clearInterval(state.poll);if(state.onFsChange)document.removeEventListener('fullscreenchange',state.onFsChange);document.body.classList.remove('has-wnw-fullscreen');};
@@ -113,7 +113,12 @@ const WorkflowNodeWorkbench=(()=>{
       el('duplicate').disabled=state.busy||state.result.provisional;
       el('discuss').disabled=state.busy||state.result.provisional;
       el('draft-state').textContent=state.result.provisional?'已保存的中间产物 · 固定后可编辑交付':state.draftDirty?'草稿尚未保存':changed()?'草稿已保存，尚未成为产物修订':'当前产物已固定';
-      host.querySelectorAll('[data-wnw-mode]').forEach(button=>{button.setAttribute('aria-pressed',String(state.mode===button.dataset.wnwMode));button.disabled=state.busy||(button.dataset.wnwMode==='edit'&&!canEdit);});
+      const canCompare = state.preview?.text !== undefined || state.preview?.data !== undefined;
+      host.querySelectorAll('[data-wnw-mode]').forEach(button=>{
+        const mode = button.dataset.wnwMode;
+        button.setAttribute('aria-pressed', String(state.mode === mode));
+        button.disabled = state.busy || (mode === 'edit' && !canEdit) || (mode === 'diff' && !canCompare);
+      });
     }
     function scheduleDraft(){
       if(!(state.result?.editable||state.result?.can_rework))return;
@@ -149,7 +154,10 @@ const WorkflowNodeWorkbench=(()=>{
       const result=state.result,task=result.task,node=result.node||{},identity=result.identity;
       el('title').textContent=node.label||task.title||'节点产物';
       el('meta').textContent='第 '+(result.run.attempt||1)+' 次执行 · 修订 v'+identity.output_revision+' · '+(task.workflow_node_id||identity.workflow_node_id)+(result.scheduling?' · '+result.scheduling:'');
-      el('status').textContent=statuses[task.status]||task.status;
+      const decision=task.deliveries?.findLast(item=>item.task_run_id===identity.task_run_id);
+      el('status').textContent=task.status==='blocked'&&decision?.decision==='rejected'
+        ? '已退回修改'
+        : statuses[task.status]||task.status;
       el('steps').innerHTML=(result.steps||[]).map((step,index)=>`<button type="button" data-wnw-step="${h(step.task_id)}" aria-current="${step.task_id===task.id?'step':'false'}"><small>${index+1}</small><span>${h(step.title)}<em>${h(statuses[step.status]||step.status)}</em></span></button>`).join('');
       el('steps').querySelectorAll('[data-wnw-step]').forEach(button=>button.onclick=async()=>{if(await state.saveDraft())options.select({project_id:task.project_id,task_id:button.dataset.wnwStep});});
       el('collect').hidden=!result.can_collect;
@@ -220,7 +228,7 @@ const WorkflowNodeWorkbench=(()=>{
       el('version').innerHTML=entries.map((item,index)=>`<option value="${index}" ${sameVersion(item,identity)?'selected':''}>${h(item.label||'运行 '+(item.attempt||'')+' · 修订 v'+item.output_revision)}</option>`).join('');
       el('version').onchange=()=>{const selected=entries[Number(el('version').value)];options.select({...state.selection,task_run_id:selected.task_run_id||selected.identity?.task_run_id,output_revision:selected.output_revision??selected.identity?.output_revision});};
       el('files').innerHTML=(result.artifacts||[]).map((artifact,index)=>`<button type="button" class="wnw-file" data-wnw-file="${index}"><span>${h(artifact.name||artifact.id)}</span><small>${h(artifact.kind||'文件')}</small></button>`).join('');
-      el('files').querySelectorAll('[data-wnw-file]').forEach(button=>button.onclick=async()=>{if(await state.saveDraft())await selectArtifact(result.artifacts[Number(button.dataset.wnwFile)]);});
+      el('files').querySelectorAll('[data-wnw-file]').forEach(button=>button.onclick=()=>openArtifact(result.artifacts[Number(button.dataset.wnwFile)]));
       let checks=Array.isArray(result.checks)?result.checks:Object.entries(result.checks||{}).map(([name,value])=>({label:(({format:'输出格式',min_chars:'最少字数',sections:'必要章节',required_files:'必要文件'})[name]||name)+' '+textOf(value)}));
       checks=[...(result.guide?.checks||[]),...checks];
       if(!checks.length)checks=[{label:'核对实际产物及证据来源'},{label:'核对输入、版本与修改要求'}];
@@ -238,16 +246,19 @@ const WorkflowNodeWorkbench=(()=>{
       const links=bound.map(item=>`<li><b>${h(item.artifact)}</b><small>${h(item.source)} · 交付 ${h(item.delivery_id)}${item.argument?' → '+h(item.argument):''}</small></li>`).join('');
       return `<ul class="wnw-input-list">${links}${dependencies.map((item,index)=>`<li><b>${h(item.title||item.label||'前置交付 '+(index+1))}</b><small>已验收的固定版本${item.outputs?.length?' · '+item.outputs.length+' 个文件':''}</small></li>`).join('')}${(inputs.assets||[]).map((item,index)=>`<li>${h(item.name||item.relative||'输入资料 '+(index+1))}<small>${h((item.content_hash||'').slice(0,12))}</small></li>`).join('')}</ul>${!dependencies.length&&!inputs.assets?.length?'<p class="hint">本节点未单独附加资料，依据已固定的任务要求执行。</p>':''}`;
     }
+    async function openArtifact(artifact){
+      if(artifact&&await state.saveDraft())await selectArtifact(artifact);
+    }
     async function selectArtifact(artifact){
       const seq=++state.previewRequest||1;state.previewRequest=seq;
-      if(state.artifact?.id!==artifact.id)state.paperView={query:'',filter:'all',page:0};
+      if(state.artifact?.id!==artifact.id)state.rendererView={};
       state.artifact=artifact;
       const response=await api('/api/project-tasks/node-workspace-preview?'+query(state.selection,artifact.id));
       if(!state.alive()||state.previewRequest!==seq)return;
       state.preview=response.preview;
       state.rawDraft=false;
       state.structuredData=copy(state.preview.data??null);
-      state.baseline=state.preview.text!==undefined?state.preview.text:(typeof state.preview.data==='string'?state.preview.data:'');
+      state.baseline=state.preview.text??(state.preview.data==null?'':textOf(state.preview.data));
       state.value=state.baseline;state.reason='';state.draftVersion=0;state.draftDirty=false;
       const saved=(state.result.drafts||[]).find(item=>item.artifact_id===artifact.id&&item.window_id===windowId&&(item.base_revision??item.output_revision??state.result.identity.output_revision)===state.result.identity.output_revision);
       if(saved&&(state.result.editable||state.result.can_rework)){state.value=saved.text??state.value;state.reason=saved.reason||'';state.feedback=saved.feedback||state.feedback;state.draftVersion=saved.version??saved.draft_version??0;if(saved.instruction)el('instruction').value=saved.instruction;message('已恢复此窗口在当前版本上的编辑草稿。');}
@@ -283,7 +294,6 @@ const WorkflowNodeWorkbench=(()=>{
     }
     function change(value){state.value=value;scheduleDraft();}
     function parsed(){
-      if(state.structuredData!==null&&typeof state.structuredData==='object')return state.structuredData;
       try{return JSON.parse(state.value);}catch{return state.structuredData??state.preview.data??state.preview.content;}
     }
     function changeData(data){
@@ -295,6 +305,14 @@ const WorkflowNodeWorkbench=(()=>{
       }else change(textOf(data));
     }
     function kind(){return state.artifact.kind||state.preview.kind||'text';}
+    async function loadPdf(artifact){
+      const {preview}=await api('/api/project-tasks/node-workspace-preview?'+query(state.selection,artifact.id));
+      const media=preview.preview||preview;
+      if(media.kind!=='pdf'||!media.url)throw new Error('此版本的 PDF 无法预览');
+      const url=new URL(media.url,location.href);
+      if(url.origin!==location.origin)throw new Error('文件预览地址不在本地服务');
+      return url.href;
+    }
     async function drawContent(){
       const target=el('content');if(!state.preview)return;
       host.querySelectorAll('[data-wnw-mode]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.wnwMode===state.mode)));
@@ -302,9 +320,10 @@ const WorkflowNodeWorkbench=(()=>{
       const type=kind(),edit=state.mode==='edit'&&editable();
       if(edit&&state.rawDraft){target.innerHTML=`<textarea class="wnw-editor" data-wnw-editor aria-label="产物修订正文" spellcheck="false">${h(state.value)}</textarea>`;target.querySelector('textarea').oninput=event=>change(event.target.value);return;}
       if(type==='export'){drawExport(target,parsed(),edit);return;}
-      if(type==='papers'&&Array.isArray(parsed())&&!edit){drawPapers(target,parsed());return;}
-      if(type==='table'&&Array.isArray(parsed())&&isLiteratureRows(parsed())){drawSearchResults(target,parsed(),edit);return;}
-      if(type==='graph'){drawGraph(target,parsed(),edit);return;}
+      if(WorkflowNodeRenderers.render(state.result.node?.step,target,{
+        artifact:state.artifact,data:parsed(),text:state.value,editable:edit,view:state.rendererView,onChange:changeData,
+        files:state.result.artifacts,openArtifact,loadPdf,
+      }))return;
       if(type==='idea'&&typeof parsed()==='object'){drawIdea(target,parsed(),edit);return;}
       if(type==='bilingual'&&!Array.isArray(parsed())&&parsed()&&('source' in parsed()||'source_text' in parsed())&&!parsed().segments){drawBilingual(target,parsed(),edit);return;}
       if(['table','papers','bilingual','checklist'].includes(type)&&typeof parsed()==='object'){drawStructured(target,parsed(),edit,type==='papers'?'table':type);return;}
@@ -317,6 +336,11 @@ const WorkflowNodeWorkbench=(()=>{
         const raw=media.url||media.preview_url||state.preview.url;
         if(raw){const url=new URL(raw,location.href);if(url.origin!==location.origin)throw new Error('产物预览地址不属于本机服务。');target.innerHTML=(media.kind||type)==='image'?`<img class="wnw-image" src="${h(url.href)}" alt="${h(state.artifact.name)}">`:`<iframe class="wnw-frame" title="${h(state.artifact.name)}" ${(media.kind||type)==='html'?'sandbox="allow-same-origin"':''} src="${h(url.href)}"></iframe>`;return;}
       }
+      const download = state.preview.download_url;
+      if (download && media.kind === 'other') {
+        target.innerHTML = `<a class="btn" href="${h(download)}" download>下载 ${h(state.artifact.name)}</a>`;
+        return;
+      }
       if(['markdown','text','checklist'].includes(type)&&typeof parsed()!=='object'||state.preview.text!==undefined){target.innerHTML=/\.(md|markdown)$/i.test(state.artifact.name||'')||type==='markdown'||type==='checklist'?`<div class="md-render wnw-prose">${renderMarkdown(state.value)}</div>`:`<pre class="wnw-text">${h(state.value)}</pre>`;return;}
       target.innerHTML=`<pre class="wnw-text">${h(state.value||'此产物需使用对应文件查看器打开。')}</pre>`;
     }
@@ -325,54 +349,6 @@ const WorkflowNodeWorkbench=(()=>{
       target.innerHTML=`<label>生成格式<select class="control" data-wnw-export-format>${[['docx','Word'],['pdf','PDF'],['html','HTML'],['md','Markdown']].map(([value,label])=>`<option value="${value}" ${data.format===value?'selected':''}>${label}</option>`).join('')}</select></label><p class="hint">保存修订会根据源稿生成新的成品文件，旧版保留在版本记录中。</p><textarea class="wnw-editor" data-wnw-export-source aria-label="排版源稿">${h(data.markdown||'')}</textarea>`;
       target.querySelector('[data-wnw-export-source]').oninput=event=>{data.markdown=event.target.value;changeData(data);};
       target.querySelector('[data-wnw-export-format]').onchange=event=>{data.format=event.target.value;changeData(data);};
-    }
-    function drawPapers(target,rows){
-      const files=state.result.artifacts.filter(item=>item.kind==='pdf');
-      target.innerHTML=`<div class="wnw-papers">${rows.map((row,index)=>{const file=files.find(item=>item.name===row.filename||item.name===row.title||item.name.includes(row.id));return `<article><span class="wnw-paper-number">${index+1}</span><div><h4>${h(row.title||row.filename||'论文')}</h4><p>${h(row.annotation||row.reason||'核查论文内容及来源证据')}</p>${file?`<button class="btn" type="button" data-wnw-paper-open="${h(file.id)}">打开论文预览</button>`:''}</div></article>`;}).join('')}</div>`;
-      target.querySelectorAll('[data-wnw-paper-open]').forEach(button=>button.onclick=()=>selectArtifact(files.find(item=>item.id===button.dataset.wnwPaperOpen)));
-    }
-    function isLiteratureRows(rows){return rows.some(row=>row&&typeof row==='object'&&('title'in row||'filename'in row)&&('abstract'in row||'doi'in row||'authors'in row||'year'in row||'source'in row));}
-    function drawSearchResults(target,rows,edit){
-      const pageSize=20,view=state.paperView;
-      target.innerHTML=`<div class="wnw-search-tools"><label>检索文献<input class="control" type="search" data-wnw-paper-search placeholder="搜索标题、作者、摘要、DOI" value="${h(view.query)}"></label><label>纳入状态<select class="control" data-wnw-paper-filter><option value="all" ${view.filter==='all'?'selected':''}>全部记录</option><option value="included" ${view.filter==='included'?'selected':''}>仅纳入</option><option value="excluded" ${view.filter==='excluded'?'selected':''}>仅排除</option></select></label><span class="wnw-search-count" data-wnw-search-count></span></div><div class="wnw-search-results" data-wnw-search-results></div><nav class="wnw-pagination" data-wnw-pagination aria-label="文献结果分页"></nav>`;
-      const list=target.querySelector('[data-wnw-search-results]'),count=target.querySelector('[data-wnw-search-count]'),pagination=target.querySelector('[data-wnw-pagination]');
-      const paint=()=>{
-        const query=view.query.trim().toLocaleLowerCase();
-        const matches=rows.map((row,index)=>({row,index})).filter(({row})=>{
-          if(view.filter==='included'&&row.included===false)return false;
-          if(view.filter==='excluded'&&row.included!==false)return false;
-          if(!query)return true;
-          return (row.title&&String(row.title).toLocaleLowerCase().includes(query))||
-                 (row.authors&&String(row.authors).toLocaleLowerCase().includes(query))||
-                 (row.abstract&&String(row.abstract).toLocaleLowerCase().includes(query))||
-                 (row.doi&&String(row.doi).toLocaleLowerCase().includes(query))||
-                 (row.source&&String(row.source).toLocaleLowerCase().includes(query))||
-                 (row.filename&&String(row.filename).toLocaleLowerCase().includes(query));
-        });
-        const pages=Math.max(1,Math.ceil(matches.length/pageSize));view.page=Math.min(view.page,pages-1);
-        const visible=matches.slice(view.page*pageSize,(view.page+1)*pageSize),included=rows.filter(row=>row.included!==false).length;
-        count.textContent=`${matches.length} 条匹配 · 共 ${rows.length} 条 · 纳入 ${included} 条`;
-        list.innerHTML=visible.length?visible.map(({row,index})=>{
-          const meta=[row.authors||row.author,row.year,row.source||row.journal,row.doi?'DOI '+row.doi:''].filter(Boolean).map(value=>`<span>${h(value)}</span>`).join('');
-          const abstract=row.abstract||row.summary||'',details=abstract?`<details class="wnw-paper-abstract"><summary>摘要</summary><p>${h(abstract)}</p></details>`:'';
-          const controls=edit?`<div class="wnw-paper-edit"><label><input type="checkbox" data-wnw-cell="${index}" data-field="included" ${row.included!==false?'checked':''}> 纳入本阶段交付</label><label>文献标题<textarea class="control" rows="2" data-wnw-cell="${index}" data-field="title">${h(row.title||row.filename||'')}</textarea></label><label>筛选理由<textarea class="control" rows="2" data-wnw-cell="${index}" data-field="reason">${h(row.reason||'')}</textarea></label><label>人工批注<textarea class="control" rows="2" data-wnw-cell="${index}" data-field="annotation">${h(row.annotation||'')}</textarea></label></div>`:'';
-          const order=edit?`<div class="wnw-paper-order"><button type="button" class="pw-text-button" data-wnw-row-move="${index}:-1" ${index===0?'disabled':''}>上移</button><button type="button" class="pw-text-button" data-wnw-row-move="${index}:1" ${index===rows.length-1?'disabled':''}>下移</button></div>`:'';
-          return `<article class="wnw-search-paper ${row.included===false?'is-excluded':''}"><header><span class="wnw-paper-number">${index+1}</span><h3>${h(row.title||row.filename||'未命名文献')}</h3>${order}</header><div class="wnw-paper-meta">${meta}<span class="wnw-paper-state ${row.included===false?'is-excluded':''}">${row.included===false?'已排除':'已纳入'}</span></div>${details}${row.reason&&!edit?`<p class="wnw-paper-reason">${h(row.reason)}</p>`:''}${row.annotation&&!edit?`<p class="wnw-paper-annotation">${h(row.annotation)}</p>`:''}${controls}</article>`;
-        }).join(''):'<p class="wnw-empty">没有匹配的文献记录</p>';
-        pagination.innerHTML=`<button type="button" class="btn ghost" data-wnw-page="-1" ${view.page?'':'disabled'}>上一页</button><span>第 ${view.page+1} / ${pages} 页</span><button type="button" class="btn ghost" data-wnw-page="1" ${view.page+1<pages?'':'disabled'}>下一页</button>`;
-        pagination.querySelectorAll('[data-wnw-page]').forEach(button=>button.onclick=()=>{view.page+=Number(button.dataset.wnwPage);paint();});
-        list.querySelectorAll('[data-wnw-cell]').forEach(input=>{const update=()=>{const row=rows[Number(input.dataset.wnwCell)];row[input.dataset.field]=input.type==='checkbox'?input.checked:input.value;changeData(rows);updateButtons();};input.oninput=update;input.onchange=update;});
-        list.querySelectorAll('[data-wnw-row-move]').forEach(button=>button.onclick=()=>{const [index,direction]=button.dataset.wnwRowMove.split(':').map(Number),next=index+direction;if(next<0||next>=rows.length)return;[rows[index],rows[next]]=[rows[next],rows[index]];changeData(rows);view.page=0;paint();updateButtons();});
-      };
-      let searchTimer=null;
-      target.querySelector('[data-wnw-paper-search]').oninput=event=>{
-        clearTimeout(searchTimer);
-        searchTimer=setTimeout(()=>{
-          view.query=event.target.value;view.page=0;paint();
-        },100);
-      };
-      target.querySelector('[data-wnw-paper-filter]').onchange=event=>{view.filter=event.target.value;view.page=0;paint();};
-      paint();
     }
     function drawIdea(target,data,edit){
       const report=typeof data.report==='object'&&data.report?data.report:{markdown:typeof data.report==='string'?data.report:''};
@@ -418,22 +394,6 @@ const WorkflowNodeWorkbench=(()=>{
     function drawSegments(target,data,rows,edit){
       target.innerHTML=rows.map((row,rowIndex)=>`<section class="wnw-segment-group"><h4>${h(row.title||row.id||'双语对照')}</h4>${(row.segments||[]).map((segment,index)=>`<div class="wnw-bilingual"><section><small>原文 · ${index+1}</small><p>${h(segment.source||'')}</p></section><section><label>译文 · ${index+1}${edit?`<textarea class="control" rows="5" data-wnw-segment="${rowIndex}:${index}" aria-label="第 ${rowIndex+1} 篇第 ${index+1} 段译文">${h(segment.target??segment.translation??'')}</textarea>`:`<p>${h(segment.target??segment.translation??'')}</p>`}</label></section></div>`).join('')}</section>`).join('');
       target.querySelectorAll('[data-wnw-segment]').forEach(input=>input.oninput=()=>{const [row,index]=input.dataset.wnwSegment.split(':').map(Number),segment=rows[row].segments[index];segment['target' in segment?'target':'translation']=input.value;changeData(data);});
-    }
-    function drawGraph(target,graph,edit){
-      if(!graph?.nodes||!graph.edges){target.innerHTML=`<pre class="wnw-text">${h(state.value)}</pre>`;return;}
-      let selected=graph.nodes[0]?.id;
-      const positions=new Map(graph.nodes.map((node,index)=>[node.id,{x:20+index%3*220,y:20+Math.floor(index/3)*95}]));
-      const draw=()=>{
-        const node=graph.nodes.find(item=>item.id===selected);
-        target.innerHTML=`<div class="wnw-graph"><svg viewBox="0 0 680 ${Math.max(110,Math.ceil(graph.nodes.length/3)*95+20)}" role="group" aria-label="当前版本证据链">${graph.edges.map(edge=>{const a=positions.get(edge.from),b=positions.get(edge.to);return a&&b?`<g><line x1="${a.x+90}" y1="${a.y+30}" x2="${b.x+90}" y2="${b.y+30}" stroke="var(--muted)"/><text x="${(a.x+b.x)/2+90}" y="${(a.y+b.y)/2+20}" fill="var(--fg)" font-size="10">${h(edge.label)}</text></g>`:'';}).join('')}${graph.nodes.map(item=>{const p=positions.get(item.id);return `<g transform="translate(${p.x} ${p.y})" tabindex="0" role="button" data-wnw-graph-node="${h(item.id)}" aria-label="${h(item.label)}"><rect width="185" height="64" rx="8" fill="var(--panel)" stroke="${item.id===selected?'var(--accent)':'var(--line)'}" stroke-width="2"/><text x="10" y="34" fill="var(--fg)" font-size="12">${h(item.label?.slice(0,18)||item.id)}</text></g>`;}).join('')}</svg></div>${node?`<div class="wnw-graph-fields"><label>类型<select class="control" data-wnw-graph-field="type" ${edit?'':'disabled'}>${['section','paper','note','data'].map(type=>`<option ${node.type===type?'selected':''}>${type}</option>`).join('')}</select></label>${[['label','标题'],['ref','来源'],['detail','证据说明']].map(([field,label])=>`<label>${label}<textarea class="control" data-wnw-graph-field="${field}" ${edit?'':'readonly'}>${h(node[field]||'')}</textarea></label>`).join('')}</div>`:''}${edit?'<div class="wnw-agent-buttons"><button class="btn ghost" type="button" data-wnw-add-node>添加证据</button><button class="btn ghost" type="button" data-wnw-remove-node>删除所选证据</button></div>':''}<h4>证据连线</h4><div data-wnw-edges>${graph.edges.map((edge,index)=>`<div class="wnw-edge"><span>${h(graph.nodes.find(item=>item.id===edge.from)?.label)} → ${h(graph.nodes.find(item=>item.id===edge.to)?.label)} · ${h(edge.label)}</span>${edit?`<button class="pw-text-button" type="button" data-wnw-remove-edge="${index}">删除</button>`:''}</div>`).join('')}</div>${edit?`<div class="wnw-edge-new"><select class="control" data-wnw-from aria-label="证据连线起点">${graph.nodes.map(item=>`<option value="${h(item.id)}">${h(item.label)}</option>`).join('')}</select><select class="control" data-wnw-to aria-label="证据连线终点">${graph.nodes.map(item=>`<option value="${h(item.id)}">${h(item.label)}</option>`).join('')}</select><input class="control" data-wnw-edge-label aria-label="证据连线说明" placeholder="支持 / 引用 / 反驳"><button class="btn ghost" type="button" data-wnw-add-edge>添加连线</button></div>`:''}`;
-        target.querySelectorAll('[data-wnw-graph-node]').forEach(button=>{const choose=()=>{selected=button.dataset.wnwGraphNode;draw();};button.onclick=choose;button.onkeydown=event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();choose();}};});
-        target.querySelectorAll('[data-wnw-graph-field]').forEach(input=>input.oninput=()=>{node[input.dataset.wnwGraphField]=input.value;change(textOf(graph));});
-        target.querySelector('[data-wnw-add-node]')?.addEventListener('click',()=>{const item={id:'human-'+crypto.randomUUID().slice(0,8),type:'note',label:'新证据',ref:'',detail:''};positions.set(item.id,{x:20+graph.nodes.length%3*220,y:20+Math.floor(graph.nodes.length/3)*95});graph.nodes.push(item);selected=item.id;change(textOf(graph));draw();});
-        target.querySelector('[data-wnw-remove-node]')?.addEventListener('click',()=>{if(graph.nodes.length<2)return;graph.nodes=graph.nodes.filter(item=>item.id!==selected);graph.edges=graph.edges.filter(edge=>edge.from!==selected&&edge.to!==selected);selected=graph.nodes[0].id;change(textOf(graph));draw();});
-        target.querySelectorAll('[data-wnw-remove-edge]').forEach(button=>button.onclick=()=>{graph.edges.splice(Number(button.dataset.wnwRemoveEdge),1);change(textOf(graph));draw();});
-        target.querySelector('[data-wnw-add-edge]')?.addEventListener('click',()=>{graph.edges.push({from:target.querySelector('[data-wnw-from]').value,to:target.querySelector('[data-wnw-to]').value,label:target.querySelector('[data-wnw-edge-label]').value});change(textOf(graph));draw();});
-      };
-      draw();
     }
     async function drawDiff(target){
       const history=state.history.filter(item=>!sameVersion(item,state.result.identity));

@@ -14,6 +14,7 @@ from typing import Any
 
 import pdfplumber
 from pypdf import PdfReader, PdfWriter
+from pypdf.errors import PdfReadError
 
 DEFAULT_SIZE = (595.0, 842.0)          # 补空白页时用不到页面自身尺寸的兜底（A4）
 

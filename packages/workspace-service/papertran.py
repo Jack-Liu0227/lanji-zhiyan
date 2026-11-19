@@ -172,19 +172,43 @@ def output_dir(db: Any, paper_id: str, project_id: str = "") -> Path:
 
 def deliveries(db: Any, project_id: str) -> list[dict[str, Any]]:
     """Only completed translations with project-local PDF output can be delivered."""
-    out_dir = db.pdir(project_id, "文献库")
+    if not project_id or not db.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (project_id,)).fetchone():
+        return []
+    root = db.base_dir(project_id)
+    out_dir = db.pdir(project_id, "文献库").resolve()
+    root = (root or out_dir).resolve()
+    if not out_dir.is_relative_to(root):
+        return []
     completed = []
     for paper in sorted(db.papers_of(project_id), key=lambda row: row["id"]):
         source = pdf_path(db, paper["id"])
-        if not source or not _read_state(out_dir, paper["id"]).get("done"):
+        state = _read_state(out_dir, paper["id"])
+        if not source or not state.get("done"):
+            continue
+        source = source.resolve()
+        if not source.is_relative_to(root) or not source.stat().st_size:
             continue
         dual, mono = out_paths(source, out_dir)
-        if not mono.is_file() or not mono.stat().st_size:
+        if not mono.resolve().is_relative_to(root) or not mono.is_file() or not mono.stat().st_size:
             continue
-        files = [str(mono)]
-        if not _read_state(out_dir, paper["id"]).get("identity") and dual.is_file() and dual.stat().st_size:
-            files.append(str(dual))
-        completed.append({"id": paper["id"], "files": files})
+        translation_path = str(mono.resolve())
+        dual_path = ""
+        if not state.get("identity") and dual.resolve().is_relative_to(root) and dual.is_file() and dual.stat().st_size:
+            dual_path = str(dual.resolve())
+        try:
+            source_pages = pdfio.page_count(source)
+            translation_pages = pdfio.page_count(mono)
+        except (OSError, pdfio.PdfReadError):
+            continue
+        pages = list(range(1, source_pages + 1))
+        page_map = []
+        if source_pages == translation_pages == state.get("total") and state.get("completed_pages", pages) == pages:
+            page_map = [{"source": page, "translation": page} for page in pages]
+        completed.append({
+            "id": paper["id"], "title": paper.get("title") or paper.get("filename") or source.name,
+            "source_path": str(source), "translation_path": translation_path, "dual_path": dual_path,
+            "page_map": page_map, "files": [path for path in (str(source), translation_path, dual_path) if path],
+        })
     return completed
 
 

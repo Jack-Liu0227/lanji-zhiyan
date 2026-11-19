@@ -397,6 +397,19 @@ class WorkflowTest(unittest.TestCase):
         self.db.add_event("组会", "2026-10-04", self.task)
         self.db.add_message(self.task, "user", "hi")
         other = self.db.create_task("别的项目", "q", "kw")
+        from project_data import locations, preview
+
+        ordinary = self.db.create_chat("Keep ordinary messages", task_id=self.task)
+        self.db.add_message(ordinary, "user", "Keep this message")
+        conn = self.db.db
+        for project in (self.task, other):
+            conn.execute("INSERT INTO execution_board_events(project_id,source,kind,created_at) VALUES (?,?,?,?)",
+                         (project, "task", "started", "2026-10-04"))
+            conn.execute("INSERT INTO model_requests(id,created_at,project_id,provider,model,status,duration_ms) VALUES (?,?,?,?,?,?,?)",
+                         (project, "2026-10-04", project, "local", "model", "success", 0))
+        conn.commit()
+        root = self.db.base_dir(self.task)
+        self.assertEqual(preview(self.db, self.task)["conversations"], 1)
 
         out = self.db.delete_task(self.task)
         self.assertTrue(out["deleted"])
@@ -414,6 +427,11 @@ class WorkflowTest(unittest.TestCase):
             self.assertEqual(self.db.db.execute(sql, (arg,)).fetchone()["n"], 0, sql)
         self.assertTrue(pdf.is_file(), "用户原文件不能被删掉")
         self.assertEqual(self.db.tasks()[0]["id"], other)
+        self.assertEqual(self.db.chat(ordinary)["task_id"], "")
+        self.assertEqual(self.db.messages(ordinary)[0]["content"], "Keep this message")
+        self.assertEqual(locations(self.db)["retained_projects"][0]["base_dir"], str(root))
+        for table in ("model_requests", "execution_board_events"):
+            self.assertEqual([row[0] for row in conn.execute(f"SELECT project_id FROM {table}")], [other])
         with self.assertRaises(KeyError):
             self.db.delete_task("不存在的项目")
 

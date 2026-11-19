@@ -36,6 +36,22 @@ class WorkflowExecutionTest(unittest.TestCase):
         workflow.doc_write(db, pid, stage, "# " + stage + "\nACTUAL_ARTIFACT_" + str(len(self.seen)))
         return {"reply": "RESULT_MEMORY_" + stage, "output_assets": []}
 
+    def test_execution_listing_includes_the_run_layout_identity(self):
+        workflow_layout.ensure_schema(self.db)
+        layout = workflow_layout.save_layout(self.db, {
+            "name": "Layout identity",
+            "nodes": [{"id": "search-node", "step": "search", "assistant_id": self.default_executor}],
+            "edges": [],
+        })["layout"]
+        workflow_layout.select_layout(self.db, {"task_id": self.pid, "layout_id": layout["id"]})
+        run = engine.create(self.db, self.pid, "Find relevant papers")
+
+        listing = engine.route("GET", "/api/workflow/execution", {}, {"project_id": [self.pid]}, self.db)
+
+        self.assertEqual(listing["runs"][0]["id"], run["id"])
+        self.assertEqual(listing["runs"][0]["layout_id"], layout["id"])
+        self.assertEqual(listing["runs"][0]["node_order"], ["search-node"])
+
     def test_default_review_stops_each_node_and_feedback_flows_downstream(self):
         self.layout([{"step": "outline"}, {"step": "write"}, {"step": "review"}])
         run = engine.create(self.db, self.pid, "RESEARCH_GOAL")

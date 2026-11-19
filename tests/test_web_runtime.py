@@ -47,6 +47,9 @@ def workspace_section(page, section):
     tab.wait_for()
     if tab.get_attribute('aria-selected') != 'true':
         tab.click()
+    if surface == 'flow':
+        page.locator('#pwWorkflowChoice').wait_for()
+        return
     target = page.locator(f'[data-pw-view="{section}"]')
     if not target.is_visible():
         page.locator('#pwToggleNav').click()
@@ -78,7 +81,7 @@ class WebRuntimeTest(unittest.TestCase):
             from tools.installer import APP
             command = [str(Path(packaged) / (APP + ".exe"))]
         else:
-            command = [sys.executable, str(ROOT / "apps/desktop/server.py")]
+            command = [sys.executable, *getattr(cls, 'source_server_args', (str(ROOT / 'apps/desktop/server.py'),))]
         server = subprocess.Popen(
             [*command, "--port", str(port), "--no-open"],
             cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,

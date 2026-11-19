@@ -1333,7 +1333,17 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
             draft = source.read_text(encoding="utf-8") if source else compose_draft(db, task_id)
         reviewed = stage_review(db, task_id, draft)
         if scope == "review" and reviewed.get("markdown"):
-            doc_write(db, task_id, "review", reviewed["markdown"])
+            saved = doc_write(db, task_id, "review", reviewed["markdown"])
+            import service_settings
+            from workflow_state import digest
+            report = reviewed['review']
+            issues = [{**issue, 'id': f'review-{index}'} for index, issue in enumerate(report.get('issues') or [], start=1)
+                      if isinstance(issue, dict) and isinstance(issue.get('problem'), str) and issue['problem'].strip()]
+            service_settings.write(db, 'review-checklist', {
+                'document_digest': digest(saved['markdown']),
+                'checklist': {'summary': str(report.get('verdict') or ''), 'issues': issues,
+                              'scores': report.get('scores'), 'missing_evidence': report.get('missing_evidence')},
+            }, owner=task_id)
         return reviewed
     if name == "manuscript_translate_en":
         source = _accepted_workflow_manuscript(db, task_id, "write") or doc_path(db, task_id, "write")

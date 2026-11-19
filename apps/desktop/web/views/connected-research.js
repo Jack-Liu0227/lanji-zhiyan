@@ -11,7 +11,6 @@
   style.textContent = `.connected-dialog{width:min(900px,calc(100vw - 28px));max-height:88vh;overflow:auto;border:1px solid var(--line);border-radius:14px;padding:22px;background:var(--bg);color:var(--fg)}.connected-dialog::backdrop{background:#0007}.connected-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.connected-dialog textarea{width:100%;min-height:80px}.connected-node{padding:12px 0;border-bottom:1px solid var(--line)}.connected-node pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;font-size:12px}.connected-node details{margin:8px 0}.connected-status{font-size:12px;color:var(--muted);margin:10px 0}.connected-error{color:var(--err);white-space:pre-wrap}.connected-library{font-size:12px;margin:10px 0;color:var(--muted)}`;
   document.head.append(style);
 
-  function syncSettings() { ProjectLiterature.open(curTask,true); }
   function activeProject() { return (S.tasks || []).find(t=>t.id===currentProject); }
   function signature(run) { return JSON.stringify(run && [run.id,run.status,run.error,run.current_node,run.settings,run.nodes.map(n=>[n.id,n.status,n.ended_at,n.error,n.checkpoint])]); }
   async function fetchRun() {
@@ -20,11 +19,6 @@
     if(project!==currentProject) return;
     currentRun=result.run;
     nodeTasks=new Map((taskData.tasks||[]).map(task=>[task.id,task]));
-    const button=document.getElementById("wfSequenceOpen");
-    if(button){
-      const txt = button.querySelector(".wf-seq-text") || button;
-      txt.textContent=currentRun ? "顺序执行 · "+(statuses[currentRun.status] || currentRun.status) : "顺序执行整个工作流";
-    }
     if(dialog?.open && rendered!==signature(currentRun)) drawRun();
   }
   function drawRun() {
@@ -128,34 +122,14 @@
     } catch(error) { instance.querySelector("[data-sequence-error]").textContent=error.message; }
   }
 
-  const originalWorkflow=renderWorkflow;
-  renderWorkflow=async function(container) {
-    await originalWorkflow(container);
-    if(!uiRouteIs("workflow") || !curTask || !container.isConnected) return;
-    if(dialog?.open && currentProject!==curTask) dialog.close();
-    currentProject=curTask;
-    const seqBtn=container.querySelector("#wfSequenceOpen");
-    if(seqBtn) seqBtn.onclick=()=>openRun(curTask);
-    const syncBtn=container.querySelector("#wfSyncSettings");
-    if(syncBtn) syncBtn.onclick=syncSettings;
-    fetchRun().catch(()=>{});
-  };
-
   async function refreshLibrary() {
     const project=curTask, tab=route();
-    const showSpace=uiRouteIs("space") && spTab==="papers", showFlow=uiRouteIs("workflow") && wfStep==="search";
-    if(!project || (!showSpace && !showFlow)) return;
+    if(!project || !uiRouteIs("space") || spTab!=="papers") return;
     const data=await api("/api/library/project?task_id="+encodeURIComponent(project));
-    if(curTask!==project || route()!==tab) return;
+    if(curTask!==project || route()!==tab || !uiRouteIs("space") || spTab!=="papers") return;
     const key=project+":"+tab, previous=versions.get(key); versions.set(key,data.version);
-    if(showFlow && wfStep==="search") {
-      wsRes=data.items.filter(item=>item.result_id);
-      if(document.getElementById("wsList")) wsPaint();
-    }
-    if(showSpace && spTab==="papers") {
-      if(previous!==data.version) ProjectLiterature.update(project,data);
-      ProjectLiterature.refreshStatus(project).catch(()=>{});
-    }
+    if(previous!==data.version) ProjectLiterature.update(project,data);
+    ProjectLiterature.refreshStatus(project).catch(()=>{});
   }
   const originalCalendar=renderCalendar;
   renderCalendar=function(container){ originalCalendar(container); calendarRendered=JSON.stringify(S.events); };
