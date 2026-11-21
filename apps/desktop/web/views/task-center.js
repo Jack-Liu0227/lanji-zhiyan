@@ -69,7 +69,7 @@ const TaskCenter=(()=>{
         if(!rows.length)el('content').innerHTML='<div class="pw-empty"><h3>没有待安排的计划</h3><p>可新建研究目标。已派发的任务请到实时任务看板跟踪，原计划保留在“已派发与历史”中。</p></div>';
         el('content').querySelectorAll('[data-plan-edit]').forEach(button=>button.onclick=()=>editPlan(state.plans.find(row=>row.id===button.dataset.planEdit)));
         el('content').querySelectorAll('[data-plan-dispatch]').forEach(button=>button.onclick=()=>{const plan=state.plans.find(row=>row.id===button.dataset.planDispatch);ProjectTasks.compose(owner(plan),{plan_id:plan.id,title:plan.title,goal:plan.description||plan.title});});
-        el('content').querySelectorAll('[data-plan-task]').forEach(button=>button.onclick=()=>ProjectWorkspace.openTask(button.dataset.planTask,owner(state.plans.find(row=>row.id===button.closest('[data-plan-id]').dataset.planId))));
+        el('content').querySelectorAll('[data-plan-task]').forEach(button=>button.onclick=()=>AppNavigation.follow(()=>ProjectWorkspace.openTask(button.dataset.planTask,owner(state.plans.find(row=>row.id===button.closest('[data-plan-id]').dataset.planId)),{peek:false})));
         return;
       }
       if(!rows.some(row=>row.id===state.selected))state.selected='';
@@ -103,10 +103,9 @@ const TaskCenter=(()=>{
       if(state.opening)return;
       state.opening=true;
       try{
-        if(row.execution_kind==='workflow')await ExecutionConversation.open('workflow',row.workflow_run_id,row.project_id);
-        else if(row.kind==='task')await ExecutionConversation.open('task',row.id,row.project_id);
-        else if(row.channel==='toolbox')await PaperToolbox.openResult(row.run_id,row.project_id);
-        else await ProjectWorkspace.openConversation(row.chat_id,row.project_id);
+        if(row.channel==='toolbox')await PaperToolbox.openResult(row.run_id,row.project_id);
+        else await AppNavigation.follow(()=>row.execution_kind==='workflow'?ExecutionConversation.open('workflow',row.workflow_run_id,row.project_id)
+          :row.kind==='task'?ExecutionConversation.open('task',row.id,row.project_id):ProjectWorkspace.openConversation(row.chat_id,row.project_id));
       }catch(err){error(err.message);}
       finally{state.opening=false;}
     }
@@ -117,13 +116,9 @@ const TaskCenter=(()=>{
     }
     function bindExecutionActions(host,row){
       host.querySelector('[data-ec-open-chat], [data-ec-open]')?.addEventListener('click',()=>openExecutionConversation(row));
-      host.querySelector('[data-ec-open-workflow]')?.addEventListener('click',async()=>{
-        try{await ProjectWorkspace.openWorkflowRun(row.project_id,row.workflow_run_id);}catch(err){error(err.message);}
-      });
+      host.querySelector('[data-ec-open-workflow]')?.addEventListener('click',()=>AppNavigation.follow(()=>ProjectWorkspace.openWorkflowRun(row.project_id,row.workflow_run_id)));
       const nodes=artifactNodes(row);
-      host.querySelectorAll('[data-ec-open-artifact]').forEach(button=>button.onclick=async()=>{
-        try{await ProjectWorkspace.openNodeResult(nodes[Number(button.dataset.ecOpenArtifact)],row.project_id);}catch(err){error(err.message);}
-      });
+      host.querySelectorAll('[data-ec-open-artifact]').forEach(button=>button.onclick=()=>AppNavigation.follow(()=>ProjectWorkspace.openNodeResult(nodes[Number(button.dataset.ecOpenArtifact)],row.project_id)));
     }
     function runCard(row){
       const kind=row.execution_kind==='workflow'?'工作流':row.workflow_node_id?'流程节点':row.channel==='toolbox'?'论文工具':row.kind==='conversation'?'对话运行':row.executor_kind==='team'?'团队协作':'专家任务';
@@ -182,6 +177,22 @@ const TaskCenter=(()=>{
       if(view==='automation'){await renderSchedules(el('content'),{projectId:project,live:()=>live()&&state.view==='automation'});return;}
       await load();
     }
+    state.navigationContext=()=>{
+      const {view,query,filter,laneFilter,trash,layout,boardLayout,planHistory,selected,inspectorOpen}=state;
+      const search=el('search').value;
+      return {
+        restoreScope(){if(options.global){globalView=view;globalProject=project;}},
+        async restoreFilters(){
+          const next=mounted;
+          if(!next?.live()||next.scope!==scope)return;
+          if(next.view!==view)await next.switchView(view);
+          if(!next.live())return;
+          Object.assign(next,{query,filter,laneFilter,trash,layout,boardLayout,planHistory,selected,inspectorOpen});
+          next.paintFilters(search);
+        }
+      };
+    };
+    state.scope=scope;state.switchView=switchView;state.paintFilters=value=>{el('search').value=value;paint();};
     let refreshTimer;
     function connect(){if(!live())return;state.source?.close();const source=new EventSource('/api/execution-board/stream?'+scope+'&include_deleted=1&after='+state.cursor);state.source=source;source.onopen=()=>{if(live()){el('connection').textContent='● 实时连接';load();}};source.onmessage=event=>{if(!live())return;state.cursor=Math.max(state.cursor,Number(event.lastEventId)||0);if(!refreshTimer)refreshTimer=setTimeout(()=>{refreshTimer=null;load();},100);};source.onerror=()=>{if(live())el('connection').textContent='正在重连 · 记录已保存';};}
     container.querySelectorAll('[data-ec-view]').forEach(button=>button.onclick=()=>switchView(button.dataset.ecView));
@@ -192,5 +203,5 @@ const TaskCenter=(()=>{
   }
   async function newPlan(){if(mounted?.live?.())return mounted.newPlan();await ProjectWorkspace.openProject(curTask);await ProjectWorkspace.showResource('plan');return mounted.newPlan();}
   async function openPlan(id,project){await ProjectWorkspace.openProject(project);await ProjectWorkspace.showResource('plan');return mounted.openPlan(id);}
-  return {render,renderGlobal,requestView,dispose,newPlan,openPlan,contextActions:row=>row.__ecActions||[]};
+  return {render,renderGlobal,requestView,dispose,newPlan,openPlan,navigationContext:()=>mounted?.live()?mounted.navigationContext():null,contextActions:row=>row.__ecActions||[]};
 })();

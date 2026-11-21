@@ -373,7 +373,7 @@ const ProjectWorkspace = (() => {
     const indicator=root().querySelector('[data-execution-indicator]');if(indicator&&!state.chatId?.startsWith('execution-'))indicator.remove();
     if(trace&&!state.chatId?.startsWith('execution-'))WorkspaceTrajectory.mount(document.getElementById('pwTrajectory'),{chatId:state.chatId,projectId:state.id,live:()=>live(state)&&state.surface==='chat'&&state.chatView==='trajectory'});
   }
-  function append(box,event){appendOne(box,event,event.sender?{name:event.sender}:undefined);}
+  function append(box,event){appendOne(box,event);}
   async function paintChat(state){
     if(!live(state))return;
     paintChatView(state,false);
@@ -427,7 +427,14 @@ const ProjectWorkspace = (() => {
       const selected=state.target?targetRows(state).find(row=>row.value===state.target):null;if(state.target&&!selected)throw new Error('执行者已移除，请重新选择');
       const run={key:crypto.randomUUID(),api:"/api/agent",runId:"",cursor:0,status:"running",projectId:state.id,chatId:id,draftText:submission.text,draftImages:submission.images,request:{task_id:id,executor_binding_id:selected?.binding?.id||'',member_id:selected?.member?.id||'',image_ids:submission.images.map(item=>item.asset_id),message:goal+context+mentionContext,mentions,template_ref:submission.template,idempotency_key:""}};run.request.idempotency_key=run.key;
       record.lastError="";record.run=run;run.base=[...record.messages];record.base=run.base;
-      record.events=[{type:"user",content:goal+context+mentionContext},{type:"chat_waiting"}];
+      const binding=selected?.binding;
+      if(binding?.kind==='team'){
+        const team=state.teams.find(item=>item.id===binding.target_id);
+        run.assistantId=(selected.member || team?.members?.find(member=>member.role==='leader'))?.assistant_id;
+      }else if(binding?.kind==='assistant'){
+        run.assistantId=binding.target_id;
+      }
+      record.events=[{type:"user",content:goal+context+mentionContext},{type:"chat_waiting",assistant_id:run.assistantId}];
       if(draft(state).text===submission.text){draft(state).text="";draft(state).images=[];}persist(state);paintDraft(state);drawMessages(state,id);persistRuns();follow(run,record);
     }catch(err){error(err.message,state);}finally{state.sending=false;if(live(state)){document.getElementById("pwSend").disabled=false;paintSend(state);}}
   }
@@ -436,7 +443,7 @@ const ProjectWorkspace = (() => {
     await observeAgentRun(run,event=>{
       if(event.type==='user')return;
       record.events.push(event);const state=get(run.projectId);
-      if(live(state)&&state.chatId===run.chatId){const box=document.getElementById("pwMessages");if(["done","cancelled"].includes(event.type)){if(event.type==="done"&&!record.events.some(e=>e.type==="assistant"))append(box,{type:"assistant",content:event.content||"执行结束"});}else append(box,event);}
+      if(live(state)&&state.chatId===run.chatId){const box=document.getElementById("pwMessages");if(["done","cancelled"].includes(event.type)){if(event.type==="done"&&!record.events.some(e=>e.type==="assistant"))append(box,{...event,type:"assistant",assistant_id:event.assistant_id||run.assistantId,content:event.content||"执行结束"});}else append(box,event);}
       if(event.type==="error")record.lastError=event.message;paintBackground();
     },persistRuns,()=>{const state=get(run.projectId);if(live(state)&&state.chatId===run.chatId){
       updateChatActivity(document.getElementById("pwMessages"),"chat_reconnecting");
@@ -459,7 +466,7 @@ const ProjectWorkspace = (() => {
   function restoreRuns(){
     for(const saved of read("rw-workspace-runs",[])){
       if(!saved.projectId||!(S.tasks||[]).some(p=>p.id===saved.projectId)||!(S.chats||[]).some(c=>c.id===saved.chatId&&c.task_id===saved.projectId))continue;
-      const record=chatRecord(saved.chatId);if(record.run)continue;saved.status="running";saved.cursor=0;record.run=saved;record.base=saved.base||[];record.events=[{type:'user',content:saved.request.message,local:true},{type:"chat_waiting"}];follow(saved,record);
+      const record=chatRecord(saved.chatId);if(record.run)continue;saved.status="running";saved.cursor=0;record.run=saved;record.base=saved.base||[];record.events=[{type:'user',content:saved.request.message,local:true},{type:"chat_waiting",assistant_id:saved.assistantId}];follow(saved,record);
     }
     paintBackground();
   }
@@ -618,7 +625,8 @@ const ProjectWorkspace = (() => {
     if(state.section==='search'){await mountSearch(state,host);return;}
     const seq=state.resourceEpoch;host.innerHTML='<p class="pw-loading">正在读取项目资料…</p>';
     try{const data=await api('/api/task?id='+encodeURIComponent(state.id));if(!live(state)||seq!==state.resourceEpoch||!host.isConnected)return;
-      state.project=data;spId=state.id;spTab=state.section;host.innerHTML=`<div id="spBody">${spBodyHTML(data)}</div>`;spBind(data);
+      state.project=data;spId=state.id;spTab=state.section;host.innerHTML=`<div id="spBody">${spBodyHTML(data)}</div>`;await spBind(data);
+      if(!live(state)||seq!==state.resourceEpoch||!host.isConnected)return;
       const graph=document.getElementById('spStars');if(graph&&window.StarMap){graph.__api=api;graph.__toast=toast;StarMap.mount(graph,data.paper_graph||{nodes:[],edges:[],stats:{}});}
       const generate=document.getElementById('spStarGen');if(generate)generate.onclick=async()=>{generate.disabled=true;try{await api('/api/task/papergraph/build',{id:state.id});if(live(state)&&state.section==='stars')await showResource('stars',state);}catch(err){error(err.message,state);if(generate.isConnected)generate.disabled=false;}};
     }catch(err){if(live(state)&&host.isConnected)host.innerHTML=`<p class="pw-error">${h(err.message)}</p>`;}
@@ -943,6 +951,36 @@ const ProjectWorkspace = (() => {
   if(oldTabs.length){const keep=oldTabs.find(t=>t.id===activeTab)||oldTabs[0];if(keep.route!=='workspace')requestRoute(keep.route);keep.route='workspace';keep.title='项目工作区';tabs=tabs.filter(t=>!oldTabs.includes(t)||t===keep);}
   async function applyTemplate(project,value){await openProject(project);if(!live(get(project))||!await flush())return;const state=get(project);draft(state).template=value;draft(state).text=`请按照「${value.title}」完成任务。`;persist(state);await switchSurface('chat',state);paintDraft(state);document.getElementById('pwAsk').focus();}
   async function openConversation(chatId,projectId){if(!(S.chats||[]).some(chat=>chat.id===chatId))await refreshState(false);if(!active()||mounted?.id!==projectId)await openProject(projectId);const state=get(projectId);await selectChat(state,chatId);await switchSurface('chat',state);}
-  window.ProjectWorkspace={openConversation,openWorkflowRun,openWorkflowNode,openStage,active,hasSurface,hasDirty,flush,leave,requestRoute,render,openProject,openTask,openNodeResult,openFile,openPaper,currentFile,referenceResource,handoffResource,showResource,createEntry,refreshFiles,applyTemplate,refresh:()=>mounted&&refresh(mounted)};
+  function navigationContext(){
+    if(!active())return null;
+    const {id,chatId,chatView,surface,section,sections,peek,inspection,fileDirectory,fileRow,libraryFile,
+      nodeResultSelection,artifactRunId,searchQuery,navHidden,treeHidden,review}=mounted;
+    const savedSections={...sections},chat=surface==='chat'&&!peek;
+    const note=!chat&&section==='notes'&&mdProj?.pid===id?mdProj:null;
+    const label=(S.tasks.find(project=>project.id===id)?.title||TITLES.workspace)+' · '+
+      (chat?surfaces.chat:section==='task-detail'?'任务详情':resources[section]||surfaces[surface]);
+    const key=[id,surface,chat?'chat':section,chatId,chatView,peek,review?.id,fileRow?.rel,
+      nodeResultSelection?.task_id,artifactRunId];
+    return {label,key,async restore(){
+      await openProject(id);
+      const state=get(id);
+      if(!live(state))return;
+      if(state.chatId!==chatId)await selectChat(state,chatId);
+      Object.assign(state,{sections:{...savedSections},fileDirectory,fileRow,libraryFile,nodeResultSelection,artifactRunId,
+        searchQuery,navHidden,treeHidden});
+      if(chat){
+        await switchSurface('chat',state);
+        state.chatView=chatView||'chat';
+        await paintChat(state);
+      }else if(section==='task-detail'&&review){
+        await openTask(review.id,id,{peek,preferWorkbench:false});
+      }else{
+        if(inspection?.origin==='task')state.review=review;
+        await showResource(section,state,{surface,peek,inspection,initial:true});
+        if(note?.path&&live(state)&&state.section==='notes'&&mdDashPath!==note.path)await Notebook.open(note.path);
+      }
+    }};
+  }
+  window.ProjectWorkspace={openConversation,openWorkflowRun,openWorkflowNode,openStage,active,hasSurface,hasDirty,flush,leave,requestRoute,render,openProject,openTask,openNodeResult,openFile,openPaper,currentFile,referenceResource,handoffResource,showResource,createEntry,refreshFiles,applyTemplate,navigationContext,refresh:()=>mounted&&refresh(mounted)};
   return window.ProjectWorkspace;
 })();

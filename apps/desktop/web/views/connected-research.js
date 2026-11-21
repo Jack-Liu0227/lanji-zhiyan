@@ -142,10 +142,10 @@
     await ProjectWorkspace.showResource('notes');
     await Notebook.open(path);
   }
-  async function openCalendarSource(id){
+  function openCalendarSource(id,trigger){return AppNavigation.follow(()=>openCalendarTarget(id),{trigger});}
+  async function openCalendarTarget(id){
     const event=S.events.find(e=>e.id===id);
     if(!event) throw new Error('关联日程已更新，请刷新后重试');
-    if(!await pnSaveCurrent()) return;
     const project=event.task_id;
     if(event.target_type==='workflow') return openRun(project,event.run_id || event.target_id);
     if(event.target_type==='project_task') return ProjectWorkspace.openTask(event.target_id,project);
@@ -162,7 +162,7 @@
   }
   document.addEventListener('click',event=>{
     const button=event.target.closest('[data-cal-open]');
-    if(button) openCalendarSource(button.dataset.calOpen).catch(error=>uiNotify(error.message));
+    if(button) openCalendarSource(button.dataset.calOpen,button);
   });
   let inbox=null;
   async function reviewInbox(){

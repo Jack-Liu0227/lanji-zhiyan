@@ -21,7 +21,7 @@ const TaskActions=(()=>{
   function actions(row,refresh){
     if(row.deleted_at)return [removal(row,refresh)];
     if(row.kind!=='task')return [
-      {text:'打开对话',run:()=>row.channel==='toolbox'?PaperToolbox.openResult(row.run_id,row.project_id):ProjectWorkspace.openConversation(row.chat_id,row.project_id)},
+      {text:'打开对话',run:()=>row.channel==='toolbox'?PaperToolbox.openResult(row.run_id,row.project_id):AppNavigation.follow(()=>ProjectWorkspace.openConversation(row.chat_id,row.project_id))},
       ...(['running','queued','waiting_input'].includes(row.status)?[{text:'停止执行',run:async()=>{await stop(row);await refresh();}}]:[]),
       ...(['failed','interrupted'].includes(row.status)?[{text:'继续执行',run:async()=>{await api(row.execution_kind==='workflow'?'/api/workflow/execution/resume':'/api/execution-board/conversation-action',{id:row.run_id,project_id:row.project_id,run_id:row.run_id,action:'resume'});await refresh();}}]:[]),
       {separator:true},removal(row,refresh)
@@ -29,8 +29,8 @@ const TaskActions=(()=>{
     const command=async(action,body={})=>{const result=await api('/api/project-tasks/'+action,{project_id:row.project_id,id:row.id,...body});await refresh();return result;};
     const edit=async(key,title,value)=>{const answer=await uiPrompt(title,value||'');if(answer!==null)await command('organize',{[key]:answer});};
     return [
-      {text:'打开任务对话',run:()=>ProjectWorkspace.openConversation(row.chat_id,row.project_id)},
-      {text:'打开任务与审查',run:()=>ProjectWorkspace.openTask(row.id,row.project_id)},
+      {text:'打开任务对话',run:()=>AppNavigation.follow(()=>ProjectWorkspace.openConversation(row.chat_id,row.project_id))},
+      {text:'打开任务与审查',run:()=>AppNavigation.follow(()=>ProjectWorkspace.openTask(row.id,row.project_id,{peek:false}))},
       {text:'重命名任务…',run:()=>edit('title','任务名称',row.title)},
       {text:'优先级…',run:()=>edit('priority','优先级（P0 / P1 / P2）',row.priority)},
       {text:'开始日期…',run:()=>edit('start_date','开始日期（YYYY-MM-DD，留空清除）',row.start_date)},
@@ -46,11 +46,5 @@ const TaskActions=(()=>{
       removal(row,refresh)
     ];
   }
-  async function navigate(){
-    const params=new URLSearchParams(location.hash.slice(1)),project=params.get('project'),task=params.get('task');
-    if(project&&task){try{await ProjectWorkspace.openTask(task,project);}catch(error){uiNotify(error.message);}}
-  }
-  window.addEventListener('hashchange',navigate);
-  window.addEventListener('load',()=>{let tries=0;const timer=setInterval(()=>{if(S.loaded){clearInterval(timer);navigate();}else if(++tries>60)clearInterval(timer);},250);});
   return {actions,copy,visibility,stop};
 })();

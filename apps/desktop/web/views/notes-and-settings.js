@@ -29,6 +29,14 @@ function renderMarkdown(value){
   try{
     const root=document.createElement("div");
     root.innerHTML=markdownNoteClean(window.marked.parse(source));
+    root.querySelectorAll('a[href]').forEach(anchor=>{
+      const href=anchor.getAttribute('href');
+      if(!URL.canParse(href,location.href))return;
+      const url=new URL(href,location.href);
+      if(['http:','https:'].includes(url.protocol)&&url.origin!==location.origin){
+        anchor.target='_blank';anchor.relList.add('noopener','noreferrer');
+      }
+    });
     root.querySelectorAll("[data-rw-math]").forEach(node=>{
       const math=markdownMathSlots[Number(node.dataset.rwMath)];
       node.removeAttribute("data-rw-math");
@@ -626,8 +634,8 @@ async function renderSchedules(m, options={}){
   m.querySelectorAll("[data-run-note]").forEach(b=>b.onclick=async()=>{
     await ConnectedResearch.openNote(b.dataset.noteProject,b.dataset.notePath);
   });
-  m.querySelectorAll('[data-run-workflow]').forEach(b=>b.onclick=()=>ConnectedResearch.openRun(b.dataset.runProject,b.dataset.runWorkflow));
-  m.querySelectorAll('[data-run-task]').forEach(b=>b.onclick=()=>ProjectWorkspace.openTask(b.dataset.runTask,b.dataset.runProject));
+  m.querySelectorAll('[data-run-workflow]').forEach(b=>b.onclick=()=>AppNavigation.follow(()=>ConnectedResearch.openRun(b.dataset.runProject,b.dataset.runWorkflow)));
+  m.querySelectorAll('[data-run-task]').forEach(b=>b.onclick=()=>AppNavigation.follow(()=>ProjectWorkspace.openTask(b.dataset.runTask,b.dataset.runProject,{peek:false})));
   $("schRunsClear") && ($("schRunsClear").onclick = async ()=>{
     if(!await uiConfirm(`删除全部 ${visibleRuns.length} 条运行记录？定时规则与产物文件都不会被改动。`)) return;
     try{ await api("/api/schedule/run/delete", { ids: visibleRuns.map(x=>x.id) }); await schLoad(); refresh(); }
@@ -795,7 +803,7 @@ function spBind(d){
   if(spTab === "notes"){
     mdBind(document.querySelector("#spBody"));
     mdDashProject = curTask;
-    mdDashLoad();
+    const loaded = mdDashLoad();
     let pnT = 0;
     const sInp = $("mdDashSearch");
     if(sInp) sInp.oninput = e => {
@@ -805,6 +813,7 @@ function spBind(d){
     };
     const backBtn = $("mdBackDash");
     if(backBtn) backBtn.onclick = pnBackToDash;
+    return loaded;
   }
 }
 
@@ -2134,12 +2143,11 @@ if(savedRoute && (TITLES[savedRoute]||savedRoute==='workbench') && savedRoute !=
 }
 setInterval(()=>{ const el=document.querySelector(".topbar .date"); if(el) el.textContent=clock();
   const g=$("calHelloText"); if(g) g.textContent=helloText(); }, 30000);   // 顶栏日期/时间自己走；问候语跟着时间变
-refreshState().catch(e=>{ $("main").innerHTML=`<div class="msg error">加载失败：${esc(e.message)}</div>`; });
-
-// 深链：#library 这样带 hash 打开就直达那一页（书签/外部链接用）
-const _hashRoute = (location.hash || "").replace(/^#\/?/, "");
-if (_hashRoute==='workbench') document.addEventListener('DOMContentLoaded',()=>openTab('workbench'),{once:true});
-else if (_hashRoute && TITLES[_hashRoute]) openTab(_hashRoute);
+const initialAppState = refreshState().catch(e=>{ $("main").innerHTML=`<div class="msg error">加载失败：${esc(e.message)}</div>`; });
+document.addEventListener('DOMContentLoaded', async()=>{
+  await initialAppState;
+  if(S.loaded)await AppNavigation.start();
+},{once:true});
 
 /* Intelligence discovery and imports share the project bibliography. */
 async function renderIntel(container){return IntelligenceView.render(container);}

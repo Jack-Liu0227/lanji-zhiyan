@@ -40,5 +40,5 @@ window.RSSSettings=(()=>{
   }
   const previousPanel=setPanel;setPanel=function(){return setSec==='rss'?markup():previousPanel();};
   const previousSettings=renderSettings;renderSettings=function(container){previousSettings(container);if(setSec==='rss')mount(container.querySelector('[data-rss-settings]'));};
-  return {open(){setSec='rss';openTab('settings');}};
+  return {open:()=>AppNavigation.follow(()=>{setSec='rss';return openTab('settings');})};
 })();

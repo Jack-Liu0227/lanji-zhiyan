@@ -685,17 +685,93 @@ class WorkflowDB(ResearchDB):
         return self.rss_source(sid)
 
     def save_rss_items(self, src: dict[str, Any], items: list[dict[str, str]]) -> int:
-        """按 link 去重入库（UNIQUE 索引 + OR IGNORE），返回真正新增的条数。"""
-        n = 0
-        for it in items:
-            cur = self.db.execute(
-                "INSERT OR IGNORE INTO rss_items (id,source_id,link,title,authors,summary,published_at,"
-                "source_title,category,fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (uuid.uuid4().hex, src["id"], it["link"], it["title"], it.get("authors", ""),
-                 it.get("summary", ""), it.get("published_at", ""), src["title"], src["category"], now()))
-            n += cur.rowcount or 0
-        self.db.commit()
-        return n
+        """Insert new links and enrich existing rows in place. Count only inserts."""
+        from rss import LEGACY_TEXT_MAX, normalize_summary, richer_summary
+
+        added = 0
+        with self.db:
+            for it in items:
+                link = it["link"]
+                title = it["title"].strip() or link
+                authors = it.get("authors", "").strip()
+                summary = normalize_summary(it.get("summary", ""))
+                published = it.get("published_at", "").strip()
+                cur = self.db.execute(
+                    "INSERT INTO rss_items (id,source_id,link,title,authors,summary,published_at,"
+                    "source_title,category,fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(link) DO NOTHING",
+                    (uuid.uuid4().hex, src["id"], link, title, authors, summary, published,
+                     src["title"], src["category"], now()))
+                if cur.rowcount:
+                    added += 1
+                    continue
+                old = self.db.execute(
+                    "SELECT title,authors,summary,published_at FROM rss_items WHERE link=?", (link,)).fetchone()
+                existing_summary = normalize_summary(old["summary"])
+                best_summary = richer_summary(existing_summary, summary)
+                updated = (
+                    title if (not old["title"].strip() or old["title"] == link
+                              or (len(old["title"]) == LEGACY_TEXT_MAX
+                                  and title.startswith(old["title"]))) else old["title"],
+                    self._richer_rss_authors(old["authors"], authors),
+                    best_summary if best_summary != existing_summary else old["summary"],
+                    old["published_at"].strip() or published,
+                )
+                if updated != tuple(old):
+                    self.db.execute(
+                        "UPDATE rss_items SET title=?,authors=?,summary=?,published_at=? WHERE link=?",
+                        (*updated, link))
+        return added
+
+    @staticmethod
+    def _richer_rss_authors(old: str, new: str) -> str:
+        from rss import LEGACY_TEXT_MAX
+
+        def names(value: str) -> set[str]:
+            return {" ".join(name.casefold().split()) for name in re.split(r"[;；]", value) if name.strip()}
+
+        if names(old) < names(new):
+            return new
+        # Older feeds may have kept one comma-delimited value, sometimes at the 400-character cap.
+        if old and (new.startswith(old + ",") or (len(old) == LEGACY_TEXT_MAX and new.startswith(old))):
+            return new
+        return old
+
+    def recover_arxiv_metadata(self, item_id: str) -> dict[str, Any]:
+        from rss import LEGACY_TEXT_MAX, fetch_arxiv_abstract, needs_arxiv_metadata, normalize_summary
+
+        def read_item() -> dict[str, str]:
+            row = self.db.execute("SELECT link,authors,summary FROM rss_items WHERE id=?", (item_id,)).fetchone()
+            if not row:
+                raise ValueError("找不到这条情报")
+            return dict(row)
+
+        old = read_item()
+        if not needs_arxiv_metadata(old):
+            raise ValueError("这条情报无需从 arXiv 补全")
+        abstract, authors = fetch_arxiv_abstract(old["link"])
+        previous = normalize_summary(old["summary"])
+        complete_summary = old["summary"]
+        if abstract and (not previous or (len(old["summary"]) == LEGACY_TEXT_MAX and len(abstract) > len(previous))):
+            complete_summary = abstract
+
+        previous_authors = old["authors"]
+        # Citation metadata uses “Family, Given”; accept additions to older “Given Family” lists.
+        canonical_authors = "; ".join(" ".join(reversed(name.split(", ", 1))) for name in authors.split("; "))
+        complete_authors = previous_authors
+        if (self._richer_rss_authors(previous_authors, authors) != previous_authors
+                or self._richer_rss_authors(previous_authors, canonical_authors) != previous_authors
+                or (len(previous_authors) == LEGACY_TEXT_MAX and len(authors) > len(previous_authors))):
+            complete_authors = authors
+
+        if (complete_summary, complete_authors) == (old["summary"], previous_authors):
+            raise ValueError("arXiv 未提供更完整的摘要或作者信息")
+        with self.db:
+            self.db.execute(
+                "UPDATE rss_items SET summary=?, authors=? WHERE id=? AND link=? AND summary=? AND authors=?",
+                (complete_summary, complete_authors, item_id, old["link"], old["summary"], previous_authors))
+        current = read_item()
+        return {"id": item_id, "summary": normalize_summary(current["summary"]), "authors": current["authors"],
+                "can_recover_arxiv": needs_arxiv_metadata(current)}
 
     def mark_rss_fetch(self, sid: str, error: str = "") -> None:
         self.db.execute("UPDATE rss_sources SET last_fetch=?, last_error=? WHERE id=?", (now(), error[:200], sid))
@@ -712,12 +788,16 @@ class WorkflowDB(ResearchDB):
         return sql, args
 
     def rss_items(self, source_id: str = "", q: str = "", year: str = "", limit: int = 200) -> list[dict[str, Any]]:
+        from rss import needs_arxiv_metadata, normalize_summary
+
         sql, args = self._rss_where(source_id, q, year)
         sql = ("SELECT i.*, s.title AS src_now FROM rss_items i LEFT JOIN rss_sources s ON s.id=i.source_id"
                + sql + " ORDER BY (i.published_at='') ASC, i.published_at DESC, i.fetched_at DESC LIMIT ?")
         out = []
         for r in self.db.execute(sql, args + [int(limit)]):
             d = dict(r)
+            d["can_recover_arxiv"] = needs_arxiv_metadata(d)
+            d["summary"] = normalize_summary(d["summary"])
             d["source_title"] = d["src_now"] or d["source_title"]     # 来源删了就用入库时的快照
             d["source_deleted"] = not d["src_now"]
             d.pop("src_now", None)

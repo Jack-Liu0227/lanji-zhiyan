@@ -19,6 +19,77 @@ class IntelligenceLibraryRuntimeTest(unittest.TestCase):
     use_model=workspace.ProjectWorkspaceRuntimeTest.use_model
     poll_json=workspace.ProjectWorkspaceRuntimeTest.poll_json
 
+    def test_expanded_feed_details_show_full_abstract_and_all_authors(self):
+        self.load_page()
+        self.assertEqual(self.database_path.resolve().parent, self.temporary_root.resolve())
+        first = 'Controlled measurements establish the baseline for the analysis. ' * 10
+        with workflow.WorkflowDB(self.database_path) as db:
+            source = rss.save_source(db, {'title': 'Complete feed fixture', 'url': 'https://example.test/full-feed'})['source']
+            db.save_rss_items(source, rss.parse(f'''<feed xmlns="http://www.w3.org/2005/Atom"><entry>
+              <title>Complete abstract fixture</title><link href="https://example.test/full-abstract"/>
+              <author><name>First Author</name></author><author><name>Second Author</name></author>
+              <published>2026-10-28T08:00:00Z</published>
+              <summary type="text">{first}\n\nThe final result uses the literal symbol &lt;T&gt;.</summary>
+            </entry></feed>'''))
+
+        self.page.locator('#sidebar [data-nav="intel"]').click()
+        card = self.page.locator('[data-intel-id]').filter(has_text='Complete abstract fixture')
+        card.wait_for()
+        self.assertIn('First Author; Second Author', card.locator('.it-authors').inner_text())
+        self.assertIn('2026-10-28 08:00', card.locator('.it-meta-line').inner_text())
+        self.assertIn('Complete feed fixture', card.locator('.it-meta-line').inner_text())
+
+        paragraphs = card.locator('.it-abstract p')
+        self.assertFalse(paragraphs.last.is_visible())
+        card.get_by_text('摘要与详情', exact=True).press('Enter')
+        self.assertTrue(paragraphs.last.is_visible())
+        self.assertEqual(paragraphs.all_text_contents(), [first.strip(), 'The final result uses the literal symbol <T>.'])
+        self.assertEqual(card.locator('.it-url').get_attribute('href'), 'https://example.test/full-abstract')
+        self.page.locator('#itSelectAll').check()
+        self.assertTrue(paragraphs.last.is_visible())
+        self.page.set_viewport_size({'width': 820, 'height': 700})
+        self.assertTrue(self.page.evaluate('document.documentElement.scrollWidth<=innerWidth'))
+        self.assertTrue(card.locator('.it-summary-body').evaluate('body=>body.scrollWidth<=body.clientWidth'))
+        self.assertEqual(self.errors, [])
+
+    def test_archived_arxiv_details_retry_and_show_recovered_metadata(self):
+        self.load_page()
+        self.assertEqual(self.database_path.resolve().parent, self.temporary_root.resolve())
+        legacy = ('Old measurements appear in the first paragraph. ' * 10)[:400]
+        with workflow.WorkflowDB(self.database_path) as db:
+            source = rss.save_source(db, {'title': 'Archived fixture', 'url': 'https://example.test/archive'})['source']
+            db.save_rss_items(source, [{'title': 'Archived arXiv fixture', 'link': 'https://arxiv.org/abs/2610.17392'}])
+            db.db.execute('UPDATE rss_items SET summary=? WHERE title=?', (legacy, 'Archived arXiv fixture'))
+            db.db.commit()
+            item_id = db.rss_items(q='Archived arXiv fixture')[0]['id']
+
+        requests = []
+        complete = 'The official abstract also includes the complete final result. ' * 10
+
+        def reply(route):
+            requests.append(route.request.post_data_json)
+            if len(requests) == 1:
+                route.fulfill(status=400, json={'error': 'arXiv 暂时不可用'})
+            else:
+                route.fulfill(json={'item': {'id': item_id, 'authors': 'Author, First; Author, Second',
+                                             'summary': complete.strip(), 'can_recover_arxiv': False}})
+
+        self.page.route('**/api/rss/recover-arxiv', reply)
+        self.page.locator('#sidebar [data-nav="intel"]').click()
+        card = self.page.locator(f'[data-intel-id="{item_id}"]')
+        card.get_by_text('摘要与详情', exact=True).click()
+        button = card.get_by_role('button', name='从 arXiv 补全摘要')
+        button.click()
+        card.get_by_role('status').filter(has_text='arXiv 暂时不可用').wait_for()
+        self.assertEqual(card.locator('.it-abstract').inner_text(), legacy)
+        button.click()
+        card.get_by_role('status').filter(has_text='已补全 arXiv 信息').wait_for()
+        self.assertEqual(card.locator('.it-abstract').inner_text(), complete.strip())
+        self.assertIn('Author, First; Author, Second', card.locator('.it-authors').inner_text())
+        self.assertEqual(button.count(), 0)
+        self.assertEqual(requests, [{'item_id': item_id}, {'item_id': item_id}])
+        self.assertEqual(self.errors, [])
+
     def test_preview_open_original_batch_import_and_manual_doi_share_project_library(self):
         self.seed()
         with FeedFixture() as feed,workflow.WorkflowDB(self.database_path) as db:

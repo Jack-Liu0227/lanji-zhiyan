@@ -71,7 +71,7 @@ const ExecutionConversation=(()=>{
       }
       const section=document.createElement('section');section.className='execution-chat-turn';section.dataset.executionMessage=message.id;
       if(message.attempt)section.innerHTML=`<div class="execution-chat-turn-meta">${h(message.task_title)} · 第 ${message.attempt} 次执行 · ${h(labels[message.status]||message.status)}${message.team_name?' · '+h(message.team_name):''}${message.member_name?' · '+h(message.member_name):''}</div>`;
-      appendOne(section,{...message,type:message.role,content:message.content||labels[message.status]||'',replay:true,at:message.created_at},message.sender?{name:message.sender}:undefined);
+      appendOne(section,{...message,type:message.role,content:message.content||labels[message.status]||'',replay:true,at:message.created_at});
       section.querySelectorAll('details').forEach((node,index)=>{node.dataset.executionDetail=message.id+':'+index;node.open=opened.has(node.dataset.executionDetail);});box.append(section);
     }
     box.scrollTop=atBottom?box.scrollHeight:oldScroll;

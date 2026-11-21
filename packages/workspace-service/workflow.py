@@ -29,7 +29,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -605,6 +605,7 @@ TOOL_RISK = {
     "file_list": "read_only", "file_hand": "workspace_write", "project_resources": "read_only", "paper_tool": "network_read",
     "project_resource_write": "workspace_write", "project_create_from_idea": "workspace_write",
     "paper_discover": "network_read", "paper_search": "network_read",
+    "rss_recent": "read_only",
     "paper_excerpt": "read_only", "research_data_profile": "read_only", "search": "network_read",
     "paper_abstracts": "read_only", "paper_focus": "read_only", "paper_evidence_get": "read_only",
     "mail_accounts": "network_read", "mail_list": "network_read", "mail_read": "network_read",
@@ -1073,17 +1074,35 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         return _delegate(db, project_id, args.get("jobs") or [], emit=emit, profile=profile,
                          scope=scope, parallel=int(args.get("parallel") or 3),
                          state=state, cancel_check=cancel_check)
+    if name == "rss_recent":
+        snapshot = {}
+        if getattr(db, "template_schedule_id", ""):
+            import rss
+            fetched = rss.refresh_for_schedule(db)
+            snapshot = {"refreshed": fetched["fetched"],
+                        "unavailable_sources": [item["title"] for item in fetched["failures"]]}
+        days = max(1, min(90, int(args.get("days") or 7)))
+        now_utc = datetime.now(timezone.utc)
+        start = (now_utc - timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
+        end = now_utc.strftime("%Y-%m-%d %H:%M")
+        rows = db.rss_items(q=str(args.get("query") or "").strip(), limit=24)
+        return {**snapshot, "from_utc": start, "through_utc": end, "items": [
+            {"title": row["title"], "authors": row["authors"], "published_at": row["published_at"],
+             "source": row["source_title"], "link": row["link"], "summary": row["summary"][:1000]}
+            for row in rows if start <= row["published_at"] <= end]}
     if name == "paper_discover":
         from workflow_search import search
         query = str(args.get("query") or "").strip()
         if not query:
             raise ValueError("检索词不能为空")
-        papers = search(query, sources=["openalex", "crossref"], rows=5)
+        days = args.get("days")
+        filters = {"since": date.today() - timedelta(days=max(1, min(90, int(days))))} if days else {}
+        papers = search(query, sources=["openalex", "crossref"], rows=5, **filters)
         distinct = {}
         for paper in papers:
             key = str(paper.get("doi") or paper["title"]).casefold()
             distinct.setdefault(key, {field: paper.get(field, "") for field in
-                                      ("doi", "url", "title", "year", "source", "abstract")})
+                                      ("doi", "url", "title", "authors", "year", "published_at", "source", "abstract")})
         return {"query": query, "papers": list(distinct.values())[:8], "type": "metadata"}
     if name == "paper_excerpt":
         paper_id = str(args.get("paper_id") or "")
@@ -1683,9 +1702,11 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     if execution_context:
         extra_context = (extra_context + "\n" + execution_context).strip()
     aid = cfg["assistant_id"]
-    expert_name = cfg.get("assistant_name") or (db.assistant(aid) or {}).get("name") or "执行专家"
+    expert = db.assistant(aid) or {}
+    expert_name = cfg.get("assistant_name") or expert.get("name") or "执行专家"
+    speaker = {"assistant_id": aid, "sender": expert_name, "assistant_avatar": expert.get("avatar", "")}
     send_event = say
-    say = lambda event: send_event({"assistant_id": aid, "sender": expert_name, **event})
+    say = lambda event: send_event({**speaker, **event})
     profile["assistant_id"] = aid
     resume = getattr(db, "agent_resume", {}) or {}
     save_checkpoint = getattr(db, "save_agent_checkpoint", lambda **values: None)
@@ -1954,7 +1975,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             say({"type": "reasoning_done", "id": reasoning_id, "content": "".join(reasoning_parts),
                  "duration_ms": int((time.monotonic() - model_started) * 1000)})
             if cancel_check and cancel_check() and publish and partial:
-                db.add_message(task_id, "assistant", "".join(partial), scope=scope, sender=expert_name)
+                content = "".join(partial)
+                db.add_message(task_id, "assistant", content, [{**speaker, "type": "assistant", "content": content}], scope=scope, sender=expert_name)
             run_service.finish_node(db, tracked_node["id"], "failed", error=str(exc))
             run_service.finish(db, tracked_run["id"], "failed", error=str(exc))
             raise
@@ -1990,7 +2012,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                        + "\n\n> ⚠ 本次工具返回里没找到这些数字的出处："
                        + "、".join(x["value"] for x in rep["bad"][:8])}
         if msg.get("content"):
-            reply_event = {"type": "assistant", "content": msg["content"], "step": step, "message_id": reasoning_id}
+            reply_event = {**speaker, "type": "assistant", "content": msg["content"], "step": step, "message_id": reasoning_id}
             say(reply_event)
             events.append(reply_event)
         if not calls:

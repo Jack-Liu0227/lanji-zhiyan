@@ -18,6 +18,11 @@ from runtime import (
 )
 
 
+def http_error(status, code, headers=None):
+    return urllib.error.HTTPError('https://example.test/v1', status, 'failure', headers or {},
+                                  io.BytesIO(json.dumps({'error': {'code': code}}).encode()))
+
+
 class AIRuntimeTest(unittest.TestCase):
     def test_unavailable_gateway_channel_has_actionable_error_without_blind_retries(self):
         raw = json.dumps({'error': {'code': 'get_channel_failed', 'message': 'no channel'}}).encode()
@@ -36,6 +41,43 @@ class AIRuntimeTest(unittest.TestCase):
 
         delay5 = policy.delay_for_attempt(5)
         self.assertEqual(delay5, 10.0)
+
+    def test_429_honors_retry_after_and_posts_once_per_attempt(self):
+        profile = {'base_url': 'https://example.test/v1', 'model': 'model'}
+        success = io.BytesIO(b'{"choices":[{"message":{"content":"Recovered"}}]}')
+        with patch('workflow.open_url', side_effect=[http_error(429, 'rate_limit_exceeded', {'Retry-After': '35'}), success]) as request, \
+                patch('runtime.time.sleep') as sleep:
+            self.assertEqual(call(profile, [])['content'], 'Recovered')
+        self.assertEqual(request.call_count, 2)
+        sleep.assert_called_once_with(35)
+
+    def test_unaffordable_quota_and_long_cooldown_do_not_retry(self):
+        profile = {'base_url': 'https://example.test/v1', 'model': 'model'}
+        for code, headers, message in [('insufficient_quota', {}, '额度不足'),
+                                       ('rate_limit_exceeded', {'Retry-After': '600'}, '至少等待 600 秒')]:
+            with self.subTest(code=code), patch('workflow.open_url', side_effect=http_error(429, code, headers)) as request, \
+                    patch('runtime.time.sleep') as sleep:
+                with self.assertRaisesRegex(AIRuntimeError, message):
+                    call(profile, [])
+                request.assert_called_once()
+                sleep.assert_not_called()
+
+    def test_responses_rate_limit_retries_only_before_output(self):
+        profile = {'base_url': 'https://example.test/v1', 'model': 'model', 'api': 'openai-responses'}
+        limited = b'data: {"type":"error","code":"rate_limit_exceeded"}\n\n'
+        delta = b'data: {"type":"response.output_text.delta","delta":"A"}\n\n'
+        completed = b'data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"A"}]}]}}\n\n'
+        parts = []
+        with patch('workflow.open_url', side_effect=[io.BytesIO(limited), io.BytesIO(delta + completed)]) as request, \
+                patch('runtime.time.sleep'):
+            self.assertEqual(call(profile, [], on_delta=parts.append)['content'], 'A')
+            self.assertEqual(request.call_count, 2)
+        self.assertEqual(parts, ['A'])
+        with patch('workflow.open_url', return_value=io.BytesIO(delta + limited)) as request, patch('runtime.time.sleep') as sleep:
+            with self.assertRaisesRegex(AIRuntimeError, '429'):
+                call(profile, [], on_delta=parts.append)
+            request.assert_called_once()
+            sleep.assert_not_called()
 
     def test_budget_token_tracking_and_limit(self):
         b = Budget(max_tokens=100)

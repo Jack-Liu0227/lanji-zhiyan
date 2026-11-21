@@ -163,7 +163,7 @@
       return inFlight;
     }
     $('plLinkImport').onclick=()=>LiteratureImport.open({projectId:project,onImported:refresh});
-    $('plIntelligence').onclick=()=>openTab('intel');
+    $('plIntelligence').onclick=()=>AppNavigation.follow(()=>openTab('intel'));
     async function management(target='sources') {
       $('plManagement').open=true;
       if(!managerPromise) {
@@ -208,18 +208,20 @@
     $('spZoteroBtn').onclick=event=>run(event.target,()=>management('sources'));
     $('plManagement').ontoggle=()=>{if($('plManagement').open&&!managerPromise)management().catch(err=>message(err.message,true));};
     $('plRemove').onclick=event=>run(event.target,async()=>{const keys=rows.filter(r=>selected.has(r.result_id)&&r.zotero_key).map(r=>r.zotero_key);await management('history');if(live())await ProjectZotero.previewRemoval($('plZotero'),keys);});
-    $('plConnection').onclick=()=>IntegrationSettings.openZotero(project);
+    $('plConnection').onclick=()=>AppNavigation.follow(()=>IntegrationSettings.openZotero(project));
     paint();
     if(openManagerFor===project){openManagerFor='';management().catch(err=>message(err.message,true));}
     return refresh().catch(err=>message(err.message,true));
   }
   async function open(project, manage=false) {
-    if(!project || !await pnSaveCurrent())return;
+    if(!project)return;
     if(current?.project===project&&current.live())return manage?current.management():current.refresh();
-    await ProjectWorkspace.openProject(project);
-    if(curTask!==project)return;
-    openManagerFor=manage?project:'';
-    await ProjectWorkspace.showResource('papers');
+    return AppNavigation.follow(async()=>{
+      await ProjectWorkspace.openProject(project);
+      if(curTask!==project)return;
+      openManagerFor=manage?project:'';
+      await ProjectWorkspace.showResource('papers');
+    });
   }
   window.ProjectLiterature={html,mount,open,async poll(){
     const panel=current;

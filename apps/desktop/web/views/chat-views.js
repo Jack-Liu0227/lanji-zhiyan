@@ -19,7 +19,7 @@ function render(){
     retired.route='workspace';
     retired.title=TITLES.workspace;
   }
-  renderSidebar(); renderTopbar(); renderTabs(); renderStatus();
+  renderSidebar(); renderTopbar(); renderTabs(); renderStatus(); AppNavigation.sync();
   if(typeof GlobalTodos !== 'undefined') GlobalTodos.syncProjects();
   const r = route(); const m = $("main");
   m.classList.remove("sp-fill", "tof-fill");m.classList.toggle("agent-fill",r==="agent");
@@ -27,7 +27,7 @@ function render(){
   m.classList.toggle('toolbox-fill',r==='toolbox');
   m.classList.toggle('ec-global-fill',r==='task-center');
   if(!S.loaded) m.innerHTML = `<div class="muted">加载中…</div>`;
-  else if(r==="agent") renderAgent(m);
+  else if(r==="agent") return renderAgent(m);
   else if(r==="workspace") return ProjectWorkspace.render(m);
   else if(r==='task-center') return TaskCenter.renderGlobal(m);
   else if(r==='usage') return UsageView.render(m);
@@ -35,12 +35,12 @@ function render(){
   else if(r==="workflow") { ProjectWorkspace.requestRoute("workflow"); return ProjectWorkspace.render(m); }
   else if(r==="tasks") ProjectManager.open();
   else if(r==="space" || r==="notes") { if(window.ProjectWorkspace) { ProjectWorkspace.requestRoute("notes"); return ProjectWorkspace.render(m); } else return renderSpace(m); }
-  else if(r==="calendar") renderCalendar(m);
-  else if(r==="mail") renderMail(m);
-  else if(r==="library") renderStar(m);
-  else if(r==="intel") renderIntel(m);
+  else if(r==="calendar") return renderCalendar(m);
+  else if(r==="mail") return renderMail(m);
+  else if(r==="library") return renderStar(m);
+  else if(r==="intel") return renderIntel(m);
   else if(r==="assistants") renderAssistants(m);
-  else if(r==="team") renderTeam(m);
+  else if(r==="team") return renderTeam(m);
   else if(r==="models") renderModels(m);
   else renderSettings(m);
 }
@@ -75,17 +75,15 @@ function asCur(){ return (S.assistants||[]).find(a=>a.id===asEdit.id) || null; }
 function asChat(){ return (S.chats||[]).find(c=>c.id===curChat) || null; }
 function asBound(){ const c=asChat(); return c ? (c.assistant_id||"") : ""; }
 const Q_AV = "/vendor/img/agent-q.png";                                        // 智研管家主形象（Q 版小人，透明底）
-const AH_AV = Array.from({length: 7}, (_, i)=>`/vendor/img/av${i + 1}.png`);   // 管家姿势池（q/ 里那 7 张，对话列表/消息轮流用）
-let poseN = 0;                                                                  // 姿势轮换游标，每渲染一次对话归零
+const AH_AV = Array.from({length: 7}, (_, i)=>`/vendor/img/av${i + 1}.png`);   // 对话列表中的管家姿势
 function asAvatarOf(a, size){
   const px = size||42;
   return `<span class="as-av" style="width:${px}px;height:${px}px;font-size:${Math.round(px*0.55)}px">${esc(a&&a.avatar || "👨‍🔬")}</span>`;
 }
-/* 一个对话的脸：绑了专家 = 专家头像；没绑 = 智研管家（主形象 / rotate 时轮流换姿势） */
-function faceOf(a, px, rotate){
-  if(a) return asAvatarOf(a, px);
-  const src = rotate ? AH_AV[(poseN++) % AH_AV.length] : Q_AV;
-  return `<span class="as-av" style="width:${px}px;height:${px}px"><img src="${src}" alt="智研管家"
+/* 对话标题使用绑定的专家头像，默认显示智研管家。 */
+function faceOf(a, px){
+  if(a && a.id !== 'builtin-steward') return asAvatarOf(a, px);
+  return `<span class="as-av" style="width:${px}px;height:${px}px"><img src="${Q_AV}" alt="智研管家"
     style="width:100%;height:100%;object-fit:contain" loading="lazy"></span>`;
 }
 /* 对话抬头副标题：管家=全局；专家=项目内（没绑项目给提示）。renderAgent 和 loadAgentMeta 共用一份，别再各写一遍 */
@@ -854,19 +852,48 @@ const chatActivityLabels = {
   tool_result: "正在处理工具结果…",
 };
 
-function updateChatActivity(box, type){
+function assistantSpeaker(box, event, fallback){
+  const experts = S.assistants || [];
+  const sender = event.sender || event.assistant_name || (event.type==='team' ? event.name : '') || '';
+  const displayName = name => name.replace(/助[理手]/g, '专家');
+  let id = event.assistant_id || '';
+  let expert = id ? experts.find(item=>item.id===id) : null;
+  if(!id && sender){
+    expert = experts.find(item=>item.name===sender) || experts.find(item=>displayName(item.name)===displayName(sender));
+  }
+  if(!id && !sender && fallback) return fallback;
+  if(!id && !sender){
+    const chatId = box.closest('[data-chat-id]')?.dataset.chatId || (box.id==='msgs' ? curChat : '');
+    id = (S.chats||[]).find(chat=>chat.id===chatId)?.assistant_id || 'builtin-steward';
+    expert = experts.find(item=>item.id===id);
+  }
+  const name = displayName(sender || expert?.name || (id==='builtin-steward'?'智研管家':'执行专家'));
+  return {id:expert?.id || id, name, avatar:expert?.avatar || event.assistant_avatar || event.emoji || [...name][0]};
+}
+
+function speakerAvatar(who, className='msg-ava'){
+  return `<span class="${className}" aria-hidden="true">${who.id==='builtin-steward'?`<img src="${Q_AV}" alt="">`:esc(who.avatar)}</span>`;
+}
+
+function updateChatActivity(box, type, who){
   let status = box.querySelector(".chat-activity");
   if(!status && type === "chat_waiting"){
     status = document.createElement("div");
     status.className = "chat-activity";
     status.setAttribute("role","status");
-    status.innerHTML = '<span class="chat-activity-dots" aria-hidden="true"><i></i><i></i><i></i></span><span></span>';
+    status.innerHTML = '<span class="chat-activity-speaker"></span><span class="chat-activity-dots" aria-hidden="true"><i></i><i></i><i></i></span><span></span>';
   }
   if(!status) return;
   if(["done","error","cancelled"].includes(type)){ status.remove(); return; }
   if(["assistant_delta","assistant","team"].includes(type)){ status.hidden = true; return; }
   const label = chatActivityLabels[type];
   if(!label) return;
+  if(who){
+    const speaker = status.firstElementChild;
+    const avatar = speakerAvatar(who);
+    if(speaker.__avatar !== avatar){speaker.innerHTML=avatar;speaker.__avatar=avatar;}
+    speaker.title=who.name;
+  }
   const text = status.lastElementChild;
   if(text.textContent !== label) text.textContent = label;
   status.hidden = false;
@@ -875,10 +902,9 @@ function updateChatActivity(box, type){
 }
 
 function appendOne(box,ev,who){
-  updateChatActivity(box,ev.type);
+  who = assistantSpeaker(box,ev,who);
+  updateChatActivity(box,ev.type,who);
   if(ev.type === "chat_waiting") return;
-  if(ev.sender||ev.assistant_name)who={name:ev.sender||ev.assistant_name,emoji:who?.emoji||'🤖'};
-  else if(ev.assistant_id){const expert=(S.assistants||[]).find(item=>item.id===ev.assistant_id);if(expert)who={name:expert.name,emoji:expert.avatar||'🤖'};}
   if(ev.type==='template_used'){PromptUI.event(box,ev);return;}
   if(ev.type.startsWith("reasoning_")){
     if(ev.type === "reasoning_start" && box.querySelector(".chat-activity")) return;
@@ -901,7 +927,7 @@ function appendOne(box,ev,who){
     if(!row){
       row=document.createElement("div"); row.className="msg-row msg-assistant streaming";
       row.dataset.messageId=ev.message_id||'';row.dataset.subId=ev.sub||'';
-      row.innerHTML=`<div class="msg-meta"><span class="msg-ava">🤖</span><strong>${esc(who?.name||'执行专家')}</strong><span class="msg-chip">输出中…</span><button class="msg-copy" title="复制回复">复制</button></div><div class="md"></div>`;
+      row.innerHTML=`<div class="msg-meta">${speakerAvatar(who)}<strong>${esc(who.name)}</strong><span class="msg-chip">输出中…</span><button class="msg-copy" title="复制回复">复制</button></div><div class="md"></div>`;
       box.appendChild(row);
     }
     row.__content=(row.__content||"")+(ev.content||"");
@@ -924,23 +950,18 @@ function appendOne(box,ev,who){
   }
   else if(ev.type==="assistant"){
     if(ev.message_id&&[...box.querySelectorAll('.msg-assistant:not(.streaming)')].some(node=>node.dataset.messageId===ev.message_id))return;
-    const cur = (S.chats||[]).find(t=>t.id===curChat);
-    const boundA = (S.assistants||[]).find(a=>a.id === ((cur&&cur.assistant_id)||"")) || null;
-    // who = 页面自己指定这一步是谁在答（科研平台十步各有自己的专家）；不给才回落到当前对话绑的专家/管家
-    const avHtml = who ? `<span class="msg-ava">${who.emoji||"🤖"}</span>` : faceOf(boundA, 22, true);
-    const aName = (who ? who.name : (boundA ? boundA.name : "智研管家")).replaceAll('助手','专家');
     const statusName={queued:'排队中',running:'执行中',failed:'执行失败',interrupted:'中断待恢复',cancelled:'已停止'}[ev.status]||'完成';
      const streaming=[...box.querySelectorAll('.msg-assistant.streaming')].findLast(node=>ev.message_id?node.dataset.messageId===ev.message_id:node.dataset.subId===(ev.sub||''));
      if(streaming) streaming.remove();
      el.className="msg-row msg-assistant";
       el.dataset.messageId=ev.message_id||'';el.dataset.subId=ev.sub||'';
-     el.innerHTML=`<div class="msg-meta">${avHtml}<strong>${esc(aName)}</strong>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}<span class="msg-chip">${esc(statusName)}</span><button class="msg-copy" title="复制回复">复制</button></div><div class="md">${md(ev.content||"…")}</div>`;
+     el.innerHTML=`<div class="msg-meta">${speakerAvatar(who)}<strong>${esc(who.name)}</strong>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}<span class="msg-chip">${esc(statusName)}</span><button class="msg-copy" title="复制回复">复制</button></div><div class="md">${md(ev.content||"…")}</div>`;
   }
   else if(ev.type==="error"){ el.className="msg-err"; el.textContent="⚠ "+(ev.message||"出错了"); }
   else if(ev.type==="team"){
     // 多 agent 协作：一条 = 一个 agent 的一段话，头上写「谁 → 谁」；role 只决定配色（同团队页），文案标签由后端给。
     el.className="team-blk"; el.dataset.role=ev.role||"";
-    el.innerHTML=`<div class="team-hd"><span class="team-av">${esc(ev.emoji||"🤖")}</span><b>${esc(ev.name||"agent")}</b>`
+    el.innerHTML=`<div class="team-hd">${speakerAvatar(who,'team-av')}<b>${esc(who.name)}</b>`
       + (ev.to?`<span class="team-to">→ ${esc(ev.to)}</span>`:"")
       + (ev.tag?`<span class="team-tag">${esc(ev.tag)}</span>`:"") + `</div>`
       + `<div class="team-bub md">${md(ev.content||"")}</div>`;
@@ -1242,7 +1263,7 @@ async function send(){
   activeAgentChat=curChat; activeAgentBase=[...(S.chat||[])];
   activeAgentEvents=[{type:"user",content:msg},{type:"chat_waiting"}];
   appendOne(box,{type:"user",content:msg});
-  updateChatActivity(box,"chat_waiting");
+  appendOne(box,{type:"chat_waiting"});
    const btn=$("send"); activeAgentRun=crypto.randomUUID(); btn.classList.add("stop"); btn.textContent="■";
   if($("projbind")) $("projbind").disabled=true;
   await followChatRun({key:activeAgentRun,api:"/api/agent",runId:"",cursor:0,status:"running",base:activeAgentBase,

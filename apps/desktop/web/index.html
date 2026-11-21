@@ -25,6 +25,9 @@ if (savedZoom && !isNaN(parseFloat(savedZoom))) document.documentElement.style.z
     <header class="topbar pywebview-drag-region" id="topbar"></header>
     <section id="globalTodo" class="global-todo" aria-label="To do 随手记"></section>
     <div class="tabsbar" id="tabsbar"></div>
+    <nav class="app-return" id="appReturn" aria-label="返回上一页面" hidden>
+      <button type="button" class="btn ghost" id="appReturnButton"><span aria-hidden="true">←</span><span id="appReturnLabel"></span></button>
+    </nav>
     <div class="body"><main class="main" id="main" tabindex="-1" aria-label="主要内容"></main></div>
     <footer class="statusbar" id="statusbar"></footer>
   </div>
@@ -124,6 +127,7 @@ if (savedZoom && !isNaN(parseFloat(savedZoom))) document.documentElement.style.z
 <script src="/vendor/dompurify/purify.min.js"></script>
 <script src="/vendor/katex/katex.min.js"></script>
 <script src="/views/app-core.js"></script>
+<script src="/views/app-navigation.js"></script>
 <script src="/views/chat-views.js"></script>
 <script src="/views/team-office.js"></script>
 <script src="/views/project-files.js"></script>

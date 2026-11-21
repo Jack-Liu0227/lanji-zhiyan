@@ -2,15 +2,15 @@
 from __future__ import annotations
 
 import json
-import os
 import random
 import socket
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -38,6 +38,12 @@ class CancelledError(AIRuntimeError):
     """Raised when an operation is cancelled."""
 
 
+class ProviderStreamError(AIRuntimeError):
+    def __init__(self, error: Any):
+        super().__init__(str(error)[:300])
+        self.error = error
+
+
 @dataclass
 class RetryPolicy:
     max_retries: int = 3
@@ -45,6 +51,7 @@ class RetryPolicy:
     max_delay: float = 20.0
     backoff_factor: float = 2.0
     retryable_codes: set[int] = field(default_factory=lambda: {429, 500, 502, 503, 504})
+    max_retry_after: float = 120.0
 
     def delay_for_attempt(self, attempt: int) -> float:
         delay = self.base_delay * (self.backoff_factor ** attempt)
@@ -114,22 +121,34 @@ GLOBAL_TELEMETRY = Telemetry()
 
 
 def open_guarded_url(req: urllib.request.Request, timeout: int = 30) -> Any:
+    from workflow import open_url
+    return open_url(req, timeout=timeout)
+
+
+def _retry_after(headers: Any) -> float | None:
+    if not headers:
+        return None
+    value = headers.get("Retry-After", "").strip()
+    if value.isascii() and value.isdecimal() and len(value) <= 12:
+        return float(value)
     try:
-        import workflow
-        if hasattr(workflow, "open_url"):
-            return workflow.open_url(req, timeout=timeout)
-    except Exception:
-        pass
-    proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or \
-            os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or ""
-    if proxy:
-        parts = urllib.parse.urlsplit(proxy if "://" in proxy else "http://" + proxy)
-        try:
-            with socket.create_connection((parts.hostname, parts.port or 80), timeout=0.6):
-                pass
-        except OSError:
-            return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=timeout)
-    return urllib.request.urlopen(req, timeout=timeout)
+        until = parsedate_to_datetime(value)
+        return max(0., (until - datetime.now(timezone.utc)).total_seconds())
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def _wait(delay: float, cancel_check: Callable[[], bool] | None) -> None:
+    if not cancel_check:
+        time.sleep(delay)
+        return
+    deadline = time.monotonic() + delay
+    while not cancel_check():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(.25, remaining))
+    raise CancelledError("已停止等待模型重试")
 
 
 def _call_wire_openai_completions(profile: dict[str, Any], messages: list[dict[str, Any]],
@@ -185,6 +204,8 @@ def _call_wire_openai_completions(profile: dict[str, Any], messages: list[dict[s
                     item = json.loads(body)
                 except ValueError:
                     continue
+                if item.get("error"):
+                    raise ProviderStreamError(item["error"])
                 usage = item.get("usage") or usage
                 for choice in item.get("choices") or []:
                     delta = choice.get("delta") or {}
@@ -246,7 +267,6 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
     policy = retry_policy or RetryPolicy()
     api = profile.get("api", "openai-completions")
     t0 = time.monotonic()
-    last_exc = None
 
     for attempt in range(policy.max_retries + 1):
         if cancel_check and cancel_check():
@@ -284,34 +304,49 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
             GLOBAL_TELEMETRY.record(api, profile.get("model", ""), duration_ms, use, "ok")
             return result
 
-        except urllib.error.HTTPError as exc:
+        except (urllib.error.HTTPError, ProviderStreamError) as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
-            last_exc = exc
-            detail = exc.read().decode('utf-8', 'replace')[:4096]
-            try:
-                remote_error = json.loads(detail).get('error') or {}
-            except (ValueError, AttributeError):
-                remote_error = {}
-            if isinstance(remote_error, dict) and remote_error.get('code') == 'get_channel_failed':
+            message = ""
+            if isinstance(exc, urllib.error.HTTPError):
+                with exc:
+                    detail = exc.read(4096).decode('utf-8', 'replace')
+                    retry_after = _retry_after(exc.headers)
+                try:
+                    remote_error = json.loads(detail).get('error') or {}
+                except (ValueError, AttributeError):
+                    remote_error = {}
+                status = exc.code
+            else:
+                remote_error, detail, retry_after, status = exc.error, str(exc), None, None
+            error = remote_error if isinstance(remote_error, dict) else {}
+            codes = {str(error.get(key) or '').lower() for key in ('code', 'type')}
+            if status is None and codes & {'429', 'rate_limit_exceeded', 'rate_limit_error', 'resource_exhausted'}:
+                status = 429
+            quota = bool(codes & {'insufficient_quota', 'billing_hard_limit_reached', 'quota_exceeded', 'insufficient_user_quota'})
+            if 'get_channel_failed' in codes:
                 message = '模型网关当前没有该模型的可用渠道。请在“设置 → 模型列表”选择其他可用模型，或联系网关管理员检查模型分组和渠道；配置已保留。'
+            elif quota:
+                message = '模型服务额度不足。请检查网关余额、配额或模型权限，再重试。'
+            elif (not streamed_any and status in policy.retryable_codes and attempt < policy.max_retries
+                  and (retry_after is None or retry_after <= policy.max_retry_after)):
+                delay = max(policy.delay_for_attempt(attempt), retry_after or 0)
+            elif status == 429:
+                wait_hint = f'请至少等待 {int(retry_after + .999)} 秒再重试。' if retry_after else '请稍后重试；反复出现时请检查模型服务的并发与速率限制。'
+                message = '模型服务限流（HTTP 429）。' + wait_hint
+            else:
+                message = f"Model interface HTTP {status}: {detail[:300]}" if status else f"Model stream failed: {detail}"
+            if message:
                 GLOBAL_TELEMETRY.record(api, profile.get("model", ""), duration_ms, {}, "error", message)
                 raise AIRuntimeError(message) from exc
-            if not streamed_any and exc.code in policy.retryable_codes and attempt < policy.max_retries:
-                time.sleep(policy.delay_for_attempt(attempt))
-                continue
-            err_msg = f"HTTP {exc.code}: {detail[:300]}"
-            GLOBAL_TELEMETRY.record(api, profile.get("model", ""), duration_ms, {}, "error", err_msg)
-            raise AIRuntimeError(f"Model interface {err_msg}") from exc
 
         except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
-            last_exc = exc
             if not streamed_any and attempt < policy.max_retries:
-                time.sleep(policy.delay_for_attempt(attempt))
-                continue
-            err_msg = str(exc)
-            GLOBAL_TELEMETRY.record(api, profile.get("model", ""), duration_ms, {}, "error", err_msg)
-            raise AIRuntimeError(f"Model unreachable: {err_msg}") from exc
+                delay = policy.delay_for_attempt(attempt)
+            else:
+                err_msg = str(exc)
+                GLOBAL_TELEMETRY.record(api, profile.get("model", ""), duration_ms, {}, "error", err_msg)
+                raise AIRuntimeError(f"Model unreachable: {err_msg}") from exc
 
         except Exception as exc:
             duration_ms = int((time.monotonic() - t0) * 1000)
@@ -321,5 +356,6 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
             import usage_stats
             usage_stats.record(profile,messages,tools,int((time.monotonic()-attempt_start)*1000),
                                (result or {}).get('usage') or {},meter_status,attempt,first_token_ms)
+        _wait(delay, cancel_check)
 
-    raise AIRuntimeError(f"Exhausted retries: {last_exc}")
+    raise AIRuntimeError("Exhausted model retries")

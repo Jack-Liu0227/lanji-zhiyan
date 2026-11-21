@@ -135,6 +135,7 @@ def actor(db, snapshot):
     expert=snapshot.get('assistant') or db.assistant(snapshot.get('assistant_id','')) or {}
     member=snapshot.get('member') or {}
     return {'assistant_id':snapshot.get('assistant_id') or expert.get('id',''),
+            'assistant_avatar':expert.get('avatar',''),
             'sender':(snapshot.get('assistant_name') or expert.get('name') or member.get('name') or '执行专家').replace('助手','专家'),
             'team_name':(snapshot.get('team') or {}).get('name',''),'member_name':member.get('name','')}
 

@@ -9,7 +9,7 @@ import os
 import tempfile
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,16 +34,22 @@ def _get(url: str, timeout: int = 30) -> bytes:
     return execution.interruptible(fetch)
 
 
-def search_crossref(query: str, rows: int = 10) -> list[dict[str, Any]]:
-    url = ("https://api.crossref.org/works?rows=%d&filter=type:journal-article&query=%s"
-           % (rows, urllib.parse.quote(query)))
+def search_crossref(query: str, rows: int = 10, *, since: date | None = None) -> list[dict[str, Any]]:
+    filters = "type:journal-article" + (f",from-pub-date:{since}" if since else "")
+    url = "https://api.crossref.org/works?" + urllib.parse.urlencode({"rows": rows, "filter": filters, "query": query})
     items = json.loads(_get(url).decode("utf-8", "replace")).get("message", {}).get("items", [])
     out = []
     for it in items:
         authors = "; ".join(filter(None, (f"{a.get('family','')} {a.get('given','')}".strip() for a in it.get("author", [])[:6])))
-        year = str((it.get("issued", {}).get("date-parts", [[""]])[0] or [""])[0] or "")
+        dates = (it.get("published") or it.get("issued") or {}).get("date-parts") or [[]]
+        parts = dates[0] or []
+        year = str(parts[0]) if parts else ""
+        try:
+            published = date(*parts[:3]).isoformat()
+        except (TypeError, ValueError):
+            published = ""
         links = [l.get("URL", "") for l in it.get("link", []) if l.get("content-type") == "application/pdf"]
-        out.append({"source": "crossref", "title": _text((it.get("title") or [""])[0]), "authors": authors, "year": year,
+        out.append({"source": "crossref", "title": _text((it.get("title") or [""])[0]), "authors": authors, "year": year, "published_at": published,
                     "doi": it.get("DOI", ""), "url": it.get("URL", ""), "pdf_url": links[0] if links else "",
                     "citations": int(it.get("is-referenced-by-count") or 0),
                     "abstract": _text(it.get("abstract", ""))[:800]})
@@ -70,9 +76,9 @@ def _oa_abstract(w: dict[str, Any]) -> str:
     return _text(" ".join(pos[k] for k in sorted(pos)))[:800]
 
 
-def search_openalex(query: str, rows: int = 10) -> list[dict[str, Any]]:
-    url = ("https://api.openalex.org/works?per-page=%d&filter=type:article&search=%s"
-           % (rows, urllib.parse.quote(query)))
+def search_openalex(query: str, rows: int = 10, *, since: date | None = None) -> list[dict[str, Any]]:
+    filters = "type:article" + (f",from_publication_date:{since}" if since else "")
+    url = "https://api.openalex.org/works?" + urllib.parse.urlencode({"per-page": rows, "filter": filters, "search": query})
     items = json.loads(_get(url).decode("utf-8", "replace")).get("results", [])
     out = []
     for it in items:
@@ -80,7 +86,7 @@ def search_openalex(query: str, rows: int = 10) -> list[dict[str, Any]]:
         pdf = _oa_pdf(it)
         out.append({"source": "openalex", "title": _text(it.get("title", "")), "authors": authors,
                     "year": str(it.get("publication_year") or ""), "doi": (it.get("doi") or "").replace("https://doi.org/", ""),
-                    "url": it.get("id", ""), "pdf_url": pdf or "", "abstract": _oa_abstract(it),
+                    "url": it.get("id", ""), "pdf_url": pdf or "", "abstract": _oa_abstract(it), "published_at": it.get("publication_date") or "",
                     "citations": int(it.get("cited_by_count") or 0)})
     return out
 
@@ -316,7 +322,7 @@ def litgraph(db: Any, task_id: str, top: int = 5) -> dict[str, Any]:
     return out
 
 
-def search(query: str, sources: list[str] | None = None, rows: int = 10) -> list[dict[str, Any]]:
+def search(query: str, sources: list[str] | None = None, rows: int = 10, *, since: date | None = None) -> list[dict[str, Any]]:
     sources = sources or list(SOURCES)
     merged: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -325,11 +331,14 @@ def search(query: str, sources: list[str] | None = None, rows: int = 10) -> list
         if not fn:
             continue
         try:
-            merged.extend(fn(query, rows))
+            merged.extend(fn(query, rows, since=since) if since and name in {"openalex", "crossref"} else fn(query, rows))
         except Exception as exc:  # 单源失败不拖垮整体
             errors.append(f"{name}: {exc}")
     if not merged and errors:
         raise RuntimeError("全部检索源失败 → " + "; ".join(errors))
+    if since:
+        start, end = since.isoformat(), date.today().isoformat()
+        return [item for item in merged if start <= (item.get("published_at") or "") <= end]
     return merged
 
 

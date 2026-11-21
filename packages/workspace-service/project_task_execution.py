@@ -285,8 +285,13 @@ def execute(db, task_run_id, cancel_check=None):
             legacy_origin = next((o for o in task["origins"] if o["kind"] == "workflow_node" and o["task_run_id"] == run["id"]), None)
             db.workflow_context_node_id = (legacy_origin or {}).get("legacy_id") or owner.get("record_id", "")
             skills = []
-            for skill_id in node.get("skills") or []:
-                skill = capabilities.invoke_tool(db, executor["assistant_id"], "skill_read", {"skill_id": skill_id}, str(db.base_dir(task["project_id"])))
+            for skill_id in dict.fromkeys([*(metadata.get("required_skills") or []), *(node.get("skills") or [])]):
+                try:
+                    skill = capabilities.invoke_tool(db, executor["assistant_id"], "skill_read", {"skill_id": skill_id}, str(db.base_dir(task["project_id"]) or ""))
+                    if not skill["content"].strip():
+                        raise ValueError("Skill 文件为空")
+                except (ValueError, OSError) as exc:
+                    raise ValueError(f"无法加载 Skill {skill_id}：{exc}。请检查设置 → Skills 及该执行专家的权限。") from exc
                 skills.append({"id": skill_id, "content": skill["content"], "hash": tasks._digest(skill["content"])})
             context = {**(metadata.get("upstream_context") or {}), "task_id": task["id"],
                        "task_goal": task["goal"], "task_inputs": {k: v for k, v in run["input_snapshot"].items() if k != "execution_context"},
@@ -315,7 +320,7 @@ def execute(db, task_run_id, cancel_check=None):
                 # checkpoint remains addressable through workflow_context_read.
                 # Never fail the node merely because the handoff was compacted.
             else:
-                context_text = json.dumps(context, ensure_ascii=False, default=str)
+                context_text = json.dumps({k: v for k, v in context.items() if k != 'skills'}, ensure_ascii=False, default=str)
             db.workflow_node_search_capture = bool(owner and stage == 'search')
             if member and member.get("prompt"):
                 context_text += "\n【团队成员职责】\n" + member["prompt"]
@@ -327,6 +332,9 @@ def execute(db, task_run_id, cancel_check=None):
             purpose = node.get("label") or task["title"]
             prompt = node.get("prompt") or task["goal"]
             system = "执行当前项目任务「" + purpose + "」。依据版本化输入完成目标，使用工具保存实际产物；需要派生工作时只能使用当前任务允许的执行者和范围。"
+            if metadata.get("schedule_id") and not stage:
+                system = ("执行定时任务：" + purpose + "。根据项目目标和可核验的来源写出完整的 Markdown 回复。"
+                          "任务服务会把最终回复写到设定的输出目录并归档到项目笔记。")
             from workflow_catalog import STAGE_GUIDES
             guide = STAGE_GUIDES.get(stage)
             if guide:

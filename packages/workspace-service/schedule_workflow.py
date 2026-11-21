@@ -6,6 +6,13 @@ import json
 
 import asset_service
 
+BUILTIN_SKILLS = {
+    'builtin.schedule.last30days': 'scheduled-news-digest',
+    'builtin.schedule.literature-matrix': 'scheduled-literature-matrix',
+    'builtin.schedule.literature-review-push': 'scheduled-literature-review',
+    'builtin.schedule.feishu-daily-msg': 'scheduled-feishu-draft',
+}
+
 
 def pending(db, schedule_id):
     existing = db.db.execute("SELECT w.id FROM schedule_workflow_runs l JOIN schedule_runs s ON s.id=l.schedule_run_id JOIN workflow_runs w ON w.id=l.workflow_run_id WHERE s.schedule_id=? AND w.status IN ('queued','running','awaiting_review','blocked','interrupted')", (schedule_id,)).fetchone()
@@ -27,6 +34,8 @@ def start_task(db, sched, run, *, emit=None, cancel_check=None):
     grant = project_bindings.register(db, sched['project_id'], 'assistant', sched['assistant_id'], source='legacy')
     inputs = [a['id'] for a in asset_service.research_assets(db, sched['project_id'], limit=200)]
     metadata = {'schedule_id': sched['id'], 'schedule_snapshot': sched, 'schedule_run_id': run['id']}
+    if skill := BUILTIN_SKILLS.get(sched['id']):
+        metadata['required_skills'] = [skill]
     project_todos.ensure_table(db)
     linked = db.db.execute('SELECT p.stage FROM task_links l JOIN project_todos p ON p.id=l.todo_id WHERE l.schedule_id=?', (sched['id'],)).fetchone()
     stage = linked['stage'] if linked else ''
@@ -90,13 +99,15 @@ def refresh_task(db, task):
     run = dict(record)
     metadata = task['metadata']
     sched = metadata.get('schedule_snapshot') or db.schedule(run['schedule_id'])
-    if not sched or not db.schedule(run['schedule_id']):
+    current = db.schedule(run['schedule_id'])
+    if not sched or not current:
         return
     attempt = task.get('latest_run') or {}
     checkpoint = attempt.get('checkpoint') or {}
     status = {'ready': 'queued', 'delivered': 'completed', 'cancelled': 'canceled'}.get(task['status'], task['status'])
     error = attempt.get('error') or metadata.get('_start_error', '')
     ended_at = attempt.get('ended_at', '') or (task['updated_at'] if status == 'blocked' and not attempt else '')
+    prior = (run['status'], run['ended_at'])
     run.update(status=status, reason=error, ended_at=ended_at)
     nodes = [o['legacy_id'] for o in task['origins'] if o['kind'] == 'schedule_node']
     assets = [f['asset_id'] for f in task['outputs'] if f.get('asset_id')]
@@ -136,8 +147,12 @@ def refresh_task(db, task):
         note_asset = db.db.execute('SELECT id FROM assets WHERE canonical_uri=?', (str(note_path.resolve()),)).fetchone() if note_path else None
         run['output_assets'] = list(dict.fromkeys([*assets, *([archived['id']] if archived else []), *([note_asset['id']] if note_asset else [])]))
     db.schedule_run_add(run)
-    if run['status'] not in ('queued', 'running', 'awaiting_review', 'blocked'):
-        db.schedule_mark_run(sched['id'], run['ended_at'] or workflow.now(), schedule.next_run_at(sched['cron']))
+    if (run['status'], run['ended_at']) != prior and run['status'] not in ('queued', 'running', 'awaiting_review', 'blocked'):
+        newest = db.db.execute('SELECT id FROM schedule_runs WHERE schedule_id=? ORDER BY started_at DESC, rowid DESC LIMIT 1',
+                               (run['schedule_id'],)).fetchone()
+        if newest and newest['id'] == run['id']:
+            next_at = schedule.next_run_at(current['cron']) if current['enabled'] and current['frequency'] != 'manual' else ''
+            db.schedule_mark_run(current['id'], run['ended_at'] or workflow.now(), next_at)
     project_todos.sync_execution(db, schedule_id=sched['id'], status=run['status'], run_id=tracked_id, assets=run.get('output_assets'))
     return run
 

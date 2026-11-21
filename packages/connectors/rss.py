@@ -6,21 +6,23 @@
 from __future__ import annotations
 
 import email.utils
-import html
 import re
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from collections.abc import Iterable, Mapping
+from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from typing import Any
 from xml.etree import ElementTree as ET
 
 UA = "Mozilla/5.0 (compatible; research-workbench/1.0; +local)"
 TIMEOUT = 12
 MAX_ITEMS = 60                 # 单个源一次最多收 60 条（够看；多的下次刷新还会来）
-SUMMARY_MAX = 400
 _sources_lock = threading.RLock()
+_scheduled_refresh_lock = threading.Lock()
 
 # 内置来源；用户可在设置中添加、编辑或停用。
 DEFAULT_SOURCES = [
@@ -31,18 +33,171 @@ DEFAULT_SOURCES = [
     {"url": "https://hnrss.org/frontpage", "title": "Hacker News", "category": "技术新闻"},
 ]
 
-_TAG = re.compile(r"<[^>]+>")
-_WS = re.compile(r"\s+")
+_PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
+LEGACY_TEXT_MAX = 400
+_ARXIV_ID = r"(?:\d{4}\.\d{4,5}|[a-z][a-z.-]*/\d{7})"
+_ARXIV_PATH = re.compile(rf"/abs/(?P<id>{_ARXIV_ID})(?:v[1-9]\d*)?", re.ASCII)
+_ARXIV_HEADER = re.compile(
+    rf"\AarXiv:\s*{_ARXIV_ID}(?:v\d+)?\s+"
+    r"(?:Announce\s+Type:\s*[\w-]+\s+)?Abstract:\s*", re.I,
+)
 
 
 def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1].lower()
 
 
-def _clean(s: str) -> str:
-    s = html.unescape(_TAG.sub(" ", s or ""))
-    s = _WS.sub(" ", s).strip()
-    return s[:SUMMARY_MAX]
+class _MarkupText(HTMLParser):
+    _blocks = {"article", "blockquote", "div", "h1", "h2", "h3", "h4", "h5", "h6",
+               "li", "ol", "p", "pre", "section", "tr", "ul"}
+    _hidden = {"script", "style", "template"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.parts: list[str] = []
+        self.hidden: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        tag = tag.rsplit(":", 1)[-1]
+        if tag in self._hidden:
+            self.hidden.append(tag)
+        elif not self.hidden:
+            if tag in self._blocks:
+                self.parts.append("\n\n")
+            elif tag == "br":
+                self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.rsplit(":", 1)[-1]
+        if self.hidden:
+            if tag == self.hidden[-1]:
+                self.hidden.pop()
+        elif tag in self._blocks:
+            self.parts.append("\n\n")
+        elif tag in {"td", "th"}:
+            self.parts.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        if not self.hidden:
+            self.parts.append(data)
+
+
+def _feed_text(node: ET.Element, *, markup: bool) -> str:
+    if len(node):
+        raw = ET.tostring(node, encoding="unicode")
+    else:
+        raw = node.text or ""
+        if not markup:
+            return raw
+    parser = _MarkupText()
+    parser.feed(raw)
+    parser.close()
+    return "".join(parser.parts)
+
+
+def normalize_summary(text: str) -> str:
+    text = _ARXIV_HEADER.sub("", text.strip(), count=1)
+    paragraphs = (" ".join(part.split()) for part in _PARAGRAPH_BREAK.split(text))
+    return "\n\n".join(part for part in paragraphs if part)
+
+
+def richer_summary(old: str, new: str) -> str:
+    # Older snapshots inserted spaces around inline tags and flattened paragraphs.
+    previous = "".join(old.split()).casefold()
+    candidate = "".join(new.split()).casefold()
+    if not candidate:
+        return old
+    if not previous:
+        return new
+    if candidate == previous:
+        return new if new.count("\n\n") > old.count("\n\n") else old
+    prefix = previous.removesuffix("...").removesuffix("…").rstrip()
+    return new if prefix and len(candidate) > len(prefix) and candidate.startswith(prefix) else old
+
+
+def arxiv_abstract_url(link: str) -> str:
+    if any(character.isspace() for character in link):
+        return ""
+    try:
+        parts = urllib.parse.urlsplit(link)
+    except ValueError:
+        return ""
+    match = _ARXIV_PATH.fullmatch(parts.path)
+    if not (match and parts.scheme in {"http", "https"}
+            and parts.netloc.lower() in {"arxiv.org", "www.arxiv.org"}):
+        return ""
+    return "https://arxiv.org" + parts.path
+
+
+def needs_arxiv_metadata(row: Mapping[str, str]) -> bool:
+    summary, authors = row["summary"], row["authors"]
+    return (len(summary) == LEGACY_TEXT_MAX or not normalize_summary(summary)
+            or len(authors) == LEGACY_TEXT_MAX or not authors.strip()) and bool(arxiv_abstract_url(row["link"]))
+
+
+class _ArxivCitation(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.metadata: dict[str, list[str]] = {}
+        self.in_head = False
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        if tag == "head":
+            self.in_head = True
+        elif tag == "body":
+            self.in_head = False
+        if self.in_head and tag == "meta":
+            attr = dict(attrs)
+            name, value = (attr.get("name") or "").lower(), (attr.get("content") or "").strip()
+            if value and name in {"citation_arxiv_id", "citation_abstract", "citation_author"}:
+                self.metadata.setdefault(name, []).append(value)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "head":
+            self.in_head = False
+
+
+def parse_arxiv_abstract(page: str, url: str) -> tuple[str, str]:
+    match = _ARXIV_PATH.fullmatch(urllib.parse.urlsplit(arxiv_abstract_url(url)).path)
+    citation = _ArxivCitation()
+    citation.feed(page)
+    citation.close()
+    ids = set(citation.metadata.get("citation_arxiv_id", []))
+    if not match or not ids or ids - {match["id"], match[0].removeprefix("/abs/")}:
+        raise ValueError("arXiv 页面未提供匹配的论文编号")
+    abstracts = {normalize_summary(text) for text in citation.metadata.get("citation_abstract", [])}
+    if len(abstracts) > 1:
+        raise ValueError("arXiv 页面提供了不同的摘要")
+    return next(iter(abstracts), ""), _join_authors(citation.metadata.get("citation_author", []))
+
+
+class _NoArxivRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def fetch_arxiv_abstract(link: str) -> tuple[str, str]:
+    url = arxiv_abstract_url(link)
+    if not url:
+        raise ValueError("仅支持 arXiv 官方摘要页")
+    request = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html"})
+    opener = urllib.request.build_opener(_NoArxivRedirects())
+    page_limit = 1024 * 1024
+    try:
+        with opener.open(request, timeout=TIMEOUT) as response:
+            if response.status != 200 or response.headers.get_content_type() not in {"text/html", "application/xhtml+xml"}:
+                raise ValueError("arXiv 未返回摘要页面")
+            raw = response.read(page_limit + 1)
+            charset = response.headers.get_content_charset() or "utf-8"
+        if len(raw) > page_limit:
+            raise ValueError("arXiv 摘要页面过大")
+        page = raw.decode(charset)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        raise ValueError(f"arXiv 返回 HTTP {exc.code}，请稍后重试") from exc
+    except (OSError, UnicodeError, LookupError) as exc:
+        raise ValueError("暂时无法读取 arXiv 摘要页，请稍后重试") from exc
+    return parse_arxiv_abstract(page, url)
 
 
 def _iso(raw: str) -> str:
@@ -66,16 +221,40 @@ def _iso(raw: str) -> str:
 
 
 def _pick(node: ET.Element, *names: str) -> str:
-    """按局部名找文本（命名空间无关）：先直接子元素，再往下一层（Atom 的 author/name）。"""
-    want = {n.lower() for n in names}
-    for kid in node:
-        if _local(kid.tag) in want and (kid.text or "").strip():
-            return kid.text.strip()
-    for kid in node.iter():
-        if kid is node:
-            continue
-        if _local(kid.tag) in want and (kid.text or "").strip():
-            return kid.text.strip()
+    """Read a direct child in field preference order, ignoring namespaces."""
+    for name in names:
+        for kid in node:
+            if _local(kid.tag) == name and (kid.text or "").strip():
+                return kid.text.strip()
+    return ""
+
+
+def _join_authors(authors: Iterable[str]) -> str:
+    names: dict[str, str] = {}
+    for author in authors:
+        name = " ".join(author.split())
+        if name:
+            names.setdefault(name.casefold(), name)
+    return "; ".join(names.values())
+
+
+def _authors(node: ET.Element) -> str:
+    return _join_authors(_pick(field, "name") or field.text or ""
+                         for field in node if _local(field.tag) in {"author", "creator"})
+
+
+def _item_text(node: ET.Element, atom: bool, *fields: str) -> str:
+    for name in fields:
+        for field in node:
+            if _local(field.tag) != name:
+                continue
+            content_type = field.get("type", "text").lower()
+            plain = content_type in {"text", "text/plain"}
+            if atom and not plain and content_type not in {"html", "xhtml", "text/html", "application/xhtml+xml"}:
+                continue
+            text = _feed_text(field, markup=not atom or not plain)
+            if text.strip():
+                return text
     return ""
 
 
@@ -89,10 +268,12 @@ def parse(raw: bytes | str, charset: str = "utf-8") -> list[dict[str, str]]:
         raise ValueError("这不是 RSS：拿到的是网页（地址失效或被反爬拦了）")
     root = ET.fromstring(body)
     items = [el for el in root.iter() if _local(el.tag) in ("item", "entry")]
+    feed_authors = _authors(root) if _local(root.tag) == "feed" else ""
     out: list[dict[str, str]] = []
     for it in items[:MAX_ITEMS]:
+        atom = _local(it.tag) == "entry"
         # 链接：RSS 是 <link>文本</link>；Atom 是 <link href=.../>（挑 alternate 或第一个有 href 的）
-        link = _pick(it, "link") if _local(it.tag) == "item" else ""
+        link = "" if atom else _pick(it, "link")
         if not link:
             for kid in it:
                 if _local(kid.tag) == "link" and kid.get("href"):
@@ -100,14 +281,19 @@ def parse(raw: bytes | str, charset: str = "utf-8") -> list[dict[str, str]]:
                         link = kid.get("href")
                         break
                     link = link or kid.get("href")
-        if not link and _local(it.tag) == "item":
+        if not link and not atom:
             link = _pick(it, "guid")
         link = (link or "").strip()
         if not link:
             continue
-        title = _clean(_pick(it, "title")) or link
-        authors = _clean(_pick(it, "author", "creator", "name"))
-        summary = _clean(_pick(it, "description", "summary", "content", "encoded"))
+        title = " ".join(_item_text(it, atom, "title").split()) or link
+        authors = _authors(it)
+        if atom and not authors:
+            source = next((child for child in it if _local(child.tag) == "source"), None)
+            authors = (_authors(source) if source is not None else "") or feed_authors
+        summary = normalize_summary(_item_text(it, atom, "summary", "description"))
+        content = normalize_summary(_item_text(it, atom, "encoded", "content"))
+        summary = richer_summary(summary, content)
         published = _iso(_pick(it, "pubdate", "published", "updated", "date"))
         out.append({"title": title, "link": link, "authors": authors,
                     "summary": summary, "published_at": published})
@@ -123,7 +309,7 @@ def fetch(url: str, timeout: int = TIMEOUT) -> list[dict[str, str]]:
     return parse(raw, cs or "utf-8")
 
 
-def refresh(db: Any) -> dict[str, Any]:
+def refresh(db: Any, *, stale_before: str = "") -> dict[str, Any]:
     """抓取已启用来源；网络并发，SQLite 落库在主线程串行完成。"""
     from concurrent.futures import ThreadPoolExecutor
     import service_settings
@@ -132,6 +318,8 @@ def refresh(db: Any) -> dict[str, Any]:
         if not db.rss_sources() and not service_settings.read(db,'rss').get('configured'):
             seed(db)
         srcs = [source for source in db.rss_sources() if source['enabled']]
+        if stale_before:
+            srcs = [source for source in srcs if source["last_fetch"] < stale_before]
     if not srcs:
         return {"sources": 0, "fetched": 0, "added": 0, "failures": []}
 
@@ -158,6 +346,13 @@ def refresh(db: Any) -> dict[str, Any]:
                 db.mark_rss_fetch(s["id"], "")
                 ok += 1
     return {"sources": len(srcs), "fetched": ok, "added": added, "failures": failures}
+
+
+def refresh_for_schedule(db: Any) -> dict[str, Any]:
+    """Share the latest feed snapshot across scheduled reports in the same hour."""
+    with _scheduled_refresh_lock:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        return refresh(db, stale_before=cutoff)
 
 
 def seed(db: Any) -> int:

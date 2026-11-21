@@ -43,7 +43,8 @@ def _anthropic_stream(url, payload, headers, timeout, on_delta, cancel_check, on
     for event in _stream_events(url, payload, headers, timeout, cancel_check):
         kind = event.get("type")
         if kind == "error":
-            raise RuntimeError(str(event.get("error") or "Anthropic stream error"))
+            from runtime import ProviderStreamError
+            raise ProviderStreamError(event.get("error") or event)
         if kind == "message_start":
             usage.update((event.get("message") or {}).get("usage") or {})
         elif kind == "content_block_start":
@@ -91,7 +92,8 @@ def _responses_stream(url, payload, headers, timeout, on_delta, cancel_check, on
         elif kind == "response.completed":
             completed = event.get("response")
         elif kind in {"response.failed", "error"}:
-            raise RuntimeError(str((event.get("response") or {}).get("error") or event.get("error") or kind))
+            from runtime import ProviderStreamError
+            raise ProviderStreamError((event.get("response") or {}).get("error") or event.get("error") or event)
     if completed is None:
         raise RuntimeError("Responses 流未返回完成事件")
     return completed
@@ -101,6 +103,9 @@ def _gemini_stream(url, payload, headers, timeout, on_delta, cancel_check, on_re
     parts = []
     usage = {}
     for chunk in _stream_events(url, payload, headers, timeout, cancel_check):
+        if chunk.get("error"):
+            from runtime import ProviderStreamError
+            raise ProviderStreamError(chunk["error"])
         candidates = chunk.get("candidates") or []
         for part in ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []:
             parts.append(part)
