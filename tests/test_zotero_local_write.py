@@ -53,9 +53,9 @@ class ZoteroLocalWriteTest(unittest.TestCase):
                            ("zotero_local_item_add", {"item": {"itemType": "journalArticle"}}),
                            ("zotero_local_link_pdf", {"key": "ABCD1234", "pdf": str(self.pdf)}),
                            ("zotero_local_authorize", {})):
-            with self.subTest(name=name), self.assertRaises(ValueError):
+            with self.subTest(name=name), self.assertRaises((ValueError, PermissionError)):
                 agent_integrations.invoke(name, self.db, self.task, args, permission="read_only")
-            with self.subTest(name=name), self.assertRaises(ValueError):
+            with self.subTest(name=name), self.assertRaises((ValueError, PermissionError)):
                 agent_integrations.invoke(name, self.db, self.task, args, permission="auto")
 
     def test_unauthorized_state_and_no_zotero(self):
@@ -113,12 +113,12 @@ class ZoteroLocalWriteTest(unittest.TestCase):
             self.assertEqual(calls[-1][1], [{"name": "MLCU", "parentCollection": False}])
 
             item = {"itemType": "journalArticle", "title": "T", "DOI": "10.1/x"}
-            agent_integrations.invoke("zotero_local_item_add", self.db, self.task, {"item": item},
-                                      permission="full_access")
+            with self.assertRaises(PermissionError):
+                agent_integrations.invoke("zotero_local_item_add", self.db, self.task, {"item": item}, permission="full_access")
+            zotero.add_item(self.db, item)
             self.assertEqual(calls[-1][1][0]["itemType"], "journalArticle")
 
-            agent_integrations.invoke("zotero_local_link_pdf", self.db, self.task,
-                                      {"key": "NEW00001", "pdf": str(self.pdf)}, permission="full_access")
+            zotero.link_pdf(self.db, 'NEW00001', str(self.pdf))
             attachment = calls[-1][1][0]
             self.assertEqual(attachment["linkMode"], "linked_file")
             self.assertEqual(attachment["parentItem"], "NEW00001")
@@ -155,6 +155,18 @@ class ZoteroLocalWriteTest(unittest.TestCase):
         self.assertEqual(local_calls[0][2]["If-None-Match"], "*")
         upload.assert_called_once_with("http://upload.test/file", self.pdf.read_bytes(), "application/pdf")
         self.assertEqual(local_calls[1][1], b"upload=UPLOAD01")
+
+    def test_import_pdf_reuses_identical_linked_attachment(self):
+        original = self.root / 'zotero-original.pdf'
+        original.write_bytes(self.pdf.read_bytes())
+        child = {'key': 'ATTCH001', 'data': {'itemType': 'attachment', 'linkMode': 'linked_file',
+                                            'contentType': 'application/pdf', 'path': str(original)}}
+        with patch.object(zotero, '_children', return_value=[child]), \
+             patch.object(zotero, '_get', return_value=(200, {}, [child])), \
+             patch.object(zotero, '_write') as write:
+            out = zotero.import_pdf(self.db, 'ITEM0001', str(self.pdf))
+        self.assertEqual((out['key'], out['path'], out['reused']), ('ATTCH001', str(original.resolve()), True))
+        write.assert_not_called()
 
     def test_link_pdf_outside_project_is_refused(self):
         outside = self.root / "外部.pdf"

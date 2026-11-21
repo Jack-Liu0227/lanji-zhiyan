@@ -58,9 +58,12 @@
           <p class="hint">可添加多个 Collection，默认逐篇勾选加入项目。来源可以被多个项目共用；移除来源不会移除已加入的文献。不添加来源时，可从整个文献库勾选。</p>
           <div class="integration-actions"><button class="btn ghost" id="zs-load">读取 Collections</button><select class="control" id="zs-collection" aria-label="文献来源 Collection"><option value="">先读取 Collections</option></select><button class="btn ghost" id="zs-add-source">添加来源</button></div>
           <div id="zs-sources"></div><button class="btn" id="zs-save-sources">保存项目来源</button>
-          <p class="hint">“全部跟随”会将该 Collection 当前及以后新增的文献纳入项目，请按需开启。子 Collection 需单独添加。</p>
-          <div class="integration-actions"><button class="btn ghost" id="zs-browse" ${bound.library?'':'disabled'}>从已保存来源选择文献</button><input class="control" id="zs-filter" aria-label="筛选来源文献" placeholder="筛选标题、作者或 DOI"></div>
-          <p class="hint" id="zs-candidate-count" role="status"></p><div id="zs-candidates"></div><button class="btn" id="zs-select" disabled>加入所选文献并预览同步</button>
+          <p class="hint">“全部跟随”只纳入该 Collection 的直属文献；要跟随子 Collection，请单独添加。</p>
+          <div class="integration-actions"><button class="btn ghost" id="zs-browse">浏览 Zotero 文献</button><input class="control" id="zs-filter" aria-label="筛选来源文献" placeholder="筛选标题、作者或 DOI"></div>
+          <div class="integration-actions"><select class="control" id="zs-browse-collection" aria-label="筛选 Collection"><option value="">全部候选</option></select><label><input type="checkbox" id="zs-chosen-only"> 仅显示已选</label><button class="btn ghost" id="zs-visible">全选当前页</button><button class="btn ghost" id="zs-whole">一次加入整个 Collection</button><button class="btn ghost" id="zs-clear">清空选择</button></div>
+          <p class="hint" id="zs-candidate-count" role="status"></p><div id="zs-candidates"></div><button class="btn ghost" id="zs-prev">上一页</button><button class="btn ghost" id="zs-next">下一页</button><button class="btn" id="zs-select" disabled>加入所选文献</button>
+        </fieldset><fieldset class="zs-section"><legend>默认保存到</legend>
+          <div class="integration-actions"><select class="control" id="zs-target" aria-label="默认写入 Collection"><option value="${e(bound.collection||'')}">${e(bound.collection||'尚未设置')}</option></select><button class="btn ghost" id="zs-target-load">读取分类</button><button class="btn" id="zs-target-save">保存默认分类</button><button class="btn ghost" id="zs-target-create">新建项目同名分类</button></div>
         </fieldset></section>
         <section data-zs-panel="sync" aria-label="同步设置" hidden><fieldset class="zs-section"><legend>自动同步到工作流与项目空间</legend>
           <label><input type="checkbox" id="zs-auto-enabled" ${autoSync.enabled ? "checked" : ""}> 应用运行期间自动同步</label>
@@ -91,15 +94,35 @@
     async function loadCollections() {
       const data = await call("/api/zotero/web/collections");
       if (!isCurrent()) return;
-      const collections = data.collections || [];
+      return showCollections(data.collections);
+    }
+    function showCollections(collections) {
       collectionNames = new Map(collections.map(item => [item.key, item.data?.name || item.key]));
+      const source = field('zs-collection'), target = field('zs-target');
+      const sourceChoice = source.value, targetChoice = target.value;
       field("zs-collection").innerHTML = collections.map(item => `<option value="${e(item.key)}">${e(item.data?.name || item.key)} · ${e(item.key)}</option>`).join("");
+      if(collectionNames.has(sourceChoice)) source.value=sourceChoice;
+      target.innerHTML='<option value="">尚未设置</option>'+source.innerHTML;
+      target.value=collectionNames.has(targetChoice)?targetChoice:'';
+      const filter=field('zs-browse-collection'), previous=filter.value;
+      filter.innerHTML='<option value="">全部候选</option>'+field('zs-collection').innerHTML;
+      filter.value=collectionNames.has(previous)?previous:'';
       renderSources();
       return collections.length;
     }
     field("zs-load").onclick = event => action(event.target, async () => {
       const count = await loadCollections();
       if (isCurrent()) field("integration-result").textContent = `已拉取 ${count} 个集合。`;
+    });
+    field('zs-target-load').onclick=event=>action(event.target,loadCollections);
+    field('zs-target-save').onclick=event=>action(event.target,async()=>{
+      await call('/api/zotero/web/target',{task_id:projectId,library:result.library,collection:field('zs-target').value});
+      await loadZotero();
+    });
+    field('zs-target-create').onclick=event=>action(event.target,async()=>{
+      if(!await uiConfirm(`在 ${result.library} 的顶层新建项目同名分类，并设为默认写入目标？`))return;
+      await call('/api/zotero/web/target',{task_id:projectId,library:result.library,create:true,confirm:true});
+      await loadZotero();
     });
     function renderSources() {
       field('zs-sources').innerHTML = sourceDraft.map((s,i)=>`<div class="integration-actions"><span>${e(collectionNames.get(s.collection)||s.collection)}</span><select class="control" data-zs-source-mode="${i}" aria-label="${e(s.collection)} 同步范围"><option value="selected" ${s.mode==='selected'?'selected':''}>逐篇选择（默认）</option><option value="all" ${s.mode==='all'?'selected':''}>全部跟随，包括新增文献</option></select><button class="btn ghost" data-zs-remove-source="${i}">移除来源</button></div>`).join('');
@@ -117,15 +140,29 @@
       await call('/api/zotero/web/sources',{task_id:activeProject,sources:sourceDraft,export_collection:bound.collection||''});
       if(isCurrent()) await loadZotero();
     });
-    let candidateRows = [], chosenKeys = new Set();
+    let candidateRows = [], chosenKeys = new Set(), page=0, displayed=[], candidateState='idle';
+    const pageSize=30;
+    const canSelect=row=>!row.selected&&row.status!=='removing';
+    const directCandidates=collection=>candidateRows.filter(row=>row.collections.includes(collection)&&canSelect(row));
     function renderCandidates(){
       const query=field('zs-filter').value.trim().toLocaleLowerCase();
-      const visible=candidateRows.filter(r=>[r.title,r.authors,r.doi,r.key].join(' ').toLocaleLowerCase().includes(query));
+      const collection=field('zs-browse-collection').value;
+      const chosenOnly=field('zs-chosen-only').checked;
+      const visible=candidateRows.filter(r=>chosenOnly?chosenKeys.has(r.key):(!collection||r.browse_collections.includes(collection))&&[r.title,r.authors,r.doi,r.key].join(' ').toLocaleLowerCase().includes(query));
+      page=Math.min(page,Math.max(0,Math.ceil(visible.length/pageSize)-1));
+      displayed=visible.slice(page*pageSize,(page+1)*pageSize);
+      field('zs-prev').disabled=page===0;
+      field('zs-next').disabled=(page+1)*pageSize>=visible.length;
+      field('zs-visible').disabled=chosenOnly||!displayed.some(canSelect);
+      field('zs-whole').disabled=chosenOnly||!collection||!directCandidates(collection).length;
+      field('zs-filter').disabled=field('zs-browse-collection').disabled=chosenOnly;
       function updateCount(){
-        field('zs-candidate-count').textContent=`${visible.length} 条候选 · 已勾选 ${chosenKeys.size} 条`;
+        const state={idle:'候选文献尚未读取',loading:'正在读取 Zotero 文献…',error:'读取失败，请重试',ready:`${visible.length} 条候选 · 已勾选 ${chosenKeys.size} 条`};
+        field('zs-candidate-count').textContent=state[candidateState];
         field('zs-select').disabled=!chosenKeys.size;
+        field('zs-select').textContent=`加入所选 ${chosenKeys.size} 篇`;
       }
-      field('zs-candidates').innerHTML=visible.map(row=>{
+      field('zs-candidates').innerHTML=displayed.map(row=>{
         const status={selected:'已选待同步',excluded:'已移除，可重新勾选',removing:'正在移除'}[row.status]||(row.selected?'已加入项目':'');
         const collections=(row.collections||[]).map(key=>collectionNames.get(key)||key).join('、');
         return `<label class="zs-candidate"><input type="checkbox" data-zs-member="${e(row.key)}" ${chosenKeys.has(row.key)?'checked':''} ${row.selected||row.status==='removing'?'disabled':''}><span><strong>${e(row.title)}</strong><small>${[row.doi||row.key,collections,status].filter(Boolean).map(e).join(' · ')}</small></span></label>`;
@@ -133,27 +170,48 @@
       updateCount();
       field('zs-candidates').querySelectorAll('[data-zs-member]').forEach(input=>input.onchange=()=>{
         if(input.checked)chosenKeys.add(input.dataset.zsMember);else chosenKeys.delete(input.dataset.zsMember);
-        updateCount();
+        if(chosenOnly)renderCandidates();else updateCount();
       });
     }
-    field('zs-filter').oninput=renderCandidates;
+    field('zs-filter').oninput=field('zs-browse-collection').onchange=()=>{page=0;renderCandidates();};
+    field('zs-chosen-only').onchange=()=>{page=0;renderCandidates();};
+    field('zs-prev').onclick=()=>{page--;renderCandidates();};
+    field('zs-next').onclick=()=>{page++;renderCandidates();};
+    field('zs-clear').onclick=()=>{chosenKeys.clear();field('zs-chosen-only').checked=false;renderCandidates();};
+    field('zs-visible').onclick=()=>{displayed.filter(canSelect).forEach(r=>chosenKeys.add(r.key));renderCandidates();};
     field('zs-browse').onclick=event=>action(event.target,async()=>{
-      const data=await call('/api/zotero/web/candidates?task_id='+encodeURIComponent(activeProject));
-      if(!isCurrent()) return;
-      candidateRows=data.items;chosenKeys.clear();renderCandidates();
+      candidateState='loading';renderCandidates();
+      try {
+        const data=await call('/api/zotero/web/candidates?task_id='+encodeURIComponent(activeProject));
+        if(!isCurrent()) return;
+        showCollections(data.collections);
+        candidateRows=data.items;
+        const available=new Set(candidateRows.filter(canSelect).map(row=>row.key));
+        for(const key of chosenKeys)if(!available.has(key))chosenKeys.delete(key);
+        candidateState='ready';renderCandidates();
+      } catch(err) {
+        if(isCurrent()) { candidateState='error';renderCandidates(); }
+        throw err;
+      }
     });
-    field('zs-select').onclick=event=>action(event.target,async()=>{
-      await call('/api/zotero/web/select',{task_id:activeProject,keys:[...chosenKeys]});
-      if(!isCurrent()) return;
-      candidateRows.forEach(r=>{if(chosenKeys.has(r.key)){r.status='selected';r.selected=true;}});
-      chosenKeys.clear();renderCandidates();
-      const plan=await call('/api/zotero/web/sync',{task_id:activeProject,mode:'merge',dry_run:true});
-      if(!isCurrent()) return;
-      preview=plan;field('zs-mode').value='merge';show('sync');
-      field('integration-result').textContent='已保存选择，请核对同步预览。自动同步已启用时，也会按所设方向处理。';
-      renderPlan(plan);
-      field('zs-apply').disabled=!!plan.conflicts.length||!plan.actions.length;showConflicts(plan.conflicts);
+    async function join(keys){
+      const out=await call('/api/zotero/web/join',{task_id:activeProject,library:result.library,keys});
+      if(!isCurrent())return;
+      const joined=new Set(keys);
+      candidateRows.forEach(row=>{if(joined.has(row.key)){row.status='active';row.selected=true;chosenKeys.delete(row.key);}});
+      if(!chosenKeys.size)field('zs-chosen-only').checked=false;
+      renderCandidates();
+      field('integration-result').textContent=`已加入 ${out.total} 篇，其中 ${out.downloaded} 篇有本机 PDF 引用。`;
+      await onChange();
+    }
+    field('zs-select').onclick=event=>action(event.target,()=>join([...chosenKeys]));
+    field('zs-whole').onclick=event=>action(event.target,async()=>{
+      const collection=field('zs-browse-collection').value;
+      const rows=directCandidates(collection);
+      if(!rows.length)return;
+      if(await uiConfirm(`一次加入「${collectionNames.get(collection)||collection}」的 ${rows.length} 篇？\n${rows.map(row=>row.title).join('\n')}`))await join(rows.map(row=>row.key));
     });
+    renderCandidates();
     field("zs-mode").onchange = () => { preview = null; field("zs-apply").disabled = true; };
     field("zs-preview").onclick = event => action(event.target, async () => {
       const plan = await call("/api/zotero/web/sync", {task_id: projectId, mode: field("zs-mode").value, dry_run: true});

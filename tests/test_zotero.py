@@ -183,22 +183,20 @@ class TestZoteroImport(unittest.TestCase):
                 project = db.create_task("Zotero import", base_dir=str(root / "project"))
                 with patch.object(zotero, "items", return_value={"items": [paper, manual, note], "returned": 3, "hasMore": False, "total": 3}), \
                      patch.object(zotero, "item", return_value=paper), \
-                     patch.object(zotero, "pdf_path", side_effect=lambda key, base=None: str(source) if key == "PAPER001" else ""):
-                    out = workflow.stage_zotero_import(db, project)
+                     patch.object(zotero, "pdf_attachment", side_effect=lambda key, *_, **__: {'key': 'ATTCH001', 'path': str(source)} if key == "PAPER001" else None):
+                    out = workflow.stage_zotero_import(db, project, collection='COLLA001')
                     self.assertEqual(out["total"], 2)
                     self.assertEqual((out["downloaded"], out["manual"]), (1, 1))
                     papers = db.papers_of(project)
                     self.assertEqual(len(papers), 1)
-                    copied = Path(papers[0]["source_path"])
-                    self.assertNotEqual(copied, source)
-                    self.assertTrue(copied.is_relative_to(root / "project"))
-                    self.assertEqual(copied.read_bytes(), original)
+                    self.assertEqual(papers[0]['source_path'], '')
+                    self.assertFalse(list((root / 'project').rglob('*.pdf')))
                     self.assertEqual(source.read_bytes(), original)
                     records = project_library.items(db, project)
                     linked = next(r for r in records if r["zotero_key"] == "PAPER001")
                     self.assertEqual(linked["paper_id"], papers[0]["id"])
                     self.assertEqual(linked["url"], "https://doi.org/10.1234/x")
-                    workflow.stage_zotero_import(db, project)
+                    workflow.stage_zotero_import(db, project, collection='COLLA001')
                     self.assertEqual(len(db.papers_of(project)), 1)
 
 

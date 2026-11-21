@@ -72,7 +72,7 @@ class StewardTest(unittest.TestCase):
         original = source.read_bytes()
         modified = source.stat().st_mtime_ns
         with patch.object(zotero, "item", return_value={"title": "Paper", "version": 3}), patch.object(zotero, "pdf_path", return_value=str(source)):
-            first = agent_integrations.invoke("zotero_import_pdf", self.db, self.a, {"key": "ABCD1234"})
+            first = project_sources.import_zotero_pdf(self.db, self.a, "ABCD1234")
             second = project_sources.import_zotero_pdf(self.db, self.a, "ABCD1234")
             other = project_sources.import_zotero_pdf(self.db, self.b, "ABCD1234")
             self.assertTrue(second["reused"])
@@ -152,7 +152,7 @@ class StewardTest(unittest.TestCase):
         linked = self.root / "linked-papers"
         linked.mkdir()
         pdf = write_text_pdf(linked / "paper.pdf", ["Linked PDF"])
-        child = {"data": {"itemType": "attachment", "contentType": "application/pdf", "path": "attachments:paper.pdf"}}
+        child = {"key": "ATTCH001", "data": {"itemType": "attachment", "contentType": "application/pdf", "path": "attachments:paper.pdf"}}
         with patch.object(zotero, "_get", return_value=(200, {}, [child])), patch.object(zotero, "linked_attachment_roots", return_value=[linked]):
             self.assertEqual(zotero.pdf_path("ABCD1234"), str(pdf.resolve()))
             child["data"]["path"] = "attachments:../outside.pdf"

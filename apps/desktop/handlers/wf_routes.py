@@ -90,15 +90,24 @@ class WorkflowRoutes:
             return self._json({"path": str(p),
                                "snapshots": [{"at": s.parent.name + " " + s.name, "bytes": s.stat().st_size}
                                              for s in fileguard.snapshots(p)]})
-        if path == "/api/paper/open":                 # 星图/文献双击：用系统默认程序打开这篇论文的 PDF
+        if path in {"/api/paper/content", "/api/paper/open"}:
             pid = q.get("id", [""])[0]
             req_path = q.get("path", [""])[0]
             p = None
             if pid:
+                from project_sources import resolve_pdf_for_read
                 with WorkflowDB(DB_PATH) as db:
-                    row = db.db.execute("SELECT source_path FROM papers WHERE id=?", (pid,)).fetchone()
-                if row and row["source_path"]:
-                    p = Path(row["source_path"])
+                    project = q.get("task_id", [""])[0]
+                    if not project and path == "/api/paper/open":
+                        row = db.db.execute("SELECT task_id FROM papers WHERE id=?", (pid,)).fetchone()
+                        project = row["task_id"] if row else ""
+                    p = resolve_pdf_for_read(db, project, pid)
+            if path == "/api/paper/content":
+                if not p:
+                    return self._json({"error": "PDF 在本机不可读，请在 Zotero 中核对附件"}, 404)
+                if q.get("check") == ["1"]:
+                    return self._json({"ok": True})
+                return self._send(200, p.read_bytes(), "application/pdf")
             if (not p or not p.is_file()) and req_path:
                 p = Path(req_path)
             if not p or not p.is_file():

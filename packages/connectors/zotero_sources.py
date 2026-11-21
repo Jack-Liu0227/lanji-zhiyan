@@ -46,11 +46,17 @@ def configure(db, pid, sources, export_collection=''):
 
 
 def candidates(db, pid):
+    if not db.db.execute('SELECT 1 FROM research_tasks WHERE id=?', (pid,)).fetchone():
+        raise ValueError('项目不存在')
     bound = sync.binding(db, pid)
     cfg = sync.config(db)
-    if not bound or bound['library'] != sync.library(cfg):
-        raise ValueError('请先保存当前项目的 Zotero 来源')
+    library = sync.library(cfg)
+    if bound and bound['library'] != library:
+        raise ValueError('项目绑定的 Zotero 库不匹配')
+    bound = bound or {'library': library, 'sources': [], 'collection': ''}
     sources = {s['collection'] for s in bound['sources']}
+    collections = sync.all_pages(cfg, '/collections')
+    parents = {row['key']: row.get('data', {}).get('parentCollection') for row in collections}
     memberships = {r['item_key']: r['status'] for r in db.db.execute(
         'SELECT item_key,status FROM zotero_project_memberships WHERE task_id=? AND library=?', (pid, bound['library']))}
     mapped = {r['item_key'] for r in db.db.execute('SELECT item_key FROM zotero_item_links WHERE task_id=?', (pid,))}
@@ -59,12 +65,19 @@ def candidates(db, pid):
         data = item.get('data', {})
         if data.get('itemType') in ('note', 'attachment', 'annotation'):
             continue
-        if sources and not sources.intersection(data.get('collections', [])):
+        direct = data.get('collections', [])
+        ancestry = set()
+        for collection in direct:
+            while collection and collection not in ancestry:
+                ancestry.add(collection)
+                collection = parents.get(collection)
+        if sources and not sources.intersection(ancestry):
             continue
         status = memberships.get(item['key'], 'active' if item['key'] in mapped else '')
-        rows.append({**sync._from_remote(item), 'key': item['key'], 'collections': data.get('collections', []),
+        rows.append({**sync._from_remote(item), 'key': item['key'], 'collections': direct,
+                     'browse_collections': sorted(ancestry),
                      'status': status, 'selected': status in ('active', 'selected')})
-    return {'items': rows, 'binding': bound}
+    return {'items': rows, 'collections': collections, 'binding': bound}
 
 
 def select(db, pid, keys):
@@ -91,3 +104,26 @@ def select(db, pid, keys):
                               (pid, lib, key, old['result_id'] if old else '', project_library.identity(row), str(time.time())))
         service_settings.write(db, 'zotero_plan', {}, pid)
         return {'ok': True, 'selected': len(set(keys))}
+
+
+def join(db, pid, keys, library):
+    if not isinstance(keys, list) or not keys or any(not isinstance(key, str) for key in keys):
+        raise ValueError('请选择至少一篇 Zotero 文献')
+    with sync._sync_lock:
+        cfg, bound = sync.config(db), sync.binding(db, pid)
+        if library != sync.library(cfg) or (bound and bound['library'] != library):
+            raise ValueError('Zotero 文献库已变化，请刷新后重新选文')
+        available = {row['key']: row for row in candidates(db, pid)['items']}
+        if any(key not in available or available[key]['status'] == 'removing' for key in keys):
+            raise ValueError('所选条目已变化，请刷新后重选')
+        if cfg.get('transport') == 'local':
+            from workflow_stages import stage_zotero_import
+            return stage_zotero_import(db, pid, keys=keys)
+        if not bound:
+            configure(db, pid, [])
+        for key in dict.fromkeys(keys):
+            remote = sync.request(cfg, '/items/' + key)
+            item = sync._from_remote(remote)
+            rid = sync.import_record(db, pid, key, item)
+            sync.record_membership(db, pid, library, rid, key, remote['version'])
+        return {'total': len(set(keys)), 'downloaded': 0}

@@ -72,13 +72,15 @@ def _delete_records(conn, project_id: str) -> None:
     conn.execute(f"DELETE FROM schedule_runs WHERE schedule_id IN ({schedule_ids})", args)
     conn.execute("DELETE FROM schedules WHERE project_id=?", args)
     paper_ids = "SELECT id FROM papers WHERE task_id=?"
+    conn.execute(f"DELETE FROM paper_evidence_recheck WHERE evidence_id IN (SELECT id FROM evidence WHERE paper_id IN ({paper_ids}))", args)
     for table in ("paper_pages", "evidence"):
         conn.execute(f"DELETE FROM {table} WHERE paper_id IN ({paper_ids})", args)
     for table in (
         "papers", "artifacts", "runs", "calendar_events", "notes", "steps", "search_cache", "chat",
         "paper_graph", "kb_graph", "project_memory", "md_notes", "dl_queue", "team_tasks", "team_events",
         "zotero_bindings", "zotero_project_sources", "zotero_project_memberships", "zotero_link_batches",
-        "project_paper_links", "project_todos",
+        "project_paper_links", "project_todos", "paper_zotero_refs", "zotero_save_plans",
+        "zotero_pending_writes", "zotero_downloads",
         "background_jobs", "idea_input", "tr_hl", "chat_fts", "zotero_staging",
     ):
         conn.execute(f"DELETE FROM {table} WHERE task_id=?", args)

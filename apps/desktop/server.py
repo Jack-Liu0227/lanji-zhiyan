@@ -1868,7 +1868,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                         return self._json(ACTION["download"](db, tid, data.get("result_id", "")))
                     if stage == "zotero":                       # Zotero 分类 → 直接进下载队列（题录用 Zotero 的、PDF 用本机附件、不联网）
                         return self._json(stage_zotero_import(db, tid, data.get("collection", ""),
-                                                              data.get("keys") or []))
+                                                              data.get("keys")))
                     if stage == "deepread":                     # 一键精读：扔后台跑，立刻返回（前端轮询进度、可停）
                         return self._json(deepread_kick(str(DB_PATH), tid, str(data.get("mode") or "full")))
                     if stage == "queue":                        # 下载精读面板的实时数据

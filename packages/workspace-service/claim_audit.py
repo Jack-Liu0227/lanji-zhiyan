@@ -63,7 +63,7 @@ def assess(db, project_id, manuscript, model):
     papers = {paper["id"]: dict(paper) for paper in db.papers_of(project_id)}
     index = eligibility_index(db, project_id)
     eligible = [dict(row) for row in db.evidence(project_id)
-                if row["paper_id"] in papers and legacy_context_available(db, project_id, "evidence", row["id"], index=index)]
+                if not row['needs_recheck'] and row["paper_id"] in papers and legacy_context_available(db, project_id, "evidence", row["id"], index=index)]
     evidence = {row["id"]: row for row in eligible[:120]}
     packet = [{"id": key, "field": item["field"], "value": item["value"],
                "excerpt": str(item["excerpt"])[:400], "paper": item["filename"], "page": item["page_no"]}
@@ -119,9 +119,10 @@ def assess(db, project_id, manuscript, model):
                     identity = (item["paper_id"], item["page_no"])
                     paper = papers[identity[0]]
                     if identity[0] not in source_intact:
-                        path = Path(paper["source_path"])
+                        from project_sources import resolve_pdf_for_read
+                        path = resolve_pdf_for_read(db, project_id, paper['id'])
                         try:
-                            source_intact[identity[0]] = path.is_file() and sha256_file(path) == paper["sha256"]
+                            source_intact[identity[0]] = bool(path and sha256_file(path) == paper["sha256"])
                         except OSError:
                             source_intact[identity[0]] = False
                     if identity not in pages:

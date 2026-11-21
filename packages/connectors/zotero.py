@@ -424,7 +424,12 @@ def linked_attachment_roots() -> list[Path]:
     return roots
 
 
-def pdf_path(key: str, base: str | None = None) -> str:
+def pdf_path(key: str, base: str | None = None, *, attachment_key: str = "") -> str:
+    result = pdf_attachment(key, base, attachment_key=attachment_key)
+    return result["path"] if result else ""
+
+
+def pdf_attachment(key: str, base: str | None = None, *, attachment_key: str = "") -> dict | None:
     """条目第一个 PDF 附件在本机的绝对路径。
 
     支持多种附件存储模式：
@@ -435,15 +440,18 @@ def pdf_path(key: str, base: str | None = None) -> str:
     root = _base(base)
     key = str(key or "").strip()
     if not key:
-        return ""
+        return None
     try:
         _, _, body = _get(_api_url(root, f"/users/0/items/{urllib.parse.quote(key)}/children"))
     except ZoteroError:
-        return ""
+        return None
     s_dir = storage_dir()
     for row in (body if isinstance(body, list) else []):
         data = row.get("data") or {}
-        if data.get("itemType") != "attachment":
+        child_key = str(row.get("key") or data.get("key") or "")
+        if (data.get("itemType") != "attachment" or not re.fullmatch(r"[A-Z0-9]{8}", child_key)
+                or (attachment_key and child_key != attachment_key)
+                or (data.get("parentItem") and data["parentItem"] != key)):
             continue
         ct = str(data.get("contentType") or "").lower()
         fn = str(data.get("filename") or "").lower()
@@ -455,13 +463,13 @@ def pdf_path(key: str, base: str | None = None) -> str:
         p = data.get("path")
         if p:
             if os.path.isfile(p):
-                return str(Path(p).resolve())
+                return {"key": child_key, "path": str(Path(p).resolve()), "mode": data.get("linkMode", "")}
             if str(p).startswith("attachments:"):
                 rel = str(p)[len("attachments:"):].lstrip("/\\")
                 for candidate_root in linked_attachment_roots():
                     cand = (candidate_root / rel).resolve()
                     if cand.is_relative_to(candidate_root) and cand.is_file():
-                        return str(cand.resolve())
+                        return {"key": child_key, "path": str(cand), "mode": data.get("linkMode", "")}
 
         # 2. enclosure href
         enc = (row.get("links") or {}).get("enclosure") or {}
@@ -471,15 +479,17 @@ def pdf_path(key: str, base: str | None = None) -> str:
             if os.name == "nt" and cand_p.startswith("/"):
                 cand_p = cand_p[1:]
             if os.path.isfile(cand_p):
-                return str(Path(cand_p).resolve())
+                return {"key": child_key, "path": str(Path(cand_p).resolve()), "mode": data.get("linkMode", "")}
 
         # 3. 内部 storage 目录 (imported_file)
-        folder = s_dir / str(row.get("key") or data.get("key") or "")
-        if folder.is_dir():
-            hits = sorted(folder.glob("*.pdf"))
-            if hits:
-                return str(hits[0].resolve())
-    return ""
+        folder = s_dir / child_key
+        if folder.is_dir() and data.get("linkMode") in (None, "", "imported_file", "imported_url"):
+            hits = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"]
+            named = [p for p in hits if p.name.casefold() == fn]
+            matches = named or hits
+            if len(matches) == 1:
+                return {"key": child_key, "path": str(matches[0].resolve()), "mode": data.get("linkMode", "")}
+    return None
 
 
 def note_for(base: str | None = None, key: str = "") -> dict[str, str]:
@@ -801,7 +811,8 @@ def _write(db: Any, path: str, payload: Any = None, method: str = "POST") -> Any
                    "Zotero-API-Key": securestore.unprotect(data["key"])}
         if method in {"DELETE", "PATCH", "PUT"}:        # Zotero 要求带版本，否则 428
             _, version_headers, obj = _get(_api_url(base, path))
-            version = version_headers.get("last-modified-version") or str((obj or {}).get("version") or "")
+            version = str(payload['version']) if isinstance(payload, dict) and 'version' in payload else (
+                version_headers.get("last-modified-version") or str((obj or {}).get("version") or ""))
             if version:
                 headers["If-Unmodified-Since-Version"] = str(version)
         request = urllib.request.Request(base + "/api" + path, data=raw, method=method, headers=headers)
@@ -944,13 +955,24 @@ def import_pdf(db: Any, item_key: str, pdf: str, title: str = "PDF") -> dict[str
     attachment = None
     for child in _children(item_key):
         data = child.get("data") or {}
-        if data.get("itemType") != "attachment" or data.get("linkMode") != "imported_file":
+        mode = data.get("linkMode")
+        if data.get("itemType") != "attachment" or mode not in {"imported_file", "imported_url", "linked_file"}:
             continue
-        if str(data.get("md5") or "").lower() == md5.lower():
-            return {"key": str(child.get("key") or data.get("key") or ""), "parentItem": item_key,
-                    "path": str(path), "mode": "imported_file", "md5": md5, "reused": True}
-        if not attachment and str(data.get("filename") or "") == filename:
-            attachment = child
+        child_key = str(child.get("key") or data.get("key") or "")
+        if not child_key:
+            continue
+        recorded_md5 = str(data.get("md5") or "").lower()
+        if recorded_md5 == md5 or not recorded_md5 or mode == "linked_file":
+            actual = pdf_path(item_key, attachment_key=child_key)
+            if actual and not path.samefile(actual) and _md5_file(Path(actual)) == md5:
+                return {"key": child_key, "parentItem": item_key, "path": actual,
+                        "mode": mode, "md5": md5, "reused": True}
+            if not actual and recorded_md5 == md5:
+                raise ZoteroError("Zotero 已有相同附件，请先在 Zotero 下载原件再保存")
+            if not actual and mode == "imported_file" and not recorded_md5 and data.get("filename") == filename:
+                if attachment:
+                    raise ZoteroError("Zotero 有多个未完成的同名附件，请核对后重试")
+                attachment = child
     if attachment:
         attachment_key = str(attachment.get("key") or (attachment.get("data") or {}).get("key") or "")
     else:

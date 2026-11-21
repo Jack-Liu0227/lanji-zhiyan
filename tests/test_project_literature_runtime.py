@@ -23,9 +23,11 @@ class ProjectLiteratureRuntimeTest(unittest.TestCase):
     setUp = connected.runtime.WebRuntimeTest.setUp
     load_page = connected.runtime.WebRuntimeTest.load_page
 
-    def fixture(self):
+    def fixture(self, *, local=False):
         self.remote = Remote()
         self.cfg = {'library_type': 'users', 'library_id': str(time.time_ns()), 'api_key': 'fixture-only'}
+        if local:
+            self.cfg.update(transport='local', local_profile='fixture')
         for target, replacement in [('config', lambda db: self.cfg), ('all_pages', self.remote.pages), ('request', self.remote.request)]:
             active = patch.object(sync, target, side_effect=replacement)
             active.start(); self.addCleanup(active.stop)
@@ -36,9 +38,7 @@ class ProjectLiteratureRuntimeTest(unittest.TestCase):
             pid = body.get('task_id') or query.get('task_id', [''])[0]
             with workflow.WorkflowDB(self.database_path) as db:
                 if url.path.endswith('/config'):
-                    value = {'config': {'transport': 'local'}, 'binding': sync.binding(db, pid), 'local': {'readable': True, 'authorized': True}, 'docs': {}}
-                elif url.path.endswith('/collections'):
-                    value = {'collections': [{'key': key, 'data': {'name': name}} for key,name in [('COLLA001','Source A'),('COLLB001','Source B')]]}
+                    value = {'config': self.cfg, 'library': sync.library(self.cfg), 'binding': sync.binding(db, pid), 'local': {'readable': True, 'authorized': True}, 'docs': {}}
                 else:
                     value = sync.route(request.request.method, url.path, body, query, db)
             request.fulfill(json=value)
@@ -60,29 +60,38 @@ class ProjectLiteratureRuntimeTest(unittest.TestCase):
         self.remote.add('PAPER001',['COLLA001','COLLB001'],title='Shared source paper')
         self.remote.add('PAPER002',['COLLA001'],title='Leave unselected',DOI='10.123/unselected')
         self.remote.add('PAPER003',['COLLB001'],title='Chosen B paper',DOI='10.123/chosen-b')
+        for i in range(30):
+            self.remote.add(f'ROWX{i:04d}', ['COLLA001'], title=f'Middle row {i:02d}', DOI=f'10.123/middle-{i}')
+        self.remote.add('ZZZZ0004', ['COLLA001'], title='Z last on page two', DOI='10.123/page-two')
         pid=self.create_project('Project literature membership')
         self.open_project(pid)
         self.page.locator('#spZoteroBtn').click()
         self.page.locator('#zs-browse').click()
-        for key in ('PAPER001','PAPER003'):
-            self.page.locator(f'[data-zs-member="{key}"]').check()
+        self.page.locator('#zs-browse-collection').select_option('COLLA001')
+        self.page.locator('[data-zs-member="PAPER001"]').check()
+        self.page.locator('#zs-next').click()
+        self.page.locator('[data-zs-member="ZZZZ0004"]').check()
+        self.page.locator('#zs-browse-collection').select_option('COLLB001')
+        self.assertTrue(self.page.locator('[data-zs-member="PAPER001"]').is_checked())
+        self.page.locator('[data-zs-member="PAPER003"]').check()
+        self.page.locator('#zs-chosen-only').check()
+        self.assertEqual(self.page.locator('[data-zs-member]:checked').count(), 3)
         self.page.locator('#zs-select').click()
-        self.page.wait_for_function('!document.querySelector("#zs-apply").disabled')
         self.page.evaluate('() => {window.uiConfirm=async()=>true;}')
-        self.page.locator('#zs-apply').click()
         self.page.locator('#plList').get_by_text('Chosen B paper',exact=True).wait_for()
-        self.assertEqual(self.page.locator('#plList [data-pl-id]').count(),2)
+        self.assertEqual(self.page.locator('#plList [data-pl-id]').count(),3)
+        self.assertFalse(self.remote.writes)
         self.assertNotIn(sync.project_tag(pid),{t['tag'] for t in self.remote.rows['PAPER002']['data']['tags']})
         self.page.locator('#plManagement > summary').click()
-        self.page.locator('[data-pl-key="PAPER001"]').check()
+        self.page.get_by_role('checkbox', name='选择 Shared source paper').check()
         self.page.locator('#plRemove').click()
         self.page.locator('[data-zs-unlink-key="PAPER001"]').wait_for()
         self.assertEqual(self.page.locator('[data-zs-unlink-key]').count(),1)
         self.page.locator('#zs-unlink-apply').click()
-        self.page.wait_for_function('document.querySelectorAll("#plList [data-pl-id]").length===1')
+        self.page.wait_for_function('document.querySelectorAll("#plList [data-pl-id]").length===2')
         self.assertEqual(self.remote.rows['PAPER001']['data']['collections'],['COLLA001','COLLB001'])
         self.page.locator('[data-zs-restore]').first.click()
-        self.page.wait_for_function('document.querySelectorAll("#plList [data-pl-id]").length===2')
+        self.page.wait_for_function('document.querySelectorAll("#plList [data-pl-id]").length===3')
         self.assertEqual(self.page.evaluate('route()'),'workspace')
         self.assertEqual(self.page.locator('#pwProject').input_value(),pid)
         screenshot_dir=Path(os.environ.get('LANJI_TEST_SCREENSHOT_DIR',str(self.temporary_root)))
@@ -90,6 +99,36 @@ class ProjectLiteratureRuntimeTest(unittest.TestCase):
         self.page.locator('#plManagement > summary').click()
         self.page.screenshot(path=str(screenshot_dir/'project-literature.png'),full_page=True)
         self.assertEqual(self.errors,[])
+
+    def test_browse_empty_parent_and_join_only_chosen_descendants(self):
+        self.fixture()
+        self.remote.collections.extend([
+            {'key': 'CHILD001', 'data': {'name': 'Child', 'parentCollection': 'COLLA001'}},
+            {'key': 'LEAF0001', 'data': {'name': 'Leaf', 'parentCollection': 'CHILD001'}},
+            {'key': 'OTHER001', 'data': {'name': 'Unrelated collection'}},
+        ])
+        self.remote.add('PAPER001', ['CHILD001'], title='Child paper', DOI='10.123/child')
+        self.remote.add('PAPER002', ['LEAF0001'], title='Grandchild paper', DOI='10.123/grandchild')
+        self.remote.add('PAPER003', ['OTHER001'], title='Outside project sources', DOI='10.123/outside')
+        self.load_page()
+        pid = self.create_project('Nested Zotero sources')
+        self.open_project(pid, True)
+        self.page.locator('#zs-browse').click()
+        self.page.locator('[data-zs-member="PAPER001"]').wait_for()
+        collection = self.page.locator('#zs-browse-collection')
+        collection.select_option('COLLA001')
+        self.assertEqual(self.page.locator('[data-zs-member]').count(), 2)
+        self.assertTrue(self.page.locator('#zs-whole').is_disabled())
+        self.page.locator('[data-zs-member="PAPER001"]').check()
+        collection.select_option('LEAF0001')
+        self.assertEqual(self.page.locator('[data-zs-member]').count(), 1)
+        self.page.locator('#zs-chosen-only').check()
+        self.assertEqual(self.page.locator('[data-zs-member]:checked').count(), 1)
+        self.page.locator('#zs-select').click()
+        self.page.locator('#plList').get_by_text('Child paper', exact=True).wait_for()
+        self.assertEqual(self.page.locator('#plList [data-pl-id]').count(), 1)
+        self.assertFalse(self.remote.writes)
+        self.assertEqual(self.errors, [])
 
     def test_poll_preserves_draft_filter_selection_and_detects_edit_conflict(self):
         self.fixture();self.load_page()
@@ -104,14 +143,14 @@ class ProjectLiteratureRuntimeTest(unittest.TestCase):
         self.page.locator('#zs-collection').select_option('COLLA001')
         self.page.locator('[data-zs-source-mode]').first.select_option('all')
         self.page.locator('#plSearch').fill('Evidence')
-        self.page.locator('[data-pl-key="PAPER001"]').check()
+        self.page.locator(f'[data-pl-key="{rid}"]').check()
         self.page.locator('[data-pl-edit]').click()
         self.page.locator('#plEditForm [name=title]').fill('My unsaved Evidence draft')
         self.page.evaluate("async x => api('/api/library/project',{task_id:x.pid,result_id:x.rid,fields:{title:'Evidence changed remotely'}})",{'pid':pid,'rid':rid})
         self.page.evaluate('() => ConnectedResearch.refreshLibrary()')
         self.assertEqual(self.page.locator('#plEditForm [name=title]').input_value(),'My unsaved Evidence draft')
         self.assertEqual(self.page.locator('#plSearch').input_value(),'Evidence')
-        self.assertTrue(self.page.locator('[data-pl-key="PAPER001"]').is_checked())
+        self.assertTrue(self.page.locator(f'[data-pl-key="{rid}"]').is_checked())
         self.assertEqual(self.page.locator('[data-zs-source-mode]').first.input_value(),'all')
         self.page.locator('#plEditForm').get_by_role('button',name='保存题录').click()
         self.page.locator('#plError').get_by_text('编辑期间文献已更新',exact=False).wait_for()
@@ -151,8 +190,8 @@ class ProjectLiteratureRuntimeTest(unittest.TestCase):
         self.assertEqual(self.page.locator('[data-zs-member]').count(),0)
         self.assertEqual(self.errors,[])
 
-    def test_import_pdf_from_project_row_then_open_project_copy(self):
-        self.fixture();self.load_page()
+    def test_link_pdf_from_project_row_then_preview_original(self):
+        self.fixture(local=True);self.load_page()
         remote=self.remote.add(collections=['COLLA001'])
         pid=self.create_project('Project literature PDF')
         with workflow.WorkflowDB(self.database_path) as db:
@@ -165,10 +204,11 @@ class ProjectLiteratureRuntimeTest(unittest.TestCase):
         imports,opened=[],[]
         def import_pdf(request):
             body=request.request.post_data_json;imports.append(body)
-            with workflow.WorkflowDB(self.database_path) as db, patch.object(zotero,'item',return_value=normalized), patch.object(zotero,'pdf_path',return_value=str(original)):
+            with workflow.WorkflowDB(self.database_path) as db, patch.object(zotero,'item',return_value=normalized), patch.object(zotero,'pdf_attachment',return_value={'key': 'ATTCH001', 'path': str(original)}):
                 result=workflow.stage_zotero_import(db,body['task_id'],keys=body['keys'])
             request.fulfill(json=result)
         self.page.route('**/api/workflow/zotero',import_pdf)
+        self.page.route('**/api/paper/content?**',lambda request: request.fulfill(json={'ok':True}) if 'check=1' in request.request.url else request.fulfill(body=original_bytes,content_type='application/pdf'))
         self.page.route('**/api/paper/open?**',lambda request:(opened.append(request.request.url),request.fulfill(json={'opened':True})))
         self.open_project(pid)
         self.page.locator('[data-pl-import-pdf]').click()
@@ -178,11 +218,10 @@ class ProjectLiteratureRuntimeTest(unittest.TestCase):
         with workflow.WorkflowDB(self.database_path) as db:
             rows=project_library.items(db,pid)
             self.assertEqual(len(rows),1)
-            copied=Path(rows[0]['source_path'])
-            self.assertNotEqual(copied,original)
-            self.assertEqual(copied.read_bytes(),original_bytes)
+            self.assertEqual(rows[0]['source_path'],'')
+            self.assertTrue(rows[0]['zotero_reference'])
             self.page.locator('#flStage iframe').wait_for()
-            self.assertIn('pdf',self.page.locator('#flStage iframe').get_attribute('src'))
+            self.assertIn('/api/paper/content?',self.page.locator('#flStage iframe').get_attribute('src'))
             self.assertEqual(opened,[])
         self.assertEqual(original.read_bytes(),original_bytes)
         self.assertEqual(self.page.evaluate('route()'),'workspace')
@@ -204,3 +243,39 @@ class ProjectLiteratureRuntimeTest(unittest.TestCase):
         self.assertEqual(self.page.locator('#pwProject').input_value(),pid)
         self.assertEqual(self.page.evaluate('route()'),'workspace')
         self.assertEqual(self.errors,[])
+
+    def test_batch_save_previews_exact_selection_and_keeps_default_target(self):
+        self.fixture(local=True)
+        self.load_page()
+        pid = self.create_project('Project batch save')
+        with workflow.WorkflowDB(self.database_path) as db:
+            self.default = zotero_sources.configure(db, pid, [], 'COLLA001')['collection']
+            records = [db.cache_result(pid, {'source': 'fixture', 'title': title})
+                       for title in ['Chosen first', 'Leave in project', 'Chosen last']]
+
+        def item(key):
+            row = self.remote.rows[key]
+            return {**sync._from_remote(row), 'collections': row['data']['collections'], 'version': row['version']}
+
+        def create(db, payload):
+            response = self.remote.request(self.cfg, '/items', 'POST', [payload])
+            return response['successful']['0']
+
+        with patch.object(zotero, 'item', side_effect=item), patch.object(zotero, 'add_item', side_effect=create), \
+             patch.object(zotero, 'items', return_value={'items': []}):
+            self.open_project(pid)
+            for rid in (records[0], records[2]):
+                self.page.locator(f'[data-pl-key="{rid}"]').check()
+            self.page.locator('#plSaveZotero').click()
+            target = self.page.locator('[data-save-target]')
+            self.assertEqual(target.input_value(), 'COLLA001')
+            target.select_option('COLLB001')
+            self.page.locator('[data-save-preview]').click()
+            self.page.locator('[data-save-result]').get_by_text('Chosen last', exact=False).wait_for()
+            self.assertFalse(self.remote.writes)
+            self.page.locator('[data-save-apply]').click()
+            self.page.locator('#plMessage').get_by_text('已保存 2 篇到 Zotero。').wait_for()
+        self.assertEqual({row['data']['title'] for row in self.remote.rows.values()}, {'Chosen first', 'Chosen last'})
+        self.assertTrue(all(row['data']['collections'] == ['COLLB001'] for row in self.remote.rows.values()))
+        with workflow.WorkflowDB(self.database_path) as db:
+            self.assertEqual(sync.binding(db, pid)['collection'], 'COLLA001')

@@ -181,9 +181,10 @@ def stage_zotero_import(db: WorkflowDB, task_id: str, collection: str = "",
     Zotero 里没 PDF 附件的条目照样进队列，标成「待手动」，不假装成功。
     """
     import zotero                                     # 只走本机 Local API；没启动会抛中文原因
-    keys = [k for k in (keys or []) if k]
+    if keys is not None and (not isinstance(keys, list) or not keys or any(not isinstance(k, str) or not k for k in keys)):
+        raise ValueError("请选择至少一篇 Zotero 文献")
     if keys:
-        rows = [zotero.item(k) for k in keys]
+        rows = [zotero.item(zotero._key(k)) for k in dict.fromkeys(keys)]
     else:
         coll_list = []
         if collections:
@@ -191,7 +192,7 @@ def stage_zotero_import(db: WorkflowDB, task_id: str, collection: str = "",
         elif collection:
             coll_list = [c.strip() for c in collection.split(",") if c.strip()]
         if not coll_list:
-            coll_list = [""]
+            raise ValueError("请选择文献，或明确指定要加入的 Collection")
 
         rows, seen_keys = [], set()
         for col in coll_list:
@@ -205,38 +206,42 @@ def stage_zotero_import(db: WorkflowDB, task_id: str, collection: str = "",
                 start += page["returned"]
                 if not page["hasMore"] or not page["returned"]:
                     break
+    import zotero_sync
+    cfg = zotero_sync.config(db)
+    library = zotero_sync.library(cfg)
+    bound = zotero_sync.binding(db, task_id)
+    if cfg.get('transport') != 'local' or (bound and bound['library'] != library):
+        raise ValueError('请核对项目绑定的本机 Zotero 库')
+    if any(not zotero._key(it['key']) or it.get('type') in ('attachment', 'note', 'annotation') for it in rows):
+        raise ValueError('只能加入 Zotero 文献条目')
+    if not bound:
+        db.db.execute('INSERT OR IGNORE INTO zotero_bindings VALUES (?,?,?,?)', (task_id, library, '', ''))
+        db.db.commit()
     done = manual = 0
     for it in rows:
-        import zotero_sync
-        zotero_sync.ensure(db)
         rid = zotero_sync.import_record(db, task_id, it['key'], {
             "source": "zotero", "title": it["title"], "authors": "; ".join(it["creators"]),
             "year": it["year"], "doi": it["doi"],
             "url": it["url"] or (f"https://doi.org/{it['doi']}" if it["doi"] else ""),
             "pdf_url": "", "abstract": it["abstract"],
         })
-        db.db.execute("INSERT OR IGNORE INTO zotero_item_links VALUES (?,?,?,?,?)",
-                      (task_id, rid, it["key"], it.get("version", 0), zotero_sync._hash(db.result(rid))))
-        db.db.commit()
+        zotero_sync.record_membership(db, task_id, library, rid, it['key'], it.get('version', 0))
         import project_library
-        project_library.index_record(db, task_id, rid)
-        path = zotero.pdf_path(it["key"])
-        if not path:
-            db.set_queue(task_id, rid, "manual", "", "Zotero 里这条没有 PDF 附件")
-            manual += 1
+        prior = db.db.execute("""SELECT p.source_path FROM project_paper_links l JOIN papers p ON p.id=l.paper_id
+            WHERE l.task_id=? AND l.result_id=?""", (task_id, rid)).fetchone()
+        if prior and prior['source_path'] and Path(prior['source_path']).is_file():
+            done += 1
             continue
         try:
             import project_sources
-            import project_library
-            copied = project_sources.import_zotero_pdf(db, task_id, it["key"])
-            path = copied["path"]
-            project_library.link_pdf(db, task_id, rid, copied["paper_id"])
+            linked = project_sources.reference_zotero_pdf(db, task_id, it["key"])
+            project_library.link_pdf(db, task_id, rid, linked["paper_id"])
         except Exception as exc:                      # 加密/损坏/不是真 PDF → 交给人工
             db.set_queue(task_id, rid, "manual", "", f"Zotero 附件读不了：{exc}")
             manual += 1
             continue
-        db.set_queue(task_id, rid, "downloaded", path, "")
-        db.set_zotero_stage(task_id, rid, "external", zotero_key=it["key"])
+        db.set_queue(task_id, rid, "downloaded", "", "")
+        db.set_zotero_stage(task_id, rid, "external", zotero_key=it["key"], attachment_key=linked["attachment_key"])
         done += 1
     if done:
         try:
@@ -430,6 +435,8 @@ def stage_read(db: WorkflowDB, task_id: str, paper_id: str, per_page: int = 2500
     from workflow import chat
     profile = db.active_model()
     paper = db.paper(paper_id)
+    if paper['task_id'] != task_id:
+        raise PermissionError('只能精读当前项目的文献')
     if paper["text_chars"] < 100:
         raise ValueError("这篇 PDF 疑似扫描件，没有文本层，无法精读。")
     pages = paper["pages"]

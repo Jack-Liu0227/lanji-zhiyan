@@ -360,7 +360,6 @@ window.zotOpen = zotOpen;
 async function zotLoad(reset){
   if(reset){
     zotStart = 0;
-    zotSelectedKeys.clear();
     if($("zotSelectAll")) $("zotSelectAll").checked = false;
   }
   const qs = new URLSearchParams({ collection: $("zotCollection").value,
@@ -389,7 +388,8 @@ function zotBind(){
     const n = zotSelectedKeys.size;
     const btn = $("zotToProject");
     if(btn){
-      btn.textContent = n > 0 ? `导入所选 ${n} 篇到项目` : "导入当前分类到项目";
+      btn.textContent = n > 0 ? `加入所选 ${n} 篇到项目` : "加入所选文献到项目";
+      btn.disabled = !n;
     }
   }
   const selAll = $("zotSelectAll");
@@ -409,12 +409,8 @@ function zotBind(){
     const btn = $("zotToProject"); btn.disabled = true;
     $("zotStatus").textContent = "正在导入题录并自动解析本机 PDF 附件…";
     const selKeys = Array.from(zotSelectedKeys);
-    const body = {task_id: curTask};
-    if(selKeys.length){
-      body.keys = selKeys;
-    } else {
-      body.collection = $("zotCollection").value;
-    }
+    if(!selKeys.length) return updateZotSelectCount();
+    const body = {task_id: curTask, keys: selKeys};
     try{
       const d = await api("/api/workflow/zotero", body);
       $("zotStatus").textContent = `✓ 成功导入 ${d.total} 条（已入库 ${d.downloaded} 篇，PDF 已就绪）。知识星图已同步更新！`;

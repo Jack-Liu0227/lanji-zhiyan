@@ -627,7 +627,7 @@ TOOL_RISK = {
     "project_list": "read_only", "skill_read": "read_only",
     "semantic_index": "local_execution",
     "zotero_search": "read_only", "zotero_item": "read_only", "zotero_import_pdf": "workspace_write",
-    "zotero_staged_list": "read_only", "zotero_staged_import": "external_write",
+    "zotero_staged_list": "read_only", "zotero_staged_import": "external_write", "zotero_staged_download": "network_read",
 }
 
 
@@ -2037,6 +2037,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
                 elif name in integration_names:
                     result = agent_integrations.invoke(name, db, ctx_id, args, assistant_id=aid, permission=permission)
                 elif name in ("skill_read", "skill_write") or (name.startswith("mcp_") and name != "mcp_register"):
+                    if bound and name in {capabilities._mcp_name("zotero", tool) for tool in ("zotero_create_item", "zotero_update_item")}:
+                        raise PermissionError('项目文献请通过保存预览写入 Zotero')
                     result = capabilities.invoke_tool(db, aid, name, args, project_dir)
                 else:
                     if name == "delegate":

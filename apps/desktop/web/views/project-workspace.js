@@ -733,7 +733,7 @@ const ProjectWorkspace = (() => {
     if(projectId!==mounted?.id){await openProject(projectId);}
     const state=get(projectId);if(!live(state)||!await flush())return;
     const project=(S.tasks||[]).find(p=>p.id===projectId)||state.project?.task||{};
-    const rel=(row.read_only?relative(row.path,project.base_dir):'')||row.rel||row.relative||relative(row.path,project.base_dir);
+    const rel=row.paper_id?`paper:${row.paper_id}`:(row.read_only?relative(row.path,project.base_dir):'')||row.rel||row.relative||relative(row.path,project.base_dir);
     if(!rel)return error('该文件尚未作为当前项目副本保存，请先导入项目后再操作。',state);
     const task=state.review,output=options.inspection?.origin==='task'||row.read_only&&(task?.outputs||[]).some(o=>o.path===row.path),peek=!output&&(options.peek===true||options.peek!==false&&state.surface==='chat');
     state.fileRequest=(state.fileRequest||0)+1;state.fileRow={...row,rel,name:row.name||rel.split('/').pop(),ext:row.ext||rel.split('.').pop(),project_id:projectId};
@@ -747,7 +747,7 @@ const ProjectWorkspace = (() => {
     state.fileRow=row;persist(state);document.getElementById('pwResourceTitle').textContent=row.name;layoutPanels(state);
     if(row.read_only){flCurrentMode='preview';flUpdateModeTabs();flRenderContent();document.getElementById('flModeTabs').style.display='none';document.getElementById('flSaveBtn').style.display='none';}
   }
-  function currentFile(){if(!active()||mounted.surface==='chat'&&!mounted.peek)return null;if(mounted.section==='files'&&mounted.fileRow)return {project_id:mounted.id,relative:mounted.fileRow.rel};if(mounted.section==='notes'&&typeof mdProj!=='undefined'&&mdProj?.path)return {project_id:mounted.id,relative:mdProj.path};return null;}
+  function currentFile(){if(!active()||mounted.surface==='chat'&&!mounted.peek)return null;if(mounted.section==='files'&&mounted.fileRow&&!mounted.fileRow.paper_id)return {project_id:mounted.id,relative:mounted.fileRow.rel};if(mounted.section==='notes'&&typeof mdProj!=='undefined'&&mdProj?.path)return {project_id:mounted.id,relative:mdProj.path};return null;}
   async function addReference(state,quotation=''){
     if(!live(state)||!await flush())return;const file=currentFile();if(!file)return notice('先打开项目文件、PDF 或笔记，再引用到当前对话。',state);
     const ref={relative:file.relative,name:file.relative.split('/').pop(),quote:quotation,read_only:state.section==='files'&&!!state.fileRow?.read_only};if(!draft(state).refs.some(r=>r.relative===ref.relative&&r.quote===ref.quote))draft(state).refs.push(ref);persist(state);paintRefs(state);await switchSurface('chat',state);document.getElementById('pwAsk').focus();
@@ -778,7 +778,7 @@ const ProjectWorkspace = (() => {
     if(!text){text=await uiPrompt('粘贴要引用的原文，将关联当前打开的项目资料','');if(text===null)return;}
     if(text.trim())await addReference(state,text.trim());
   }
-  async function openPaper(row){const state=mounted;if(!live(state))return;const data=await api('/api/task?id='+encodeURIComponent(state.id));if(!live(state))return;state.project=data;const paper=(data.paper_list||[]).find(p=>p.id===row.paper_id||p.id===row.id);if(!paper)return error('没有找到项目 PDF 副本，请先导入或下载到当前项目。',state);await openFile({path:paper.source_path||paper.path,name:paper.filename||paper.title||row.title,ext:'pdf',read_only:true},state.id);}
+  async function openPaper(row){const state=mounted;if(!live(state))return;const data=await api('/api/task?id='+encodeURIComponent(state.id));if(!live(state))return;state.project=data;const paper=(data.paper_list||[]).find(p=>p.id===row.paper_id||p.id===row.id);if(!paper)return error('没有找到这篇项目 PDF。',state);await openFile({path:paper.source_path||paper.path,paper_id:paper.source_path?'':paper.id,name:paper.filename||paper.title||row.title,ext:'pdf',read_only:true},state.id);}
   async function openProject(id){if(!S.tasks.some(p=>p.id===id))await refreshState(false);if(!S.tasks.some(p=>p.id===id))throw new Error('项目不存在');if(active())await switchProject(id);else{curTask=id;localStorage.setItem('rw-task',id);await openTab('workspace');}return get(id);}
   async function openNodeResult(selection,projectId=curTask,options={}){
     if(typeof selection==='string')selection={task_id:selection};

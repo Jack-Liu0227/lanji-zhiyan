@@ -92,6 +92,8 @@ def items(db, project_id):
     queue = {r["id"]: r for r in db.queue(project_id)}
     has_links = db.db.execute("SELECT 1 FROM sqlite_master WHERE name='zotero_item_links'").fetchone()
     zotero = {r["result_id"]: r["item_key"] for r in db.db.execute("SELECT * FROM zotero_item_links WHERE task_id=?", (project_id,))} if has_links else {}
+    references = {r["paper_id"]: r["attachment_key"] for r in db.db.execute(
+        "SELECT paper_id,attachment_key FROM paper_zotero_refs WHERE task_id=?", (project_id,))}
     used, result = set(), []
     for row in records(db, project_id):
         pid = next((explicit[r] for r in row["result_ids"] if r in explicit), "")
@@ -103,14 +105,16 @@ def items(db, project_id):
         queued = next((queue.get(r, {}) for r in row["result_ids"] if r in queue), {})
         used.add(pid)
         result.append({**paper, **row, "paper_id": pid, "source_path": paper.get("source_path", ""),
-                       "has_pdf": bool(paper and Path(paper["source_path"]).is_file()),
+                       "has_pdf": bool(pid in references or (paper and Path(paper["source_path"]).is_file())),
+                       "zotero_reference": pid in references,
                        "zotero_key": next((zotero[r] for r in row["result_ids"] if r in zotero), "") or queued.get("zotero_key", ""),
                        "zotero_status": queued.get("zotero_status", ""),
                        "zotero_attachment_key": queued.get("zotero_attachment_key", ""),
                        "zotero_error": queued.get("zotero_error", "")})
     result.extend({**p, "paper_id": p["id"], "result_id": "", "result_ids": [], "zotero_key": "",
                    "zotero_status": "", "zotero_attachment_key": "", "zotero_error": "",
-                   "has_pdf": Path(p["source_path"]).is_file()} for pid, p in papers.items() if pid not in used)
+                   "zotero_reference": pid in references,
+                   "has_pdf": pid in references or Path(p["source_path"]).is_file()} for pid, p in papers.items() if pid not in used)
     return result
 
 

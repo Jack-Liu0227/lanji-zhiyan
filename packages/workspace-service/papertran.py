@@ -64,11 +64,11 @@ KW_RE = re.compile(r"(?i)key\s?words?\s*[:：]?\s*(.{5,240})")
 
 # ---------------- PDF 文件 ----------------
 def pdf_path(db: Any, paper_id: str) -> Path | None:
-    row = db.db.execute("SELECT source_path FROM papers WHERE id=?", (paper_id,)).fetchone()
+    row = db.db.execute("SELECT task_id FROM papers WHERE id=?", (paper_id,)).fetchone()
     if not row:
         return None
-    p = Path(row["source_path"])
-    return p if p.is_file() and p.suffix.lower() == ".pdf" else None
+    from project_sources import resolve_pdf_for_read
+    return resolve_pdf_for_read(db, row["task_id"], paper_id)
 
 
 # ---------------- 元数据 ----------------

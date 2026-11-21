@@ -259,12 +259,12 @@ def _to_remote(local: dict, collection: str, existing: dict | None = None, task_
 _sync_lock = threading.RLock()
 
 
-def sync(db, task_id, mode="merge", dry_run=True, plan_token="", skip_conflicts=False):
+def sync(db, task_id, mode="merge", dry_run=True, plan_token="", skip_conflicts=False, *, automatic=False):
     with _sync_lock:
-        return _sync(db, task_id, mode, dry_run, plan_token, skip_conflicts)
+        return _sync(db, task_id, mode, dry_run, plan_token, skip_conflicts, automatic=automatic)
 
 
-def _sync(db: Any, task_id: str, mode: str = "merge", dry_run: bool = True, plan_token: str = "", skip_conflicts=False) -> dict:
+def _sync(db: Any, task_id: str, mode: str = "merge", dry_run: bool = True, plan_token: str = "", skip_conflicts=False, *, automatic=False) -> dict:
     """Merge metadata and membership; never deletes local papers or remote items."""
     if mode not in {"pull", "push", "merge"}:
         raise ValueError("同步方式应为 pull / push / merge")
@@ -305,7 +305,7 @@ def _sync(db: Any, task_id: str, mode: str = "merge", dry_run: bool = True, plan
             continue
         if not existing:
             doi = project_library.identity(row) if row.get("doi") else ""
-            pool = remote if mode == 'pull' else [r for r in all_remote if r['key'] not in excluded]
+            pool = remote if mode == 'pull' or automatic else [r for r in all_remote if r['key'] not in excluded]
             candidates = [r for r in pool if doi and doi == project_library.identity(_from_remote(r))]
             if not candidates:
                 candidates = [r for r in pool
@@ -330,7 +330,7 @@ def _sync(db: Any, task_id: str, mode: str = "merge", dry_run: bool = True, plan
                 conflicts.append({"result_id": row["id"], "key": existing["key"], "title": row["title"],
                                   "reason": "本地与远端均有变更，保留两端原文；先手动解决再同步"})
                 continue
-            if mode == "push" or (mode == "merge" and lc and not rc):
+            if (mode == "push" and (link or not automatic)) or (mode == "merge" and lc and not rc):
                 payload = _to_remote(row, collection, existing, task_id)
                 same = payload == existing.get("data", {})
                 actions.append({"kind": "link" if same else "push", "result_id": row["id"], "key": existing["key"],
@@ -338,14 +338,8 @@ def _sync(db: Any, task_id: str, mode: str = "merge", dry_run: bool = True, plan
             else:
                 actions.append({"kind": "pull", "result_id": row["id"], "key": existing["key"],
                                 "version": existing["version"], "payload": _from_remote(existing),
-                                "membership": _to_remote(_from_remote(existing), collection, existing, task_id) if mode == "merge" else None})
-        elif mode in {"push", "merge"}:
-            if link:
-                conflicts.append({"result_id": row["id"], "key": link["item_key"], "title": row["title"],
-                                  "reason": "已映射条目不存在；不会复活远端删除"})
-            else:
-                actions.append({"kind": "push", "result_id": row["id"], "key": "", "version": 0,
-                                "payload": _to_remote(row, collection, task_id=task_id)})
+                                "membership": _to_remote(_from_remote(existing), collection, existing, task_id)
+                                if mode == "merge" and (link or not automatic) else None})
     ambiguous = {key for key, rows in matched.items() if len(rows) > 1}
     if ambiguous:
         actions = [a for a in actions if a["key"] not in ambiguous]
@@ -358,7 +352,8 @@ def _sync(db: Any, task_id: str, mode: str = "merge", dry_run: bool = True, plan
             if row["key"] not in used:
                 actions.append({"kind": "pull", "result_id": "", "key": row["key"], "version": row["version"],
                                 "payload": _from_remote(row),
-                                "membership": _to_remote(_from_remote(row), collection, row, task_id) if mode == "merge" else None})
+                                "membership": _to_remote(_from_remote(row), collection, row, task_id)
+                                if mode == "merge" and not automatic else None})
     identities = {}
     for action in actions:
         payload = action['payload'] if action['kind'] == 'pull' else _from_remote({'data': action['payload']})
@@ -440,6 +435,19 @@ def import_record(db, task_id, key, payload):
     return rid
 
 
+def record_membership(db, task_id, library_id, rid, key, version):
+    import project_library
+    row = db.result(rid)
+    with db.db:
+        db.db.execute('INSERT INTO zotero_item_links VALUES (?,?,?,?,?) ON CONFLICT(task_id,result_id) DO UPDATE '
+                      'SET item_key=excluded.item_key, remote_version=excluded.remote_version, '
+                      'local_hash=CASE WHEN zotero_item_links.item_key=excluded.item_key THEN zotero_item_links.local_hash ELSE excluded.local_hash END',
+                      (task_id, rid, key, version, _hash(row)))
+        db.db.execute("INSERT OR REPLACE INTO zotero_project_memberships VALUES (?,?,?,?,?,'active','',?)",
+                      (task_id, library_id, key, rid, project_library.identity(row), str(time.time())))
+    project_library.index_record(db, task_id, rid)
+
+
 _auto_lock = threading.Lock()
 _workers = set()
 
@@ -486,8 +494,8 @@ def auto_tick(db):
             if pending.get("expires", 0) > time.time():
                 continue
             try:
-                plan = sync(db, task_id, state["mode"], True)
-                result = sync(db, task_id, state["mode"], False, plan["plan_token"], skip_conflicts=True)
+                plan = sync(db, task_id, state["mode"], True, automatic=True)
+                result = sync(db, task_id, state["mode"], False, plan["plan_token"], skip_conflicts=True, automatic=True)
                 state.update(status=("conflict" if plan["conflicts"] else "synced") if result.get("ok") else "error",
                              conflicts=plan["conflicts"], error=result.get("error", ""), last_sync=result.get("last_sync", ""))
                 count += 1
@@ -546,12 +554,42 @@ def route(method: str, path: str, body: dict, query: dict, db: Any) -> dict | No
     if path == '/api/zotero/web/select' and method == 'POST':
         import zotero_sources
         return zotero_sources.select(db, task_id, body.get('keys'))
+    if path == '/api/zotero/web/join' and method == 'POST':
+        import zotero_sources
+        return zotero_sources.join(db, task_id, body.get('keys'), body.get('library'))
+    if path == '/api/zotero/web/reference' and method == 'POST':
+        from project_sources import use_zotero_reference
+        if body.get('confirm') is not True:
+            raise ValueError('请确认切换 PDF 读取来源')
+        return use_zotero_reference(db, task_id, str(body.get('paper_id') or ''))
+    if path == '/api/zotero/web/target' and method == 'POST':
+        import zotero_sources
+        with _sync_lock:
+            current = binding(db, task_id)
+            cfg = config(db)
+            if body.get('library') != library(cfg) or (current and current['library'] != library(cfg)):
+                raise ValueError('Zotero 文献库已变化，请重新加载分类')
+            collection = str(body.get('collection') or '')
+            if body.get('create') is True:
+                task = db.db.execute('SELECT title FROM research_tasks WHERE id=?', (task_id,)).fetchone()
+                if not task or body.get('confirm') is not True:
+                    raise ValueError('请确认新建项目同名分类')
+                # Validate saved sources before making an external change.
+                for source in current.get('sources', []):
+                    request(cfg, '/collections/' + source['collection'])
+                exact = [row for row in all_pages(cfg, '/collections')
+                         if row.get('data', {}).get('name') == task['title'] and not row['data'].get('parentCollection')]
+                if exact:
+                    raise ValueError('已存在同名顶层分类，请从列表中选择')
+                collection = _saved(request(cfg, '/collections', 'POST', [{'name': task['title'], 'parentCollection': False}]))['key']
+            return {'binding': zotero_sources.configure(db, task_id, current.get('sources', []), collection)}
     if path == "/api/zotero/web/auto":
         return {"auto_sync": configure_auto(db, task_id, body) if method == "POST" else auto_state(db, task_id),
                 "binding": binding(db, task_id)}
     if method == "GET" and path == "/api/zotero/web/config":
         import zotero
-        return {"config": store.public(config(db)), "binding": binding(db, task_id) if task_id else {}, "docs": DOCS,
+        cfg = config(db)
+        return {"config": store.public(cfg), "library": library(cfg), "binding": binding(db, task_id) if task_id else {}, "docs": DOCS,
                 "local": {**zotero.status(), **zotero.local_write_state(db)}}
     if method == "POST" and path == "/api/zotero/web/authorize":
         import zotero

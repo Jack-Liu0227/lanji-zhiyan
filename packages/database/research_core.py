@@ -236,7 +236,8 @@ class ResearchDB:
         self.db.commit()
         return {"deleted": bool(row)}
 
-    def ingest_pdf(self, task_id: str, source: str | Path, *, deduplicate: bool = True) -> dict[str, Any]:
+    def ingest_pdf(self, task_id: str, source: str | Path, *, deduplicate: bool = True,
+                   zotero_ref: tuple[str, str, str] | None = None, replace_id: str = "") -> dict[str, Any]:
         path = Path(source).expanduser().resolve()
         if path.suffix.lower() != ".pdf":
             raise ValueError("only .pdf files are accepted")
@@ -245,26 +246,42 @@ class ResearchDB:
         if self.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (task_id,)).fetchone() is None:
             raise KeyError(task_id)
         sha = digest(path)
-        existing = self.db.execute("SELECT id FROM papers WHERE task_id=? AND sha256=?", (task_id, sha)).fetchone() if deduplicate else None
+        existing = self.db.execute("SELECT id FROM papers WHERE task_id=? AND sha256=? AND source_path!=''",
+                                   (task_id, sha)).fetchone() if deduplicate and not zotero_ref else None
         if existing:
             return self.paper(existing["id"])
         pages = [(i + 1, t) for i, t in enumerate(pdfio.page_texts(path))]
         text_chars = sum(len(text) for _, text in pages)
         ocr_status = "text" if text_chars >= 100 else "likely-scan"
-        paper_id = uuid.uuid4().hex
+        paper_id = replace_id or uuid.uuid4().hex
         t = now()
-        self.db.execute(
-            "INSERT INTO papers VALUES (?,?,?,?,?,?,?,?,?)",
-            (paper_id, task_id, path.name, str(path), sha, len(pages), text_chars, ocr_status, t),
-        )
-        self.db.executemany("INSERT INTO paper_pages VALUES (?,?,?)", [(paper_id, n, text) for n, text in pages])
-        self.db.execute("UPDATE research_tasks SET stage='reading', updated_at=? WHERE id=?", (t, task_id))
-        self.db.commit()
+        with self.db:
+            if replace_id:
+                updated = self.db.execute(
+                    "UPDATE papers SET source_path='' WHERE id=? AND task_id=? AND sha256=?",
+                    (paper_id, task_id, sha),
+                )
+                if not zotero_ref or not updated.rowcount:
+                    raise ValueError("The attachment differs from the indexed project PDF")
+            else:
+                self.db.execute(
+                    "INSERT INTO papers VALUES (?,?,?,?,?,?,?,?,?)",
+                    (paper_id, task_id, path.name, "" if zotero_ref else str(path), sha, len(pages), text_chars, ocr_status, t),
+                )
+                self.db.executemany("INSERT INTO paper_pages VALUES (?,?,?)", [(paper_id, n, text) for n, text in pages])
+            if zotero_ref:
+                self.db.execute("INSERT INTO paper_zotero_refs VALUES (?,?,?,?,?)", (paper_id, task_id, *zotero_ref))
+            self.db.execute("UPDATE research_tasks SET stage='reading', updated_at=? WHERE id=?", (t, task_id))
         try:
             import asset_service
-            asset_service.register_file(self, path, project_id=task_id, kind="paper",
-                                        title=path.stem, source="paper_ingest",
-                                        metadata={"paper_id": paper_id, "pages": len(pages)})
+            if zotero_ref:
+                asset_service.register(self, project_id=task_id, kind="paper", title=path.stem,
+                                       canonical_uri=f"research://{task_id}/paper/{paper_id}", storage="virtual",
+                                       content_hash=sha, source="zotero_reference", metadata={"paper_id": paper_id})
+            else:
+                asset_service.register_file(self, path, project_id=task_id, kind="paper",
+                                            title=path.stem, source="paper_ingest",
+                                            metadata={"paper_id": paper_id, "pages": len(pages)})
         except Exception:
             # Asset indexing is a recoverable projection; paper ingestion itself
             # must remain usable for legacy databases and offline repairs.
@@ -282,6 +299,10 @@ class ResearchDB:
         row = self.db.execute("SELECT * FROM papers WHERE id=?", (paper_id,)).fetchone()
         if not row:
             raise KeyError(paper_id)
+        if not row['source_path'] and self.db.execute('SELECT 1 FROM paper_zotero_refs WHERE paper_id=?', (paper_id,)).fetchone():
+            from project_sources import resolve_pdf_for_read
+            resolve_pdf_for_read(self, row['task_id'], paper_id)
+            row = self.db.execute('SELECT * FROM papers WHERE id=?', (paper_id,)).fetchone()
         pages = list(self.db.execute("SELECT page_no, text FROM paper_pages WHERE paper_id=? ORDER BY page_no", (paper_id,)))
         return {**dict(row), "pages": [dict(p) for p in pages]}
 
@@ -350,9 +371,9 @@ class ResearchDB:
                 storage="sqlite", source="evidence_gate", body=excerpt,
                 metadata={"evidence_id": row["id"], "paper_id": paper_id, "page_no": page_no},
             )
-            paper_asset = self.db.execute(
-                "SELECT id FROM assets WHERE canonical_uri=?", (str(Path(paper["source_path"]).resolve()),)
-            ).fetchone()
+            uri = (str(Path(paper["source_path"]).resolve()) if paper["source_path"] else
+                   f"research://{paper['task_id']}/paper/{paper_id}")
+            paper_asset = self.db.execute("SELECT id FROM assets WHERE canonical_uri=?", (uri,)).fetchone()
             if paper_asset:
                 asset_service.link(self, evidence_asset["id"], "derived_from", paper_asset["id"],
                                    {"page_no": page_no, "excerpt": excerpt})
@@ -361,7 +382,8 @@ class ResearchDB:
         return row
 
     def evidence(self, task_id: str | None = None) -> list[sqlite3.Row]:
-        sql = "SELECT e.*, p.filename FROM evidence e JOIN papers p ON p.id=e.paper_id"
+        sql = """SELECT e.*, p.filename, r.evidence_id IS NOT NULL AS needs_recheck FROM evidence e
+                 JOIN papers p ON p.id=e.paper_id LEFT JOIN paper_evidence_recheck r ON r.evidence_id=e.id"""
         args: tuple[Any, ...] = ()
         if task_id:
             sql += " WHERE p.task_id=?"

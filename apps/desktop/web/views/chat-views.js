@@ -988,6 +988,21 @@ function appendOne(box,ev,who){
         if(copyOut) copyOut.onclick=e=>{e.stopPropagation();navigator.clipboard.writeText(outputContent).then(()=>{copyOut.textContent='已复制';setTimeout(()=>copyOut.textContent='复制',1500);});};
       }
       if(ev.ok&&ev.navigation)WorkflowReview.mount(card,ev.navigation);
+      if(ev.ok&&ev.name==='zotero_staged_import'&&ev.result?.plan_token&&ev.result.actions?.length&&!ev.result.conflicts?.length){
+        const preview=ev.result;
+        const button=document.createElement('button');button.type='button';button.className='btn ghost';
+        button.textContent=`核对并保存 ${preview.actions.length} 篇到 Zotero`;
+        button.onclick=async()=>{
+          if(!await uiConfirm(`保存到「${preview.collection_name}」？\n${preview.actions.map(row=>`${row.title} · ${row.kind==='create'?'新建':row.add_collection?'复用并加入分类':'已在分类中'}${row.pdf?' · PDF':''}`).join('\n')}`))return;
+          button.disabled=true;
+          try{
+            const out=await api('/api/zotero/web/staged/apply',{task_id:preview.task_id,plan_token:preview.plan_token,confirm:true});
+            button.textContent=`已保存 ${out.applied.length} 篇`;
+            if(out.failed.length)uiNotify(out.failed.map(row=>row.error).join('；'));
+          }catch(err){button.disabled=false;uiNotify(err.message);}
+        };
+        card.append(button);
+      }
       if(ev.ok&&ev.name==='project_create_from_idea'&&ev.result?.workspace?.project_id){
         const button=document.createElement('button');button.type='button';button.className='btn ghost';button.dataset.stewardProject=ev.result.workspace.project_id;button.textContent='进入项目工作区 ↗';
         button.onclick=async()=>{await refreshState(false);await ProjectWorkspace.openProject(button.dataset.stewardProject);await ProjectWorkspace.showResource('workflow');};

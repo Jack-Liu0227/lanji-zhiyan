@@ -11,7 +11,8 @@
         <span class="pill" id="plCount"></span></header>
       <details id="plManagement"><summary>管理 Zotero</summary><div class="pl-manager-settings"><button class="btn ghost" id="plConnection">Zotero 连接设置</button></div><div id="plZotero"><p class="hint">正在读取同步配置…</p></div></details>
       <div class="pl-tools"><input class="control" type="search" id="plSearch" aria-label="搜索项目文献" placeholder="搜索标题、作者、DOI 或 Zotero Key"><select class="control" id="plFilter" aria-label="筛选项目文献"><option value="all">全部文献</option><option value="zotero">已关联 Zotero</option><option value="pdf">有 PDF</option><option value="metadata">仅题录</option></select><button class="btn ghost" id="plRefresh">刷新</button></div>
-      <div class="pl-tools pl-selection" id="plSelection" hidden><label><input type="checkbox" id="plSelectAll"> 全选 Zotero 关联</label><span class="hint" id="plSelected">已选 0 篇</span><button class="btn ghost" id="plRemove" disabled>移除所选项目关联</button></div>
+      <div class="pl-tools pl-selection" id="plSelection" hidden><label><input type="checkbox" id="plSelectAll"> 全选当前列表</label><span class="hint" id="plSelected">已选 0 篇</span><button class="btn" id="plSaveZotero" disabled>保存所选到 Zotero</button><button class="btn ghost" id="plRemove" disabled>移除所选项目关联</button></div>
+      <section id="plZoteroSave" class="pl-editor" hidden aria-label="保存到 Zotero"></section>
       <div id="plMessage" role="status" aria-live="polite"></div><div id="plError" class="pl-error" role="alert"></div>
       <section id="plEditor" class="pl-editor" hidden aria-label="编辑文献题录"></section>
       <div id="plList" class="pl-list"></div></section>`;
@@ -36,23 +37,25 @@
       finally { if(live()){button.disabled=false;updateSelection();} }
     }
     function updateSelection() {
-      const keys=filtered().filter(r=>r.zotero_key).map(r=>r.zotero_key);
+      const keys=filtered().filter(r=>r.result_id).map(r=>r.result_id);
       $('plSelection').hidden=!keys.length&&!selected.size;
       $('plSelected').textContent=`已选 ${selected.size} 篇`;
-      $('plRemove').disabled=!selected.size;
+      $('plRemove').disabled=!rows.some(r=>selected.has(r.result_id)&&r.zotero_key);
+      $('plSaveZotero').disabled=!selected.size;
+      $('plSaveZotero').textContent=`保存所选 ${selected.size} 篇到 Zotero`;
       $('plSelectAll').disabled=!keys.length;
       $('plSelectAll').checked=!!keys.length&&keys.every(k=>selected.has(k));
       $('plSelectAll').indeterminate=keys.some(k=>selected.has(k))&&!$('plSelectAll').checked;
     }
     function paint() {
       if(!live()) return;
-      const visible=filtered(), available=new Set(rows.map(r=>r.zotero_key).filter(Boolean));
+      const visible=filtered(), available=new Set(rows.map(r=>r.result_id).filter(Boolean));
       for(const key of selected) if(!available.has(key)) selected.delete(key);
       $('plCount').textContent=`${rows.length} 篇`;
       $('plList').innerHTML=visible.map(r=>{
         const zoteroStatus=r.zotero_status==='imported'?'<span class="pill">已写入 Zotero</span>':r.zotero_status==='failed'?`<span class="pill">Zotero 待重试${r.zotero_error?`：${h(r.zotero_error)}`:''}</span>`:(r.has_pdf&&r.result_id&&r.zotero_status==='staged'&&!r.zotero_key?'<span class="pill">暂存待写入 Zotero</span>':'');
-        const canImport=!!(r.result_id&&r.has_pdf&&['staged','failed'].includes(r.zotero_status)&&(!r.zotero_key||r.zotero_status==='failed'));
-        return `<article class="pl-row" data-pl-id="${h(r.id)}"><input type="checkbox" data-pl-key="${h(r.zotero_key)}" aria-label="选择 ${h(r.title||r.filename)}" ${r.zotero_key?'':'disabled'} ${selected.has(r.zotero_key)?'checked':''} title="${r.zotero_key?'选择项目关联':'关联 Zotero 后可批量移除该关联'}"><div class="pl-main"><h4>${h(r.title||r.filename||'未命名')}</h4><p>${h(r.authors||'作者未识别')}${r.year?' · '+h(r.year):''}${r.doi?' · DOI '+h(r.doi):''}</p><span class="pill">${r.has_pdf?'有 PDF':'题录'}</span> ${r.zotero_key?`<span class="pill">Zotero · ${h(r.zotero_key)}</span>`:''}${zoteroStatus}<div class="es-badges" data-journal="${h(r.journal||r.title||'')}" style="margin-top:6px"></div></div><div class="pl-actions">${LiteratureImport.safeLink(r.url||r.doi&&"https://doi.org/"+r.doi)?`<a class="btn ghost" href="${h(LiteratureImport.safeLink(r.url||"https://doi.org/"+r.doi))}" target="_blank" rel="noopener noreferrer">查看原文 ↗</a>`:""}${r.result_id?'<button class="btn ghost" data-pl-edit>编辑题录</button>':''}${r.has_pdf&&r.paper_id?'<button class="btn ghost" data-pl-read>阅读 PDF</button>':''}${canImport?`<button class="btn ghost" data-pl-stage-import>${r.zotero_status==='failed'?'重试写入 Zotero':'写入 Zotero'}</button>`:''}</div></article>`;}).join('') || `<p class="hint">${rows.length?'没有匹配的文献，请调整筛选。':'项目暂无文献。可从情报日报、链接 / DOI 或 Zotero 添加题录。'}</p>`;
+        const canImport=!!r.result_id;
+        return `<article class="pl-row" data-pl-id="${h(r.id)}"><input type="checkbox" data-pl-key="${h(r.result_id)}" aria-label="选择 ${h(r.title||r.filename)}" ${r.result_id?'':'disabled'} ${selected.has(r.result_id)?'checked':''}><div class="pl-main"><h4>${h(r.title||r.filename||'未命名')}</h4><p>${h(r.authors||'作者未识别')}${r.year?' · '+h(r.year):''}${r.doi?' · DOI '+h(r.doi):''}</p><span class="pill">${r.zotero_reference?'Zotero PDF 引用':r.has_pdf?'有 PDF':'题录'}</span> ${r.zotero_key?`<span class="pill">Zotero · ${h(r.zotero_key)}</span>`:''}${zoteroStatus}<div class="es-badges" data-journal="${h(r.journal||r.title||'')}" style="margin-top:6px"></div></div><div class="pl-actions">${LiteratureImport.safeLink(r.url||r.doi&&"https://doi.org/"+r.doi)?`<a class="btn ghost" href="${h(LiteratureImport.safeLink(r.url||"https://doi.org/"+r.doi))}" target="_blank" rel="noopener noreferrer">查看原文 ↗</a>`:""}${r.result_id?'<button class="btn ghost" data-pl-edit>编辑题录</button>':''}${r.has_pdf&&r.paper_id?'<button class="btn ghost" data-pl-read>阅读 PDF</button>':''}${r.zotero_key?'<button class="btn ghost" data-pl-open-zotero>在 Zotero 中打开</button>':''}${canImport?'<button class="btn ghost" data-pl-stage-import>保存到 Zotero</button>':''}</div></article>`;}).join('') || `<p class="hint">${rows.length?'没有匹配的文献，请调整筛选。':'项目暂无文献。可从情报日报、链接 / DOI 或 Zotero 添加题录。'}</p>`;
       $('plList').querySelectorAll('[data-pl-key]').forEach(el=>el.onchange=()=>{el.checked?selected.add(el.dataset.plKey):selected.delete(el.dataset.plKey);updateSelection();});
       $('plList').querySelectorAll('[data-pl-edit]').forEach(el=>el.onclick=()=>{
         if(saving) return;
@@ -68,30 +71,86 @@
       }));
       $('plList').querySelectorAll('[data-pl-stage-import]').forEach(el=>el.onclick=()=>run(el,async()=>{
         const row=rows.find(r=>r.id===el.closest('[data-pl-id]').dataset.plId);
-        if(!row?.result_id) throw new Error('\u8fd9\u6761\u6682\u5b58\u6587\u732e\u7f3a\u5c11\u68c0\u7d22\u8bb0\u5f55');
-        const plan=await api('/api/zotero/web/staged/plan',{task_id:project,result_ids:[row.result_id],attachment_mode:'plugin'});
-        if(plan.conflicts?.length) throw new Error(plan.conflicts.map(item=>item.reason||'Zotero \u5339\u914d\u51b2\u7a81').join('\n'));
-        if(!plan.actions?.length) throw new Error('\u6ca1\u6709\u53ef\u5199\u5165\u7684\u6682\u5b58\u6587\u732e');
-        if(!await uiConfirm(`\u5c06\u201c${row.title||row.filename}\u201d\u5199\u5165 Zotero\uff0c\u5e76\u7531\u9644\u4ef6\u7ba1\u7406\u63d2\u4ef6\u63a5\u7ba1 PDF\u3002\u662f\u5426\u7ee7\u7eed\uff1f`)) return;
-        const result=await api('/api/zotero/web/staged/apply',{task_id:project,plan_token:plan.plan_token,confirm:true});
-        if(result.failed?.length) throw new Error(result.failed.map(item=>item.error||'\u5199\u5165\u5931\u8d25').join('\n'));
-        message('\u5df2\u5199\u5165 Zotero\uff0c\u6682\u5b58 PDF \u4ecd\u4fdd\u7559\u3002');
-        await refresh();
+        await openSave([row.result_id]);
+      }));
+      $('plList').querySelectorAll('[data-pl-open-zotero]').forEach(el=>el.onclick=()=>run(el,async()=>{
+        const row=rows.find(r=>r.id===el.closest('[data-pl-id]').dataset.plId);
+        await api('/api/zotero/select?key='+encodeURIComponent(row.zotero_key));
       }));
       $('plList').querySelectorAll('[data-pl-id]').forEach(el=>{
         const row=rows.find(r=>r.id===el.dataset.plId);
-        if(!row.zotero_key||row.has_pdf) return;
-        const button=document.createElement('button');button.className='btn ghost';button.dataset.plImportPdf='';button.textContent='导入本机 PDF';
+        if(!row.zotero_key||row.zotero_reference) return;
+        if(row.has_pdf&&row.paper_id){
+          const button=document.createElement('button');button.className='btn ghost';button.textContent='改用 Zotero 原件';
+          button.onclick=()=>run(button,async()=>{
+            if(!await uiConfirm('改用 Zotero 中内容相同的 PDF？当前项目中的文件会保留。')||!live())return;
+            await api('/api/zotero/web/reference',{task_id:project,paper_id:row.paper_id,confirm:true});
+            message('已改用 Zotero 原件。');await refresh();
+          });
+          el.querySelector('.pl-actions').append(button);
+          return;
+        }
+        const button=document.createElement('button');button.className='btn ghost';button.dataset.plImportPdf='';button.textContent='引用本机 PDF';
         button.onclick=()=>run(button,async()=>{
           const result=await api('/api/workflow/zotero',{task_id:project,keys:[row.zotero_key]});
           if(!live())return;
-          message(result.downloaded?'PDF 已导入当前项目。':'未能导入 PDF，请检查 Zotero 附件；可在工作流下载队列查看原因。');
+          message(result.downloaded?'已关联 Zotero PDF。':'Zotero 附件在本机不可读。');
           await refresh();
         });
         el.querySelector('.pl-actions').append(button);
       });
       if(typeof spLoadPaperBadges==='function') spLoadPaperBadges($('plList'));
       updateSelection();
+    }
+    async function openSave(resultIds){
+      if(!resultIds.length)return;
+      const [settings,list]=await Promise.all([api('/api/zotero/web/config?task_id='+encodeURIComponent(project)),api('/api/zotero/web/collections')]);
+      if(!live())return;
+      if(settings.config?.transport!=='local')throw new Error('请切换到本机 Zotero 保存项目文献');
+      const panel=$('plZoteroSave'); let batch, matches={}, busy=false;
+      panel.hidden=false;
+      panel.innerHTML=`<h4>保存 ${resultIds.length} 篇到 Zotero</h4><div class="pl-tools"><label>目标分类 <select class="control" data-save-target><option value="">请选择分类</option>${(list.collections||[]).map(row=>`<option value="${h(row.key)}">${h(row.data?.name||row.key)} · ${h(row.key)}</option>`).join('')}</select></label><button class="btn ghost" data-save-download>下载所选开放获取 PDF</button><button class="btn" data-save-preview>预览</button><button class="btn" data-save-apply disabled>确认保存</button><button class="btn ghost" data-save-close>取消</button></div><div data-save-result aria-live="polite"></div>`;
+      const get=key=>panel.querySelector(`[data-save-${key}]`), target=get('target'), details=get('result');
+      target.value=settings.binding?.collection||'';
+      if(target.selectedIndex<0)target.value='';
+      const invalidate=()=>{batch=null;get('apply').disabled=true;};
+      const operate=async work=>{
+        if(busy||!live())return;
+        busy=true;panel.querySelectorAll('button,select').forEach(node=>node.disabled=true);
+        try{await work();}catch(err){details.textContent=err.message;invalidate();}
+        finally{busy=false;panel.querySelectorAll('button,select').forEach(node=>node.disabled=false);get('apply').disabled=!batch||!!batch.conflicts.length;}
+      };
+      target.onchange=()=>{invalidate();details.replaceChildren();};
+      get('close').onclick=()=>{invalidate();panel.hidden=true;};
+      get('download').onclick=()=>operate(async()=>{
+        invalidate();
+        const eligible=rows.filter(row=>resultIds.includes(row.result_id)&&!row.has_pdf&&row.pdf_url).map(row=>row.result_id);
+        if(!eligible.length){details.textContent='所选文献没有可下载的开放获取 PDF。';return;}
+        const out=await api('/api/zotero/web/staged/download',{task_id:project,result_ids:eligible});
+        details.textContent=`已暂存 ${out.result_ids.length} 篇 PDF。${out.failed.map(row=>row.error).join('；')}`;
+        await refresh();
+      });
+      get('preview').onclick=()=>operate(async()=>{
+        invalidate();
+        if(!target.value)throw new Error('请选择目标分类');
+        batch=await api('/api/zotero/web/staged/plan',{task_id:project,result_ids:resultIds,collection:target.value,matches});
+        details.innerHTML=`<p>${h(batch.collection_name)} · ${batch.actions.length} 篇可保存${batch.conflicts.length?` · ${batch.conflicts.length} 项待核对`:''}</p><ul>${batch.actions.map(row=>`<li>${h(row.title)} · ${row.kind==='create'?'新建题录':row.add_collection?'复用并加入分类':'已在分类中'}${row.pdf?' · 导入或复用 PDF':''}</li>`).join('')}${batch.conflicts.map(row=>`<li>${h(row.title)} · ${h(row.reason)}${row.candidates.length?` <select class="control" data-save-match="${h(row.result_id)}" aria-label="选择对应条目"><option value="">请选择</option>${row.candidates.map(item=>`<option value="${h(item.key)}" ${matches[row.result_id]===item.key?'selected':''}>${h(item.title||item.key)} · ${h(item.key)}</option>`).join('')}</select>`:''}</li>`).join('')}</ul>`;
+        details.querySelectorAll('[data-save-match]').forEach(el=>el.onchange=()=>{matches[el.dataset.saveMatch]=el.value;invalidate();});
+      });
+      get('apply').onclick=()=>operate(async()=>{
+        if(!batch)return;
+        const token=batch.plan_token;invalidate();
+        const out=await api('/api/zotero/web/staged/apply',{task_id:project,plan_token:token,confirm:true});
+        const done=new Set(out.applied.map(row=>row.result_id));
+        done.forEach(id=>selected.delete(id));
+        resultIds=resultIds.filter(id=>!done.has(id));
+        panel.querySelector('h4').textContent=`保存 ${resultIds.length} 篇到 Zotero`;
+        if(!resultIds.length)panel.hidden=true;
+        message(`已保存 ${done.size} 篇到 Zotero。`);
+        details.textContent=out.failed.map(row=>row.error).join('；');
+        await refresh();
+      });
+      target.focus();panel.scrollIntoView({block:'nearest'});
     }
     function refresh({poll=false}={}) {
       if(!live())return;
@@ -143,11 +202,12 @@
     current={container,project,refresh,live,management,
       refreshStatus(){if(live()&&$('plManagement').open)return ProjectZotero.refreshStatus($('plZotero'));}};
     $('plSearch').oninput=paint;$('plFilter').onchange=paint;
-    $('plSelectAll').onchange=event=>{filtered().filter(r=>r.zotero_key).forEach(r=>event.target.checked?selected.add(r.zotero_key):selected.delete(r.zotero_key));paint();};
+    $('plSelectAll').onchange=event=>{filtered().filter(r=>r.result_id).forEach(r=>event.target.checked?selected.add(r.result_id):selected.delete(r.result_id));paint();};
+    $('plSaveZotero').onclick=event=>run(event.target,()=>openSave([...selected]));
     $('plRefresh').onclick=event=>run(event.target,refresh);
     $('spZoteroBtn').onclick=event=>run(event.target,()=>management('sources'));
     $('plManagement').ontoggle=()=>{if($('plManagement').open&&!managerPromise)management().catch(err=>message(err.message,true));};
-    $('plRemove').onclick=event=>run(event.target,async()=>{const keys=[...selected];await management('history');if(live())await ProjectZotero.previewRemoval($('plZotero'),keys);});
+    $('plRemove').onclick=event=>run(event.target,async()=>{const keys=rows.filter(r=>selected.has(r.result_id)&&r.zotero_key).map(r=>r.zotero_key);await management('history');if(live())await ProjectZotero.previewRemoval($('plZotero'),keys);});
     $('plConnection').onclick=()=>IntegrationSettings.openZotero(project);
     paint();
     if(openManagerFor===project){openManagerFor='';management().catch(err=>message(err.message,true));}

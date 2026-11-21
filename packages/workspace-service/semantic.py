@@ -379,9 +379,18 @@ def invalidate_project(db: Any, project_id: str) -> None:
 def _source_exists(conn: sqlite3.Connection, kind: str, sid: str, project_id: str) -> bool:
     if project_id and not conn.execute("SELECT 1 FROM research_tasks WHERE id=?", (project_id,)).fetchone():
         return False
-    if kind == "evidence":
-        return bool(conn.execute("SELECT 1 FROM evidence e JOIN papers p ON p.id=e.paper_id "
-                                 "WHERE e.id=? AND COALESCE(p.task_id,'')=?", (sid, project_id)).fetchone())
+    if kind in {'paper', 'evidence'}:
+        import project_library
+        class View:
+            db = conn
+        if kind == 'evidence':
+            paper = conn.execute("SELECT p.* FROM evidence e JOIN papers p ON p.id=e.paper_id "
+                                 "WHERE e.id=? AND COALESCE(p.task_id,'')=? "
+                                 "AND NOT EXISTS(SELECT 1 FROM paper_evidence_recheck r WHERE r.evidence_id=e.id)",
+                                 (sid, project_id)).fetchone()
+        else:
+            paper = conn.execute("SELECT * FROM papers WHERE id=? AND COALESCE(task_id,'')=?", (sid, project_id)).fetchone()
+        return bool(paper and project_library.visible(View(), project_id, [dict(paper)], papers=True))
     table = {"paper": "papers", "note": "notes", "md_note": "md_notes"}.get(kind)
     if kind in ("note", "md_note"):
         import asset_service

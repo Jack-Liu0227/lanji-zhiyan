@@ -237,10 +237,10 @@ async function flShow(row){
   if(row.project_id && row.project_id!==curTask) return;
   const project = curTask;
   flSel = row.rel;
-  $("flHand").disabled=false;
+  $("flHand").disabled=!!row.paper_id;
   $("flHand").title="交给当前工作流中的节点、团队或专家（Alt+Shift+H）";
-  $("flHandoffHistory").disabled=false;
-  FileHandoff.preview({project_id:project,relative:row.rel});
+  $("flHandoffHistory").disabled=!!row.paper_id;
+  if(!row.paper_id) FileHandoff.preview({project_id:project,relative:row.rel});
   document.querySelectorAll("#flList .fl-tree-row[data-rel]").forEach(el=>{
     const selected=el.dataset.rel===flSel;
     el.classList.toggle('on',selected);el.setAttribute('aria-current',String(selected));
@@ -279,6 +279,12 @@ async function flShow(row){
   if(modeTabs) modeTabs.style.display = "none";
   if(saveBtn) saveBtn.style.display = "none";
   try{
+    if(row.paper_id){
+      const url=`/api/paper/content?task_id=${encodeURIComponent(project)}&id=${encodeURIComponent(row.paper_id)}`;
+      await api(url+'&check=1');
+      if(curTask===project&&flSel===row.rel&&stage.isConnected) stage.innerHTML=`<iframe class="fl-frame" title="${esc(row.name)}" src="${url}"></iframe>`;
+      return;
+    }
     const d = await api(`/api/conv/preview?path=${encodeURIComponent(row.path)}`);
     if(d.error) throw new Error(d.error);
     if(curTask!==project || flSel!==row.rel || !stage.isConnected) return;

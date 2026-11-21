@@ -19,6 +19,8 @@ class Remote:
         self.rows = {}
         self.reads = []
         self.writes = []
+        self.collections = [{'key': key, 'data': {'name': name}} for key, name in
+                            [('COLLA001', 'Source A'), ('COLLB001', 'Source B')]]
 
     def add(self, key="PAPER001", collections=None, **fields):
         data = {"key": key, "version": self.version, "itemType": "journalArticle", "title": "Evidence",
@@ -30,11 +32,15 @@ class Remote:
 
     def pages(self, config, path):
         self.reads.append(path)
+        if path == '/collections':
+            return deepcopy(self.collections)
         since = int(path.partition('since=')[2] or 0)
         return sync.Page([deepcopy(r) for r in self.rows.values() if r['version'] > since], self.version)
 
     def request(self, config, path, method="GET", payload=None):
         if method == "GET":
+            if path == '/items/top?format=versions':
+                return {key: row['version'] for key, row in self.rows.items()}
             if path.startswith('/deleted'):
                 return {'items': []}
             if path.startswith('/items/'):
@@ -54,6 +60,15 @@ class Remote:
             item.update(key=key, version=self.version)
             self.rows[key] = {'key': key, 'version': self.version, 'data': item}
             return {'successful': {'0': deepcopy(self.rows[key])}}
+        if path.startswith('/items/') and method == 'PATCH':
+            key = path.rsplit('/', 1)[-1]
+            current = self.rows[key]
+            if payload['version'] != current['version']:
+                raise ValueError('412 stale version')
+            self.version += 1
+            current['version'] = self.version
+            current['data'].update(payload, version=self.version)
+            return {}
         raise AssertionError((path, method))
 
 
@@ -357,11 +372,12 @@ class ZoteroCollaborationTest(unittest.TestCase):
         self.assertFalse(project_library.items(self.db, self.pid))
 
     def test_workflow_selected_import_outside_sources_uses_same_sync_mapping(self):
+        self.cfg.update(transport='local', local_profile='fixture')
         remote = self.remote.add(collections=['COLLB001'])
         zotero_sources.configure(self.db, self.pid, [{'collection': 'COLLA001'}])
         normalized = {**sync._from_remote(remote), 'key': 'PAPER001', 'version': remote['version'],
                       'creators': ['Alice Chen'], 'type': 'journalArticle'}
-        with patch.object(zotero, 'item', return_value=normalized), patch.object(zotero, 'pdf_path', return_value=''):
+        with patch.object(zotero, 'item', return_value=normalized), patch.object(zotero, 'pdf_attachment', return_value=None):
             workflow.stage_zotero_import(self.db, self.pid, keys=['PAPER001'])
         before = project_library.items(self.db, self.pid)[0]
         self.apply()
@@ -383,12 +399,14 @@ class ZoteroCollaborationTest(unittest.TestCase):
         self.assertEqual(self.remote.writes, [])
 
     def test_importing_attachment_does_not_reset_pending_local_metadata_edit(self):
+        self.cfg.update(transport='local', local_profile='fixture')
+        sync.bind(self.db, self.pid, 'COLLA001')
         remote = self.remote.add(collections=['COLLA001'])
         self.apply()
         rid = project_library.items(self.db,self.pid)[0]['result_id']
         project_library.update_record(self.db,self.pid,rid,{'title':'Local edit before PDF import'})
         normalized = {**sync._from_remote(remote),'key':'PAPER001','version':remote['version'],'creators':['Alice Chen'],'type':'journalArticle'}
-        with patch.object(zotero,'item',return_value=normalized), patch.object(zotero,'pdf_path',return_value=''):
+        with patch.object(zotero,'item',return_value=normalized), patch.object(zotero,'pdf_attachment',return_value=None):
             workflow.stage_zotero_import(self.db,self.pid,keys=['PAPER001'])
         self.apply()
         self.assertEqual(self.remote.rows['PAPER001']['data']['title'],'Local edit before PDF import')

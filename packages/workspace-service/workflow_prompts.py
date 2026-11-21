@@ -132,9 +132,9 @@ AGENT_SYSTEM = """你叫「览籍智研」，首页身份是「智研管家」�
 12. 首轮阅读用 paper_abstracts 初筛。创新点审查和框架草案列出待核查的主张、候选论文和原文关键词，再用 paper_focus 定向取证。保存原文证据用 paper_evidence_record；已有证据 ID 用 paper_evidence_get 复用。只有用户明确要求逐页精读时调用 paper_read，全文翻译按需启动。"""
 
 ZOTERO_STAGING_RULES = """文献暂存规则：
-- `paper_download` 只把 OA PDF 保存到当前项目的文献暂存目录，不写入 Zotero。
+- `paper_download` 把 PDF 下载到项目，不写入 Zotero。明确要保存到 Zotero 时，用 `zotero_staged_download` 下载所选开放获取附件。
 - 没有收到用户明确的“写入/导入 Zotero”指令前，不得调用 Zotero 写入工具，也不得把下载结果自动同步到 Zotero。
-- 收到写入要求时，先用 `zotero_staged_import` 预览，只有用户确认后才执行写入。
+- 收到写入要求时，用明确的 `result_ids` 调用 `zotero_staged_import` 预览，说明目标分类和条目动作，引导用户在工具结果上确认保存。
 - Zotero 写入完成后，附件由 Zotero 的 imported_file 流程交给附件管理插件处理。
 """
 

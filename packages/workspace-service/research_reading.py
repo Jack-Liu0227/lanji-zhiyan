@@ -28,12 +28,12 @@ def _available(db, project_id):
 
 def abstract(db, project_id, paper):
     """Read at most the first three indexed pages locally. Require an identifiable abstract."""
-    rows = list(db.db.execute(
-        "SELECT pp.page_no, pp.text FROM paper_pages pp JOIN papers p ON p.id=pp.paper_id "
-        "WHERE p.task_id=? AND p.id=? AND pp.page_no<=3 ORDER BY pp.page_no", (project_id, paper["id"])
-    ))
+    indexed = db.paper(paper['id'])
+    if indexed['task_id'] != project_id:
+        raise PermissionError('只能读取当前项目的文献')
+    rows = indexed['pages'][:3]
     info = {"paper_id": paper["id"], "title": paper.get("title") or paper["filename"],
-            "doi": paper.get("doi", ""), "version": paper.get("sha256", ""), "status": "missing"}
+            "doi": paper.get("doi", ""), "version": indexed['sha256'], "status": "missing"}
     for index, row in enumerate(rows):
         text = row["text"] or ""
         start = ABSTRACT.search(text)
@@ -100,8 +100,8 @@ def focus(db, project_id, question, paper_ids, keywords, limit=6):
     ]
     picks = []
     for paper_id in ids:
-        paper = available[paper_id]
-        by_page = db.db.execute("SELECT page_no,text FROM paper_pages WHERE paper_id=? ORDER BY page_no", (paper_id,))
+        paper = db.paper(paper_id)
+        by_page = paper['pages']
         for row in by_page:
             execution.check()
             text = row["text"] or ""
@@ -134,6 +134,9 @@ def evidence(db, project_id, ids):
         row = records.get(evidence_id)
         if not row or not asset_service.legacy_context_available(db, project_id, "evidence", evidence_id, index=index):
             raise ValueError(f"证据不属于当前项目或尚不可用：{evidence_id}")
+        db.paper(row['paper_id'])  # Refresh a changed Zotero attachment before citing its page.
+        if db.db.execute('SELECT 1 FROM paper_evidence_recheck WHERE evidence_id=?', (evidence_id,)).fetchone():
+            raise ValueError(f'PDF 内容已变化，请重新核对证据：{evidence_id}')
         result.append({key: row[key] for key in ("id", "paper_id", "filename", "page_no", "excerpt", "field", "value")})
     return result
 
@@ -178,7 +181,8 @@ def record(db, project_id, paper_id, items):
                 if not _numbers(value).issubset(_numbers(excerpt)):
                     raise ValueError("登记数值未在所提交的原文中找到")
                 key = (paper_id, item["page_no"], field, value, excerpt)
-                existing = db.db.execute("SELECT * FROM evidence WHERE paper_id=? AND page_no=? AND field=? AND value=? AND excerpt=?",
+                existing = db.db.execute("SELECT * FROM evidence WHERE paper_id=? AND page_no=? AND field=? AND value=? AND excerpt=? "
+                                         "AND NOT EXISTS(SELECT 1 FROM paper_evidence_recheck r WHERE r.evidence_id=evidence.id)",
                                          key).fetchone()
                 accepted.append(dict(existing) if existing else db.add_evidence(paper_id, {
                     "page_no": item["page_no"], "field": field, "value": value, "excerpt": excerpt}))

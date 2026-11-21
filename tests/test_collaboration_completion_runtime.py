@@ -123,26 +123,30 @@ class CollaborationCompletionRuntimeTest(unittest.TestCase):
     def test_multiple_collection_sources_and_explicit_item_selection(self):
         binding, writes = {}, []
         chosen = []
+        collections = [{'key': key, 'data': {'name': name}} for key, name in
+                       [('COLLA001', 'Collection A'), ('COLLB001', 'Collection B')]]
         def route(request):
             path = request.request.url.split('/api/zotero/web/')[1].split('?')[0]
             body = request.request.post_data_json if request.request.method == 'POST' else {}
             if path == 'config':
-                value = {'config': {'transport': 'local'}, 'binding': binding, 'local': {'readable': True, 'authorized': True}, 'docs': {}}
+                value = {'config': {'transport': 'local'}, 'library': 'local:fixture/users/0', 'binding': binding, 'local': {'readable': True, 'authorized': True}, 'docs': {}}
             elif path == 'auto': value = {'auto_sync': {}}
             elif path == 'links': value = {'batches': []}
             elif path == 'collections':
-                value = {'collections': [{'key': key, 'data': {'name': name}} for key, name in [('COLLA001', 'Collection A'), ('COLLB001', 'Collection B')]]}
+                value = {'collections': collections}
             elif path == 'sources':
                 writes.append((path, body))
                 binding.update(library='local:fixture/users/0', collection='', sources=body['sources'])
                 value = {'binding': binding}
             elif path == 'candidates':
-                value = {'items': [{'key': key, 'title': name, 'collections': cols, 'doi': '', 'selected': False, 'status': ''}
+                value = {'collections': collections,
+                         'items': [{'key': key, 'title': name, 'collections': cols, 'browse_collections': cols,
+                                    'doi': '', 'selected': False, 'status': ''}
                                    for key, name, cols in [('PAPER001', 'Shared source item', ['COLLA001', 'COLLB001']),
                                                           ('PAPER002', 'Leave in A', ['COLLA001']),
                                                           ('PAPER003', 'Choose from B', ['COLLB001'])]]}
-            elif path == 'select':
-                writes.append((path, body)); chosen.extend(body['keys']); value = {'ok': True}
+            elif path == 'join':
+                writes.append((path, body)); chosen.extend(body['keys']); value = {'total': len(chosen), 'downloaded': 0}
             elif path == 'sync':
                 writes.append((path, body))
                 value = {'actions': [{'key': key, 'kind': 'pull'} for key in chosen], 'conflicts': [], 'mode': 'merge', 'plan_token': 'browser-selection'} if body['dry_run'] else {'ok': True}
@@ -165,13 +169,10 @@ class CollaborationCompletionRuntimeTest(unittest.TestCase):
         self.page.locator('[data-zs-member="PAPER001"]').check()
         self.page.locator('[data-zs-member="PAPER003"]').check()
         self.page.locator('#zs-select').click()
-        self.page.wait_for_function('!document.querySelector("#zs-apply").disabled')
-        self.page.evaluate('() => {window.uiConfirm=async()=>true;}')
-        self.page.locator('#zs-apply').click()
-        self.page.wait_for_function('document.querySelector("#integration-result").textContent.includes("同步完成")')
+        self.page.locator('#integration-result').get_by_text('已加入 2 篇',exact=False).wait_for()
         self.assertEqual(chosen, ['PAPER001', 'PAPER003'])
         self.assertEqual(writes[0], ('sources', {'task_id': pid, 'sources': [{'collection': 'COLLA001', 'mode': 'selected'}, {'collection': 'COLLB001', 'mode': 'selected'}], 'export_collection': ''}))
-        self.assertEqual(writes[-1], ('sync', {'task_id': pid, 'mode': 'merge', 'dry_run': False, 'plan_token': 'browser-selection', 'confirm': True}))
+        self.assertEqual(writes[1:], [('join', {'task_id': pid, 'library': 'local:fixture/users/0', 'keys': ['PAPER001', 'PAPER003']})])
         self.assertEqual(self.page.evaluate('route()'),'workspace')
         self.assertEqual(self.errors, [])
 

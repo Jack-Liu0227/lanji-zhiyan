@@ -16,7 +16,7 @@ def tool_specs() -> list[dict]:
         ("mail_read", "按UID读取指定邮件正文。", {"account_id": "string", "folder": "string", "uid": "string"}),
         ("zotero_search", "通过本机 API 查询 Zotero 题录，不修改数据库或附件。", {"query": "string", "start": "integer", "limit": "integer"}),
         ("zotero_item", "通过本机 API 读取指定 Zotero 条目的题录。", {"key": "string"}),
-        ("zotero_import_pdf", "将 Zotero 条目的 PDF 复制并入库到当前项目，返回 paper_id 和副本路径；原附件始终只读。", {"key": "string"}),
+        ("zotero_import_pdf", "把一条 Zotero 文献及其只读 PDF 引用加入当前项目。", {"key": "string"}),
         ("mail_send", "Send an email; requires user enabled Full Access", {"account_id": "string", "to": "string", "cc": "string", "subject": "string", "text": "string"}),
         ("feishu_send", "Send a Feishu message; requires user enabled Full Access", {"text": "string", "receive_id": "string"}),
         ("zotero_collections", "读取已配置 Zotero Web API 的全部集合。", {}),
@@ -28,7 +28,8 @@ def tool_specs() -> list[dict]:
         ("zotero_write", "Write a Zotero item; requires Full Access and key/version for updates", {"item": "object"}),
         ("zotero_sync", "预览或执行项目与绑定Collection的元数据同步；默认只预览，执行需plan_token与确认。", {"task_id": "string", "mode": "string", "dry_run": "boolean", "plan_token": "string", "confirm": "boolean"}),
         ("zotero_staged_list", "列出当前项目已下载但尚未明确写入 Zotero 的暂存文献；只读。", {}),
-        ("zotero_staged_import", "按用户明确要求，把当前项目暂存 PDF 预览/导入 Zotero；默认只预览，执行需 Full Access、plan_token 和确认。附件使用 Zotero imported_file，交给附件管理插件继续整理。", {"result_ids": "array", "collection": "string", "attachment_mode": "string", "dry_run": "boolean", "plan_token": "string", "confirm": "boolean"}),
+        ("zotero_staged_download", "将明确选中的项目文献的开放获取 PDF 下载到 Zotero 导入暂存区，不写入 Zotero。", {"result_ids": "array"}),
+        ("zotero_staged_import", "预览保存明确选中的项目题录和 PDF，未指定 collection 时用项目默认分类。Full Access 下可在工具结果卡片确认写入。", {"result_ids": "array", "collection": "string", "matches": "object"}),
     ]
     return [{"type": "function", "function": {"name": name, "description": desc,
              "parameters": {"type": "object", "properties": {k: {"type": v} for k, v in props.items()}, "additionalProperties": False}}}
@@ -36,6 +37,15 @@ def tool_specs() -> list[dict]:
 
 
 def invoke(name: str, db: Any, task_id: str, args: dict, assistant_id: str = "", permission: str = "auto") -> dict:
+    if task_id and db.db.execute('SELECT 1 FROM research_tasks WHERE id=?', (task_id,)).fetchone() and name in {
+        'zotero_write', 'zotero_local_item_add', 'zotero_local_link_pdf',
+    }:
+        raise PermissionError('项目文献请通过保存预览写入 Zotero')
+    if name == 'zotero_staged_download':
+        if permission in {'read_only', 'read-only'}:
+            raise PermissionError('只读权限不能下载文件')
+        import zotero_staged
+        return zotero_staged.download(db, task_id, args.get('result_ids'))
     if name == "zotero_staged_list":
         import zotero_staged
         return zotero_staged.list_staged(db, task_id)
@@ -44,14 +54,10 @@ def invoke(name: str, db: Any, task_id: str, args: dict, assistant_id: str = "",
         result_ids = args.get("result_ids")
         if result_ids is not None and (not isinstance(result_ids, list) or any(not isinstance(v, str) for v in result_ids)):
             raise ValueError("result_ids must be a list of strings")
-        if args.get("dry_run", True) is not False:
-            return zotero_staged.plan(db, task_id, result_ids, str(args.get("collection") or ""),
-                                      str(args.get("attachment_mode") or "imported_file"))
-        if permission not in {"full_access", "full-access"}:
-            raise PermissionError("Zotero import requires Full Access")
-        if args.get("confirm") is not True:
-            raise ValueError("Zotero import requires explicit confirmation")
-        return zotero_staged.apply(db, task_id, str(args.get("plan_token") or ""), confirm=True)
+        if args.get('dry_run') is False or args.get('confirm'):
+            raise PermissionError('请由用户在预览卡片上确认保存')
+        return zotero_staged.plan(db, task_id, result_ids, str(args.get('collection') or ''),
+                                  matches=args.get('matches'), allow_apply=permission in {'full_access', 'full-access'})
     if name in {"zotero_search", "zotero_item", "zotero_import_pdf"}:
         if name == "zotero_search":
             return zotero.items(q=str(args.get("query") or ""), start=int(args.get("start") or 0), limit=int(args.get("limit") or 20))
@@ -59,8 +65,8 @@ def invoke(name: str, db: Any, task_id: str, args: dict, assistant_id: str = "",
             return zotero.item(str(args.get("key") or ""))
         if permission in {"read_only", "read-only"}:
             raise PermissionError("只读权限不能创建项目副本")
-        import project_sources
-        return project_sources.import_zotero_pdf(db, task_id, str(args.get("key") or ""))
+        from workflow_stages import stage_zotero_import
+        return stage_zotero_import(db, task_id, keys=[str(args.get('key') or '')])
     external_write = name in {"mail_send", "feishu_send", "zotero_write", "zotero_local_authorize",
                              "zotero_local_collection_create", "zotero_local_item_add",
                              "zotero_local_link_pdf"} or (name == "zotero_sync" and args.get("dry_run") is False)
@@ -106,6 +112,8 @@ def invoke(name: str, db: Any, task_id: str, args: dict, assistant_id: str = "",
     if name == "zotero_write":
         return zotero_sync.write_item(db, args.get("item") or {})
     if name == "zotero_sync":
+        if args.get('dry_run') is False and args.get('confirm') is not True:
+            raise ValueError('执行同步需要明确确认')
         return zotero_sync.sync(db, str(args.get("task_id") or task_id), str(args.get("mode") or "merge"),
                                 args.get("dry_run") is not False, str(args.get("plan_token") or ""))
     raise ValueError("未知连接器工具：" + name)
