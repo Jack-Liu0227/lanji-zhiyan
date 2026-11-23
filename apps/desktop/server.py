@@ -1995,6 +1995,9 @@ def _start_inproc(port: int, url: str) -> None:
     import workflow_execution
     workflow_execution.recover(DB_PATH)
     _semantic_boot()           # 语义索引后台预热（内容没变就全跳过，幂等）
+    # 交付后复盘：只补「已交付还没沉淀」的任务，一次最多 3 条；放在启动线程里，不占交付路径。
+    import wrap_up
+    threading.Thread(target=wrap_up.drain_at_startup, args=(DB_PATH,), daemon=True).start()
     print(f"览籍智研已启动：{url}")
 
 
