@@ -40,6 +40,8 @@ def _ensure(db):
         "CREATE TABLE IF NOT EXISTS capability_tool_metadata (name TEXT PRIMARY KEY, label TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '')",
         "CREATE TABLE IF NOT EXISTS capability_mcp_config (id INTEGER PRIMARY KEY CHECK(id=1), protected TEXT NOT NULL)",
         "CREATE TABLE IF NOT EXISTS capability_mcp_tools (server TEXT PRIMARY KEY, config_hash TEXT NOT NULL, tools TEXT NOT NULL DEFAULT '[]')",
+        # skill 使用计数（wrap_up 沉淀上来的经验到底有没有人用）。与上面几张同属能力面，沿用本模块的 _ensure 建表约定。
+        "CREATE TABLE IF NOT EXISTS skill_usage (skill_id TEXT PRIMARY KEY, hits INTEGER NOT NULL DEFAULT 0, last_used_at TEXT NOT NULL DEFAULT '')",
     ):
         conn.execute(sql)
     conn.commit()
@@ -240,6 +242,40 @@ def skill_context(db, assistant_id: str, project_dir: str = "") -> str:
     return ("\n\n[Enabled skills]\nUse skill_read with the exact skill_id before applying a skill. "
             "Disabled skills are unavailable. Project skills override user skills with the same name.\n" +
             "\n".join(f"- {item['id']}: {item['description']}" for item in items))
+
+
+def _stamp(offset_days: float = 0) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - offset_days * 86400))
+
+
+def touch_skill(db, skill_id: str) -> None:
+    """记一次 skill 真被读过。计数失败不影响读取 —— 度量是附加价值，不许挡路。"""
+    try:
+        conn = _ensure(db)
+        conn.execute("INSERT INTO skill_usage(skill_id,hits,last_used_at) VALUES(?,1,?) "
+                     "ON CONFLICT(skill_id) DO UPDATE SET hits=hits+1,last_used_at=excluded.last_used_at",
+                     (str(skill_id or "")[:120], _stamp()))
+        conn.commit()
+    except Exception:
+        pass
+
+
+def skills_usage(db, project_dir: str = "", days: int = 30) -> dict:
+    """哪些技能在吃灰。判「沉淀有没有用」的唯一客观指标；冷资产置顶。"""
+    conn = _ensure(db)
+    days = max(1, min(3650, int(days or 30)))
+    rows = {row["skill_id"]: dict(row) for row in conn.execute("SELECT skill_id,hits,last_used_at FROM skill_usage")}
+    cutoff = _stamp(days)
+    items = []
+    for item in list_skills(project_dir):
+        row = rows.get(item["id"], {})
+        last = str(row.get("last_used_at") or "")
+        items.append({"id": item["id"], "scope": item["scope"], "description": item["description"],
+                      "hits": int(row.get("hits") or 0), "last_used_at": last,
+                      # 内置技能是我们随包发的，没有「该删」这一说，不算冷资产，只列出来
+                      "stale": item["scope"] != "builtin" and (not last or last < cutoff)})
+    items.sort(key=lambda item: (0 if item["stale"] else 1, item["hits"], item["id"]))
+    return {"days": days, "total": len(items), "stale": sum(1 for item in items if item["stale"]), "skills": items}
 
 
 def steward_context(db, assistant_id: str, project_dir: str = "") -> str:
@@ -739,6 +775,7 @@ def invoke_tool(db, assistant_id: str, name: str, args: dict, project_dir: str =
             raise ValueError("Skill resource not found inside the skill")
         if target.stat().st_size > MAX_SKILL_BYTES:
             raise ValueError("Skill resource exceeds 1 MiB")
+        touch_skill(db, item_id)
         return {**item, "resource": relative, "content": target.read_text(encoding="utf-8-sig")}
     if name.startswith("mcp_"):
         return invoke_mcp_tool(db, assistant_id, name, args, project_dir)
@@ -778,6 +815,8 @@ def route(method: str, path: str, body: dict, query: dict, db) -> dict | None:
         return registry_response
     if method == "GET" and path == "/api/capabilities":
         return settings_meta(db, project_dir)
+    if method == "GET" and path == "/api/capabilities/skills/usage":
+        return skills_usage(db, project_dir, int(query.get("days") or 30))
     if path == "/api/capabilities/skill" and method in ("GET", "POST"):
         raw = body.get("id", query.get("id", ""))
         item = _skill(str(raw[0] if isinstance(raw, list) and raw else raw), project_dir)
