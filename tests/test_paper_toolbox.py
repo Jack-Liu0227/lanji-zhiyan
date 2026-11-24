@@ -36,6 +36,48 @@ class PaperToolboxTest(unittest.TestCase):
         self.assertEqual(Path(exported['path']).suffix,'.docx')
         self.assertFalse(any(step['stage']=='convert' for step in self.db.steps(self.pid)))
 
+    def test_image_conversion_embeds_dpi_and_compresses_tiff(self):
+        import base64,io
+        from PIL import Image
+        import image_tools
+        buffer=io.BytesIO();Image.new('RGBA',(20,10),(0,0,255,128)).save(buffer,format='PNG')
+        asset=image_tools.upload(self.db,{'name':'fig.png','project_id':self.pid,'data':base64.b64encode(buffer.getvalue()).decode()})
+        for fmt,dpi in (('png',300),('tiff',600)):
+            events=[]
+            result=paper_toolbox.transform(self.db,self.pid,{'tool':'image_convert','image_ids':[asset['asset_id']],'format':fmt,'dpi':dpi},events.append)
+            with Image.open(result['path']) as out:
+                self.assertEqual(round(out.info['dpi'][0]),dpi)
+                if fmt=='tiff':self.assertEqual(out.info.get('compression'),'tiff_lzw')
+            self.assertIn('toolbox_file',[event.get('type') for event in events])
+            self.assertEqual(result['files'][0]['project_id'],self.pid)
+            self.assertTrue(image_tools.preview(self.db,self.pid,result['files'][0]['asset_id']).startswith(b'\x89PNG'))
+
+    def test_compliance_reports_numbering_units_and_citations_without_a_model(self):
+        text=('图1 显示趋势，图3 为对照。正文引用 [1] 与 [5]，电流为 10mA。本研究首次报道该现象。\n\n'
+              '[1] Li J. Title A[J]. Nature Energy, 2026, 11(3): 100.\n'
+              '[2] Wang X. Title B[J]. Joule, 2025, 9(1): 1.')
+        with patch.object(workflow,'chat_raw',side_effect=AssertionError('合规预检不应调用模型')):
+            content=paper_toolbox.transform(self.db,self.pid,{'tool':'compliance','text':text})['content']
+        for expected in ('图编号不连续','缺空格','绝对化表述','正文引用编号超出参考文献条数','正文未引用'):
+            self.assertIn(expected,content)
+        clean=paper_toolbox.transform(self.db,self.pid,{'tool':'compliance','text':'图1 与图2 均正常。\n\n[1] A. B.\n\n正文见 [1]。'})['content']
+        self.assertIn('未发现硬性问题',clean)
+
+    def test_reference_styles_format_bibtex_for_submission(self):
+        bib=('@article{one,\n title={Ion transport in solids},\n author={Li, Jian and Wang, Xue},\n'
+             ' journal={Nature Energy},\n year={2026},\n volume={11},\n number={3},\n pages={100--108},\n doi={10.1000/example}\n}')
+        gb=paper_toolbox.transform(self.db,self.pid,{'tool':'references','text':bib,'cite_style':'gb7714'})['content']
+        self.assertIn('[1] Li J, Wang X. Ion transport in solids[J]. Nature Energy, 2026, 11(3): 100--108. DOI: 10.1000/example.',gb)
+        nature=paper_toolbox.transform(self.db,self.pid,{'tool':'references','text':bib,'cite_style':'nature'})['content']
+        self.assertIn('Li, J & Wang, X. Ion transport in solids. Nature Energy 11, 100--108 (2026).',nature)
+        with self.assertRaises(ValueError):paper_toolbox.validate({'tool':'polish','text':'x','cite_style':'ieee'})
+
+    def test_polish_runs_one_request_per_paragraph(self):
+        with patch.object(workflow,'chat_raw',side_effect=lambda profile,messages,**kwargs:{'content':messages[-1]['content'].upper()}) as model:
+            result=paper_toolbox.transform(self.db,self.pid,{'tool':'polish','text':'第一段文字。\n\n第二段文字。'})
+        self.assertEqual(model.call_count,2)
+        self.assertEqual(result['content'],'第一段文字。\n\n第二段文字。'.upper())
+
     def test_paper_tool_and_manual_panel_use_the_same_transform_and_permissions(self):
         with patch.object(workflow,'chat_raw',return_value={'content':'Academic English result'}):
             result=workflow._tool_impl('paper_tool',self.db,self.pid,{'tool':'translate','text':'学术文本'})
@@ -122,3 +164,37 @@ class PaperToolboxTest(unittest.TestCase):
         self.assertRegex(converted,r'<table(?:\s|>)')
         self.assertIn('89%',converted)
         self.assertIn('Content-Security-Policy',converted)
+
+    def test_caption_output_language(self):
+        self.assertEqual(paper_toolbox.validate({'tool':'caption','lang':'zh'})['lang'],'zh')
+        self.assertEqual(paper_toolbox.validate({'tool':'caption'})['lang'],'en')
+        with self.assertRaises(ValueError):
+            paper_toolbox.validate({'tool':'caption','lang':'fr'})
+
+    def test_caption_returns_per_image_items_and_preview_bytes(self):
+        import base64,io
+        from PIL import Image as PILImage
+        import image_tools
+        buffer=io.BytesIO();PILImage.new('RGB',(40,30),'white').save(buffer,format='PNG')
+        uploaded=image_tools.upload(self.db,{'name':'fig1.png','project_id':'',
+            'data':'data:image/png;base64,'+base64.b64encode(buffer.getvalue()).decode()})
+        self.assertEqual(uploaded['pages'],1)
+        seen={}
+        def fake(model,messages,**kw):
+            seen['system']=messages[0]['content'];return {'content':'图 1 首圈充放电曲线。'}
+        with patch.object(workflow,'chat_raw',side_effect=fake):
+            result=image_tools.transform(self.db,'',{'tool':'caption','image_ids':[uploaded['asset_id']],
+                'text':'O3-NFM','prompt':'','lang':'zh'},lambda event:None)
+        self.assertIn('中文图注',seen['system'])
+        with patch.object(workflow,'chat_raw',side_effect=fake):
+            image_tools.transform(self.db,'',{'tool':'caption','image_ids':[uploaded['asset_id']],
+                'text':'O3-NFM','prompt':'','lang':'en'},lambda event:None)
+        self.assertIn('英文 caption',seen['system'])
+        item=result['items'][0]
+        self.assertEqual((item['asset_id'],item['page']), (uploaded['asset_id'],1))
+        self.assertIn('图 1 首圈充放电曲线',item['content'])
+        self.assertEqual(item['error'],'')
+        png=image_tools.preview(self.db,'',uploaded['asset_id'],1)
+        self.assertTrue(png.startswith(b'\x89PNG'))
+        with self.assertRaises(ValueError):image_tools.preview(self.db,'其他项目',uploaded['asset_id'],1)
+        with self.assertRaises(ValueError):image_tools.preview(self.db,'',uploaded['asset_id'],2)

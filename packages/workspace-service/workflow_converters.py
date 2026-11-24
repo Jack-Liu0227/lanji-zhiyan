@@ -682,10 +682,11 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", templat
         out = folder / f"{safe}.pdf"
         shutil.copy2(pdf, out)
         import asset_service
-        asset_service.register_file(db, out, project_id=task_id, kind="export", source="format_convert",
+        made_asset = asset_service.register_file(db, out, project_id=task_id, kind="export", source="format_convert",
                                     metadata={"source_path": str(src_tex), "format": fmt})
         db.log_step(task_id, "convert", "done", f"导出 {out.name}")
         return {"path": str(out), "name": out.name, "format": fmt, "size": out.stat().st_size,
+                "asset_id": made_asset.get("id", ""),
                 "pdf": True, "source": str(src_tex), "passes": passes, "bibtex": bib_note}
     src = Path(source) if source else doc_path(db, task_id, "write")
     md = src.read_text(encoding="utf-8", errors="replace") if src.is_file() else ""
@@ -778,10 +779,11 @@ def conv_run(db: "WorkflowDB", task_id: str, fmt: str, source: str = "", templat
     else:
         raise ValueError(f"不支持的格式：{fmt}（可用 {'/'.join(CONV_FORMATS)}）")
     import asset_service
-    asset_service.register_file(db, out, project_id=task_id, kind="export", source="format_convert",
+    made_asset = asset_service.register_file(db, out, project_id=task_id, kind="export", source="format_convert",
                                 body=md, metadata={"source_path": str(src), "format": fmt})
     db.log_step(task_id, "convert", "done", f"导出 {out.name}")
     res = {"path": str(out), "name": out.name, "format": fmt, "size": out.stat().st_size,
+           "asset_id": made_asset.get("id", ""),
            "pdf": fmt == "latex", "source": str(src),
            "template": tpl if fmt == "latex" else "", "template_fallback": fallback if fmt == "latex" else ""}
     if fmt == "latex":

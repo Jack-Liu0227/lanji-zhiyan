@@ -12,8 +12,9 @@ import execution
 TOOLS=[{'id':'caption','name':'图片图注','description':'单张或批量图片生成、核对与润色图注，需支持视觉的模型'},
        {'id':'image_convert','name':'图片格式转换','description':'本地转换 PNG、JPG、JPEG、WebP、TIFF、PDF；PDF 按页栅格化'},
        {'id':'translate','name':'中英互译','description':'双语学术文本翻译，保留公式和引用标记'},
-       {'id':'polish','name':'学术润色','description':'改进表达，保留事实、数字、公式和引用'},
-       {'id':'references','name':'引文整理','description':'检查 BibTeX / RIS 重复项与缺失字段，不判定文献真实性'},
+       {'id':'polish','name':'学术润色','description':'逐段润色一段文字，改进表达，保留事实、数字、公式和引用'},
+       {'id':'references','name':'引文整理','description':'检查 BibTeX / RIS 重复项与缺失字段，可输出 GB/T 7714、Nature 或 IEEE 格式，不判定文献真实性'},
+       {'id':'compliance','name':'合规预检','description':'按固定规则自查篇幅、图表编号、正文引用与参考文献、单位与措辞，不做查重也不核验文献真实性'},
        {'id':'convert','name':'格式转换','description':'原文件本地转换或粘贴文本导出；论文排版 PDF 使用项目转换服务'},
        {'id':'pdf_translate','name':'PDF 论文翻译','description':'调用已有项目 PDF 翻译与进度服务'},
        {'id':'mermaid','name':'Mermaid 图表','description':'本地预览流程图、时序图等，导出 SVG 或高分辨率 PNG','runtime':'browser'}]
@@ -60,6 +61,12 @@ def validate(spec):
     formats = ('md','html','docx','tex') if document_id else (
         ('png','jpg','jpeg','webp','tif','tiff','pdf') if tool=='image_convert' else ('md','html','docx','pdf'))
     if fmt not in formats:raise ValueError('导出格式无效')
+    style=str(spec.get('cite_style') or '')
+    if style:
+        if tool!='references':raise ValueError('参考文献格式只用于引文整理')
+        if style not in CITE_STYLES:raise ValueError('参考文献格式无效')
+    lang=str(spec.get('lang') or 'en')
+    if tool=='caption' and lang not in ('en','zh'):raise ValueError('图注输出语言无效')
     preset_id=str(spec.get('prompt_preset') or (tool+'_academic' if tool in PROMPT_TOOLS else ''))
     prompt=spec.get('prompt');reference=spec.get('prompt_template')
     if tool not in PROMPT_TOOLS and (prompt is not None or reference is not None or preset_id):
@@ -71,9 +78,11 @@ def validate(spec):
     if reference is not None and (not isinstance(reference,dict) or not reference.get('template_id')):
         raise ValueError('请选择有效的项目提示词模板')
     return {'tool':tool,'text':text,'direction':direction,'format':fmt,'terminology':str(spec.get('terminology') or '')[:10000],
+            'cite_style':style,'lang':lang,
             'prompt_preset':preset_id,'prompt':prompt,'prompt_template':reference,
             **({'document_asset_id': document_id} if document_id else {}),
-            'image_ids':spec.get('image_ids',[]),'dpi':max(72,min(600,int(spec.get('dpi') or 180)))}
+            'image_ids':spec.get('image_ids',[]),'dpi':max(72,min(600,int(spec.get('dpi') or 180))),
+            'source_name':str(spec.get('source_name') or '')[:120]}
 
 
 def _prepare_prompt(db,project_id,spec):
@@ -98,8 +107,85 @@ def _prompt_record(spec):
             'revision_id':snapshot.get('revision_id',''),'text':spec.get('prompt',''),'modified':spec.get('prompt','')!=original}
 
 
-def _references(text):
-    if re.search(r'^TY\s+-',text,re.M):
+CITE_STYLES={'gb7714':'GB/T 7714','nature':'Nature','ieee':'IEEE'}
+FIGURE=re.compile(r'(?:图|Fig(?:ure)?\.?)\s*(\d+)',re.I)
+TABLE=re.compile(r'(?:表|Table)\s*(\d+)',re.I)
+INLINE_CITE=re.compile(r'\[(\d+(?:\s*[,，–-]\s*\d+)*)\]')
+UNIT_GAP=re.compile(r'(?<![A-Za-z0-9.．])(\d+(?:[.,]\d+)?)(mAh|mV|mA|nA|μA|uA|nm|μm|um|mm|cm|mg|kg|mol|min|h)\b')
+ABSOLUTE=re.compile(r'(首次|证明了|毫无疑问|彻底解决|完全一致|必然)')
+
+
+def _authors(entry,ris):
+    if ris:
+        names=re.findall(r'^AU\s+-\s*(.+)$',entry,re.M)
+        return ' and '.join(name.strip() for name in names)
+    for pattern in (r'author\s*=\s*\{(.*?)\}',r'author\s*=\s*"([^"]*)"',r'author\s*=\s*([^,\n]+)'):
+        match=re.search(pattern,entry,re.S|re.I)
+        if match:return re.sub(r'\s+',' ',match.group(1)).strip()
+    return ''
+
+
+def _people(value):
+    people=[]
+    for item in re.split(r'\s+and\s+|;\s*',value or ''):
+        item=item.strip('{} ,')
+        if not item:continue
+        if ',' in item:surname,given=item.split(',',1)
+        else:
+            bits=item.split()
+            if len(bits)<2:people.append((item,''));continue
+            surname,given=bits[-1],' '.join(bits[:-1])
+        people.append((surname.strip(),''.join(word[0] for word in re.findall(r'[A-Za-z]+',given)).upper()))
+    return people
+
+
+def _field(data,*keys):
+    for key in keys:
+        raw=(data.get(key) or '').strip()
+        if raw:return raw.strip('{}",\' ').strip()
+    return ''
+
+
+def _cite(records,style):
+    """按刊格式排版参考文献；缺关键字段时保留原条目而不是编造。"""
+    lines=[]
+    for index,(entry,data,ris) in enumerate(records,1):
+        title=_field(data,'title','TI').rstrip('.')
+        journal=_field(data,'journal','journaltitle','JO','T2')
+        year=_field(data,'year','PY')
+        volume=_field(data,'volume','VL')
+        issue=_field(data,'number','IS')
+        pages=_field(data,'pages','SP')
+        tail=_field(data,'EP')
+        if ris and pages and tail and tail!=pages:pages+='-'+tail
+        doi=_field(data,'doi','DO')
+        people=_people(_authors(entry,ris))
+        if not (title and journal and year and people):
+            excerpt=' '.join(entry.split())[:120]
+            lines.append(f'{index}. 元数据不全，保留原条目：{excerpt}')
+            continue
+        family=', '.join(f'{surname} {initials}'.strip() for surname,initials in people[:3])+(', 等' if len(people)>3 and re.search(r'[\u4e00-\u9fff]',title) else (', et al' if len(people)>3 else ''))
+        if style=='gb7714':
+            marker='M' if re.match(r'@\w*book',entry,re.I) else 'J'
+            body=f'{journal}, {year}'
+            if volume:body+=f', {volume}'
+            if issue:body+=f'({issue})'
+            if pages:body+=f': {pages}'
+            lines.append(f'[{index}] {family}. {title}[{marker}]. {body}.'+(f' DOI: {doi}.' if doi else ''))
+        elif style=='nature':
+            names=', '.join(f'{surname}, {initials}'.strip() for surname,initials in people[:-1])+(f' & {people[-1][0]}, {people[-1][1]}' if len(people)>1 else '')
+            body=f'{journal}'+(f' {volume}' if volume else '')+(f', {pages}' if pages else '')+f' ({year}).'
+            lines.append(f'{index}. {names}. {title}. {body}'+(f' doi:{doi}' if doi else ''))
+        else:
+            names=', '.join(f'{initials} {surname}'.strip() for surname,initials in people[:-1])+(f', and {people[-1][1]} {people[-1][0]}' if len(people)>1 else '')
+            body=f'{journal}'+(f', vol. {volume}' if volume else '')+(f', no. {issue}' if issue else '')+(f', pp. {pages}' if pages else '')+f', {year}.'
+            lines.append(f'[{index}] {names}, "{title}," {body}'+(f' doi: {doi}' if doi else ''))
+    return '\n\n'.join(lines)
+
+
+def _references(text,style=''):
+    ris=bool(re.search(r'^TY\s+-',text,re.M))
+    if ris:
         entries=[part.strip()+'\nER  -' for part in re.split(r'^ER\s+-\s*$',text,flags=re.M) if part.strip()]
         fields=lambda entry:{match[0]:match[1].strip() for match in re.findall(r'^([A-Z0-9]{2})\s+-\s*(.+)$',entry,re.M)}
         required=('TI','AU','PY');doi_field='DO'
@@ -109,15 +195,65 @@ def _references(text):
         entries=[text[match.start():starts[i+1].start() if i+1<len(starts) else len(text)].strip() for i,match in enumerate(starts)]
         fields=lambda entry:{match[0].lower():match[1].strip('{}" ') for match in re.findall(r'(\w+)\s*=\s*([^\n]+)',entry)}
         required=('title','author','year');doi_field='doi'
-    seen=set();kept=[];warnings=[]
+    seen=set();kept=[];records=[];warnings=[]
     for i,entry in enumerate(entries,1):
         data=fields(entry);doi=re.search(r'10\.\d{4,9}/[^\s}"<>]+',data.get(doi_field,''),re.I)
         key=doi.group(0).lower().rstrip(',') if doi else re.sub(r'\s+','',data.get('title') or data.get('TI') or entry).casefold()
         if key in seen:warnings.append(f'第 {i} 条与已有条目重复，已从整理结果中合并');continue
-        seen.add(key);kept.append(entry)
+        seen.add(key);kept.append(entry);records.append((entry,data,ris))
         missing=[field for field in required if not data.get(field)]
         if missing:warnings.append(f'第 {i} 条缺少：'+', '.join(missing))
-    return '# 引文整理结果\n\n输入 '+str(len(entries))+' 条，保留 '+str(len(kept))+' 条。\n\n'+('\n'.join('- '+line for line in warnings) or '未发现重复项或所检查字段缺失。')+'\n\n```\n'+'\n\n'.join(kept)+'\n```\n\n本工具检查格式和字段，不核验文献是否真实发表。'
+    report='# 引文整理结果\n\n输入 '+str(len(entries))+' 条，保留 '+str(len(kept))+' 条。\n\n'+('\n'.join('- '+line for line in warnings) or '未发现重复项或所检查字段缺失。')
+    if style:
+        report+='\n\n## '+CITE_STYLES[style]+' 格式\n\n'+_cite(records,style)
+    return report+'\n\n```\n'+'\n\n'.join(kept)+'\n```\n\n本工具检查格式和字段，不核验文献是否真实发表。'
+
+
+def _compliance(text):
+    """投稿前自查：只用确定性规则，不确定的项标为「建议确认」，不猜。"""
+    cjk=len(re.findall(r'[\u4e00-\u9fff]',text))
+    words=len(re.findall(r"\b[A-Za-z][A-Za-z'\-]*\b",text))
+    paragraphs=[part for part in re.split(r'\n\s*\n',text) if part.strip()]
+    issues=[];notes=[]
+    counts=[]
+    for label,pattern in (('图',FIGURE),('表',TABLE)):
+        numbers=sorted({int(value) for value in pattern.findall(text)})
+        counts.append(f'{label} {len(numbers)} 个')
+        missing=[number for number in range(1,(numbers[-1] if numbers else 0)+1) if number not in numbers]
+        if missing:issues.append(f'{label}编号不连续，缺 {", ".join(map(str,missing[:5]))}')
+    cited=set()
+    # 参考文献表每行以 [n] 开头，先剥掉行首编号再统计正文引用，避免把自己的列表当成正文引用。
+    body=re.sub(r'^[ \t]*\[\d+\]','',text,flags=re.M)
+    for group in INLINE_CITE.findall(body):
+        for part in re.split(r'[,，]',group):
+            bounds=re.split(r'[–-]',part.strip())
+            try:
+                if len(bounds)==2:cited.update(range(int(bounds[0]),int(bounds[1])+1))
+                else:cited.add(int(bounds[0]))
+            except ValueError:pass
+    listed=sorted({int(number) for number in re.findall(r'^\s*\[(\d+)\]',text,re.M)})
+    if listed and cited:
+        beyond=sorted(number for number in cited if number>len(listed))
+        if beyond:issues.append('正文引用编号超出参考文献条数，'+', '.join(map(str,beyond[:5]))+' 无对应条目')
+        unused=[number for number in listed if number not in cited]
+        if unused:notes.append('正文未引用 '+str(len(unused))+' 条：'+', '.join(map(str,unused[:8])))
+    elif cited:
+        notes.append('正文有 [n] 引用但未识别到编号参考文献表；若采用著者-年份制可忽略')
+    gaps=UNIT_GAP.findall(text)
+    if gaps:issues.append('数字与单位之间缺空格 '+str(len(gaps))+' 处：'+'、'.join(number+unit for number,unit in gaps[:3]))
+    if cjk and '（' in text and re.search(r'(?<![A-Za-z0-9])\(',text):notes.append('全角「（）」与半角「()」混用')
+    absolutes=list(dict.fromkeys(ABSOLUTE.findall(text)))
+    if absolutes:notes.append('绝对化表述：'+'、'.join(absolutes[:6])+'（确认有统计支撑或改写）')
+    frequent=[name for name in set(re.findall(r'\b[A-Z]{2,6}\b',text)) if text.count(name)>=2]
+    undefined=[name for name in frequent if not re.search(r'[（(][^）)\n]{0,40}'+re.escape(name)+r'[^）)\n]{0,40}[）)]',text)]
+    if undefined:notes.append('缩写出现多次但未见首次定义：'+'、'.join(undefined[:6]))
+    long_paragraphs=[str(index) for index,part in enumerate(paragraphs,1) if len(part)>1500]
+    if long_paragraphs:notes.append('段落过长（>1500 字）：第 '+'、'.join(long_paragraphs[:5])+' 段')
+    report=f'# 投稿合规预检\n\n**篇幅**：中文 {cjk} 字 · 英文 {words} 词 · 段落 {len(paragraphs)} 个\n\n**图表**：'+' · '.join(counts)+f'\n\n**参考文献**：{len(listed)} 条'
+    if cited:report+=f' · 正文引用到 [{max(cited)}]'
+    report+='\n\n## 需要处理\n\n'+('\n'.join('- '+line for line in issues) if issues else '未发现硬性问题。')
+    report+='\n\n## 建议确认\n\n'+('\n'.join('- '+line for line in notes) if notes else '无。')
+    return report+'\n\n本工具按固定规则检查篇幅、编号、引用和常见格式，不做查重，不判断期刊具体要求；字数与图表上限请对照投稿须知。'
 
 
 def transform(db,owner_id,spec,emit=None,*,prepared=False):
@@ -129,7 +265,8 @@ def transform(db,owner_id,spec,emit=None,*,prepared=False):
         import image_tools
         project_id=owner_id if db.db.execute('SELECT 1 FROM research_tasks WHERE id=?',(owner_id,)).fetchone() else ''
         return image_tools.transform(db,project_id,spec,emit)
-    if tool=='references':return {'content':_references(text)}
+    if tool=='references':return {'content':_references(text,spec['cite_style'])}
+    if tool=='compliance':return {'content':_compliance(text)}
     if tool=='convert':
         if spec.get('document_asset_id'):
             import document_convert
@@ -141,7 +278,7 @@ def transform(db,owner_id,spec,emit=None,*,prepared=False):
                 if not db.db.execute('SELECT 1 FROM research_tasks WHERE id=?',(owner_id,)).fetchone():raise ValueError('导出 PDF 请选择项目，以使用项目的论文与引用配置')
                 source=db.pdir(owner_id,'其余')/('toolbox-'+uuid.uuid4().hex+'.md');asset_service.atomic_write_text(source,text)
                 result=workflow.conv_run(db,owner_id,'pdf',str(source))
-            else:result=workflow.stage_convert(db,owner_id,text,spec['format'],'toolbox-'+uuid.uuid4().hex[:10])
+            else:result=workflow.stage_convert(db,owner_id,text,spec['format'],re.sub(r'[^\w\-. ]+','_',Path(spec.get('source_name') or '').stem)[:60] or ('toolbox-'+uuid.uuid4().hex[:10]))
         finally:db.quiet_steps=old
         return {'content':'已导出：'+result['path'],**result}
     if tool not in ('translate','polish'):raise ValueError('PDF 翻译请从已入库的项目文献启动')
@@ -150,14 +287,17 @@ def transform(db,owner_id,spec,emit=None,*,prepared=False):
     protected=[]
     def mask(match):protected.append(match.group(0));return '⟦KEEP_'+str(len(protected)-1)+'⟧'
     masked=PROTECTED.sub(mask,text);chunks=[]
-    while masked:
-        cut=min(4000,len(masked))
-        if cut<len(masked):
-            boundary=masked.rfind('\n\n',0,cut)
-            if boundary>cut//2:cut=boundary+2
-            marker=masked.rfind('⟦KEEP_',0,cut)
-            if marker>=0 and masked.find('⟧',marker)>=cut:cut=marker
-        chunks.append(masked[:cut]);masked=masked[cut:]
+    # 润色按段落独立请求：一段一次，段落不合并，避免跨段改写；超过 4000 字的长段再拆。
+    blocks=[part for part in re.split(r'\n\s*\n',masked) if part.strip()] if tool=='polish' else [masked]
+    for block in blocks:
+        while block:
+            cut=min(4000,len(block))
+            if cut<len(block):
+                boundary=block.rfind('\n\n',0,cut)
+                if boundary>cut//2:cut=boundary+2
+                marker=block.rfind('⟦KEEP_',0,cut)
+                if marker>=0 and block.find('⟧',marker)>=cut:cut=marker
+            chunks.append(block[:cut]);block=block[cut:]
     results=[]
     instruction=('Translate the text into academic English.' if spec['direction']=='zh_en' else '将文本译为准确、自然的学术中文。') if tool=='translate' else '润色学术文本，保持原语言、事实、数字和结论，不增加未经提供的证据。'
     instruction+='\n风格与写作偏好：\n'+(spec['prompt'] or '')
@@ -251,16 +391,17 @@ def route(method,path,body,query,db):
         if not chat or chat['channel']!='toolbox' or (pid and chat['task_id']!=pid):raise ValueError('工具处理记录不存在或不属于当前项目')
         spec=run.get('checkpoint',{}).get('request',{}).get('toolbox_spec',{})
         input_text=spec.get('text','')
-        content='';result_path='';result_files=[];result_errors=[]
+        content='';result_path='';result_files=[];result_errors=[];result_items=[]
         if run['status']=='done':
             messages=db.messages(chat['id'],'agent')
             input_text=next((m['content'] for m in reversed(messages) if m['role']=='user'),input_text)
             content=next((m['content'] for m in reversed(messages) if m['role']=='assistant'),'')
             event=db.db.execute("SELECT payload FROM run_events WHERE run_id=? AND kind='toolbox_result' ORDER BY event_id DESC LIMIT 1",(identifier,)).fetchone()
             if event:
-                payload=json.loads(event['payload']);result_path=payload.get('path','');result_files=payload.get('files',[]);result_errors=payload.get('errors',[])
+                payload=json.loads(event['payload']);result_path=payload.get('path','');result_files=payload.get('files',[]);result_errors=payload.get('errors',[]);result_items=payload.get('items',[])
         return {'id':identifier,'title':chat['title'],'project_id':chat['task_id'],'status':run['status'],'input':input_text,
-                'content':content,'path':result_path,'files':result_files,'errors':result_errors,'prompt':_prompt_record(spec)}
+                'content':content,'path':result_path,'files':result_files,'errors':result_errors,'items':result_items,
+                'prompt':_prompt_record(spec)}
     if method=='POST' and path.endswith('/upload'):
         import image_tools
         return image_tools.upload(db,body)

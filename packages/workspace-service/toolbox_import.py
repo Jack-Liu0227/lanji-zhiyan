@@ -8,6 +8,7 @@ TEXT = {'.txt', '.md', '.markdown', '.tex'}
 FORMATS = {
     'translate': TEXT | {'.docx', '.pdf'}, 'polish': TEXT | {'.docx', '.pdf'},
     'convert': TEXT | {'.docx', '.pdf'}, 'references': {'.bib', '.bibtex', '.ris', '.txt'},
+    'compliance': TEXT | {'.docx', '.pdf'},
     'mermaid': {'.mmd', '.mermaid', '.md', '.txt'}, 'pdf_translate': {'.pdf'},
 }
 MAX_BYTES = 20 * 1024 * 1024
