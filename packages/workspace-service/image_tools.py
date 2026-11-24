@@ -38,15 +38,17 @@ def upload(db, body):
         import pypdfium2
         with pypdfium2.PdfDocument(raw) as document:
             if not 1<=len(document)<=30:raise ValueError('每个 PDF 支持 1 至 30 页')
+            page_count=len(document)
     else:
         with Image.open(io.BytesIO(raw)) as image:
             if image.width*image.height>40_000_000:raise ValueError('图片最多 4000 万像素')
             image.verify()
+        page_count=1
     pid=str(body.get('project_id') or '')
     dest=folder(db,pid,'输入')/(uuid.uuid4().hex+suffix)
     with dest.open('xb') as output:output.write(raw)
     asset=asset_service.register_file(db,dest,project_id=pid,kind='image',source='image_upload',title=name)
-    return {'asset_id':asset['id'],'name':name,'bytes':len(raw)}
+    return {'asset_id':asset['id'],'name':name,'bytes':len(raw),'pages':page_count}
 
 
 def inputs(db, project_id, ids):
@@ -54,7 +56,7 @@ def inputs(db, project_id, ids):
     result=[]
     for identifier in ids:
         asset=asset_service.get(db,str(identifier))
-        if not asset or asset['project_id']!=project_id or asset['source'] not in ('image_upload','project_upload'):
+        if not asset or asset['project_id']!=project_id or asset['source'] not in ('image_upload','project_upload','image_conversion'):
             raise ValueError('图片不存在或不属于当前项目')
         path=Path(asset['canonical_uri'])
         if path.suffix.lower().lstrip('.') not in FORMATS:raise ValueError('此文件不是支持的图片或 PDF')
@@ -107,7 +109,7 @@ def message_images(db, project_id, ids, snapshots=None):
 def transform(db, project_id, spec, emit):
     import workflow
     selected=inputs(db,project_id,spec['image_ids'])
-    results=[];files=[];errors=[]
+    results=[];files=[];errors=[];items=[]
     dest=folder(db,project_id,'输出')/uuid.uuid4().hex;dest.mkdir()
     for index,(asset,path) in enumerate(selected,1):
         try:
@@ -123,24 +125,36 @@ def transform(db, project_id, spec, emit):
                         if model.get('api','') in account_providers.WIRES:
                             raise ValueError('当前账号适配器不支持图片输入，请选择支持视觉的 API 模型')
                         image.thumbnail((2048,2048));buffer=io.BytesIO();image.save(buffer,format='PNG')
-                        instruction=spec.get('prompt') or '根据图片生成严谨的论文图注；识别子图、坐标、图例与可见趋势。未知实验条件、样本量或统计方法列为待确认，不编造。输出英文 caption、中文说明和待补充项。若给定原图注，先核对再润色。'
+                        instruction=spec.get('prompt') or '根据图片生成严谨的论文图注；识别子图、坐标、图例与可见趋势。未知实验条件、样本量或统计方法列为待确认，不编造。若给定原图注，先核对再润色。'
+                        want='中文图注（投稿体，一段话），另附英文 caption 与待补充项。' if spec.get('lang')=='zh' else '英文 caption（投稿体，一段话），另附中文说明与待补充项。'
+                        instruction=instruction+chr(10)+'输出语言（优先于上文其它要求）：'+want
                         result=workflow.chat_raw(model,[{'role':'system','content':instruction},{'role':'user','content':[
                             {'type':'text','text':'图片：'+label+'\n研究背景或原图注：'+spec.get('text','')},
                             {'type':'image_url','image_url':{'url':'data:image/png;base64,'+base64.b64encode(buffer.getvalue()).decode()}}]}],max_tokens=4000)
                         content=str(result.get('content') or '').strip()
                         if not content:raise ValueError('模型未返回图注')
                         results.append('## '+label+'\n\n'+content)
+                        items.append({'asset_id':asset['id'],'name':asset['title'],'label':label,'page':page_no,'content':content,'error':''})
                     else:
                         fmt=spec['format'];output=dest/(f'{index:02d}-{page_no:02d}.'+fmt)
                         converted=rgb(image) if fmt in ('jpg','jpeg','pdf') else image
-                        try:converted.save(output,format=FORMATS[fmt],**({'resolution':spec['dpi']} if fmt=='pdf' else {'quality':95} if fmt in ('jpg','jpeg','webp') else {}))
+                        # dpi 写进文件本身（PNG pHYs、JFIF、TIFF 标签），投稿系统与 Word 都认；PDF 用 resolution
+                        dpi=spec['dpi'];options={'dpi':(dpi,dpi)} if fmt in ('png','jpg','jpeg','tif','tiff') else {}
+                        if fmt=='pdf':options={'resolution':dpi}
+                        elif fmt in ('tif','tiff'):options['compression']='tiff_lzw'
+                        elif fmt=='png':options['optimize']=True
+                        if fmt in ('jpg','jpeg','webp'):options['quality']=95
+                        try:converted.save(output,format=FORMATS[fmt],**options)
                         finally:
                             if converted is not image:converted.close()
                         saved=asset_service.register_file(db,output,project_id=project_id,kind='image',source='image_conversion',title=label)
-                        files.append({'asset_id':saved['id'],'name':label+' → '+fmt.upper(),'path':str(output)})
+                        files.append({'asset_id':saved['id'],'name':label+' → '+fmt.upper(),'path':str(output),'project_id':project_id})
+                        emit({'type':'toolbox_file','file':files[-1],'done':len(files)})
                 finally:image.close()
         except execution.Cancelled:raise
-        except Exception as exc:errors.append({'name':asset['title'],'error':str(exc)[:500]})
+        except Exception as exc:
+            errors.append({'name':asset['title'],'error':str(exc)[:500]})
+            items.append({'asset_id':asset['id'],'name':asset['title'],'label':asset['title'],'page':0,'content':'','error':str(exc)[:500]})
     content='\n\n'.join(results) if spec['tool']=='caption' else '\n'.join('- '+f['name'] for f in files)
     if errors:content+='\n\n## 未完成的文件\n'+'\n'.join('- '+e['name']+'：'+e['error'] for e in errors)
     if not results and not files:raise ValueError(content or '未生成结果')
@@ -148,4 +162,17 @@ def transform(db, project_id, spec, emit):
         output=dest/'captions.md';asset_service.atomic_write_text(output,content)
         saved=asset_service.register_file(db,output,project_id=project_id,kind='note',source='image_caption',title='图片图注')
         files.append({'asset_id':saved['id'],'name':'图注文档','path':str(output)})
-    return {'content':content,'files':files,'errors':errors,'path':files[0]['path'] if files else ''}
+    return {'content':content,'files':files,'errors':errors,'items':items,'path':files[0]['path'] if files else ''}
+
+
+def preview(db, project_id, asset_id, page_no=1, width=1600):
+    """工具箱「图片预览」的缩略图：只读已经过 hash 校验的原图/PDF，输出 PNG 字节。
+    不落盘、不加缓存 —— 一次渲染约 50 ms，比缓存失效逻辑便宜。"""
+    asset,path=inputs(db,project_id,[str(asset_id or '')])[0]
+    for index,image in pages(path,120):
+        try:
+            if index!=int(page_no):continue
+            image.thumbnail((width,width));buffer=io.BytesIO();image.convert('RGB').save(buffer,format='PNG')
+            return buffer.getvalue()
+        finally:image.close()
+    raise ValueError('没有这一页')
