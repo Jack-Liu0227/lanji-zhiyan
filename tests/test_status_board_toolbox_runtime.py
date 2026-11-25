@@ -54,7 +54,7 @@ class StatusBoardToolboxRuntimeTest(unittest.TestCase):
         self.page.locator('#paperToolboxPage').wait_for()
         self.assertEqual(self.page.locator('#sidebar [data-nav="toolbox"]').get_attribute('aria-current'),'page')
         self.assertEqual(self.page.locator('#projectWorkspace,dialog.project-manager').count(),0)
-        self.assertEqual(self.page.locator('.ptb-tools [data-tb-tool]').count(),8)
+        self.assertEqual(self.page.locator('.ptb-tools [data-tb-tool]').count(),9)
         self.page.locator('[data-tb-text]').fill('Global toolbox draft')
         self.page.locator('#sidebar [data-nav="agent"]').click()
         self.page.locator('#sidebar [data-nav="toolbox"]').click()
@@ -67,7 +67,7 @@ class StatusBoardToolboxRuntimeTest(unittest.TestCase):
         self.page.locator('[data-tb-tool="convert"]').click()
         self.page.locator('[data-tb-format-row]').wait_for(state='visible')
         self.page.locator('[data-tb-tool="pdf_translate"]').click()
-        self.assertTrue(self.page.locator('[data-tb-paper-row]').is_visible())
+        self.page.locator('[data-tb-pdfread]').wait_for(state='visible')
         self.page.locator('[data-tb-tool="references"]').click()
         for theme in ('dark','light'):
             self.page.evaluate('theme=>setTheme(theme)',theme)

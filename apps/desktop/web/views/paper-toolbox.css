@@ -347,12 +347,8 @@
 .paper-toolbox:not(.ptb-page).is-pdfread>.ptb-tools{padding-top:4px;padding-bottom:4px}
 
 /* ===== 工具箱整页形态：只占正文区，左侧栏与顶部标签保留（fixed 会盖住导航，已撤） ===== */
-.paper-toolbox.ptb-page>.list-search{display:none}
 .paper-toolbox.ptb-page>.ptb-header{padding:8px 20px}
 .paper-toolbox.ptb-page>.ptb-body{padding-top:20px}
-
-/* 论文工具箱页面：隐藏重复的顶栏标题行 */
-.paper-toolbox.ptb-page>.ptb-header{display:none}
 
 /* 格式转换：把「原文件转换」开关收进双卡左卡标题栏，与图片格式转换同款 */
 .icv-h .ptb-config{border:0;background:transparent;padding:0;margin:0 8px 0 auto;gap:6px;font-size:12px;color:var(--muted)}

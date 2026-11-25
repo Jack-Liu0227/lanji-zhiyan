@@ -31,11 +31,18 @@ class ToolboxUsageRuntimeTest(unittest.TestCase):
           document.querySelector('.paper-toolbox').dispatchEvent(new DragEvent('drop',{dataTransfer:transfer,bubbles:true,cancelable:true}));
         }''',{'name':name,'data':base64.b64encode(raw).decode()})
 
-    def test_all_eight_tools_accept_their_own_files(self):
+    def test_all_tools_accept_their_own_files(self):
         self.load_page();self.page.evaluate("()=>openTab('toolbox')")
-        self.page.locator('[data-tb-import-zone]').wait_for()
+        self.page.locator('[data-tb-tool]').first.wait_for()
         for tool,name,text in [('translate','translation.txt','Translation draft'),('polish','polish.md','Polishing draft'),('convert','document.md','# Converted document'),('references','refs.bib','@article{sample, title={A study}, author={Li}, year={2026}}')]:
             self.page.locator('[data-tb-tool='+tool+']').click()
+            if tool=='convert':
+                # 格式转换改为导入式双卡：源文件进左侧卡片，不再粘贴到正文框
+                self.drop(name,text.encode())
+                self.page.wait_for_function("name=>document.querySelector('[data-tb-icv-in]').textContent.includes(name)",arg=name)
+                self.page.wait_for_function("!document.querySelector('[data-tb-run]').disabled")
+                self.assertEqual(self.page.locator('[data-tb-tool='+tool+']').get_attribute('aria-pressed'),'true')
+                continue
             self.page.locator('[data-tb-text]').fill('Existing draft')
             self.drop(name,text.encode())
             self.page.wait_for_function("text=>document.querySelector('[data-tb-text]').value.endsWith(text)",arg=text)
@@ -50,10 +57,12 @@ class ToolboxUsageRuntimeTest(unittest.TestCase):
         for index,tool in enumerate(('caption','image_convert'),1):
             self.page.wait_for_function("!document.querySelector('[data-tb-run]').disabled")
             self.page.locator('[data-tb-tool='+tool+']').click();self.drop(tool+'.png',buffer.getvalue())
-            self.page.wait_for_function('count=>document.querySelectorAll("[data-tb-image-list] li").length===count',arg=index)
+            self.page.wait_for_function('count=>document.querySelectorAll("[data-tb-icv-in] .icv-t").length===count',arg=index)
             self.page.wait_for_function("!document.querySelector('[data-tb-run]').disabled")
-        self.page.locator('[data-tb-tool=pdf_translate]').click()
+        # 论文翻译工作台沿用全局当前项目：项目在进入前选择，翻译模式本身不再显示项目下拉
+        self.page.locator('[data-tb-tool=translate]').click()
         pid=self.page.evaluate('S.tasks[0].id');self.page.locator('.paper-toolbox [name=project_id]').select_option(pid)
+        self.page.locator('[data-tb-tool=pdf_translate]').click()
         writer=PdfWriter();writer.add_blank_page(width=300,height=400);buffer=io.BytesIO();writer.write(buffer)
         self.drop('uploaded-paper.pdf',buffer.getvalue())
         self.page.wait_for_function("document.querySelector('[data-tb-import-result]').textContent.includes('已导入')")

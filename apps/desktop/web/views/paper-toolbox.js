@@ -179,7 +179,7 @@ const PaperToolbox=(()=>{
     return value;
   }
   function paintPrompts(){
-    const config=promptConfig(),host=el('prompts');if(!host)return;host.hidden=true;if(!config)return;
+    const config=promptConfig(),host=el('prompts');if(!host)return;host.hidden=!config||state.tool==='caption';if(!config)return;
     const busy=!!state.run||starting,changed=config.prompt!==config.original_prompt;
     const available=presets.filter(item=>item.tool===state.tool),categories=[...new Set(available.map(item=>item.category||'内置风格'))];
     el('preset').innerHTML=categories.map(category=>`<optgroup label="${h(category)}">${available.filter(item=>(item.category||'内置风格')===category).map(item=>`<option value="${h(item.id)}">${h(item.name)}</option>`).join('')}</optgroup>`).join('')+(config.reference?`<optgroup label="项目模板"><option value="project">${h(config.reference.title)} · v${h(config.reference.revision)}</option></optgroup>`:'');
@@ -371,7 +371,10 @@ const PaperToolbox=(()=>{
       el('text').placeholder=direct?(state.document?'原文件：'+state.document.name:'选择或拖入要转换的原文件'):{caption:'可选：研究背景、已有图注或需要强调的信息',polish:'粘贴一个段落（建议 200–800 字）',compliance:'粘贴论文正文与文末参考文献，按 [1] 编号',references:'粘贴 BibTeX 或 RIS 条目'}[state.tool]||'粘贴需要处理的内容';el('text').closest('.ptb-editors').hidden=diagram||state.tool==='caption'||['pdf_translate','image_convert','convert'].includes(state.tool);el('caption').hidden=state.tool!=='caption';el('import-zone').hidden=['caption','image_convert','convert','translate','polish','references','compliance'].includes(state.tool);const icvFile=panel.querySelector('#icv-file');if(icvFile)icvFile.accept=state.tool==='convert'?imports.convert[0]:imports.image_convert[0];panel.classList.toggle('ptb-cb-mode',state.tool==='caption');
       // 图注模式把「模板选择 + 本次提示词」搬到顶部胶囊行，画布直接顶到上沿
       const config=configRow,prompts=el('prompts'),toolbar=prompts?.querySelector('.ptb-prompt-toolbar'),details=prompts?.querySelector('details');
-      if(toolbar&&details){if(toolbar.parentElement!==config){config.append(toolbar,details);prompts.hidden=true;}}configRow.hidden=diagram;el('mermaid').hidden=!diagram;if(diagram&&!diagramView)diagramView=MermaidTool.mount(el('mermaid'));error('');pins();loadPapers();paint();paintPdfRead();}
+      if(toolbar&&details){
+        if(state.tool==='caption'){if(toolbar.parentElement!==config)config.append(toolbar,details);prompts.hidden=true;}
+        else{if(toolbar.parentElement!==prompts){prompts.prepend(toolbar);prompts.append(details);}prompts.hidden=false;}
+      }configRow.hidden=diagram;el('mermaid').hidden=!diagram;if(diagram&&!diagramView)diagramView=MermaidTool.mount(el('mermaid'));error('');pins();loadPapers();paint();paintPdfRead();}
     function paintPdfRead(){
       /* PDF 论文翻译：整块换成 1.0 的翻译工作台（添加论文 / 双语阅读 / 荧光笔 / 笔记 / BabelDOC 进度） */
       const on=state.tool==='pdf_translate';panel.classList.toggle('is-pdfread',on);if(el('pdfread'))el('pdfread').hidden=!on;if(!on)return;

@@ -127,7 +127,7 @@ class ToolboxPromptsRuntimeTest(unittest.TestCase):
             with workflow.WorkflowDB(self.database_path) as db:
                 current=project_notes.read(db,self.pid,note['path'])
                 project_notes.write(db,self.pid,note['path'],'LATER_TEMPLATE_CONTENT',expected_hash=current['content_hash'])
-            retry=self.page.request.post(self.url+'api/paper-toolbox/start',data={'tool':'translate','text':'Original $D$ [3]','project_id':self.pid,'request_key':started['request_key'],'prompt_preset':'translate_academic','prompt':edited,'prompt_template':self.page.evaluate("JSON.parse(localStorage.getItem('rw-paper-toolbox')).prompt_configs.translate.reference")})
+            retry=self.page.request.post(self.url+'api/paper-toolbox/start',data={'tool':'translate','text':'Original $D$ [3]','project_id':self.pid,'request_key':started['request_key'],'dpi':int(self.page.evaluate("(JSON.parse(localStorage.getItem('rw-paper-toolbox'))||{}).dpi||300")),'prompt_preset':'translate_academic','prompt':edited,'prompt_template':self.page.evaluate("JSON.parse(localStorage.getItem('rw-paper-toolbox')).prompt_configs.translate.reference")})
             self.assertTrue(retry.ok,retry.text());self.assertEqual(retry.json()['run_id'],started['run_id'])
             model.release.set()
             result=self.poll_json('/api/paper-toolbox/result?run_id='+started['run_id']+'&project_id='+self.pid,lambda data:data['status'] in ('done','failed'))

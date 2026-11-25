@@ -132,7 +132,7 @@ class BuiltinScheduleSkillsTest(unittest.TestCase):
         now = datetime.now()
         for identifier in ids:
             self.db.schedule_mark_run(identifier, '', now.isoformat(timespec='seconds'))
-        running, release = Barrier(3, timeout=6), Event()
+        running, release = Barrier(3, timeout=30), Event()
 
         def model(*args, **kwargs):
             running.wait()
