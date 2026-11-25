@@ -414,24 +414,16 @@ export function mount(root, api, opts = {}) {
     coreBox.classList.toggle('paused', L.paused);
   }
 
-  // 底部 KPI 条（参照实现的 dock 只留读数，不要问答框）
+  // 底部操作条（概览读数已按用户要求删除，只留当前范围 + 动效开关）
   const dock = el('div', 'dock');
   stageEl.appendChild(dock);
   function renderDock() {
     const top = L.level === 'projects';
-    const t = cache.totals || {};
-    const kpis = top
-      ? [['文献', 'papers', t.papers || 0],
-         ['笔记', 'notes', t.notes || 0], ['检索', 'candidates', t.candidates || 0]]
-      : [['内容节点', 'nodes', graph.stats.content], ['连接', 'links', graph.stats.links],
-         ['双向', 'mutual', graph.stats.mutual], ['关键词', 'keywords', graph.stats.concepts]];
     const me = top ? '全部项目' : ((graph.task && graph.task.title) || '');
     const curId = (!top && graph.task && graph.task.id) || L.curTaskId || '';
-    dock.innerHTML = `<div class="dock-panel glass"><div class="dock-kpis">${kpis.map(([k, en, v]) =>
-      `<div><span>${k} <em>${en}</em></span><strong class="mono">${fmt(v)}</strong></div>`).join('')}</div>`
-      + `<div class="dock-chips"><span class="me">${esc(me)} <em>${top ? 'library' : 'project'}</em></span>`
+    dock.innerHTML = `<div class="dock-chips"><span class="me">${esc(me)} <em>${top ? 'library' : 'project'}</em></span>`
       + (!top && curId ? `<button data-act="enter-workflow" style="background:#38bdf8;color:#04131d;font-weight:600;padding:2px 8px;border-radius:4px;border:none;cursor:pointer">🔬 进入科研平台</button><button data-act="enter-space" style="cursor:pointer">📁 项目空间</button>` : '')
-      + `<button data-act="replay">重播开场</button><button data-act="pause">${L.paused ? '继续' : '暂停'}</button></div></div>`;
+      + `<button data-act="replay">重播开场</button><button data-act="pause">${L.paused ? '继续' : '暂停'}</button></div>`;
   }
 
   // 面包屑

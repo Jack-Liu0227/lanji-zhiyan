@@ -3,7 +3,7 @@
 纯标准库 HTTP 服务，把 workflow.py 的能力暴露给 web/index.html 单页界面。
 启动后自动开一个 Edge 应用窗口（无浏览器边框），失败则退回默认浏览器。
 
-    py -3.10 server.py [--port 8765] [--no-open]
+    py -3.10 server.py [--port 8766] [--no-open]
 """
 from __future__ import annotations
 
@@ -165,7 +165,8 @@ if not DB_PATH.exists() and (paths.APP / "data" / "research.sqlite3").is_file():
 schedule.DB_PATH = DB_PATH          # 定时任务共用同一个库（schedule 不反向 import server）
 team.DB_PATH = DB_PATH              # 团队共用同一个库
 UPLOADS = paths.UPLOADS
-PORT = 8765
+# 8765 归 1.0（打包版装在 LOCALAPPDATA 下的 LanjiZhiyan 目录），2.0 源码端口避开它
+PORT = 8766
 APP_TITLE = "览籍智研"      # 窗口标题前缀（web/index.html 会追加 " · v<构建戳>"）
 STAMP = ""
 
@@ -545,6 +546,11 @@ def _webview_window(url: str, stamp: str) -> bool:
     if os.environ.get("RW_DEBUG_CDP"):     # 给验证用的：RW_DEBUG_CDP=9333 就能用 CDP 连进这扇窗读 DOM
         webview.settings["REMOTE_DEBUGGING_PORT"] = int(os.environ["RW_DEBUG_CDP"])
     threading.Thread(target=_watch_restore, daemon=True).start()
+    try:      # 本进程给个独立 AppUserModelID：不然任务栏按 pythonw.exe 认身份，按钮就画 Python 的图标（WM_SETICON 白设）
+        import ctypes as _c
+        _c.windll.shell32.SetCurrentProcessExplicitAppUserModelID("LanjiZhiyan.Desktop")
+    except Exception:
+        pass
     try:
         win = webview.create_window(
             f"{APP_TITLE} · v{stamp}", url + "&pw=1",
@@ -579,6 +585,7 @@ def _show_pinned(win: Any) -> None:
             time.sleep(0.02)
         if h:
             _resizable(h); _strip_nc_frame(h)   # 先补 resize 样式并抹掉非客户区，再按客户区钉
+            _set_icons(h)
             _fit(h, True)
     except Exception:
         pass                               # 隐藏态钉歪了没事，_fit_after 会重钉
@@ -587,6 +594,24 @@ def _show_pinned(win: Any) -> None:
     except Exception:
         pass
     threading.Thread(target=_fit_after, daemon=True).start()
+
+
+def _set_icons(h: int) -> None:
+    """给窗口换上自己的图标。pywebview 的 icon= 只有 GTK/QT 认，Windows(edgechromium) 直接忽略，
+    于是任务栏/标题栏用的是宿主进程 pythonw.exe 的图标（用户看到的就是 Python 图标）。
+    打包版 exe 本身带图标，这里再设一遍也无害。句柄故意不释放：进程活多久就留多久。"""
+    import ctypes
+    u = ctypes.windll.user32
+    ico = ROOT / "build" / "icon.ico"
+    if not ico.is_file():
+        ico = ROOT / "tools" / "build" / "icon.ico"
+    if not ico.is_file():
+        return
+    IMAGE_ICON, LR_LOADFROMFILE, WM_SETICON = 1, 0x10, 0x80
+    for size, kind in ((16, 0), (32, 1)):      # 0 = ICON_SMALL（标题栏），1 = ICON_BIG（任务栏/Alt-Tab）
+        handle = u.LoadImageW(None, str(ico), IMAGE_ICON, size, size, LR_LOADFROMFILE)
+        if handle:
+            u.SendMessageW(h, WM_SETICON, kind, handle)
 
 
 def _nudge(h: int) -> None:
@@ -636,6 +661,8 @@ def _fit_after() -> None:
     for _ in range(40):
         h = _win_hwnd()
         if h:
+            if first:
+                _set_icons(h)          # 露脸后再设一次：任务栏按钮是 show 之后才生出来的
             if not framed:
                 framed = _resizable(h)
                 _strip_nc_frame(h)
@@ -1149,6 +1176,12 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                     return self._stream_run(run_id, last_id)
             if path == '/api/execution-board/stream':
                 return self._stream_execution_board(q)
+            if path == '/api/paper-toolbox/preview':
+                import image_tools
+                with WorkflowDB(DB_PATH) as db:
+                    data = image_tools.preview(db, (q.get('project_id') or [''])[0], (q.get('asset_id') or [''])[0],
+                                               int((q.get('page') or [1])[0] or 1))
+                return self._send(200, data, 'image/png', {'Cache-Control': 'private, max-age=600'})
             if path == '/api/paper-toolbox/file':
                 import asset_service
                 with WorkflowDB(DB_PATH) as db:

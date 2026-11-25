@@ -94,7 +94,13 @@ def paper_meta(db: Any, paper_id: str) -> dict[str, Any]:
     if hit and hit[0] == mt and len(hit[1]) > 1:
         return dict(hit[1])
     out: dict[str, Any] = {"filename": path.name, "doi": "", "title": "", "keywords": "",
-                           "published": "", "authors": "", "pages": 0, "source": ""}
+                           "published": "", "authors": "", "pages": 0, "source": "", "added": ""}
+    try:                                                     # 入项目时间（papers.created_at）
+        row = db.db.execute("SELECT created_at FROM papers WHERE id=?", (paper_id,)).fetchone()
+        if row and row["created_at"]:
+            out["added"] = str(row["created_at"])[:19].replace("T", " ")
+    except Exception:
+        pass
     out["pages"] = pdfio.page_count(path)
     text = pdfio.text(path, limit=3)
     _meta = pdfio.meta(path)
