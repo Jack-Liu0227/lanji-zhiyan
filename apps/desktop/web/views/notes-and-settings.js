@@ -318,6 +318,32 @@ function mdBind(m){
     if(t==="drop"){ e.preventDefault(); e.stopPropagation(); mdImport(e.dataTransfer.files); }
     root.classList.remove("md-view-dragging");
   }));
+  if(typeof SplitResizer !== "undefined"){
+    const mdViewEl = $("mdView");
+    if(mdViewEl && !mdViewEl.dataset.resizerBound){
+      mdViewEl.dataset.resizerBound = "true";
+      SplitResizer.bind(mdViewEl, {
+        mode: "fixed-left",
+        storageKey: "md-sidebar",
+        defaultSize: 238,
+        min: 160,
+        max: 420,
+        cssVar: "--md-sidebar-w"
+      });
+    }
+    const mdWorkspaceEl = $("mdWorkspace");
+    if(mdWorkspaceEl && !mdWorkspaceEl.dataset.resizerBound){
+      mdWorkspaceEl.dataset.resizerBound = "true";
+      SplitResizer.bind(mdWorkspaceEl, {
+        mode: "ratio",
+        storageKey: "md-workspace",
+        defaultSize: 0.5,
+        min: 0.2,
+        max: 0.8,
+        cssVar: "--md-split-ratio"
+      });
+    }
+  }
 }
 /* ---------------- Zotero 接入（只读；本机 Local API 127.0.0.1:23119） ----------------
    不读 zotero.sqlite、不写回、不后台同步。取到的条目走原有「新建笔记」，所以前台流程不变。 */
@@ -1256,6 +1282,25 @@ function pnFolderViewHTML(folderNode, q){
 function pnBindSideEvents(host){
   const side = host.querySelector(".pn-side");
   if(!side) return;
+  const layout = host.querySelector(".pn-layout");
+  if(layout && typeof SplitResizer !== "undefined" && !layout.dataset.resizerBound){
+    layout.dataset.resizerBound = "true";
+    SplitResizer.bind(layout, {
+      mode: "fixed-left",
+      storageKey: "pn-sidebar",
+      defaultSize: 260,
+      min: 180,
+      max: 440,
+      cssVar: "--pn-sidebar-w",
+      onResize: (w) => {
+        if(w > 80 && pnSideCollapsed){
+          pnSideCollapsed = false;
+          localStorage.setItem("rw-pn-side-collapsed", "false");
+          layout.classList.remove("side-collapsed");
+        }
+      }
+    });
+  }
 
   const btnCollapse = side.querySelector("#pnBtnCollapseSide");
   if(btnCollapse) btnCollapse.onclick = () => {
@@ -1922,12 +1967,20 @@ function setPanel(){
     <div style="display:flex;gap:6px;margin-top:4px">${[["compact","紧凑"],["comfortable","标准"],["large","大"]].map(([k,l])=>`<button class="btn ghost" data-f="${k}">${l}</button>`).join("")}</div></div>`;
   if(setSec === "perm") {
     const mode = (S.sec||{}).permission_mode || "";
+    const reviewMode = ((S.sec||{}).workflow_review_mode === "auto") ? "auto" : "human_review";
     const opt = (k, t, d) => `<label class="perm-opt ${mode===k?"on":""}"><input type="radio" name="permmode" value="${k}" ${mode===k?"checked":""}><div><b>${t}</b><p>${d}</p></div></label>`;
+    const revOpt = (k, t, d) => `<label class="perm-opt ${reviewMode===k?"on":""}"><input type="radio" name="wfreviewmode" value="${k}" ${reviewMode===k?"checked":""}><div><b>${t}</b><p>${d}</p></div></label>`;
     return `<div class="card"><h3>权限模式</h3>
       <div class="hint">我只能在程序自己的数据目录和你亲手选过的项目文件夹里读写；越界会直接拒绝并记一条审计。</div>
       <div class="perm-opts">
         ${opt("all", "允许所有", "在允许的目录里直接读写、编译、导出，不再逐次询问。")}
         ${opt("ask", "每次都要问", "编译、写文件、导出前先问你一句「允许这一次吗」。")}
+      </div></div>
+    <div class="card" style="margin-top:12px"><h3>自编排工作流审查</h3>
+      <div class="hint">控制自编排与多阶段工作流节点完成后的验收方式。即使选择无需人工审查，产物仍须通过格式、版本与必备文件检查。</div>
+      <div class="perm-opts">
+        ${revOpt("human_review", "需要人工干预审查（默认）", "节点完成后在待核查状态暂停，等你审阅产物、修订并点击通过后才推进下游。")}
+        ${revOpt("auto", "无需人工干预审查", "节点产物校验通过后自动验收并推进后续节点，不再逐节点暂停（明确指定需人工上传的节点除外）。")}
       </div></div>
     <div class="card" style="margin-top:12px"><h3>上下文预算</h3>
       <div class="hint">历史消息的字数上限。智研管家和项目对话优先保留近期消息，并按当前问题选取相关旧片段。实际 token 以「用量」页为准。</div>
@@ -1975,11 +2028,30 @@ function renderSettings(m){
       <nav class="set-nav">${SET_SECS.map(([k,i,l])=>`<button class="set-row ${k===setSec?"on":""}" data-set="${k}"><span class="set-ico">${i}</span>${l}</button>`).join("")}</nav>
       <div class="set-body" id="set-body">${setPanel()}</div></div>`;
   m.querySelectorAll("[data-set]").forEach(b=>b.onclick=()=>{ setSec = b.dataset.set; render(); });
+  if(typeof SplitResizer !== "undefined"){
+    const setWrap = m.querySelector(".set-wrap");
+    if(setWrap && !setWrap.dataset.resizerBound){
+      setWrap.dataset.resizerBound = "true";
+      SplitResizer.bind(setWrap, {
+        mode: "fixed-left",
+        storageKey: "set-tabs",
+        defaultSize: 168,
+        min: 130,
+        max: 260,
+        cssVar: "--set-tabs-w"
+      });
+    }
+  }
   const ta = $("to-assist"); if(ta) ta.onclick = ()=>openTab("assistants");
   if (setSec === 'data') renderStoragePanel(m.querySelector('[data-storage-panel]'));
   if(setSec === "perm"){
     m.querySelectorAll('input[name="permmode"]').forEach(r => r.onchange = async () => {
       await setPermissionMode(r.value); render();
+    });
+    m.querySelectorAll('input[name="wfreviewmode"]').forEach(r => r.onchange = async () => {
+      await setWorkflowReviewMode(r.value);
+      uiNotify("工作流审查模式已保存：" + (r.value === "auto" ? "无需人工干预审查" : "需要人工干预审查"));
+      render();
     });
     const cs = $("ctxsave");
     if(cs) cs.onclick = async () => {

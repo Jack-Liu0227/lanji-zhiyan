@@ -1,5 +1,6 @@
 """Abstract screening and bounded retrieval from indexed paper pages."""
 from hashlib import sha256
+import json
 import re
 import unicodedata
 
@@ -33,7 +34,9 @@ def abstract(db, project_id, paper):
         raise PermissionError('只能读取当前项目的文献')
     rows = indexed['pages'][:3]
     info = {"paper_id": paper["id"], "title": paper.get("title") or paper["filename"],
-            "doi": paper.get("doi", ""), "version": indexed['sha256'], "status": "missing"}
+            "doi": paper.get("doi", ""), "version": indexed['sha256'], "status": "missing",
+            "authors": paper.get("authors", ""), "year": paper.get("year", ""),
+            "fulltext_status": "indexed", "read_with": {"tool": "paper_focus", "paper_ids": [paper["id"]]}}
     for index, row in enumerate(rows):
         text = row["text"] or ""
         start = ABSTRACT.search(text)
@@ -51,23 +54,47 @@ def abstract(db, project_id, paper):
     return info
 
 
-def abstracts(db, project_id, *, offset=0, limit=6):
+def abstracts(db, project_id, *, offset=0, limit=6, result_ids=None):
     _project(db, project_id)
     offset = max(0, int(offset))
-    limit = max(1, min(int(limit), 8))
+    limit = max(1, min(int(limit), 20))
     papers = _available(db, project_id)
+    if result_ids is not None:
+        if (not isinstance(result_ids, list) or len(result_ids) > 100 or
+                any(not isinstance(item, str) or not item for item in result_ids)):
+            raise ValueError('result_ids 须为最多 100 个当前项目题录 ID')
+        available_records = {record['id']: record for record in db.results(project_id)}
+        records = [available_records.get(result_id) for result_id in dict.fromkeys(result_ids)]
+        if any(not record or record.get('task_id') != project_id for record in records):
+            raise ValueError('只能读取当前项目中的题录')
+    else:
+        records = db.results(project_id)
     metadata = []
+    paper_ids = {paper['id'] for paper in papers}
+    linked = {row['result_id']: row['paper_id'] for row in db.db.execute(
+        'SELECT result_id,paper_id FROM project_paper_links WHERE task_id=?', (project_id,))
+        if row['paper_id'] in paper_ids}
     known = {str(paper.get("doi") or "").casefold() for paper in papers}
-    for record in db.results(project_id):
+    for record in records:
         value = " ".join(str(record.get("abstract") or "").split())
         doi = record.get("doi") or ""
-        if doi and doi.casefold() in known:
+        if result_ids is None and doi and doi.casefold() in known:
             continue
         if doi:
             known.add(doi.casefold())
-        item = {"result_id": record["id"], "title": record["title"], "doi": doi, "status": "missing"}
+        item = {"result_id": record["id"], "title": record["title"], "doi": doi, "status": "missing",
+                "authors": record.get("authors", ""), "year": record.get("year", ""),
+                "source": record.get("source", ""), "url": record.get("url", ""),
+                "fulltext_status": "not_indexed", "download_with": {"tool": "paper_download", "result_id": record["id"]},
+                "next_step": "此记录是检索题录。精读前先下载开放全文，使用下载结果中的 paper.id 调用 paper_focus；下载不可用时记录证据缺口"}
         if value:
             item.update(status="metadata", abstract=value[:ABSTRACT_LIMIT], truncated=len(value) > ABSTRACT_LIMIT)
+        if record['id'] in linked:
+            paper_id = linked[record['id']]
+            item.update(paper_id=paper_id, fulltext_status='indexed',
+                        read_with={'tool': 'paper_focus', 'paper_ids': [paper_id]},
+                        next_step='全文已在当前项目入库；用 paper_id 调用 paper_focus，无需重复下载')
+            item.pop('download_with', None)
         metadata.append(item)
     choices = [(False, paper) for paper in papers] + [(True, item) for item in metadata]
     selected = [item if from_search else abstract(db, project_id, item)
@@ -92,6 +119,10 @@ def focus(db, project_id, question, paper_ids, keywords, limit=6):
     available = {item["id"]: item for item in _available(db, project_id)}
     ids = list(dict.fromkeys(str(item) for item in paper_ids))
     if any(paper_id not in available for paper_id in ids):
+        missing = [paper_id for paper_id in ids if paper_id not in available]
+        records = {record['id'] for record in db.results(project_id)}
+        if all(paper_id in records for paper_id in missing):
+            raise ValueError('这些 ID 是当前项目的检索题录，尚未索引可用全文。请先用 paper_download(result_id=题录ID)，再用返回的 paper.id 调用 paper_focus；本节点没有下载权限时请让检索节点补齐全文。这不是项目权限错误')
         raise PermissionError("精读只能使用当前项目中可用的论文")
     patterns = [
         re.compile(r"(?<![A-Za-z0-9])" + re.escape(term) + r"(?![A-Za-z0-9])", re.I)
@@ -116,7 +147,8 @@ def focus(db, project_id, question, paper_ids, keywords, limit=6):
             citation = f"{paper['filename']} p.{row['page_no']}"
             evidence_id = sha256(f"{paper_id}:{paper.get('sha256')}:{row['page_no']}:{start}:{end}".encode()).hexdigest()[:20]
             picks.append((weight, {"excerpt_id": evidence_id, "paper_id": paper_id, "page_no": row["page_no"],
-                                  "citation": citation, "excerpt": excerpt, "start": start, "end": end}))
+                                  "citation": citation, "excerpt": excerpt, "start": start, "end": end,
+                                  "version": paper.get('sha256', '')}))
     picks.sort(key=lambda pair: -pair[0])
     limit = max(1, min(int(limit), 6))
     return {"question": question, "matches": [item for _, item in picks[:limit]], "matched_pages": len(picks),
@@ -154,6 +186,29 @@ def _numbers(value):
     return set(_NUMBER.findall(text))
 
 
+def _focused_excerpt(db, project_id, paper_id, excerpt_id):
+    context = getattr(db, 'project_task_context', None)
+    task_id = getattr(context, 'parent_task_id', '') if context else ''
+    checkpoint = getattr(db, 'job_checkpoint', {}) or {}
+    if task_id:
+        task = db.db.execute('SELECT latest_run_id FROM project_tasks WHERE id=? AND project_id=?',
+                             (task_id, project_id)).fetchone()
+        if not task or not task['latest_run_id']:
+            return None
+        run = db.db.execute('SELECT checkpoint FROM project_task_runs WHERE id=? AND task_id=?',
+                            (task['latest_run_id'], task_id)).fetchone()
+        if not run:
+            return None
+        checkpoint = json.loads(run['checkpoint'] or '{}')
+    for key, result in reversed(list((checkpoint.get('done_tools') or {}).items())):
+        if str(key).split('\0', 1)[0] != 'paper_focus' or not isinstance(result, dict):
+            continue
+        for match in result.get('matches') or []:
+            if match.get('paper_id') == paper_id and match.get('excerpt_id') == excerpt_id:
+                return match
+    return None
+
+
 def record(db, project_id, paper_id, items):
     """Register precise, reusable evidence through the existing PDF-page gate."""
     import asset_service
@@ -171,11 +226,32 @@ def record(db, project_id, paper_id, items):
     with project_tasks._lock:
         for position, item in enumerate(items, 1):
             try:
+                if isinstance(item, dict) and item.get('excerpt_id'):
+                    match = _focused_excerpt(db, project_id, paper_id, str(item['excerpt_id']))
+                    if not match:
+                        raise ValueError('excerpt_id was not returned by paper_focus in the current task attempt')
+                    current_version = db.paper(paper_id).get('sha256', '')
+                    if match.get('version') and match['version'] != current_version:
+                        raise ValueError('PDF changed after paper_focus; retrieve the excerpt again')
+                    item = {**item, **{key: match[key] for key in ('page_no', 'start', 'end', 'excerpt')}}
                 if not isinstance(item, dict) or type(item.get("page_no")) is not int:
                     raise ValueError("请填写原文物理页码")
                 field = str(item.get("field") or "").strip()
                 value = str(item.get("value") or "").strip()
-                excerpt = compact(str(item.get("excerpt") or ""))
+                excerpt = str(item.get("excerpt") or "")
+                start, end = item.get("start"), item.get("end")
+                if start is not None or end is not None:
+                    if type(start) is not int or type(end) is not int or start < 0 or end <= start:
+                        raise ValueError("原文起止位置无效")
+                    pages = {page["page_no"]: page["text"] or "" for page in db.paper(paper_id)["pages"]}
+                    page_text = pages.get(item["page_no"])
+                    if page_text is None or end > len(page_text):
+                        raise ValueError("原文起止位置超出该 PDF 页")
+                    source_excerpt = page_text[start:end]
+                    if excerpt and compact(excerpt) != compact(source_excerpt):
+                        raise ValueError("提交的原文与 PDF 页位置不一致")
+                    excerpt = source_excerpt
+                excerpt = compact(excerpt)
                 if len(field) > 120 or len(value) > 400 or len(excerpt) > 1500:
                     raise ValueError("证据字段、数值或原文超出长度限制")
                 if not _numbers(value).issubset(_numbers(excerpt)):

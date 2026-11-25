@@ -27,11 +27,20 @@ def effective(db,project_id,template):
     return {**value,'revision':row['revision'] if row else 0,'fingerprint':fingerprint(value),'project_override':bool(row)}
 
 
-def current(db,project_id,template_id=''):
+def current(db,project_id,template_id='',*,required=True):
     workflow_layout.ensure_schema(db);workflow_layout._project(db,project_id)
     if not template_id:
         row=db.db.execute('SELECT layout_id FROM project_workflow_layouts WHERE task_id=?',(project_id,)).fetchone()
+        if row and not row['layout_id']:
+            if not required:return None
+            raise ValueError('当前项目未选择工作流模板，请在工作台选择模板')
         template_id=row['layout_id'] if row else workflow_layout.DEFAULT_LAYOUT_ID
+        if not row and not db.db.execute('SELECT 1 FROM workflow_layouts WHERE id=?', (template_id,)).fetchone():
+            first=db.db.execute('SELECT id FROM workflow_layouts ORDER BY created_at,id LIMIT 1').fetchone()
+            if not first:
+                if not required:return None
+                raise ValueError('工作流模板库为空，请先在工作台创建模板')
+            template_id=first['id']
     return effective(db,project_id,workflow_layout._layout(db,template_id))
 
 

@@ -13,18 +13,8 @@ def digest(value: Any) -> str:
 
 
 def definition(db, project_id: str) -> dict:
-    import workflow_layout
-    workflow_layout.ensure_schema(db)
-    workflow_layout._project(db, project_id)
-    binding = db.db.execute("SELECT layout_id FROM project_workflow_layouts WHERE task_id=?",
-                            (project_id,)).fetchone()
-    if binding:
-        import project_workflows
-        return project_workflows.effective(db,project_id,workflow_layout._layout(db,binding['layout_id']))
-    rows = list(db.db.execute("SELECT * FROM workflow_layouts ORDER BY created_at,id"))
-    row = next((r for r in rows if r["id"] == workflow_layout.DEFAULT_LAYOUT_ID), rows[0])
     import project_workflows
-    return project_workflows.effective(db,project_id,workflow_layout._public(row))
+    return project_workflows.current(db, project_id)
 
 
 def search_result_rows(project_id, result):
@@ -219,9 +209,13 @@ def node_states(db, project_id: str, layout: dict) -> dict[str, dict]:
 
 def states(db, project_id: str, layout: dict | None = None) -> dict[str, dict]:
     import workflow_layout
-    layout = layout or definition(db, project_id)
+    if layout is None:
+        import project_workflows
+        layout = project_workflows.current(db, project_id, required=False)
+    if layout is None:
+        return {}
     steps = [n["step"] for n in layout["nodes"]]
-    if "task" in steps or len(set(steps)) != len(steps):
+    if "task" in steps or len(set(steps)) != len(steps) or any(workflow_layout.required_outputs(n) for n in layout["nodes"]):
         result = node_states(db, project_id, layout)
         for node in layout["nodes"]:
             if steps.count(node["step"]) == 1:

@@ -157,6 +157,9 @@ if(window.marked && window.marked.use){
 }
 if(window.DOMPurify && window.DOMPurify.addHook){
   window.DOMPurify.addHook("uponSanitizeAttribute", (_node, data)=>{   // 放行工具条写进去的 font/字号/对齐/高亮样式
+    if(data.attrName==='href'&&!String(data.attrValue).startsWith('/__workflow-file?')&&window.ProjectWorkspace?.active()&&window.WorkflowFilePreview?.reference(data.attrValue)){
+      data.attrValue='/__workflow-file?path='+encodeURIComponent(data.attrValue);data.keepAttr=true;
+    }
     if(data.attrName === "style"){
       const ok = String(data.attrValue||"").split(";").map(s=>s.trim()).filter(s=>
         /^(?:font-family\s*:\s*[\w\s,"'-]+|font-size\s*:\s*\d{1,2}(?:\.\d+)?(?:px|pt|em|rem|%)|text-align\s*:\s*(?:left|center|right|justify)|background-color\s*:\s*(?:#[0-9a-f]{3,8}|[a-z]+)|color\s*:\s*(?:#[0-9a-f]{3,8}|[a-z]+))$/i.test(s));
@@ -213,6 +216,7 @@ const NAV = [
     {id:"assistants",label:"专家",ico:"👨‍🔬"},
     {id:"team",label:"团队",ico:"👥"},
     {id:"workspace",label:"项目工作区",ico:"🧭"},
+    {id:"workflow-studio",label:"工作流",ico:"🔀"},
     {id:"toolbox",label:"论文工具箱",ico:"🧰"},
     {id:"calendar",label:"日历",ico:"📅"}]},
   {g:"solo",items:[
@@ -222,7 +226,7 @@ const NAV = [
   {g:"solo",items:[{id:"mail",label:"邮箱",ico:"📧"}]},
   {g:"foot",items:[{id:"settings",label:"设置",ico:"⚙️"}]}
 ];
-const TITLES = {usage:"用量统计","task-center":"任务与自动化",toolbox:"论文工具箱",assistants:"专家",team:"团队",agent:"智研管家",workspace:"项目工作区",calendar:"日历",tasks:"任务与自动化",workflow:"项目工作区",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时自动化",space:"项目工作区",settings:"设置"};
+const TITLES = {usage:"用量统计","task-center":"任务与自动化","workflow-studio":"工作流管理",toolbox:"论文工具箱",assistants:"专家",team:"团队",agent:"智研管家",workspace:"项目工作区",calendar:"日历",tasks:"任务与自动化",workflow:"项目工作区",library:"知识库",notes:"笔记",intel:"情报日报",mail:"邮箱",models:"模型",schedules:"定时自动化",space:"项目工作区",settings:"设置"};
 const route = ()=> tabs.find(t=>t.id===activeTab)?.route || "agent";
 function uiRouteIs(kind){
   return route()===kind || (route()==="workspace" && !!window.ProjectWorkspace?.hasSurface(kind));
@@ -295,6 +299,26 @@ function renderSidebar(){
     b.onclick=()=>uiNavigate(()=>openTab(b.dataset.nav));
   });
   bindSwatches($("sidebar").querySelector("#side-presets"));
+  const shell = document.querySelector(".app-shell");
+  if (shell && !shell.dataset.resizerBound && typeof SplitResizer !== "undefined") {
+    shell.dataset.resizerBound = "true";
+    SplitResizer.bind(shell, {
+      mode: "fixed-left",
+      storageKey: "shell-sidebar",
+      defaultSize: 232,
+      min: 160,
+      max: 420,
+      cssVar: "--shell-sidebar-w",
+      positioning: "absolute",
+      onResize: (w) => {
+        if (w > 100 && sidebarCollapsed) {
+          sidebarCollapsed = false;
+          localStorage.setItem("rw-sidebar", false);
+          $("sidebar")?.classList.remove("collapsed");
+        }
+      }
+    });
+  }
   $("sidebar").querySelector(".collapse").onclick=()=>{sidebarCollapsed=!sidebarCollapsed;localStorage.setItem("rw-sidebar",sidebarCollapsed);renderSidebar();};
   $("theme-toggle").onclick=()=>setTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");
   $("profileCard").onclick = openProfileModal;
@@ -557,6 +581,10 @@ async function setPermissionMode(mode) {
   try { S.sec = await api("/api/security", { permission_mode: mode }); } catch (e) { uiNotify("保存失败：" + e.message); }
   return S.sec;
 }
+async function setWorkflowReviewMode(mode) {
+  try { S.sec = await api("/api/security", { workflow_review_mode: mode }); } catch (e) { uiNotify("保存失败：" + e.message); }
+  return S.sec;
+}
 
 /* ---------------- 模型 Key 守卫 ----------------
    新装用户没配 Key 时，发消息/翻译/出计划一律先拦下来，别让一轮请求打到后端再回一句报错。
@@ -587,6 +615,7 @@ function setUiZoom(newZoom, showFeedback = true) {
   const clamped = Math.min(2.5, Math.max(0.6, Math.round(newZoom * 100) / 100));
   uiZoomLevel = clamped;
   document.documentElement.style.zoom = String(uiZoomLevel);
+  document.documentElement.style.setProperty('--ui-zoom',String(uiZoomLevel));
   localStorage.setItem("rw-ui-zoom", String(uiZoomLevel));
   if (showFeedback && typeof uiNotify === "function") {
     uiNotify(`界面缩放：${Math.round(uiZoomLevel * 100)}%`, { timeout: 1200 });
@@ -595,6 +624,7 @@ function setUiZoom(newZoom, showFeedback = true) {
 
 if (uiZoomLevel !== 1) {
   document.documentElement.style.zoom = String(uiZoomLevel);
+  document.documentElement.style.setProperty('--ui-zoom',String(uiZoomLevel));
 }
 
 window.addEventListener("wheel", (e) => {

@@ -146,6 +146,131 @@ def preview(db, project_id: str) -> dict:
     return {**dict(project), "conversations": ordinary, "running": bool(running)}
 
 
+def align_legacy_default_directory(db, project_id: str, *, title: str | None = None) -> dict:
+    """Move an ID-named default root to a title-named root and retain its old path."""
+    import hashlib
+    import json
+    import os
+    import tempfile
+    import workflow_search
+
+    row = db.db.execute(
+        "SELECT id,title,base_dir FROM research_tasks WHERE id=?", (project_id,)
+    ).fetchone()
+    if not row:
+        raise KeyError(project_id)
+    if not re.fullmatch(r"[0-9a-f]{32}", project_id):
+        return {"migrated": False, "base_dir": str(row["base_dir"] or "")}
+    old_root = db.path.resolve().parent / "projects" / project_id
+    journal = db.path.with_name(
+        f".{db.path.name}.directory-migration-{hashlib.sha256(project_id.encode()).hexdigest()[:16]}.json"
+    )
+    raw_current = str(row["base_dir"] or "").strip()
+    has_journal = journal.exists()
+    if not raw_current and not has_journal:
+        return {"migrated": False, "base_dir": ""}
+    current = old_root if has_journal else Path(raw_current).expanduser()
+    expected_old = os.path.normcase(str(old_root.absolute()))
+    if not has_journal and os.path.normcase(str(current.absolute())) != expected_old:
+        return {"migrated": False, "base_dir": str(current)}
+    if os.name != "nt":
+        raise OSError("旧默认目录迁移需要 Windows junction 支持")
+    import _winapi
+
+    if current.is_symlink() or getattr(current, "is_junction", lambda: False)():
+        if not journal.exists():
+            return {"migrated": False, "base_dir": str(current)}
+
+    def finish(destination: Path) -> None:
+        if (destination.parent != old_root.parent or destination.is_symlink() or
+                getattr(destination, "is_junction", lambda: False)() or not destination.is_dir()):
+            raise ValueError("舊目錄遷移記錄中的目標位置無效")
+        if current.exists() and not getattr(current, "is_junction", lambda: False)():
+            raise ValueError("舊路徑與新目錄同時存在，請先檢查遷移記錄")
+        if not current.exists():
+            _winapi.CreateJunction(str(destination), str(current))
+        elif current.resolve() != destination.resolve():
+            raise ValueError("舊路徑鏈接指向其他目錄，未修改項目路徑")
+        old_prefix, new_prefix = str(current.absolute()), str(destination.absolute())
+        with db.db:
+            db.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?", (new_prefix, project_id))
+            for asset in db.db.execute(
+                "SELECT id,canonical_uri FROM assets WHERE project_id=? AND storage='file'", (project_id,)
+            ).fetchall():
+                uri = asset["canonical_uri"]
+                if os.path.normcase(uri).startswith(os.path.normcase(old_prefix + os.sep)):
+                    updated = new_prefix + uri[len(old_prefix):]
+                    db.db.execute("UPDATE assets SET canonical_uri=? WHERE id=?", (updated, asset["id"]))
+
+    if journal.exists():
+        try:
+            intent = json.loads(journal.read_text(encoding="utf-8"))
+            destination = Path(intent["destination"])
+            if intent.get("project_id") != project_id or Path(intent.get("source", "")) != old_root:
+                raise ValueError("舊目錄遷移記錄與項目不匹配")
+            if destination.parent != old_root.parent:
+                raise ValueError("舊目錄遷移記錄指向項目目錄之外")
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("無法讀取舊目錄遷移記錄，未更改文件") from exc
+        if destination.is_dir() and (
+                not current.exists() or getattr(current, "is_junction", lambda: False)()):
+            finish(destination)
+            journal.unlink(missing_ok=True)
+            return {"migrated": True, "base_dir": str(destination), "legacy_alias": str(current)}
+        if current.is_dir() and not getattr(current, "is_junction", lambda: False)():
+            if destination.is_dir() and not any(destination.iterdir()):
+                destination.rmdir()
+            elif destination.exists():
+                raise ValueError("舊目錄和目標目錄都有內容，請先檢查兩邊文件")
+            journal.unlink()
+        else:
+            raise ValueError("舊目錄遷移狀態不完整，請先檢查項目目錄")
+
+    if os.path.normcase(str(current.absolute())) != expected_old:
+        return {"migrated": False, "base_dir": str(current)}
+    if current.is_symlink() or getattr(current, "is_junction", lambda: False)():
+        raise ValueError("舊默認目錄是鏈接，不能自動遷移")
+    if not current.is_dir():
+        raise ValueError("舊默認目錄不存在，未修改項目路徑")
+    paths.validate_project_dir(current)
+    if preview(db, project_id)["running"]:
+        raise ValueError("項目仍有運行或排隊任務，不能遷移目錄")
+    new_title = str(title if title is not None else row["title"]).strip()
+    destination = workflow_search.reserve_default_project_root(db, new_title)
+    temp_name = None
+    try:
+        fd, temp_name = tempfile.mkstemp(dir=journal.parent, suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump({"project_id": project_id, "source": str(current),
+                       "destination": str(destination)}, stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, journal)
+        temp_name = None
+        destination.rmdir()
+        os.replace(current, destination)
+        finish(destination)
+        try:
+            journal.unlink()
+        except OSError:
+            pass
+    except Exception:
+        if temp_name:
+            Path(temp_name).unlink(missing_ok=True)
+        try:
+            if getattr(current, "is_junction", lambda: False)():
+                os.rmdir(current)
+            if destination.is_dir() and not current.exists():
+                os.replace(destination, current)
+            journal.unlink(missing_ok=True)
+            if current.is_dir() and destination.is_dir() and not any(destination.iterdir()):
+                destination.rmdir()
+        except OSError:
+            pass
+        raise
+    return {"migrated": True, "base_dir": str(destination), "legacy_alias": str(current)}
+
+
 def locations(db) -> dict:
     """Use the database opened by the running app, including legacy fallback."""
     database = db.path.resolve()

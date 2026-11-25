@@ -75,8 +75,7 @@ class DagCursor(Cursor, total=False):
     errors: dict[str, str]
 
 
-def _dag_graph(db, run, nodes, execute_node):
-    import execution
+def _dag_graph(db, run, nodes, execute_wave):
     import workflow_execution as engine
     import workflow_tasks
 
@@ -94,21 +93,18 @@ def _dag_graph(db, run, nodes, execute_node):
         ready = [(nid, task) for nid, task in ordered
                  if task['status'] in ('ready', 'queued', 'blocked', 'failed', 'interrupted')
                  and all(rows[parent]['status'] == 'delivered' for parent in task['dependencies'])]
-        for nid, task in ready:
-            if nid in attempted or nid in errors or task['metadata']['node_config'].get('manual_execution'):
-                continue
-            try:
-                outcome = execute_node(nid, task['id'])
+        batch = [(nid, task['id']) for nid, task in ready if nid not in attempted and nid not in errors
+                 and not task['metadata']['node_config'].get('manual_execution')]
+        if batch:
+            outcomes = execute_wave(batch, excluded=set(attempted) | errors.keys())
+            task_ids = dict(nodes)
+            for nid, outcome in outcomes.items():
                 if outcome['status'] == 'cancelled':
                     return {'status': 'cancelled'}
                 if outcome['status'] == 'failed':
-                    failed = tasks.get(db, task['id'])
-                    errors = {**errors, nid: (failed.get('latest_run') or {}).get('error') or '节点执行失败'}
-            except execution.Cancelled:
-                raise
-            except (ValueError, OSError) as exc:
-                errors = {**errors, nid: str(exc)}
-            return {'status': 'running', 'attempted': [*attempted, nid], 'errors': errors}
+                    failed = tasks.get(db, task_ids[nid])
+                    errors = {**errors, nid: outcome.get('error') or (failed.get('latest_run') or {}).get('error') or '节点执行失败'}
+            return {'status': 'running', 'attempted': [*attempted, *outcomes], 'errors': errors}
         latest = engine.detail(db, run['id'])
         latest['settings']['dag_errors'] = errors
         manual = next(((nid, task) for nid, task in ready
@@ -161,9 +157,9 @@ def _dag_graph(db, run, nodes, execute_node):
     return graph
 
 
-def drive(db, run, execute_node):
+def drive(db, run, execute_node, execute_wave=None):
     nodes = list(run['settings']['task_ids'].items())
-    graph = _dag_graph(db, run, nodes, execute_node) if run['settings'].get('dag_scheduler') else _linear_graph(db, nodes, execute_node)
+    graph = _dag_graph(db, run, nodes, execute_wave) if run['settings'].get('dag_scheduler') else _linear_graph(db, nodes, execute_node)
     epoch = run['settings'].get('checkpoint_epoch', 0)
     thread_id = run['id'] if not epoch else f"{run['id']}:rework:{epoch}"
     config = {'configurable': {'thread_id': thread_id}, 'recursion_limit': max(50, len(nodes) * 4 + 10)}

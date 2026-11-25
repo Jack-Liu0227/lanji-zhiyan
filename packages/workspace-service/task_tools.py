@@ -117,7 +117,9 @@ def call(db, project_id, name, args):
             raise ValueError("节点执行不能自行重启整个工作流")
     if name in ("workflow_prepare", "workflow_start"):
         run = engine.detail(db, run_id) if run_id else workflow_tasks.prepare(db, project_id,
-            str(args.get("goal") or ""), str(args.get("request_key") or ""), str(args.get("template_id") or ""), inputs=args.get('inputs'))
+            str(args.get("goal") or ""), str(args.get("request_key") or ""), str(args.get("template_id") or ""),
+            inputs=args.get('inputs'), managed_artifacts=args.get('managed_artifacts', False),
+            review_mode=str(args.get('review_mode') or ''))
         if run["project_id"] != project_id:
             raise ValueError("工作流不属于当前项目")
         if name == "workflow_start":

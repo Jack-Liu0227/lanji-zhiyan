@@ -1,8 +1,10 @@
 """Tests for packages/ai-runtime: RetryPolicy, Budget, Telemetry, and wire execution."""
 from __future__ import annotations
 
+import http.client
 import json
 import io
+import ssl
 import urllib.error
 import unittest
 from unittest.mock import MagicMock, patch
@@ -118,6 +120,81 @@ class AIRuntimeTest(unittest.TestCase):
 
         self.assertEqual(res["content"], "Hello scientific world!")
         self.assertEqual(res["usage"]["total"], 15)
+
+    def test_stream_response_exposes_finish_reason_and_incomplete_eof(self):
+        profile = {"base_url": "https://example.test/v1", "model": "model"}
+        complete = io.BytesIO(
+            b'data: {"choices":[{"delta":{"content":"Answer"},"finish_reason":null}]}\n\n'
+            b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+        )
+        incomplete = io.BytesIO(
+            b'data: {"choices":[{"delta":{"content":"Partial"},"finish_reason":null}]}\n\n'
+        )
+        with patch("runtime.open_guarded_url", side_effect=[complete, incomplete]):
+            first = call(profile, [], on_delta=lambda _piece: None)
+            second = call(profile, [], on_delta=lambda _piece: None)
+
+        self.assertEqual(first["finish_reason"], "stop")
+        self.assertTrue(first["stream_complete"])
+        self.assertIsNone(second["finish_reason"])
+        self.assertFalse(second["stream_complete"])
+
+    def test_mid_read_ssl_eof_and_incomplete_read_retry_before_output(self):
+        profile = {"base_url": "https://example.test/v1", "model": "model", "api": "openai-responses"}
+        completed = b'data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}]}}\n\n'
+        broken_stream = MagicMock()
+        broken_stream.__enter__.return_value = broken_stream
+        broken_stream.__exit__.return_value = False
+        broken_stream.__iter__.side_effect = ssl.SSLEOFError(8, "EOF occurred in violation of protocol")
+        with patch("workflow.open_url", side_effect=[
+            broken_stream,
+            http.client.IncompleteRead(b""),
+            io.BytesIO(completed),
+        ]) as request, patch("runtime.time.sleep") as sleep:
+            res = call(profile, [], on_delta=lambda _piece: None)
+        self.assertEqual(res["content"], "OK")
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_workflow_open_url_falls_back_to_direct_on_proxy_tls_eof(self):
+        import urllib.request
+        import workflow
+
+        req = urllib.request.Request("https://example.test/v1/models")
+        proxy_opener = MagicMock()
+        proxy_opener.open.side_effect = urllib.error.URLError(ssl.SSLEOFError(8, "UNEXPECTED_EOF_WHILE_READING"))
+        direct_opener = MagicMock()
+        direct_opener.open.return_value = io.BytesIO(b"ok")
+
+        with patch.dict("os.environ", {"HTTPS_PROXY": "http://127.0.0.1:7897"}, clear=False), \
+                patch("workflow.socket.create_connection", return_value=MagicMock(__enter__=lambda s: s, __exit__=lambda *a: False)), \
+                patch("workflow.urllib.request.build_opener", side_effect=[direct_opener, proxy_opener]):
+            res = workflow.open_url(req, timeout=5)
+        self.assertEqual(res.read(), b"ok")
+        proxy_opener.open.assert_called_once()
+        direct_opener.open.assert_called_once()
+
+    def test_reasoning_only_before_ssl_eof_still_retries(self):
+        profile = {"base_url": "https://example.test/v1", "model": "model", "api": "openai-responses"}
+        class BrokenReasoningStream:
+            def __enter__(self): return self
+            def __exit__(self, *_a): return False
+            def __iter__(self):
+                yield b'data: {"type":"response.reasoning_summary_text.delta","delta":"thinking"}\n'
+                yield b'\n'
+                raise urllib.error.URLError(ssl.SSLEOFError(8, "TLS/SSL connection has been closed (EOF)"))
+        reasoning_then_drop = BrokenReasoningStream()
+        completed = io.BytesIO(
+            b'data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"RECOVERED"}]}]}}\n\n'
+        )
+        seen_reasoning = []
+        with patch("workflow.open_url", side_effect=[reasoning_then_drop, completed]) as opener, \
+                patch("runtime.time.sleep") as sleep:
+            res = call(profile, [], on_delta=lambda _p: None, on_reasoning=seen_reasoning.append)
+        self.assertEqual(res["content"], "RECOVERED")
+        self.assertEqual(opener.call_count, 2)
+        self.assertEqual(sleep.call_count, 1)
+        self.assertEqual(seen_reasoning, ["thinking"])
 
 
 if __name__ == "__main__":

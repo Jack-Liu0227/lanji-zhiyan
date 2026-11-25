@@ -81,12 +81,21 @@ const PaperToolbox=(()=>{
     const config=promptConfig(),host=el('prompts');if(!host)return;host.hidden=!config;if(!config)return;
     const busy=!!state.run||starting,changed=config.prompt!==config.original_prompt;
     const available=presets.filter(item=>item.tool===state.tool),categories=[...new Set(available.map(item=>item.category||'内置风格'))];
-    el('preset').innerHTML=categories.map(category=>`<optgroup label="${h(category)}">${available.filter(item=>(item.category||'内置风格')===category).map(item=>`<option value="${h(item.id)}">${h(item.name)}</option>`).join('')}</optgroup>`).join('');
-    el('preset').value=config.preset_id;
+    el('preset').innerHTML=categories.map(category=>`<optgroup label="${h(category)}">${available.filter(item=>(item.category||'内置风格')===category).map(item=>`<option value="${h(item.id)}">${h(item.name)}</option>`).join('')}</optgroup>`).join('')+(config.reference?`<optgroup label="项目模板"><option value="project">${h(config.reference.title)} · v${h(config.reference.revision)}</option></optgroup>`:'');
+    el('preset').value=config.reference?'project':config.preset_id;
     el('prompt').value=config.prompt;el('prompt').disabled=busy;el('preset').disabled=busy;
+    for(const name of ['pick-template','save-template']){if(!el(name))continue;el(name).disabled=busy||!state.project_id;el(name).title=state.project_id?'复用项目提示词模板库':'先选择结果归属项目，再使用项目模板库';}
     el('reset-prompt').disabled=busy||!changed;
     el('prompt-caption').textContent=(config.reference?'项目模板 · v'+config.reference.revision:'内置风格')+(changed?' · 已作本次修改':'')+' · 仅用于当前工具';
     el('prompt-purpose').textContent=config.reference?'复用当前项目模板，变量已填写；下方的调整仅用于本次处理。':available.find(item=>item.id===config.preset_id)?.description||'';
+    if(el('prompt-project-hint'))el('prompt-project-hint').hidden=!!state.project_id;
+  }
+  async function savePrompt(){
+    const project=state.project_id,tool=state.tool,config=promptConfig();if(!project||!config||state.run)return;
+    const preset=presets.find(item=>item.id===config.preset_id),tags=[...new Set(['论文工具箱',tool==='translate'?'翻译':'润色',...(config.reference?config.source_tags||[]:[preset.category])])];
+    const content=config.prompt;if(!content.trim())return error('请先填写要保存的风格提示词');
+    const dialog=Notebook.dialog('保存为提示词模板',`<form class="nb-form"><p class="hint">保存到当前项目的提示词模板库，可在笔记、Agent 对话和工具箱中复用。</p><label>模板名称<input name="title" required maxlength="100" value="${h(tools.find(item=>item.id===state.tool)?.name+'风格模板')}"></label><button type="submit" class="btn">保存模板</button></form>`);
+    dialog.querySelector('form').onsubmit=async event=>{event.preventDefault();const button=dialog.querySelector('[type=submit]');button.disabled=true;try{await api('/api/project/note/save',{project_id:project,path:'',title:dialog.querySelector('[name=title]').value,content,create:true,metadata:{note_type:'prompt_template',category_id:'prompt_templates',tags}});dialog.close();if(el('status'))el('status').textContent='已保存到项目提示词模板库';}catch(err){Notebook.error(dialog,err);}finally{button.disabled=false;}};
   }
   async function open(options={}){
     const ticket=++opening;
@@ -100,6 +109,31 @@ const PaperToolbox=(()=>{
     panel.innerHTML=`<header class="ptb-header"><div><span class="pw-eyebrow">论文辅助</span><h2>工具箱</h2></div><button type="button" class="pw-text-button" data-tb-close aria-label="关闭论文工具箱">×</button></header><nav class="ptb-tools" aria-label="论文工具">${tools.map(tool=>`<button type="button" data-tb-tool="${tool.id}" aria-pressed="${state.tool===tool.id}">${h(tool.name)}</button>`).join('')}</nav><div class="ptb-pins" data-tb-pins></div><div class="ptb-body"><p class="hint" data-tb-description></p><div class="ptb-config"><label><span class="ptb-ico" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg></span><select name="project_id" class="control"><option value="">即时处理</option>${S.tasks.map(project=>`<option value="${h(project.id)}">${h(project.title)}</option>`).join('')}</select></label><label><span class="ptb-ico" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4.5 13H11l-1 9 8.5-11H12z"/></svg></span><select name="model_id" class="control"><option value="">当前默认模型</option>${(S.models||[]).map(model=>`<option value="${h(model.id)}">${h(model.name)}</option>`).join('')}</select></label><label data-tb-direction-row><span class="ptb-ico" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h8M3 11h5"/><path d="M14 13h7M18 17h3"/></svg></span><select name="direction" class="control"><option value="zh_en">中文 → English</option><option value="en_zh">English → 中文</option></select></label><label data-tb-format-row><span class="ptb-ico" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h7l5 5v13H6z"/><path d="M13 3v5h5"/><path d="M9 14l3 3 3-3"/></svg></span><select name="format" class="control"><option value="docx">Word</option><option value="md">Markdown</option><option value="html">HTML</option><option value="pdf">PDF · 项目转换服务</option></select></label><label data-tb-paper-row><span class="ptb-ico" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h7l5 5v13H6z"/><path d="M13 3v5h5"/><path d="M9 12h6M9 16h4"/></svg></span><select class="control" data-tb-paper></select></label></div><details data-tb-terminology-row><summary>术语约定</summary><textarea name="terminology" rows="2" class="control" placeholder="例如：solid electrolyte = 固态电解质"></textarea></details><div class="ptb-editors"><div class="ptb-cap">原文<span data-tb-meta-in></span></div><div class="ptb-cap">处理结果<span data-tb-meta-out></span></div><label class="ptb-pane"><span class="sr-only">原文</span><textarea class="control" data-tb-text name="text" rows="13" placeholder="粘贴需要处理的文本、Markdown、BibTeX 或 RIS"></textarea></label><label class="ptb-pane out"><span class="sr-only">处理结果</span><textarea class="control" data-tb-output rows="13" readonly></textarea></label></div><p class="pw-error" data-tb-error role="alert"></p><p class="hint" data-tb-status role="status"></p></div><footer class="ptb-footer"><button type="button" class="pw-text-button" data-tb-pin>固定当前工具</button><span class="pw-spacer"></span><button type="button" class="btn ghost" data-tb-copy>复制结果</button><button type="button" class="btn ghost" data-tb-file hidden>打开文件</button><button type="button" class="btn ghost" data-tb-save>保存到项目</button><button type="button" class="btn ghost" data-tb-stop hidden>停止</button><button type="button" class="btn" data-tb-run>开始处理</button></footer>`;
     if(host){host.replaceChildren(panel);panel.id='paperToolboxPage';panel.querySelector('h2').textContent='论文工具箱';el('close').hidden=true;panel.querySelector('h2').insertAdjacentHTML('afterend','<p class="ptb-intro">翻译、润色、文稿整理与图表预览，使用已配置的模型与本地工具。</p>');}
     else document.body.append(panel);
+    if(typeof SplitResizer !== 'undefined'){
+      if(panel.classList.contains('ptb-page') && !panel.dataset.resizerBound){
+        panel.dataset.resizerBound = 'true';
+        SplitResizer.bind(panel, {
+          mode: 'fixed-left',
+          storageKey: 'ptb-page',
+          defaultSize: 184,
+          min: 140,
+          max: 280,
+          cssVar: '--ptb-nav-w'
+        });
+      }
+      const editors = panel.querySelector('.ptb-editors');
+      if(editors && !editors.dataset.resizerBound){
+        editors.dataset.resizerBound = 'true';
+        SplitResizer.bind(editors, {
+          mode: 'ratio',
+          storageKey: 'ptb-editors',
+          defaultSize: 0.5,
+          min: 0.2,
+          max: 0.8,
+          cssVar: '--ptb-editor-ratio'
+        });
+      }
+    }
     el('text').closest('.ptb-editors').insertAdjacentHTML('beforebegin','<section data-tb-mermaid hidden aria-label="Mermaid 图表工具"></section>');
     el('mermaid').insertAdjacentHTML('afterend',`<section data-tb-images hidden><label class="btn ghost">添加图片或 PDF<input type="file" data-tb-image-input multiple accept=".png,.jpg,.jpeg,.webp,.tif,.tiff,.pdf"></label><p class="hint">最多 20 个文件，每个 20 MB。PDF 按页处理。图注需支持视觉的模型。原图保留。</p><ul data-tb-image-list></ul></section><ul data-tb-downloads></ul>`);
     async function uploadImages(files){
@@ -157,8 +191,20 @@ const PaperToolbox=(()=>{
     el('import-input').onchange=event=>{const files=[...event.target.files];event.target.value='';importFiles(files);};
     FileDrop.bind(panel,{busy:()=>!!state.run||starting,onError:error,onFiles:importFiles});
     const headerActions=document.createElement('div');headerActions.className='ptb-header-actions';el('close').before(headerActions);
-    headerActions.append(el('close'));
-    el('terminology-row').insertAdjacentHTML('beforebegin',`<section class="ptb-prompts" data-tb-prompts aria-label="风格与提示词"><div class="ptb-prompt-toolbar"><label>提示词模板<select class="control" data-tb-preset aria-label="提示词模板"></select></label></div><p class="hint" data-tb-prompt-caption></p><details><summary>查看与调整本次提示词</summary><label class="ptb-prompt-editor"><span class="sr-only">本次风格提示词</span><textarea class="control" data-tb-prompt rows="4" maxlength="20000" aria-label="本次风格提示词"></textarea></label><button type="button" class="pw-text-button" data-tb-reset-prompt>恢复所选模板</button></details></section>`);
+    headerActions.innerHTML='<button type="button" class="btn ghost" data-tb-manage-templates>管理模板</button>';headerActions.append(el('close'));
+    el('manage-templates').onclick=()=>{
+      const tool=state.tool,editable=!!promptConfig()&&!state.run&&!starting;
+      PromptLibrary.open({project_id:state.project_id||curTask||'',onChanged:change=>{
+        if(change.deleted||change.status&&change.status!=='active')for(const [id,config] of Object.entries(state.prompt_configs||{}))if(config.reference?.project_id===change.project_id&&config.reference?.template_id===change.template_id)delete state.prompt_configs[id];
+        persist();paintPrompts();
+      },...(editable?{onChoose:(reference,rendered)=>{
+        if(!panel?.isConnected||state.run||starting||state.tool!==tool)throw new Error('当前工具正在运行或已切换，请稍后重新选择模板');
+        if(rendered.rendered.length>20000)throw new Error('模板内容超过 20000 字符，请缩小风格指令范围');
+        state.project_id=reference.project_id;panel.querySelector('[name=project_id]').value=state.project_id;
+        const config=promptConfig();Object.assign(config,{reference,prompt:rendered.rendered,original_prompt:rendered.rendered,source_tags:rendered.tags||[]});persist();paintPrompts();loadPapers();
+      }}:{})});
+    };
+    el('terminology-row').insertAdjacentHTML('beforebegin',`<section class="ptb-prompts" data-tb-prompts aria-label="风格与提示词"><div class="ptb-prompt-toolbar"><label>提示词模板<select class="control" data-tb-preset aria-label="提示词模板"></select></label><button type="button" class="btn ghost" data-tb-pick-template>从模板库选择</button><button type="button" class="btn ghost" data-tb-save-template>保存为模板</button></div><p class="hint" data-tb-prompt-caption></p><p class="hint" data-tb-prompt-project-hint>选择结果归属项目后，可使用和保存该项目的提示词模板。</p><details><summary>查看与调整本次提示词</summary><label class="ptb-prompt-editor"><span class="sr-only">本次风格提示词</span><textarea class="control" data-tb-prompt rows="4" maxlength="20000" aria-label="本次风格提示词"></textarea></label><button type="button" class="pw-text-button" data-tb-reset-prompt>恢复所选模板</button></details></section>`);
     el('prompt-caption').insertAdjacentHTML('beforebegin','<p class="hint" data-tb-prompt-purpose></p>');
     const ICONS={caption:'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10M7 9h6"/></svg>',image_convert:'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="12" height="12" rx="2"/><path d="M9 9h12v12H9z"/></svg>',translate:'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h8M3 11h5"/><path d="M14 13h7M18 17h3"/><path d="M12 3l-3 7h2.4l-.9 8 5.5-9H13.4l1.6-6z"/></svg>',polish:'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 4c-6 1-9 4.4-10 9l3 3c4.6-1 8-4 10-10"/><path d="M4 20l5-5"/></svg>',references:'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h10a2 2 0 012 2v16l-3-2-3 2-3-2-3 2V5a2 2 0 012-2z"/><path d="M10 8h4"/></svg>',convert:'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h7l5 5v13H6z"/><path d="M13 3v5h5"/><path d="M9 14l3 3 3-3"/></svg>',pdf_translate:'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h7l5 5v13H6z"/><path d="M13 3v5h5"/><circle cx="12" cy="15" r="3"/></svg>',mermaid:'<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="6" height="5" rx="1.5"/><rect x="15" y="16" width="6" height="5" rx="1.5"/><rect x="3" y="16" width="6" height="5" rx="1.5"/><path d="M6 8v8M9 18.5h6M18 16V9a3 3 0 00-3-3H9"/></svg>'};
     const CAPTIONS={caption:'生成与润色图注',image_convert:'本机转换，不占模型',translate:'保留公式与引用',polish:'表达与严谨性',references:'BibTeX / RIS 去重',convert:'Word / MD / HTML',pdf_translate:'整篇对照输出',mermaid:'本地预览与导出'};
@@ -168,15 +214,23 @@ const PaperToolbox=(()=>{
     el('preset').onchange=()=>{const preset=presets.find(item=>item.id===el('preset').value);if(!preset||state.run)return;state.prompt_configs[state.tool]={preset_id:preset.id,prompt:preset.prompt,original_prompt:preset.prompt,reference:null};persist();paintPrompts();};
     el('prompt').oninput=()=>{const config=promptConfig();if(config&&!state.run){config.prompt=el('prompt').value;persist();paintPrompts();}};
     el('reset-prompt').onclick=()=>{const config=promptConfig();if(config&&!state.run){config.prompt=config.original_prompt;persist();paintPrompts();}};
+    el('pick-template').onclick=()=>{const project=state.project_id,tool=state.tool;PromptUI.picker(project,(reference,rendered)=>{if(state.run||project!==state.project_id||tool!==state.tool)throw new Error('工具或项目已切换，请重新选择模板');if(rendered.rendered.length>20000)throw new Error('模板内容超过 20000 字符，请缩小风格指令范围');const config=promptConfig();Object.assign(config,{reference,prompt:rendered.rendered,original_prompt:rendered.rendered,source_tags:rendered.tags||[]});persist();paintPrompts();},{applyLabel:'用于当前工具',bindings:false});};
+    el('save-template').onclick=savePrompt;
     function choose(tool){if(state.run||starting)return;state.tool=tool;el('import-result').textContent='';persist();updateTool();}
     panel.querySelectorAll('[data-tb-tool]').forEach(button=>button.onclick=()=>choose(button.dataset.tbTool));
     function pins(){const ids=read('rw-paper-tool-pins',[]);el('pins').innerHTML=ids.filter(id=>tools.some(tool=>tool.id===id)).map(id=>`<button class="pw-text-button" type="button" data-tb-pinned="${id}">${h(tools.find(tool=>tool.id===id).name)}</button>`).join('');el('pins').querySelectorAll('button').forEach(button=>button.onclick=()=>choose(button.dataset.tbPinned));el('pin').textContent=ids.includes(state.tool)?'取消固定':'固定当前工具';}
     function updateTool(){const diagram=state.tool==='mermaid',images=['caption','image_convert'].includes(state.tool);const direct=documentMode(),format=panel.querySelector('[name=format]');
+      const modelSelect=panel.querySelector('[name=model_id]'),pdf=state.tool==='pdf_translate';
+      const models=(S.models||[]).filter(model=>!pdf||['openai-completions','openai-chat'].includes(model.api||'openai-completions'));
+      modelSelect.innerHTML=`<option value="">${pdf?'PDF 翻译默认模型':'当前默认模型'}</option>${models.map(model=>`<option value="${h(model.id)}">${h(model.name)}</option>`).join('')}`;
+      modelSelect.value=(pdf?state.pdf_model_id:state.model_id)||'';
+      if(modelSelect.selectedIndex<0)modelSelect.value='';
+      modelSelect.oninput=()=>{state[pdf?'pdf_model_id':'model_id']=modelSelect.value;persist();};
       const sourceFormat={markdown:'md',htm:'html'}[state.document?.format]||state.document?.format;
       const formats=direct?documentConversion.outputs.filter(value=>value!==sourceFormat):state.tool==='image_convert'?['png','jpg','jpeg','pdf','webp','tiff']:['docx','md','html','pdf'];
       format.innerHTML=formats.map(value=>`<option value="${value}">${value.toUpperCase()}</option>`).join('');format.value=state.format;if(!format.value){format.selectedIndex=0;state.format=format.value;}panel.querySelectorAll('[data-tb-tool]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.tbTool===state.tool)));el('description').textContent=tools.find(tool=>tool.id===state.tool)?.description||'';el('direction-row').hidden=state.tool!=='translate';el('format-row').hidden=!['convert','image_convert'].includes(state.tool);el('terminology-row').hidden=!['translate','polish'].includes(state.tool);panel.querySelector('[name=model_id]').closest('label').hidden=state.tool==='convert';
       el('text').closest('label').hidden=false;el('text').readOnly=!!direct;el('text').value=direct?'':state.text;
-      el('text').placeholder=direct?(state.document?'原文件：'+state.document.name:'选择或拖入要转换的原文件'):state.tool==='caption'?'可选：研究背景、已有图注或需要强调的信息':'粘贴需要处理的内容';el('text').closest('.ptb-editors').hidden=diagram||['pdf_translate','image_convert'].includes(state.tool);panel.querySelector('.ptb-config').hidden=diagram;el('mermaid').hidden=!diagram;if(diagram&&!diagramView)diagramView=MermaidTool.mount(el('mermaid'));error('');pins();loadPapers();paint();}
+      el('text').placeholder=direct?(state.document?'原文件：'+state.document.name:'选择或拖入要转换的原文件'):state.tool==='caption'?'可选：研究背景、已有图注或需要强调的信息':'粘贴需要处理的内容';el('text').closest('.ptb-editors').hidden=diagram||['pdf_translate','image_convert'].includes(state.tool);panel.querySelector('.ptb-config:not([data-tb-convert-mode-row])').hidden=diagram;el('mermaid').hidden=!diagram;if(diagram&&!diagramView)diagramView=MermaidTool.mount(el('mermaid'));error('');pins();loadPapers();paint();}
     el('pin').onclick=()=>{const ids=read('rw-paper-tool-pins',[]);localStorage.setItem('rw-paper-tool-pins',JSON.stringify(ids.includes(state.tool)?ids.filter(id=>id!==state.tool):[...ids,state.tool]));pins();};
     el('close').onclick=()=>{diagramView?.destroy();diagramView=null;panel.remove();panel=null;document.getElementById('paperToolbox')?.focus();};
     panel.onkeydown=event=>{if(event.key==='Escape'&&!host){event.preventDefault();event.stopPropagation();el('close').click();}};
@@ -186,7 +240,7 @@ const PaperToolbox=(()=>{
     el('save').onclick=async()=>{if(!state.project_id)return error('请选择要保存结果的项目');const button=el('save');button.disabled=true;try{const saved=await api('/api/paper-toolbox/save',{project_id:state.project_id,run_id:state.result_run_id,title:tools.find(tool=>tool.id===state.tool)?.name||'论文工具结果'});if(el('status'))el('status').textContent='已保存：'+saved.path;}catch(err){error(err.message);}finally{if(button.isConnected)button.disabled=false;}};
     el('run').onclick=async()=>{
       if(state.run||starting)return;error('');starting=true;paint();
-      try{const request={...state,document_asset_id:documentMode()?state.document?.asset_id:'',image_ids:(state.images||[]).map(item=>item.asset_id),request_key:crypto.randomUUID(),paper_id:el('paper').value};delete request.result;delete request.run;delete request.prompt_configs;const config=promptConfig();if(config)Object.assign(request,{prompt_preset:config.preset_id,prompt:config.prompt,prompt_template:config.reference});const made=await api('/api/paper-toolbox/start',request);
+       try{const request={...state,model_id:panel.querySelector('[name=model_id]').value,document_asset_id:documentMode()?state.document?.asset_id:'',image_ids:(state.images||[]).map(item=>item.asset_id),request_key:crypto.randomUUID(),paper_id:el('paper').value};delete request.result;delete request.run;delete request.prompt_configs;const config=promptConfig();if(config)Object.assign(request,{prompt_preset:config.preset_id,prompt:config.prompt,prompt_template:config.reference});const made=await api('/api/paper-toolbox/start',request);
         if(state.tool==='pdf_translate'){state.result='';state.path='';state.result_run_id='';persist();paint();el('status').textContent=made.msg||'PDF 翻译已启动，可在项目文献中查看';pollPdf(request.paper_id,state.project_id);return;}
         state.result='';state.path='';state.files=[];state.document_result=false;state.result_run_id='';state.run={key:made.request_key,api:'/api/agent',runId:made.run_id,cursor:0,status:'running',request:{task_id:made.chat_id}};persist();paint();follow();
       }catch(err){error(err.message);}finally{starting=false;paint();}

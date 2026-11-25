@@ -19,7 +19,7 @@ DEFAULT_SKILLS = {
 }
 NAMES = {
     'research_proposal': ('研究问题顾问', '文献证据专家', '实验方法专家', '科研写作专家'),
-    'literature_study': ('文献检索专家', '文献证据专家', '文献比较专家', '综述写作专家'),
+    'literature_study': ('文献检索专家', '文献证据专家', '文献比较专家', '综述写作专家', '终检审查专家'),
     'paper_writing': ('论文结构专家', '科研写作专家', '同行评审专家', '论文修订专家'),
 }
 
@@ -29,6 +29,71 @@ def _permit(db, actor_id, name):
         raise PermissionError('管家当前未启用工具：' + name)
 
 
+def _literature_contract(node):
+    """Apply executable minimum checks to the conventional review artifacts."""
+    contract = dict(node.get('output_contract') or {})
+    files = [item.get('relative') or item.get('path') if isinstance(item, dict) else str(item)
+             for item in contract.get('required_files', [])]
+    rules = dict(contract.get('file_rules') or {})
+    names = {str(path).replace('\\', '/').rsplit('/', 1)[-1]: str(path) for path in files}
+    expected = {
+        'candidate_papers.csv': {'min_rows': 8, 'required_columns': [
+            'title', 'authors', 'year', 'doi_or_stable_url', 'source', 'oa_status',
+            'screening_status', 'screening_reason', 'evidence_level', 'full_text_availability']},
+        'screening_notes.md': {'min_chars': 300},
+        'methods_metrics.csv': {'min_rows': 1, 'required_columns': [
+            'citation', 'interface', 'modification_method', 'material_system', 'conditions',
+            'metric', 'value', 'unit', 'evidence_level', 'comparability_note', 'doi_or_stable_url']},
+        'comparison_matrix.md': {'min_chars': 1500},
+        'review_draft.md': {'min_chars': 2500},
+        'literature_review.md': {'min_chars': 2500},
+        'references.bib': {'min_entries': 8, 'require_title_and_locator': True},
+        'citation_check.md': {'min_chars': 1000},
+    }
+    for basename, rule in expected.items():
+        path = names.get(basename)
+        if path and rule:
+            rules[path] = {**rules.get(path, {}), **rule}
+    if node.get('step') == 'search' and names.get('candidate_papers.csv'):
+        contract.pop('requires_evidence', None)
+    contract['file_rules'] = rules
+    columns = {
+        basename: expected[basename]['required_columns']
+        for basename in ('candidate_papers.csv', 'methods_metrics.csv')
+    }
+    acceptance = [str(item) for item in contract.get('acceptance') or []
+                  if not any(token in str(item) for token in (
+                      'candidate_papers.csv', 'methods_metrics.csv', '题录字段title', '字段citation,'))]
+    for basename, fields in columns.items():
+        if names.get(basename):
+            acceptance.append(f'{basename} 表头必须包含：' + ','.join(fields))
+    if acceptance:
+        contract['acceptance'] = acceptance
+    if node.get('step') == 'task' and names.get('evidence_analysis.md'):
+        contract['requires_evidence'] = True
+    node = {**node, 'output_contract': contract}
+    if node.get('step') == 'search' and names.get('candidate_papers.csv'):
+        node['prompt'] = str(node.get('prompt') or '') + (
+            '\n检索执行要求：使用至多4组不同关键词组合覆盖正极/电解质、锂负极/电解质、氧化物/硫化物界面及界面改性；'
+            '达到8条具有可核验 DOI/稳定链接的候选后停止增加检索轮次；每个关键词组合最多调用一次 paper_search，不要为凑候选重复近似查询。'
+            '对 paper_abstracts 传本次搜索返回的 result_ids，使用 offset 分页直到 next_offset 为空，不遍历无关历史；筛选后逐条记录纳排理由。'
+            '对拟纳入的 OA 文献调用 paper_download 并把成功返回的 paper.id 与题录 result_id 分开保存；'
+            '下载失败记录具体原因，不得把题录 ID 当 paper.id。若八条候选仍不足，继续调整检索词或记载真实服务限制。')
+        node['prompt'] += '\ncandidate_papers.csv 表头必须包含：' + ','.join(columns['candidate_papers.csv'])
+    if names.get('methods_metrics.csv'):
+        node['prompt'] = str(node.get('prompt') or '') + (
+            '\nmethods_metrics.csv 每行对应一篇来源，未知值标为待核；表头必须包含：' +
+            ','.join(columns['methods_metrics.csv']))
+    if node.get('step') == 'review' and names.get('literature_review.md'):
+        node['prompt'] = str(node.get('prompt') or '') + (
+            '\n输入完整性要求：遍历 accepted_upstream 中每个文件的 read_with 指引，调用 workflow_context_read(section=artifact)，'
+            '跟随 next_offset 直到为空；先读取完整 candidate_papers.csv 与 screening_notes.md，再核对正文、矩阵和 BibTeX。'
+            '未读完整的文本不得判断来源缺失。引用数量不足、来源不匹配或质量合同失败时，保留准确错误并等待修订；不得用占位 @misc 条目凑数。')
+        if node.get('tools') is not None and 'paper_search' not in node['tools']:
+            node['tools'] = [*node['tools'], 'paper_search']
+    return node
+
+
 def configure(db, args, *, project_id='', actor_id='builtin-steward', default_model_id='', origin_chat_id=''):
     """Same plan/key resumes setup; never recreate a queued or completed run."""
     import workflow
@@ -36,6 +101,12 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
         idea = str(args.get('idea') or '').strip()
         if not idea or len(idea) > 20000: raise ValueError('研究目标须为 1 至 20000 字符')
         if 'auto_start_graph' in args and not isinstance(args['auto_start_graph'], bool): raise ValueError('auto_start_graph 必须是布尔值')
+        managed_artifacts = args.get('managed_artifacts', True)
+        if not isinstance(managed_artifacts, bool):
+            raise ValueError('managed_artifacts 必须是布尔值')
+        review_mode = str(args.get('review_mode') or '')
+        if review_mode and review_mode not in project_bindings.WORKFLOW_REVIEW_MODES:
+            raise ValueError('review_mode 必须是 human_review 或 auto')
         automatic = args.get('fully_automatic', False)
         if not isinstance(automatic, bool):
             raise ValueError('fully_automatic 必须是布尔值')
@@ -158,6 +229,7 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
                 nodes = definition['nodes'] if definition else template['nodes']
                 configured = []
                 for node in nodes:
+                    node = _literature_contract(dict(node))
                     expert = next(expert for expert in result['experts'] if expert['role_id'] == node['executor_role_id'])
                     # Built-in templates carry an executor hint; custom LangGraph
                     # nodes can override it with execution_mode: assistant|team.
@@ -166,6 +238,7 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
                     if mode not in ('assistant', 'team'):
                         raise ValueError('工作流节点 execution_mode 必须是 assistant 或 team')
                     team_node = mode == 'team'
+                    node_tools = workflow_layout.normalize_agent_tools(node)
                     if full:
                         from workflow_catalog import LEGACY_TEAM_STAGES
                         lead = next(lead for lead, stages in LEGACY_TEAM_STAGES.items() if node['step'] in stages)
@@ -173,8 +246,12 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
                     configured.append({**node, 'execution_mode': mode,
                         'executor_binding_id': team_grant['id'] if team_node else expert['binding_id'],
                         'member_id': str(node.get('member_id') or '') if team_node else '',
-                        'review_required': node.get('manual_review_required', False) or (node['review_required'] and not automatic),
+                        # In supervised setup, the final review stage must carry
+                        # a platform gate as well as review wording in its prompt.
+                        'review_required': node.get('manual_review_required', False) or (node.get('step') == 'review' and not automatic) or (node['review_required'] and not automatic),
+                        'manual_review_required': node.get('manual_review_required', False) or (node.get('step') == 'review' and not automatic),
                         **({'claim_audit': True} if full and node['step'] == 'review' else {}),
+                        **({'tools': node_tools} if node_tools is not None else {}),
                         'skills': selected})
                 override = project_workflows.save(db, pid, {**(definition or template), 'layout_id': template_id,
                     'name': str(args.get('workflow_name') or result['title'] + '科研流程')[:120],
@@ -191,7 +268,8 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
                 import workflow_tasks
                 import workflow_execution
                 if not result.get('run_id'):
-                    run = workflow_tasks.prepare(db, pid, str(args.get('goal') or idea), key, result['layout_id'])
+                    run = workflow_tasks.prepare(db, pid, str(args.get('goal') or idea), key, result['layout_id'],
+                                                 managed_artifacts=managed_artifacts, review_mode=review_mode)
                     # Research setup is an explicit, user-visible workflow entry
                     # point.  Keep that provenance on the run so its node results
                     # use the same preview/edit/review workbench as Agent-started

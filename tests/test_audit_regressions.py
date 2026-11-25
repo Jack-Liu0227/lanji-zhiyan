@@ -80,6 +80,14 @@ class AuditRegressionTest(unittest.TestCase):
         self.assertEqual(len(list(folder.glob("*.pdf"))), 6)
         self.assertEqual(list(folder.glob("*.part")), [])
 
+    def test_non_pdf_download_closes_temp_file_before_cleanup(self):
+        folder = Path(self.tmp.name) / "html-download"
+        with patch.object(workflow_search, "open_url", return_value=io.BytesIO(
+                b"<html><head><title>Access denied</title></head><body>403</body></html>")):
+            with self.assertRaisesRegex(ValueError, "非 PDF"):
+                workflow_search.download_pdf({"title": "Blocked", "pdf_url": "https://example.test/blocked"}, folder)
+        self.assertEqual(list(folder.glob("*.part")), [])
+
     def zotero_setup(self, doi="10.1000/first"):
         zotero_sync.ensure(self.db)
         item = self.db.cache_results(self.pid, [{"source": "zotero", "title": "Editorial", "doi": doi, "authors": "First author"}])[0]
@@ -182,8 +190,8 @@ class AuditRegressionTest(unittest.TestCase):
         import semantic
         note = self.db.save_md_note("", "Semantic note", "OLD_SEMANTIC_CONTENT " * 30, task_id=self.pid)
         relative = Path(note["canonical_path"]).relative_to(self.db.base_dir(self.pid)).as_posix()
-        with patch.object(semantic, "config", return_value={"model": "audit"}), \
-                patch.object(semantic, "embed", side_effect=lambda texts, cfg: np.ones((len(texts), 2), dtype=np.float32)):
+        with patch.object(semantic, "config", return_value={"model": "audit", "base": "http://offline.test"}), \
+                patch.object(semantic, "embed", side_effect=lambda texts, cfg, timeout=120: np.ones((len(texts), 2), dtype=np.float32)):
             semantic.sync(self.db)
             self.assertGreater(self.db.db.execute("SELECT COUNT(*) FROM sem_chunks").fetchone()[0], 0)
             project_notes.write(self.db, self.pid, relative, "NEW_SEMANTIC_CONTENT " * 30)

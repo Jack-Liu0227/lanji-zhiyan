@@ -48,9 +48,13 @@ class StewardModelFixture:
                     previous_tools=[call.get('function',{}).get('name') for message in payload['messages']
                                     for call in (message.get('tool_calls') or [])]
                     if last.get('role')=='tool' and last.get('name')=='task_create':
-                        created=json.loads(last.get('content') or '{}').get('task') or {}
+                        import re
+                        raw=str(last.get('content') or '')
+                        try:created=(json.loads(raw).get('task') or {})
+                        except ValueError:created={}
+                        tid=created.get('id') or (re.search(r'"id"\s*:\s*"(pt-[^"]+)"',raw) or [None,''])[1]
                         delta={'tool_calls':[{'index':0,'id':'stage-team-start','type':'function','function':{
-                            'name':'task_start','arguments':json.dumps({'id':created.get('id','')})}}]}
+                            'name':'task_start','arguments':json.dumps({'id':tid})}}]}
                     elif any(name in previous_tools for name in ('idea_review','paper_search','doc_write','task_start')):
                         delta={'content':'# SETUP_REAL_OUTPUT\nResearch evidence and limitations.'}
                     elif '完成「① 研究问题与科学假设提炼」' in task_prompt:
@@ -63,12 +67,12 @@ class StewardModelFixture:
                         import re
                         match=re.search(r'团队名册：(\[.*?\])',system,re.S)
                         roster=json.loads(match.group(1)) if match else []
-                        worker=next((item for item in roster if item.get('id')), {})
+                        worker=next((item for item in roster if item.get('id') and item.get('role')!='leader'), {})
                         delta={'tool_calls':[{'index':0,'id':'stage-team','type':'function','function':{
                             'name':'task_create','arguments':json.dumps({'title':'methodology evidence','goal':'Produce a concise evidence-based methodology handoff.','member_id':worker.get('id',''),'request_key':'steward-methodology-child'})}}]}
                     elif '完成「④ 开题论证总结报告撰写」' in task_prompt:
                         delta={'tool_calls':[{'index':0,'id':'stage-write','type':'function','function':{
-                            'name':'doc_write','arguments':json.dumps({'markdown':'# SETUP_REAL_OUTPUT\nResearch evidence and limitations.'})}}]}
+                            'name':'doc_write','arguments':json.dumps({'scope':'write','markdown':'# SETUP_REAL_OUTPUT\nResearch evidence and limitations.'})}}]}
                     else:
                         delta={'content':'# SETUP_REAL_OUTPUT\nResearch evidence and limitations.'}
                 else:
@@ -107,7 +111,18 @@ class ResearchSetupRuntimeTest(unittest.TestCase):
 
     def test_global_steward_creates_project_and_real_reviewable_workflow_output(self):
         self.load_page()
-        with StewardModelFixture() as model:
+        with StewardModelFixture() as model, \
+                __import__('unittest.mock', fromlist=['patch']).patch(
+                    'workflow_search.open_url',
+                    side_effect=lambda *_a, **_kw: __import__('io').BytesIO(json.dumps({
+                        'message': {'items': [{
+                            'title': ['Controlled Ion Transport in Solid Electrolytes'],
+                            'DOI': '10.1000/ion-transport-1',
+                            'published-print': {'date-parts': [[2025]]},
+                            'author': [{'family': 'Li', 'given': 'Wei'}],
+                            'abstract': 'Controlled ion transport suppresses interfacial impedance.'
+                        }]}
+                    }).encode('utf-8'))):
             with workflow.WorkflowDB(self.database_path) as db:
                 db.add_model('Steward fixture',model.url,'steward-fixture','fixture-only-key',activate=True)
             self.page.evaluate('async()=>await refreshState(false)')
@@ -131,6 +146,7 @@ class ResearchSetupRuntimeTest(unittest.TestCase):
             self.assertEqual(len(tasks),4)
             self.assertIn('[Active skill: research-steward]',json.dumps(model.requests[0],ensure_ascii=False))
             button.click()
+            self.page.evaluate('async ([project,run])=>await ProjectWorkspace.openWorkflowRun(project,run)',[pid,run['id']])
             self.page.locator('.project-workflow-graph').wait_for()
             self.assertEqual(self.page.locator('#pwProject').input_value(),pid)
             with workflow.WorkflowDB(self.database_path) as db:
@@ -145,7 +161,18 @@ class ResearchSetupRuntimeTest(unittest.TestCase):
             pid=db.create_task('Automatic project')
             project_bindings.save_settings(db,pid,'full_access')
         self.load_page()
-        with StewardModelFixture() as model:
+        with StewardModelFixture() as model, \
+                __import__('unittest.mock', fromlist=['patch']).patch(
+                    'workflow_search.open_url',
+                    side_effect=lambda *_a, **_kw: __import__('io').BytesIO(json.dumps({
+                        'message': {'items': [{
+                            'title': ['Controlled Ion Transport in Solid Electrolytes'],
+                            'DOI': '10.1000/ion-transport-1',
+                            'published-print': {'date-parts': [[2025]]},
+                            'author': [{'family': 'Li', 'given': 'Wei'}],
+                            'abstract': 'Controlled ion transport suppresses interfacial impedance.'
+                        }]}
+                    }).encode('utf-8'))):
             with workflow.WorkflowDB(self.database_path) as db:
                 db.add_model('Automatic fixture',model.url,'automatic-fixture','fixture-only-key',activate=True)
             response=self.page.request.post(self.url+'api/langgraph/create-from-idea',data={
@@ -156,8 +183,9 @@ class ResearchSetupRuntimeTest(unittest.TestCase):
             run=self.poll_setup(model,pid,('succeeded','failed'))
             self.assertEqual(run['status'],'succeeded',{'error':run.get('error'),'nodes':[(node['id'],node.get('error')) for node in run['nodes']], 'responses': model.responses[-12:]})
             tasks=self.page.request.get(self.url+'api/project-tasks?project_id='+pid).json()['tasks']
-            self.assertEqual(len(tasks),4)
-            self.assertTrue(all(task['status']=='delivered' and task['outputs'] for task in tasks))
+            workflow_nodes=[task for task in tasks if not task.get('parent_task_id')]
+            self.assertEqual(len(workflow_nodes),4)
+            self.assertTrue(all(task['status']=='delivered' and task['outputs'] for task in workflow_nodes))
             self.assertTrue(any(task.get('member_id') for task in tasks))
             with workflow.WorkflowDB(self.database_path) as db:
                 has_search_results=bool(db.results(pid))

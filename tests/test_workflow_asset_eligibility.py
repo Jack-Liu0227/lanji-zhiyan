@@ -17,8 +17,10 @@ import workflow_context
 import workflow_execution
 import workflow_layout
 import task_tools
+import research_reading
 from tests import test_task_orchestration as orchestration
 from tests import test_project_task_service as service
+from tests._pdf_fixture import write_text_pdf
 
 
 class WorkflowAssetEligibilityTest(unittest.TestCase):
@@ -155,6 +157,50 @@ class WorkflowAssetEligibilityTest(unittest.TestCase):
         self.assertFalse(asset_service.eligibility(self.db, asset)['controlled'])
         self.assertTrue(asset_service.require_input(self.db, asset)['consumable'])
         self.assertIn(asset['id'], {a['id'] for a in asset_service.research_assets(self.db, self.pid)})
+
+    def test_failed_task_does_not_hide_ingested_project_paper_or_expose_its_failed_output(self):
+        paper_task = self.create()
+        paper_run = tasks.start(self.db, paper_task['id'], authority=self.ui)
+        source = write_text_pdf(self.root / 'source.pdf', [
+            'Methods\nCells were tested at 4.2 V after cycling.',
+        ])
+        self.db.project_task_context = tasks.CommandContext.agent(self.pid, paper_task['id'])
+        try:
+            paper = self.db.ingest_pdf(self.pid, source)
+        finally:
+            del self.db.project_task_context
+        tasks.fail(self.db, paper_run['id'], 'Old importing task failed')
+        paper_asset = asset_service.find_by_metadata(
+            self.db, project_id=self.pid, kind='paper', key='paper_id', value=paper['id']
+        )[0]
+
+        self.assertEqual(paper_asset['source'], 'paper_ingest')
+        self.assertEqual(asset_service.require_path_context(self.db, self.pid, source)['review_status'], 'source')
+        focused = research_reading.focus(self.db, self.pid, 'Check the test voltage', [paper['id']], ['4.2 V'])
+        self.assertEqual(focused['status'], 'found')
+        recorded = research_reading.record(self.db, self.pid, paper['id'], [{
+            'page_no': 1, 'field': 'test voltage', 'value': '4.2 V',
+            'excerpt': focused['matches'][0]['excerpt'],
+        }])
+        self.assertEqual(len(recorded['accepted']), 1)
+
+        output_task = self.create()
+        output_run = tasks.start(self.db, output_task['id'], authority=self.ui)
+        failed_output = self.root / 'failed-output.md'
+        failed_output.write_text('Unreviewed task output', encoding='utf-8')
+        output_asset = asset_service.register_file(
+            self.db, failed_output, project_id=self.pid, kind='document',
+            metadata={'project_task_id': output_task['id'], 'task_run_id': output_run['id']},
+        )
+        tasks.fail(self.db, output_run['id'], 'Output generation failed')
+        with self.assertRaisesRegex(ValueError, '未交付'):
+            asset_service.require_context(self.db, output_asset)
+
+    def test_ingested_paper_path_cannot_cross_project_boundary(self):
+        source = write_text_pdf(self.root / 'private.pdf', ['Methods\nPrivate project paper.'])
+        self.db.ingest_pdf(self.pid, source)
+        with self.assertRaisesRegex(PermissionError, '其他项目'):
+            asset_service.require_path_context(self.db, self.other, source)
 
     def test_other_agent_cannot_read_pending_output_but_its_own_node_can(self):
         task, asset = self.pending(text='PRIVATE_CANDIDATE_CONTENT')

@@ -186,7 +186,7 @@ class QuickTodoRuntimeTest(unittest.TestCase):
         saved=next(plan for plan in plans if plan['id']==second['id'])
         self.assertEqual(saved['dependencies'],[first['id']]);self.assertIn('provenance',saved['acceptance'])
         self.assertEqual(self.page.locator('[data-view="pipeline"]').count(),0)
-        self.page.locator('#pwTab-flow').click();self.page.locator('[data-pwg-step]').wait_for()
+        workspace_section(self.page, 'workflow');self.page.locator('[data-pwg-step]').wait_for()
 
     def test_visual_todo_and_progress_menu_in_light_dark_small_window(self):
         self.load_page('?pw=1')

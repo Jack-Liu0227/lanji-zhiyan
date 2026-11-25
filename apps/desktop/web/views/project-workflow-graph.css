@@ -1,42 +1,58 @@
-.pw-resource:has(.project-workflow-graph){padding:0;overflow:hidden}
+.pw-resource:has(.project-workflow-graph),.project-workspace.pw-peek .pw-resource:has(.project-workflow-graph),.project-workspace.pw-narrow .pw-resource:has(.project-workflow-graph){padding:0;overflow:hidden}
 .pw-resource-content:has(.project-workflow-graph){height:100%;min-height:0}
-.project-workflow-graph{display:flex;flex-direction:column;height:100%;min-height:0}
-.pwg-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:15px 20px 10px}
-.pwg-toolbar label{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
-.pwg-toolbar select.control{width:auto;max-width:310px}.pwg-toolbar .btn{font-size:12px;min-height:30px;padding:7px 10px}
-.pwg-mode{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:0 20px 12px}
-.pwg-mode [aria-pressed=true]{color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--panel))}
-.pwg-mode .hint{font-size:11px}.pwg-notice:empty{display:none}.pwg-notice{font-size:12px;color:var(--accent);padding:0 20px}
+.project-workflow-graph{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--bg)}
+.pwg-evoflow-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+.pwg-evoflow-title{display:flex;align-items:center;gap:8px;min-width:180px;flex:1 1 200px}
+.pwg-scoped-title{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pwg-evoflow-dot{width:8px;height:8px;border-radius:50%;background:#3b82f6;flex-shrink:0}
+.pwg-evoflow-dot.succeeded,.pwg-evoflow-dot.completed{background:#10b981}
+.pwg-evoflow-dot.awaiting_review{background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.2)}
+.pwg-flow-select.control{border:0;background:transparent;font-size:13.5px;font-weight:650;color:var(--fg);padding:2px 20px 2px 0;min-height:26px;width:auto;max-width:320px;cursor:pointer}
+.pwg-evoflow-metrics{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pwg-run-id{font-size:11px;color:var(--muted);font-family:Consolas,monospace}
+.pwg-toolbar{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:6px 14px;background:color-mix(in srgb,var(--panel2) 55%,var(--panel));border-bottom:1px solid var(--line)}
+.pwg-toolbar .btn.sm{font-size:11px;min-height:26px;padding:3px 8px}
+.pwg-mode{display:inline-flex;align-items:center;gap:4px;padding:0}
+.pwg-mode [aria-pressed=true]{color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--panel));font-weight:600}
+.pwg-notice:empty{display:none}.pwg-notice{font-size:11.5px;color:var(--accent);padding:5px 14px;margin:0;border-bottom:1px solid var(--line);background:var(--panel)}
 .project-workflow-graph>.pw-error:empty{display:none}
-.pwg-layout{display:grid;grid-template-columns:minmax(0,1fr) 330px;flex:1;min-height:0;border-top:1px solid var(--line)}
-.pwg-canvas{min-width:0;min-height:0;overflow:auto;background-image:radial-gradient(var(--line) .7px,transparent .7px);background-size:18px 18px;padding:24px 16px}
-.pwg-canvas .wfl-graph-scroll{overflow:visible;background-image:none;min-width:max-content;min-height:100%}
-.pwg-canvas .wfl-node rect{rx:6;fill:var(--panel)}
-.pwg-canvas .wfl-node.result-available rect{stroke:var(--accent);stroke-width:2}
-.pwg-canvas .wfl-node:hover rect{stroke:var(--accent)}
-.pwg-inspector{min-height:0;min-width:0;overflow:auto;border-left:1px solid var(--line);padding:18px 20px;background:var(--panel)}
-.pwg-node-heading{margin-bottom:18px}.pwg-node-heading h3{font-size:17px;margin:6px 0 0}
-.pwg-inspector>label,.pwg-inspector details label{display:grid;gap:7px;color:var(--muted);font-size:12px;margin:12px 0}
-.pwg-inspector .control{font-size:12px;max-width:100%}.pwg-inspector textarea{line-height:1.7;resize:vertical}
-.pwg-inspector .pwg-check{display:flex;align-items:center;gap:8px;line-height:1.6;color:var(--fg)}
-.pwg-dependencies{border:1px solid var(--line);border-radius:5px;margin:17px 0;padding:10px 12px;max-height:180px;overflow:auto}
+.pwg-layout{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto;flex:1;min-height:0;position:relative}
+.pwg-zoom{padding:3px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+.pwg-inspector{max-height:230px;min-height:0;overflow:auto;border-top:1px solid var(--line);padding:10px 14px;background:var(--panel)}
+.pw-peek .pwg-inspector{max-height:210px}
+.pwg-canvas{min-width:0;min-height:0;overflow:auto;background:var(--bg);background-image:radial-gradient(color-mix(in srgb,var(--line) 80%,transparent) 1px,transparent 1px);background-size:18px 18px;padding:12px 10px}
+.pwg-canvas .wfl-graph-scroll{overflow:visible;background:transparent;background-image:none;min-width:100%;min-height:100%;display:flex;justify-content:center}
+.pwg-inspector{min-height:0;min-width:0;overflow:auto;border-top:1px solid var(--line);padding:14px 16px;background:var(--panel)}
+.pwg-node-heading{margin-bottom:10px;display:flex;align-items:baseline;justify-content:space-between;gap:8px;flex-wrap:wrap}.pwg-node-heading h3{font-size:15px;margin:0}
+.pwg-inspector>label,.pwg-inspector details label{display:grid;gap:5px;color:var(--muted);font-size:11.5px;margin:8px 0}
+.pwg-inspector .control{font-size:12px;max-width:100%}.pwg-inspector textarea{line-height:1.65;resize:vertical}
+.pwg-inspector .pwg-check{display:flex;align-items:center;gap:8px;line-height:1.5;color:var(--fg);font-size:12px}
+.pwg-dependencies{border:1px solid var(--line);border-radius:6px;margin:10px 0;padding:8px 10px;max-height:150px;overflow:auto}
 .pwg-dependencies legend{font-size:11px;color:var(--muted);padding:0 4px}
-.pwg-dependencies label{display:flex;align-items:center;gap:7px;font-size:12px;margin:7px 0}
-.pwg-actions{display:flex;gap:7px;margin:16px 0}.pwg-node-execution{display:grid;gap:8px;border-top:1px solid var(--line);padding-top:14px;margin-top:20px}
-.pwg-actions{position:sticky;bottom:-18px;z-index:2;background:var(--panel);padding:12px 0;border-top:1px solid var(--line)}
-.pwg-zoom{display:flex;gap:3px;align-items:center;padding:4px 20px;border-top:1px solid var(--line)}
-.pwg-zoom{flex-wrap:wrap}.pwg-search{position:relative;margin-left:auto;flex:0 1 280px;min-width:160px}.pwg-search input{width:100%;font-size:12px}.pwg-search [data-pwg-search-results]{position:absolute;top:100%;left:0;right:0;z-index:5;max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:7px;background:var(--panel);box-shadow:var(--shadow)}.pwg-search [hidden]{display:none}.pwg-search button{display:block;width:100%;padding:10px;text-align:left;font:inherit;color:var(--fg);background:transparent;border:0;cursor:pointer}.pwg-search button:hover,.pwg-search button:focus-visible{background:var(--panel2)}.pwg-search small{color:var(--muted);margin-left:6px}.pwg-search p{font-size:12px;padding:10px}
-.pwg-node-execution h4{font-size:13px;margin:0}.pwg-node-execution .hint{font-size:11px;line-height:1.7;margin:0}
-.pwg-review-hint{font-size:11px;line-height:1.7;margin:0;color:var(--accent)}
+.pwg-dependencies label{display:flex;align-items:center;gap:7px;font-size:12px;margin:5px 0}
+.pwg-actions{display:flex;gap:7px;margin:12px 0;position:sticky;bottom:-14px;z-index:2;background:var(--panel);padding:10px 0;border-top:1px solid var(--line)}
+.pwg-node-execution{display:grid;gap:8px;border-top:1px solid var(--line);padding-top:10px;margin-top:10px}
+.pwg-zoom{display:flex;gap:4px;align-items:center;padding:4px 14px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+.pwg-search{position:relative;margin-left:auto;flex:0 1 220px;min-width:140px}.pwg-search input{width:100%;font-size:11.5px;min-height:26px;padding:3px 8px}.pwg-search [data-pwg-search-results]{position:absolute;top:100%;left:0;right:0;z-index:5;max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:7px;background:var(--panel);box-shadow:var(--shadow)}.pwg-search [hidden]{display:none}.pwg-search button{display:block;width:100%;padding:8px 10px;text-align:left;font:inherit;font-size:12px;color:var(--fg);background:transparent;border:0;cursor:pointer}.pwg-search button:hover,.pwg-search button:focus-visible{background:var(--panel2)}.pwg-search small{color:var(--muted);margin-left:6px}.pwg-search p{font-size:12px;padding:10px}
+.pwg-node-execution h4{font-size:12.5px;margin:0}.pwg-node-execution .hint{font-size:11px;line-height:1.6;margin:0}
+.pwg-review-hint{font-size:11px;line-height:1.6;margin:0;color:#d97706;font-weight:550}
+.pwg-run-progress{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:999px;background:color-mix(in srgb,var(--accent) 8%,var(--panel2));border:1px solid var(--line);color:var(--fg)}
+.pwg-artifact-chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
+.pwg-inline-doc{border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:10px 12px;margin:4px 0}
+.pwg-inline-doc-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding-bottom:6px;margin-bottom:8px;border-bottom:1px solid var(--line);font-size:12px}
+.pwg-inline-doc-head [aria-pressed="true"]{color:var(--accent);font-weight:600;background:color-mix(in srgb,var(--accent) 12%,var(--panel))}
+.pwg-inline-doc-preview{max-height:180px;overflow:auto;font-size:12px;line-height:1.65}
+.pwg-inline-doc-editor{font:12px/1.6 Consolas,"Microsoft YaHei UI",monospace;width:100%}
+.pwg-inline-review{display:grid;gap:8px;padding:10px 12px;border-radius:8px;background:color-mix(in srgb,#f59e0b 8%,var(--bg));border:1px solid color-mix(in srgb,#f59e0b 38%,var(--line));margin:4px 0}
+.pwg-inline-review h5{margin:0;font-size:12px}
+.pwg-inline-review label{display:grid;gap:4px;font-size:11px;color:var(--muted)}
+.pwg-inline-review-acts,.pwg-exec-btns{display:flex;flex-wrap:wrap;gap:6px}
 .pwg-inspector pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:10px;background:var(--bg);border:1px solid var(--line);border-radius:5px;font:12px/1.7 Consolas,"Microsoft YaHei UI",monospace}
 .project-workspace.pw-narrow .pw-resource:has(.project-workflow-graph){padding:0}
-.project-workspace.pw-narrow .pwg-layout{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(130px,.6fr) minmax(0,1fr)}
-.project-workspace.pw-narrow .pwg-inspector{border-left:0;border-top:1px solid var(--line)}
-.project-workspace.pw-narrow .pwg-toolbar{padding:12px;gap:6px}.project-workspace.pw-narrow .pwg-mode{padding:0 12px 10px}
 /* 纵向布局 + 拖拽自组装 */
 .pwg-canvas{position:relative}
 .pwg-toolbar{position:relative}
-.pwg-canvas .wfl-node{cursor:grab;touch-action:none}
+.pwg-canvas .wfl-node{cursor:pointer;touch-action:none}
 .pwg-canvas .wfl-node.dragging{opacity:.4}
 .pwg-drop{position:absolute;height:2px;border-radius:2px;background:var(--accent);pointer-events:none;z-index:4;box-shadow:0 0 10px color-mix(in srgb,var(--accent) 70%,transparent)}
 .pwg-drop::before,.pwg-drop::after{content:"";position:absolute;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
@@ -45,3 +61,33 @@
 .pwg-steplib-head{font-size:11px;color:var(--muted);margin:4px 8px 6px}
 .pwg-steplib button{display:block;width:100%;text-align:left;font:inherit;font-size:12px;color:var(--fg);background:transparent;border:0;border-radius:6px;padding:8px 9px;cursor:pointer}
 .pwg-steplib button:hover,.pwg-steplib button:focus-visible{background:color-mix(in srgb,var(--accent) 13%,transparent);color:var(--accent)}
+
+
+/* EvoFlow Pure Dock Layout */
+.pw-peek .pwg-inspector {
+  max-height: 190px;
+}
+.pwg-evoflow-head {
+  padding: 7px 12px;
+  gap: 8px;
+}
+.pwg-flow-select.control {
+  max-width: 170px;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.pwg-zoom {
+  padding: 3px 10px;
+  font-size: 11px;
+}
+.pwg-search {
+  flex: 0 1 150px;
+}
+.pwg-empty{margin:20px 14px;padding:24px 18px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.pwg-empty h3{margin:0 0 10px;font-size:15px;color:var(--fg)}
+.pwg-empty .pwg-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}
+.pwg-toolbar:not(.pwg-toolbar-open){display:none}
+.pwg-layout:not(.pwg-inspector-open)>.pwg-inspector{display:none}

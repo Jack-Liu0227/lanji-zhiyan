@@ -80,22 +80,45 @@ def _anthropic_stream(url, payload, headers, timeout, on_delta, cancel_check, on
 def _responses_stream(url, payload, headers, timeout, on_delta, cancel_check, on_reasoning=None):
     payload["stream"] = True
     completed = None
+    collected_text = []
+    collected_reasoning = []
+    collected_calls = []
+    output_items = []
+    usage = {}
     for event in _stream_events(url, payload, headers, timeout, cancel_check):
         kind = event.get("type")
         if kind in {"response.output_text.delta", "response.refusal.delta"}:
             piece = event.get("delta") or ""
             if piece:
+                collected_text.append(piece)
                 on_delta(piece)
         elif kind == "response.reasoning_summary_text.delta":
-            if on_reasoning and event.get("delta"):
-                on_reasoning(event["delta"])
-        elif kind == "response.completed":
-            completed = event.get("response")
+            piece = event.get("delta") or ""
+            if piece and on_reasoning:
+                collected_reasoning.append(piece)
+                on_reasoning(piece)
+        elif kind in {"response.completed", "response.done"}:
+            completed = event.get("response") or event
+        elif kind == "response.output_item.done":
+            item = event.get("item")
+            if item:
+                output_items.append(item)
         elif kind in {"response.failed", "error"}:
             from runtime import ProviderStreamError
             raise ProviderStreamError((event.get("response") or {}).get("error") or event.get("error") or event)
+        if event.get("usage"):
+            usage.update(event["usage"])
     if completed is None:
-        raise RuntimeError("Responses 流未返回完成事件")
+        if output_items or collected_text or collected_calls:
+            out = list(output_items)
+            if not out and collected_text:
+                out.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "".join(collected_text)}]})
+            if collected_calls:
+                out.extend(collected_calls)
+            completed = {"output": out, "usage": usage}
+        else:
+            from runtime import ProviderStreamError
+            raise ProviderStreamError("Responses 流未返回完成事件")
     return completed
 
 
@@ -120,6 +143,7 @@ def _gemini_stream(url, payload, headers, timeout, on_delta, cancel_check, on_re
 
 def discover(profile, timeout=25):
     import workflow
+    workflow._assert_key_host(profile)
     api = profile.get("api", "openai-completions")
     import account_providers
     if api in account_providers.WIRES:
@@ -214,7 +238,7 @@ def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_to
                     content = list(wire["content"])
                 else:
                     content = image_content(m['content'],api) if m.get('content') else []
-                    content.extend({"type": "tool_use", "id": c["id"], "name": c["function"]["name"], "input": json.loads(c["function"]["arguments"])} for c in m.get("tool_calls", []))
+                    content.extend({"type": "tool_use", "id": c["id"], "name": c["function"]["name"], "input": json.loads(c["function"].get("arguments") or "{}")} for c in m.get("tool_calls", []))
                 entry = {"role": m["role"], "content": content or [{"type": "text", "text": " "}]}
             if hist and hist[-1]["role"] == entry["role"]:
                 hist[-1]["content"].extend(entry["content"])
@@ -249,7 +273,7 @@ def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_to
                     parts = wire["parts"]
                 else:
                     parts = image_content(m['content'],api) if m.get('content') else []
-                    parts.extend({"functionCall": {"name": c["function"]["name"], "args": json.loads(c["function"]["arguments"])}} for c in m.get("tool_calls", []))
+                    parts.extend({"functionCall": {"name": c["function"]["name"], "args": json.loads(c["function"].get("arguments") or "{}")}} for c in m.get("tool_calls", []))
             role = "model" if m["role"] == "assistant" else "user"
             if contents and contents[-1]["role"] == role:
                 contents[-1]["parts"].extend(parts)

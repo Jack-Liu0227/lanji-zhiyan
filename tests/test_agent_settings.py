@@ -48,6 +48,10 @@ class AgentSettingsTest(unittest.TestCase):
         mids = {m["model"]: m["id"] for m in self.db.models()}
         self.db.assistant_save("mine", model_id=mids["second"])
         self.route("provider-save", {"id": p["id"], "name": "Updated", "base_url": "https://new.test/v1", "api": "anthropic-messages", "api_key": "new-secret"})
+        import securestore
+        stored = self.db.db.execute("SELECT api_key,key_host FROM providers WHERE id=?", (p["id"],)).fetchone()
+        self.assertTrue(securestore.is_protected(stored["api_key"]))
+        self.assertEqual(stored["key_host"], "new.test")
         m = self.db.model(mids["second"])
         self.assertEqual((m["base_url"], m["api_key"], m["api"]), ("https://new.test/v1", "new-secret", "anthropic-messages"))
         self.assertIn("Updated", m["name"])
@@ -63,6 +67,42 @@ class AgentSettingsTest(unittest.TestCase):
         self.assertNotIn('"api_key"', json.dumps(state))
         self.assertTrue(state["providers"][0]["key_present"])
         self.assertEqual(self.route("provider-secret", query={"id": [p["id"]]}, method="GET")["api_key"], "secret")
+        with patch("workflow.open_url") as request:
+            with self.assertRaisesRegex(RuntimeError, "example.test"):
+                self.route("provider-discover", {"id": p["id"]})
+            request.assert_not_called()
+
+    def test_model_test_uses_responses_and_rejects_empty(self):
+        p = self.provider(("first",))
+        mid = self.db.active_model()["id"]
+        self.route("provider-save", {**p, "api": "openai-responses"})
+        with patch("agent_protocols._request", return_value={"output": []}) as send:
+            with self.assertRaisesRegex(ValueError, "未生成文本"):
+                self.route("model-test", {"id": mid})
+            self.assertEqual(send.call_args.args[0], "https://example.test/v1/responses")
+        self.assertEqual(self.db.active_model()["id"], mid)
+
+    def test_translation_default_and_queued_model_survive_independent_changes(self):
+        import papertran
+        import workspace_chat
+        active = self.provider(("first",))
+        old_model = self.db.active_model()["id"]
+        owner = self.db.create_chat()
+        snapshot = workspace_chat.snapshot(self.db, owner)
+        local = self.route("provider-save", {"name": "Local", "base_url": "http://localhost:11434/v1"})["provider"]
+        self.route("provider-models", {"id": local["id"], "models": ["local-translation"]})
+        mid = next(m["id"] for m in self.db.models() if m["provider_id"] == local["id"])
+        self.route("translation-model", {"model_id": mid})
+        self.assertEqual(papertran._llm_cfg(self.db)["model"], "local-translation")
+        self.assertEqual(self.db.active_model()["id"], old_model)
+        self.route("provider-save", {**active, "enabled": False})
+        with self.assertRaisesRegex(ValueError, "停用"):
+            workspace_chat.apply(self.db, snapshot)
+        self.route("provider-save", {**active, "enabled": True})
+        self.assertEqual(self.db.active_model()["id"], old_model)
+        self.route("provider-save", {**active, "base_url": "https://new.test/v1", "api_key": "next-key"})
+        with self.assertRaisesRegex(ValueError, "已变更"):
+            workspace_chat.apply(self.db, snapshot)
 
     def test_full_list_no_truncation_public_eligibility_enforced(self):
         for i in range(70):

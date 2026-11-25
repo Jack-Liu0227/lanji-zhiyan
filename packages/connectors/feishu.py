@@ -713,51 +713,6 @@ def _handle_inbound_unlocked(db_path: Any, aid: str, payload: dict) -> dict:
                     db.db.commit()
 
 
-def start_bridge(db_path: Any) -> dict[str, str]:
-    """Use Feishu's local WebSocket client; no public callback port is needed."""
-    import workflow
-
-    with _BRIDGE_LOCK:
-        if _BRIDGE["status"] in {"starting", "running"}:
-            return dict(_BRIDGE)
-        with workflow.WorkflowDB(db_path) as db:
-            rows = [(a["id"], a["enabled"], config(db, a["id"])) for a in db.assistants()]
-        selected = next(((aid, cfg) for aid, enabled, cfg in rows if enabled
-                         and cfg.get("enabled") and cfg.get("inbound_enabled")
-                         and cfg.get("app_id") and cfg.get("app_secret")), None)
-        if not selected:
-            return dict(_BRIDGE)
-        aid, cfg = selected
-        try:
-            import lark_oapi as lark
-        except ImportError:
-            _BRIDGE.update(status="dependency_missing", assistant_id=aid, error="请安装 lark-oapi")
-            return dict(_BRIDGE)
-        _BRIDGE.update(status="starting", assistant_id=aid, error="")
-
-    def on_message(data: Any) -> None:
-        try:
-            payload = json.loads(lark.JSON.marshal(data))
-        except (TypeError, ValueError):
-            return
-        threading.Thread(target=handle_inbound, args=(db_path, aid, payload),
-                         daemon=True, name="feishu-inbound").start()
-
-    def worker() -> None:
-        try:
-            handler = lark.EventDispatcherHandler.builder("", "").register_p2_im_message_receive_v1(on_message).build()
-            client = lark.ws.Client(cfg["app_id"], cfg["app_secret"], event_handler=handler)
-            with _BRIDGE_LOCK:
-                _BRIDGE["status"] = "running"
-            client.start()
-        except Exception as exc:
-            with _BRIDGE_LOCK:
-                _BRIDGE.update(status="error", error=f"{type(exc).__name__}: {exc}"[:160])
-
-    threading.Thread(target=worker, daemon=True, name="feishu-websocket").start()
-    return bridge_status()
-
-
 def route(method: str, path: str, body: dict, query: dict, db: Any) -> dict | None:
     if not path.startswith("/api/feishu/"):
         return None

@@ -129,6 +129,17 @@ def stage_download(db: WorkflowDB, task_id: str, result_id: str) -> dict[str, An
     item = db.result(result_id)
     if not item:
         raise ValueError("这条检索结果不在了（可能被清过），重新搜一次")
+    if item.get("task_id") != task_id:
+        raise PermissionError("只能下载当前项目的检索记录")
+    linked = db.db.execute(
+        "SELECT paper_id FROM project_paper_links WHERE task_id=? AND result_id=?", (task_id, result_id)
+    ).fetchone()
+    if linked:
+        paper = db.paper(linked["paper_id"])
+        source = Path(paper.get("source_path") or "")
+        if source.is_file():
+            db.set_queue(task_id, result_id, "downloaded", str(source), "")
+            return {"paper": paper, "pdf_path": str(source), "reused": True}
     path = download_pdf(item, target_dir=db.pdir(task_id, "文献库"))
     import execution
     execution.check()
@@ -143,6 +154,67 @@ def stage_download(db: WorkflowDB, task_id: str, result_id: str) -> dict[str, An
     db.set_queue(task_id, result_id, "downloaded", str(path), "")
     db.log_step(task_id, "download", "done", f"已入库 {paper['filename']}（{len(paper['pages'])} 页）")
     return {"paper": paper, "pdf_path": str(path)}
+
+
+def stage_download_batch(db: WorkflowDB, task_id: str, result_ids: list[str] | None = None,
+                         limit: int = 10) -> dict[str, Any]:
+    """容错批量下载当前项目的开放获取 PDF 并入库，单篇失败不中断其余条目。"""
+    import execution
+    cap = max(1, min(int(limit or 10), 20))
+    ids = [str(x).strip() for x in (result_ids or []) if str(x).strip()][:cap]
+    if not ids:
+        linked = {
+            row["result_id"] for row in db.db.execute(
+                "SELECT result_id FROM project_paper_links WHERE task_id=?", (task_id,)
+            ).fetchall()
+        }
+        candidates = db.results(task_id)
+        prioritized = sorted(
+            (r for r in candidates if r["id"] not in linked and ((r.get("pdf_url") or "").strip() or (r.get("doi") or "").strip())),
+            key=lambda r: (0 if (r.get("pdf_url") or "").strip() else 1, -int(r.get("citations") or 0)),
+        )
+        ids = [r["id"] for r in prioritized[:cap]]
+    if not ids:
+        return {"requested": 0, "downloaded": [], "reused": [], "failed": [],
+                "summary": {"downloaded": 0, "reused": 0, "failed": 0},
+                "note": "当前没有待下载的开放获取检索条目；可先调用 paper_search 或手动导入 PDF。"}
+    downloaded: list[dict[str, Any]] = []
+    reused: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    for rid in ids:
+        execution.check()
+        item = db.result(rid) or {}
+        try:
+            res = stage_download(db, task_id, rid)
+            paper = res["paper"]
+            entry = {
+                "result_id": rid,
+                "paper_id": paper["id"],
+                "title": item.get("title") or paper.get("title") or paper.get("filename"),
+                "doi": item.get("doi") or "",
+                "pdf_path": res["pdf_path"],
+                "pages": len(paper.get("pages") or []),
+            }
+            if res.get("reused"):
+                reused.append(entry)
+            else:
+                downloaded.append(entry)
+        except execution.Cancelled:
+            raise
+        except Exception as exc:
+            failed.append({
+                "result_id": rid,
+                "title": item.get("title") or "",
+                "doi": item.get("doi") or "",
+                "error": str(exc),
+            })
+    return {
+        "requested": len(ids),
+        "downloaded": downloaded,
+        "reused": reused,
+        "failed": failed,
+        "summary": {"downloaded": len(downloaded), "reused": len(reused), "failed": len(failed)},
+    }
 
 
 def stage_download_selected(db: WorkflowDB, task_id: str, result_ids: list[str]) -> dict[str, Any]:
@@ -476,22 +548,37 @@ def stage_read(db: WorkflowDB, task_id: str, paper_id: str, per_page: int = 2500
 def stage_notes(db: WorkflowDB, task_id: str, note_id: str, vault: str | None = None, apply: bool = False) -> dict[str, Any]:
     """把精读笔记整理成结构化知识库笔记（含证据表），可选写入 Obsidian。"""
     src = db.note(note_id)
-    rows = [dict(r) for r in db.evidence(task_id)]
-    prof = db.active_model()
     md = src["markdown"]
-    # 先用严格闸门抽取候选证据，拒绝页码/原文对不上的条目
+    import execution
     from research_core import extract_ai
-    if src.get("paper_id") and prof:
+    from workflow import chat
+    extraction = {"status": "skipped", "accepted": 0, "rejected": 0,
+                  "reason": "笔记未关联来源论文"}
+    if src.get("paper_id"):
         try:
-            extract_ai(db, task_id, src["paper_id"], prof["base_url"], prof["api_key"], prof["model"])
-        except Exception:
-            pass  # 抽不到证据不阻塞笔记整理
+            profile = db.active_model()
+            if profile:
+                profile = {**profile, "_usage_context": {**profile.get("_usage_context", {}),
+                            "project_id": task_id, "source": "evidence_extraction"}}
+                out = extract_ai(db, task_id, src["paper_id"], lambda messages: chat(profile, messages, temperature=0, timeout=120))
+                extraction = {"status": "completed", "run_id": out["run_id"], "accepted": len(out["accepted"]),
+                              "rejected": len(out["rejected"]), "reason": ""}
+            else:
+                extraction["reason"] = "尚未配置模型"
+        except execution.Cancelled:
+            raise
+        except Exception as exc:
+            extraction.update(status="failed", reason="证据抽取失败，请检查模型连接与返回格式（" + type(exc).__name__ + "）")
     rows = [dict(r) for r in db.evidence(task_id)]
     lines = [f"# 知识库笔记 · {src['title']}", "", "## 要点", "", md, "", "## 证据（回查原文）", ""]
     lines += [f"- **{r['field']}**：{r['value']}（{r['filename']}，p.{r['page_no']}）\n  - 原文：{r['excerpt']}" for r in rows] or ["- 暂无"]
+    if extraction["status"] != "completed":
+        lines += ["", "本次证据抽取：" + extraction["reason"]]
+    else:
+        lines += ["", f"本次抽取通过 {extraction['accepted']} 条，拒绝 {extraction['rejected']} 条。"]
     body = "\n".join(lines)
     note = db.add_note(task_id, f"笔记 · {src['title']}", body, src.get("paper_id"))
-    result = {"note_id": note["id"], "markdown": body, "evidence": len(rows)}
+    result = {"note_id": note["id"], "markdown": body, "evidence": len(rows), "extraction": extraction}
     if vault:
         from integrations import apply_obsidian_preview, obsidian_preview
         preview = obsidian_preview(vault, src["title"], body)

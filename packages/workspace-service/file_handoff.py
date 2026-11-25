@@ -24,7 +24,7 @@ def current_layout(db, project_id):
     if not db.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_workflow_layouts'").fetchone():
         raise ValueError("项目尚未绑定工作流，请先打开科研平台并配置工作流")
     row = db.db.execute("SELECT layout_id FROM project_workflow_layouts WHERE task_id=?", (project_id,)).fetchone()
-    if not row:
+    if not row or not row["layout_id"]:
         raise ValueError("项目尚未绑定工作流，请先打开科研平台并配置工作流")
     import project_workflows
     layout = project_workflows.effective(db, project_id, workflow_layout._layout(db, row["layout_id"]))

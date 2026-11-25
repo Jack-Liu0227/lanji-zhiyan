@@ -72,8 +72,9 @@ html[data-theme=light] .ec-workspace {
 .ec-attempt{margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums}
 .ec-run-card footer{display:flex;justify-content:space-between;gap:8px;border-top:1px solid var(--line);padding-top:10px;color:var(--muted);font-size:9px}
 .ec-card-error{font-size:10px;line-height:1.6;color:var(--ec-rose);overflow-wrap:anywhere}
-.ec-live-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start}
-.ec-live-layout:has(.ec-run-inspector:not([hidden])){grid-template-columns:minmax(0,1fr) 320px}
+.ec-live-layout{display:grid;grid-template-columns:minmax(0,1fr);gap:18px;align-items:start;position:relative}
+.ec-live-layout:has(.ec-run-inspector:not([hidden])){grid-template-columns:minmax(0,1fr) var(--ec-inspector-w,320px)}
+.ec-live-layout:not(:has(.ec-run-inspector:not([hidden]))) .split-gutter[data-split-var="--ec-inspector-w"]{display:none!important}
 .ec-live-groups{min-width:0}
 .ec-run-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(225px,1fr));gap:12px}
 .ec-run-group{margin-bottom:20px}.ec-run-group>h3{display:flex;gap:10px;align-items:center;margin:0 0 12px;font-size:12px;font-weight:600}

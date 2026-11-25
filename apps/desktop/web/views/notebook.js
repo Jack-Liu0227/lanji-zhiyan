@@ -400,6 +400,25 @@ window.Notebook = (() => {
   }
 
   function bindSidebarEvents(host){
+    const nbLayout = host.querySelector('.nb-layout');
+    if(nbLayout && typeof SplitResizer !== 'undefined'){
+      SplitResizer.bind(nbLayout, {
+        mode: 'fixed-left',
+        storageKey: 'nb-sidebar',
+        defaultSize: 260,
+        min: 180,
+        max: 480,
+        cssVar: '--nb-sidebar-w',
+        onResize: (w) => {
+          if (w > 80 && treeCollapsed) {
+            treeCollapsed = false;
+            localStorage.setItem('rw-nb-tree-collapsed', 'false');
+            nbLayout.classList.remove('side-collapsed');
+          }
+        }
+      });
+    }
+
     // 侧栏折叠/展开
     const btnCollapse = host.querySelector('#nbTreeCollapse');
     const btnExpand = host.querySelector('#nbTreeExpand');

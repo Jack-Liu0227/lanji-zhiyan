@@ -136,6 +136,8 @@ class CoreRoutes:
         if path == "/api/security":                   # 权限模式：all=不再逐次问，ask=编译/写文件每次问
             with WorkflowDB(DB_PATH) as db:
                 sec = kv_store.read(db, "security")
+                rmode = "auto" if str(sec.get("workflow_review_mode") or "") == "auto" else "human_review"
                 return self._json({"permission_mode": str(sec.get("permission_mode") or ""),
+                                   "workflow_review_mode": rmode,
                                    "history_chars": int(sec.get("history_chars") or 0)})
         return None

@@ -1,18 +1,23 @@
 /* Modern Obsidian/VS Code-inspired Notebook and Project Hierarchy Styles */
 .nb-layout {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: var(--nb-sidebar-w, 260px) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   height: 100%;
   flex: 1;
   overflow: hidden;
   gap: 0;
+  position: relative;
   transition: grid-template-columns 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .nb-layout.side-collapsed {
   grid-template-columns: 36px minmax(0, 1fr);
+}
+
+.nb-layout.side-collapsed .split-gutter[data-split-var="--nb-sidebar-w"] {
+  display: none !important;
 }
 
 .nb-sidebar {

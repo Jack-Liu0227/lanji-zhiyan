@@ -46,7 +46,8 @@ def visible_messages(messages, *, canonical='', hidden_inputs=()):
     """Project durable messages into the conversation view without duplicate inputs.
 
     This is deliberately read-only. Existing rows remain available to exports
-    and audit tools; only the UI/API projection collapses repeated user turns.
+    and audit tools; only adjacent duplicate input rows are collapsed. The same
+    question after an assistant reply remains a separate user turn.
     """
     result=[]
     seen=set()
@@ -54,18 +55,43 @@ def visible_messages(messages, *, canonical='', hidden_inputs=()):
     hidden_keys=[_message_key(value) for value in hidden_inputs or () if _message_key(value)]
     for message in messages or []:
         item=dict(message)
-        if item.get('role') != 'user':
+        if item.get('role') == 'user':
+            content = str(item.get('content') or '')
+            if '\n用户问题：' in content:
+                item['display_content'] = content.split('\n用户问题：')[-1].strip()
+            key=_message_key(content)
+            if not key:
+                result.append(item)
+                continue
+            if key in seen or (canonical_key and _is_internal_input_variant(key, canonical_key)) or any(
+                    _is_internal_input_variant(key, candidate) for candidate in hidden_keys):
+                continue
+            seen.add(key)
             result.append(item)
-            continue
-        key=_message_key(item.get('content'))
-        if not key:
+        else:
+            seen.clear()
+            if item.get('events') and not item.get('tool_calls'):
+                reasoning, tool_calls, outputs = [], [], []
+                for ev in item['events']:
+                    ev_type = ev.get('type') or ev.get('kind') or ''
+                    if ev_type in ('reasoning_done', 'reasoning_chunk') and (ev.get('text') or ev.get('content')):
+                        reasoning.append(ev.get('text') or ev['content'])
+                    elif ev_type in ('tool_call', 'tool'):
+                        tool_calls.append({'name': ev.get('name') or ev.get('tool') or '', 'args': ev.get('args') or {}, 'summary': ev.get('summary') or ''})
+                    elif ev_type in ('tool_result', 'tool_output') and tool_calls:
+                        last = tool_calls[-1]
+                        if not last.get('result_summary'):
+                            last['result_summary'] = ev.get('summary') or str(ev.get('result', ''))[:200]
+                            last['ok'] = ev.get('ok', True)
+                    if ev.get('path'):
+                        p = str(ev['path'])
+                        name = ev.get('name') or p.replace('\\', '/').split('/')[-1]
+                        if not any(o.get('path') == p for o in outputs):
+                            outputs.append({'path': p, 'name': name})
+                if reasoning: item['reasoning'] = '\n'.join(reasoning).strip()
+                if tool_calls: item['tool_calls'] = tool_calls
+                if outputs and not item.get('outputs'): item['outputs'] = outputs
             result.append(item)
-            continue
-        if key in seen or (canonical_key and _is_internal_input_variant(key, canonical_key)) or any(
-                _is_internal_input_variant(key, candidate) for candidate in hidden_keys):
-            continue
-        seen.add(key)
-        result.append(item)
     return result
 
 
@@ -113,7 +139,7 @@ def ensure_project(db, project_id):
     """Repair execution projections before a project view reads them."""
     missing = db.db.execute("""
         WITH executions(kind, entity_id) AS (
-            SELECT 'task', id FROM project_tasks WHERE project_id=?
+            SELECT 'task', id FROM project_tasks WHERE project_id=? AND (workflow_run_id IS NULL OR workflow_run_id = '')
             UNION ALL
             SELECT 'workflow', r.id FROM workflow_runs r
             JOIN workflow_executions e ON e.run_id=r.id WHERE r.project_id=?
@@ -142,8 +168,13 @@ def actor(db, snapshot):
 
 def record(db, task, run, event):
     kind=event.get('type','')
-    if kind not in ('tool_call','tool_result','model_request','model_response','team','sub','error','reasoning_done'):return
-    payload={**workspace_trajectory.redact(event),**actor(db,run['executor_snapshot'])}
+    if kind not in ('tool_call','tool_result','model_request','model_response','model_fallback','team','sub','error','reasoning_done'):return
+    current = db.db.execute('SELECT status,checkpoint FROM project_task_runs WHERE id=? AND task_id=?',
+                            (run['id'], task['id'])).fetchone()
+    if not current or current['status'] not in ('queued', 'running'):
+        return
+    checkpoint = json.loads(current['checkpoint'] or '{}')
+    payload = project_event(db, task, {**run, 'checkpoint': checkpoint}, event)
     for field in ('args','result'):
         if field in payload:payload[field]=workspace_trajectory.safe_result(payload[field])
     identity=event.get('id') or event.get('message_id')
@@ -209,7 +240,7 @@ def _event_error_detail(event):
 def _ui_event(event):
     if not isinstance(event, dict):
         return event
-    value = dict(event)
+    value = workspace_trajectory.event_payload(event)
     if not value.get('type') and value.get('kind'):
         value['type'] = value['kind']
     if value.get('type') in ('error', 'failed') and not value.get('message'):
@@ -219,13 +250,24 @@ def _ui_event(event):
     return value
 
 
+def project_event(db, task, run, event):
+    checkpoint = run.get('checkpoint') or {}
+    return {**_ui_event(event), **actor(db, run['executor_snapshot']),
+            'project_id': task['project_id'], 'workflow_run_id': task.get('workflow_run_id') or '',
+            'workflow_node_id': task.get('workflow_node_id') or '', 'node_id': task.get('workflow_node_id') or '',
+            'task_id': task['id'], 'task_run_id': run['id'], 'attempt': run['attempt'],
+            'parent_task_id': task.get('parent_task_id') or '',
+            'agent_run_id': checkpoint.get('agent_run_id') or checkpoint.get('workflow_run_id') or '',
+            'agent_node_id': checkpoint.get('node_id') or ''}
+
+
 def _task_messages(db, task):
     import project_tasks
     messages=[]
     for row in db.db.execute('SELECT id FROM project_task_runs WHERE task_id=? ORDER BY attempt',(task['id'],)):
         run=project_tasks.get_run(db,row['id']);checkpoint=run['checkpoint'];who=actor(db,run['executor_snapshot'])
-        events=[_ui_event(json.loads(row['payload'])) for row in db.db.execute('SELECT payload FROM execution_conversation_events WHERE run_id=? ORDER BY id',(run['id'],))]
-        if not events:events=[_ui_event(item) for item in workspace_trajectory.redact(checkpoint.get('events') or [])]
+        events=[project_event(db,task,run,{**json.loads(row['payload']), 'at':row['created_at']}) for row in db.db.execute('SELECT payload,created_at FROM execution_conversation_events WHERE run_id=? AND task_id=? ORDER BY id',(run['id'],task['id']))]
+        if not events:events=[project_event(db,task,run,item) for item in checkpoint.get('events') or []]
         event_error=next((detail for item in reversed(events) if (detail := _event_error_detail(item))), '')
         output_error=_error_detail(run.get('output_snapshot', {}))
         error_text=_prefer_error(event_error, run.get('error'), _error_detail(checkpoint.get('error')), output_error)
@@ -235,8 +277,30 @@ def _task_messages(db, task):
         if checkpoint.get('output_revision'):
             current = run.get('output_snapshot', {}).get('content')
             reply = '当前候选产物 · 修订 v' + str(checkpoint['output_revision']) + '\n\n' + (current if isinstance(current, str) else json.dumps(current, ensure_ascii=False, indent=2))
+        reasoning, tool_calls, extra_outputs = [], [], []
+        for ev in events:
+            ev_type = ev.get('type') or ev.get('kind') or ''
+            if ev_type in ('reasoning_done', 'reasoning_chunk') and (ev.get('text') or ev.get('content')):
+                reasoning.append(ev.get('text') or ev['content'])
+            elif ev_type in ('tool_call', 'tool'):
+                tool_calls.append({'name': ev.get('name') or ev.get('tool') or '', 'args': ev.get('args') or {}, 'summary': ev.get('summary') or ''})
+            elif ev_type in ('tool_result', 'tool_output') and tool_calls:
+                last = tool_calls[-1]
+                if not last.get('result_summary'):
+                    last['result_summary'] = ev.get('summary') or str(ev.get('result', ''))[:200]
+                    last['ok'] = ev.get('ok', True)
+            if ev.get('path'):
+                p = str(ev['path'])
+                name = ev.get('name') or p.replace('\\', '/').split('/')[-1]
+                if not any(o.get('path') == p for o in extra_outputs):
+                    extra_outputs.append({'path': p, 'name': name})
+        outputs_list = (run.get('output_snapshot') or {}).get('files', []) or extra_outputs
         messages.append({'id':run['id'],'role':'assistant','content':reply,'events':events,
-                         'created_at':run['started_at'],'status':run['status'],'attempt':run['attempt'],
+                         'reasoning':'\n'.join(reasoning).strip(),'tool_calls':tool_calls,
+                         'outputs':outputs_list,
+                         'created_at':run['started_at'],'started_at':run['started_at'],'ended_at':run.get('ended_at',''),
+                         'status':run['status'],'attempt':run['attempt'],
+                         'output_revision':checkpoint.get('output_revision', 0),
                          'task_id':task['id'],'task_title':task['title'],**who})
     return messages
 
@@ -265,6 +329,8 @@ def read(db, chat_id, project_id=''):
                 if detail:
                     latest_error=detail;break
         summary={'title':task['title'],'goal':task['goal'],'status':task['status'],'workflow_run_id':task['workflow_run_id'],'outputs':task['outputs'],
+                 'started_at':(task.get('latest_run') or {}).get('started_at',''),
+                 'ended_at':(task.get('latest_run') or {}).get('ended_at',''),
                  'error':latest_error,
                   'created_at':task['created_at'],'executor':actor(db,executor),'executor_binding_id':task['executor_binding_id'],'member_id':task['member_id'],
                   'node_result': task['node_result']}
@@ -277,6 +343,7 @@ def read(db, chat_id, project_id=''):
         order=list(run['settings'].get('task_ids',{}).values())
         tasks.sort(key=lambda task:order.index(task['id']) if task['id'] in order else len(order))
         summary={'title':run['layout'].get('name','工作流'),'goal':run['settings'].get('goal',''),
+                  'started_at':run['started_at'],'ended_at':run.get('ended_at',''),
                   'status':run['status'],'error':run.get('error',''),'workflow_run_id':run['id'],'created_at':run['started_at'],'prepared':bool(run['settings'].get('prepared'))}
         children=[{'id':task['id'],'title':task['title'],'status':task['status'],'chat_id':task.get('chat_id',''), 'node_result': task['node_result']} for task in tasks]
         if not summary.get('error') or str(summary.get('error')).strip().casefold() in {'error','failed','执行失败'}:

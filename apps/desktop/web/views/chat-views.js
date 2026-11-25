@@ -32,6 +32,7 @@ function render(){
   else if(r==='task-center') return TaskCenter.renderGlobal(m);
   else if(r==='usage') return UsageView.render(m);
   else if(r==='toolbox') return PaperToolbox.render(m);
+  else if(r==='workflow-studio') return WorkflowStudio.render(m);
   else if(r==="workflow") { ProjectWorkspace.requestRoute("workflow"); return ProjectWorkspace.render(m); }
   else if(r==="tasks") ProjectManager.open();
   else if(r==="space" || r==="notes") { if(window.ProjectWorkspace) { ProjectWorkspace.requestRoute("notes"); return ProjectWorkspace.render(m); } else return renderSpace(m); }
@@ -76,9 +77,43 @@ function asChat(){ return (S.chats||[]).find(c=>c.id===curChat) || null; }
 function asBound(){ const c=asChat(); return c ? (c.assistant_id||"") : ""; }
 const Q_AV = "/vendor/img/agent-q.png";                                        // 智研管家主形象（Q 版小人，透明底）
 const AH_AV = Array.from({length: 7}, (_, i)=>`/vendor/img/av${i + 1}.png`);   // 对话列表中的管家姿势
+function assistantRoleIcon(name='', id=''){
+  const n = String(name || '').toLowerCase();
+  const i = String(id || '').toLowerCase();
+  if(i==='builtin-steward' || n.includes('管家') || n.includes('steward')){
+    return `<span class="as-role-badge steward" title="${esc(name||'智研管家')}"><img src="${Q_AV}" alt="" style="width:100%;height:100%;object-fit:contain"></span>`;
+  }
+  if(n.includes('总控') || n.includes('规划') || n.includes('编排') || i.includes('planner') || i.includes('workflow')){
+    return `<span class="as-role-badge planner" title="${esc(name||'总控规划专家')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" fill="currentColor"></polygon></svg></span>`;
+  }
+  if(n.includes('文献') || n.includes('检索') || n.includes('精读') || i.includes('literature') || i.includes('search') || i.includes('deepread')){
+    return `<span class="as-role-badge literature" title="${esc(name||'文献研究专家')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg></span>`;
+  }
+  if(n.includes('写作') || n.includes('撰写') || n.includes('润色') || i.includes('writing') || i.includes('writer')){
+    return `<span class="as-role-badge writing" title="${esc(name||'学术写作专家')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg></span>`;
+  }
+  if(n.includes('数据') || n.includes('分析') || n.includes('抽取') || i.includes('data') || i.includes('analytics') || i.includes('extractor')){
+    return `<span class="as-role-badge analytics" title="${esc(name||'数据分析专家')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg></span>`;
+  }
+  if(n.includes('终检') || n.includes('自证') || n.includes('验收') || n.includes('审查') || n.includes('审核') || i.includes('check') || i.includes('auditor') || i.includes('review')){
+    return `<span class="as-role-badge auditor" title="${esc(name||'终检验收专家')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-4"></path></svg></span>`;
+  }
+  if(n.includes('代码') || n.includes('工程') || i.includes('pony') || n.includes('pony')){
+    return `<span class="as-role-badge dev" title="${esc(name||'开发专家')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg></span>`;
+  }
+  return `<span class="as-role-badge general" title="${esc(name||'专家助手')}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z"></path></svg></span>`;
+}
+
 function asAvatarOf(a, size){
   const px = size||42;
-  return `<span class="as-av" style="width:${px}px;height:${px}px;font-size:${Math.round(px*0.55)}px">${esc(a&&a.avatar || "👨‍🔬")}</span>`;
+  const av = String(a&&a.avatar||'').trim();
+  if(av && (av.startsWith('data:image/') || av.startsWith('/') || av.startsWith('http'))){
+    return `<span class="as-av has-img" style="width:${px}px;height:${px}px"><img src="${esc(av)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:8px"></span>`;
+  }
+  if(av && /\p{Extended_Pictographic}/u.test(av)){
+    return `<span class="as-av" style="width:${px}px;height:${px}px;font-size:${Math.round(px*0.55)}px">${esc(av)}</span>`;
+  }
+  return `<span class="as-av has-role" style="width:${px}px;height:${px}px">${assistantRoleIcon(a&&a.name, a&&a.id)}</span>`;
 }
 /* 对话标题使用绑定的专家头像，默认显示智研管家。 */
 function faceOf(a, px){
@@ -645,6 +680,26 @@ function renderAgent(m){
           <p class="at-hint">Enter 发送 · Shift + Enter 换行 · ↑↓ 翻找输入历史 · 运行中点击 ■ 或按 Esc 中断</p>
       </div>
     </section></div>`;
+  if(typeof SplitResizer !== "undefined"){
+    const agentEl = m.querySelector(".agent");
+    if(agentEl && !agentEl.dataset.resizerBound){
+      agentEl.dataset.resizerBound = "true";
+      SplitResizer.bind(agentEl, {
+        mode: "fixed-left",
+        storageKey: "agent-history",
+        defaultSize: 236,
+        min: 160,
+        max: 380,
+        cssVar: "--agent-hist-w",
+        onResize: (w) => {
+          if(w > 80 && ahCollapsed){
+            ahCollapsed = false;
+            agentEl.classList.remove("ah-collapsed");
+          }
+        }
+      });
+    }
+  }
   const tEl = $("at-title");
   if(tEl && cur) tEl.onclick = ()=>{          // 点标题原地改名
     const inp = document.createElement("input");
@@ -725,8 +780,9 @@ function renderAgent(m){
     try{if(!curChat){const result=await api('/api/chat/create',{});curChat=result.chat.id;localStorage.setItem('rw-chat',curChat);await refreshState(false);}
       const chatId=curChat;await AgentRuntime.save(chatId,key,value);if(route()==='agent'&&curChat===chatId)$('atRuntimeHint').textContent='已保存，下次发送生效';
     }catch(error){uiNotify('会话设置保存失败：'+error.message);}
-    finally{if(route()==='agent')document.querySelectorAll('#atRuntime select').forEach(select=>select.disabled=false);}
+    finally{if(route()==='agent'){document.querySelectorAll('#atRuntime select').forEach(select=>select.disabled=false);AgentRuntime.effective('at',curChat);}}
   };
+  AgentRuntime.effective('at',curChat);
      $("assist").onchange = async (e)=>{
        if(!curChat){ uiNotify("先新建一个对话，再选专家。"); return; }
        try{ await api("/api/chat/assistant", {id:curChat, assistant_id:e.target.value}); }catch(err){ return uiNotify("绑定失败："+err.message); }
@@ -843,15 +899,6 @@ function renderTrajectory(box){
   box.classList.add('at-trajectory');const chat=(S.chats||[]).find(row=>row.id===curChat),id=curChat;
   WorkspaceTrajectory.mount(box,{chatId:id,projectId:chat?.task_id||'',live:()=>route()==='agent'&&curChat===id&&agentView==='trajectory'});
 }
-const chatActivityLabels = {
-  chat_waiting: "正在准备上下文…",
-  chat_reconnecting: "对话连接中断，正在重连…",
-  reasoning_start: "等待模型响应…",
-  reasoning_delta: "模型正在思考…",
-  tool_call: "正在运行工具…",
-  tool_result: "正在处理工具结果…",
-};
-
 function assistantSpeaker(box, event, fallback){
   const experts = S.assistants || [];
   const sender = event.sender || event.assistant_name || (event.type==='team' ? event.name : '') || '';
@@ -868,42 +915,34 @@ function assistantSpeaker(box, event, fallback){
     expert = experts.find(item=>item.id===id);
   }
   const name = displayName(sender || expert?.name || (id==='builtin-steward'?'智研管家':'执行专家'));
-  return {id:expert?.id || id, name, avatar:expert?.avatar || event.assistant_avatar || event.emoji || [...name][0]};
+  return {id:expert?.id || id, name, avatar:expert?.avatar || event.assistant_avatar || event.emoji || ''};
 }
 
 function speakerAvatar(who, className='msg-ava'){
-  return `<span class="${className}" aria-hidden="true">${who.id==='builtin-steward'?`<img src="${Q_AV}" alt="">`:esc(who.avatar)}</span>`;
+  if(!who) return `<span class="${className}" aria-hidden="true">${assistantRoleIcon()}</span>`;
+  if(who.id==='builtin-steward' || who.name==='智研管家'){
+    return `<span class="${className} has-steward" aria-hidden="true" title="智研管家"><img src="${Q_AV}" alt=""></span>`;
+  }
+  const av = String(who.avatar||'').trim();
+  if(av && (av.startsWith('data:image/') || av.startsWith('/') || av.startsWith('http://') || av.startsWith('https://'))){
+    return `<span class="${className} has-img" aria-hidden="true" title="${esc(who.name)}"><img src="${esc(av)}" alt=""></span>`;
+  }
+  if(av && /\p{Extended_Pictographic}/u.test(av)){
+    return `<span class="${className} has-emoji" aria-hidden="true" title="${esc(who.name)}">${esc(av)}</span>`;
+  }
+  return `<span class="${className} has-role-icon" aria-hidden="true">${assistantRoleIcon(who.name, who.id)}</span>`;
 }
 
-function updateChatActivity(box, type, who){
-  let status = box.querySelector(".chat-activity");
-  if(!status && type === "chat_waiting"){
-    status = document.createElement("div");
-    status.className = "chat-activity";
-    status.setAttribute("role","status");
-    status.innerHTML = '<span class="chat-activity-speaker"></span><span class="chat-activity-dots" aria-hidden="true"><i></i><i></i><i></i></span><span></span>';
-  }
-  if(!status) return;
-  if(["done","error","cancelled"].includes(type)){ status.remove(); return; }
-  if(["assistant_delta","assistant","team"].includes(type)){ status.hidden = true; return; }
-  const label = chatActivityLabels[type];
-  if(!label) return;
-  if(who){
-    const speaker = status.firstElementChild;
-    const avatar = speakerAvatar(who);
-    if(speaker.__avatar !== avatar){speaker.innerHTML=avatar;speaker.__avatar=avatar;}
-    speaker.title=who.name;
-  }
-  const text = status.lastElementChild;
-  if(text.textContent !== label) text.textContent = label;
-  status.hidden = false;
-  if(status !== box.lastElementChild) box.appendChild(status);
-  box.scrollTop = box.scrollHeight;
+function updateChatActivity(box, type, who, event){
+  ChatPresentation.activity(box,type,who,event);
 }
 
 function appendOne(box,ev,who){
+  return ChatPresentation.append(box,ev,()=>appendChatEvent(box,ev,who));
+}
+function appendChatEvent(box,ev,who){
   who = assistantSpeaker(box,ev,who);
-  updateChatActivity(box,ev.type,who);
+  updateChatActivity(box,ev.type,who,ev);
   if(ev.type === "chat_waiting") return;
   if(ev.type==='template_used'){PromptUI.event(box,ev);return;}
   if(ev.type.startsWith("reasoning_")){
@@ -914,13 +953,13 @@ function appendOne(box,ev,who){
       card=document.createElement("details"); card.className="reasoning-card";
       card.dataset.reasoningId=ev.id||"";
       card.innerHTML='<summary><span class="reasoning-icon">◌</span><span class="reasoning-label">等待模型响应…</span><span class="disclosure-arrow">›</span></summary><div class="md reasoning-body"></div>';
-      box.appendChild(card);
+      ChatPresentation.process(box,ev).appendChild(card);
     }
     card.classList.toggle("running",ev.type!=="reasoning_done");
     card.__content=ev.type==="reasoning_delta" ? (card.__content||"")+(ev.content||"") : (ev.content||card.__content||"");
-    card.querySelector(".reasoning-label").textContent=ev.type==="reasoning_done" ? `思考摘要 · ${(Number(ev.duration_ms||0)/1000).toFixed(1)} 秒` : (card.__content?"思考摘要生成中…":"等待模型响应…");
+    card.querySelector(".reasoning-label").textContent=ev.type==="reasoning_done" ? `过程摘要${ev.duration_ms!=null?' · '+ChatPresentation.duration(ev.duration_ms):''}` : (card.__content?"过程摘要生成中…":"等待模型响应…");
     card.querySelector(".reasoning-body").innerHTML=md(card.__content);
-    box.scrollTop=box.scrollHeight; return;
+    return;
   }
   if(ev.type==="assistant_delta"){
     let row=[...box.querySelectorAll('.msg-assistant.streaming')].findLast(node=>ev.message_id?node.dataset.messageId===ev.message_id:node.dataset.subId===(ev.sub||''));
@@ -933,13 +972,13 @@ function appendOne(box,ev,who){
     row.__content=(row.__content||"")+(ev.content||"");
     row.querySelector(".md").innerHTML=md(row.__content);
     row.querySelector(".msg-copy").onclick=()=>navigator.clipboard.writeText(row.__content||"");
-    box.scrollTop=box.scrollHeight; return;
+    return;
   }
   if(ev.replay && ev.type==="assistant" && (ev.events||[]).length){
     // 事件流里已含这条回复的 assistant 文本：嵌套事件画过 assistant 行就不再画外层整条，否则重复一整行。
     // 没有 assistant 事件的老消息（只有 usage / 空回复）照旧走整条渲染，内容不丢。
     const before = box.querySelectorAll(".msg-row.msg-assistant").length;
-    ev.events.forEach(e=>appendOne(box,e,who));
+    ev.events.forEach(e=>appendOne(box,{...e,replay:true},who));
     if((ev.events||[]).some(e=>e.type==="assistant" && String(e.content||'').trim()===String(ev.content||'').trim()) && box.querySelectorAll(".msg-row.msg-assistant").length > before) return;
   }
   const el=document.createElement("div");
@@ -950,7 +989,8 @@ function appendOne(box,ev,who){
   }
   else if(ev.type==="assistant"){
     if(ev.message_id&&[...box.querySelectorAll('.msg-assistant:not(.streaming)')].some(node=>node.dataset.messageId===ev.message_id))return;
-    const statusName={queued:'排队中',running:'执行中',failed:'执行失败',interrupted:'中断待恢复',cancelled:'已停止'}[ev.status]||'完成';
+    if(!String(ev.content||'').trim()&&['running','queued'].includes(ev.status))return;
+    const statusName={queued:'排队中',running:'执行中',awaiting_review:'等待人工核查',blocked:'等待处理',failed:'执行失败',interrupted:'中断待恢复',cancelled:'已停止',delivered:'已交付',succeeded:'节点输出已生成'}[ev.status]||'回复已结束';
      const streaming=[...box.querySelectorAll('.msg-assistant.streaming')].findLast(node=>ev.message_id?node.dataset.messageId===ev.message_id:node.dataset.subId===(ev.sub||''));
      if(streaming) streaming.remove();
      el.className="msg-row msg-assistant";
@@ -972,35 +1012,39 @@ function appendOne(box,ev,who){
       const roleLabel={literature:"文献检索",evidence:"原文取证",analysis:"数据分析",review:"独立评审"}[ev.role]||"独立子任务";
       el.innerHTML=`<span class="sub-ico">⤷</span><span class="sub-title">${esc(ev.sub_title||"子任务")}</span>
         <span class="sub-note">${esc(roleLabel)} · 独立上下文</span><span class="sub-state">运行中…</span>`;
-      box.appendChild(el); box.scrollTop=box.scrollHeight; return;
+      ChatPresentation.process(box,ev).appendChild(el); return;
     }
-    const row=$("sub-"+ev.sub);
+    const row=[...box.querySelectorAll('.sub-row')].findLast(node=>node.id==='sub-'+ev.sub);
     if(row){
       row.classList.add(ev.ok===false?"bad":"done");
       const st=row.querySelector(".sub-state"); if(st) st.textContent=ev.ok===false?"失败":"完成";
       const nt=row.querySelector(".sub-note"); if(nt) nt.textContent=ev.summary||"（已回摘要）";
     }
-    box.scrollTop=box.scrollHeight; return;
+    return;
   }
   else if(ev.type==="tool_call"){
     const toolKey=[ev.id,ev.round,ev.sub].join(':');
     if(ev.id&&[...box.querySelectorAll('.tool-card')].some(node=>node.dataset.toolKey===toolKey&&!node.dataset.complete))return;
-    el.className="tool-card"; el.id="tc"+(seq++); el.dataset.callId=ev.id||"";el.dataset.toolKey=toolKey;el.dataset.toolName=ev.name||'';el.dataset.round=String(ev.round??'');
+    el.className="tool-card"; el.id="tc"+(seq++); el.dataset.callId=ev.id||"";el.dataset.toolKey=toolKey;el.dataset.toolName=ev.name||'';el.dataset.round=String(ev.round??'');el.dataset.subId=ev.sub||'';
+    el.dataset.toolArgs=JSON.stringify(ev.args||{});
     const inputContent=JSON.stringify(ev.args||{},null,2);
-    el.innerHTML=`<details><summary><span class="disclosure-arrow">›</span><span class="tool-name">工具调用 · ${esc(ev.name)}</span>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}
-      <span class="tool-detail">调用中…</span><span class="tool-dur">进行中</span></summary>
+    el.innerHTML=`<details><summary><span class="disclosure-arrow">›</span><span class="tool-name" title="${esc(ev.name)}">${esc(ChatPresentation.toolLabel(ev.name))}</span>${ev.sub?`<span class="sub-tag">⤷ ${esc(ev.sub_title||"")}</span>`:""}
+      <span class="tool-detail"></span><span class="tool-dur">执行中</span></summary>
       <div class="tool-body"><div class="tool-blk-row"><span class="tool-blk">输入参数</span><button type="button" class="tool-copy-btn" title="复制输入参数">复制</button></div><pre>${esc(inputContent)}</pre><div class="tool-output"></div></div></details>`;
+    if(!ev.replay || ['running','queued'].includes(ev.status))ChatPresentation.clock(el.querySelector('.tool-dur'),ev.at?Date.parse(ev.at):Date.now(),'执行中 · ');
     const copyIn=el.querySelector(".tool-copy-btn");
     if(copyIn) copyIn.onclick=e=>{e.stopPropagation();navigator.clipboard.writeText(inputContent).then(()=>{copyIn.textContent='已复制';setTimeout(()=>copyIn.textContent='复制',1500);});};
-    box.appendChild(el); box.scrollTop=box.scrollHeight; return;
+    ChatPresentation.process(box,ev).appendChild(el); return;
   }
   else if(ev.type==="tool_result"){
     const cards=box.querySelectorAll(".tool-card");
-    const card=[...cards].findLast(c=>(ev.id?c.dataset.callId===ev.id:c.dataset.toolName===ev.name)&&(ev.round==null||c.dataset.round===String(ev.round)));
+    const card=[...cards].findLast(c=>(ev.id?c.dataset.callId===ev.id:c.dataset.toolName===ev.name)&&(ev.round==null||c.dataset.round===String(ev.round))&&c.dataset.subId===(ev.sub||''));
     if(card){
       card.dataset.complete='true';card.classList.toggle("bad",ev.ok===false);
-      const d=card.querySelector(".tool-detail"); if(d) d.textContent=ev.summary||"";
-      const u=card.querySelector(".tool-dur"); if(u) u.textContent=(ev.ok?"完成":"失败")+(ev.duration_ms!=null?' · '+(ev.duration_ms/1000).toFixed(1)+' 秒':'');
+      const d=card.querySelector(".tool-detail"); if(d) d.textContent=ChatPresentation.toolSummary(ev);
+      const u=card.querySelector(".tool-dur"); if(u){delete u.dataset.chatClockStart;u.textContent=(ev.ok===false?"失败":"已完成")+(ev.duration_ms!=null?' · '+ChatPresentation.duration(ev.duration_ms):'');u.title=ev.duration_ms!=null?ev.duration_ms+' 毫秒':'';}
+      if(ev.ok===false){const group=card.closest('.chat-process');if(group)group.open=true;}
+      else [...cards].filter(previous=>previous!==card&&previous.classList.contains('bad')&&previous.dataset.toolName===card.dataset.toolName&&previous.dataset.toolArgs===card.dataset.toolArgs&&previous.dataset.subId===card.dataset.subId).forEach(previous=>{previous.dataset.recovered='true';previous.classList.add('recovered');previous.querySelector('.tool-dur').textContent='先前失败 · 重试成功';});
       const b=card.querySelector(".tool-output");
       const outputContent=ev.result==null?ev.summary||'':typeof ev.result==='string'?ev.result:JSON.stringify(ev.result,null,2);
       if(b){
@@ -1008,7 +1052,7 @@ function appendOne(box,ev,who){
         const copyOut=b.querySelector(".tool-copy-btn");
         if(copyOut) copyOut.onclick=e=>{e.stopPropagation();navigator.clipboard.writeText(outputContent).then(()=>{copyOut.textContent='已复制';setTimeout(()=>copyOut.textContent='复制',1500);});};
       }
-      if(ev.ok&&ev.navigation)WorkflowReview.mount(card,ev.navigation);
+      if(ev.ok&&ev.navigation){WorkflowReview.mount(card,ev.navigation);const group=card.closest('.chat-process');if(group)group.open=true;}
       if(ev.ok&&ev.name==='zotero_staged_import'&&ev.result?.plan_token&&ev.result.actions?.length&&!ev.result.conflicts?.length){
         const preview=ev.result;
         const button=document.createElement('button');button.type='button';button.className='btn ghost';
@@ -1030,12 +1074,12 @@ function appendOne(box,ev,who){
         card.append(button);
       }
     }
-    box.scrollTop=box.scrollHeight; return;
+    return;
   }
   else return;
   const copy=el.querySelector(".msg-copy");
   if(copy) copy.onclick=()=>navigator.clipboard.writeText(ev.content||"").then(()=>uiNotify("已复制"),()=>uiNotify("复制失败"));
-  box.appendChild(el); box.scrollTop=box.scrollHeight;
+  box.appendChild(el);
 }
 /* ---------------- 附件（+ 菜单 / 拖放 / 粘贴，同一套入口） ---------------- */
 const atts = [];                                  // 待发送附件；页签重渲染不丢
@@ -1162,7 +1206,8 @@ async function observeAgentRun(run, onEvent, remember, disconnected){
             const line = block.split("\n").find(l=>l.startsWith("data: ")); if(!line) continue;
             const id = Number((block.split("\n").find(l=>l.startsWith("id: ")) || "id: 0").slice(4));
             if(id && id <= run.cursor) continue;
-            const wire = JSON.parse(line.slice(6)), ev = wire.payload || wire;
+            const wire = JSON.parse(line.slice(6)), ev = {...(wire.payload || wire)};
+            if(wire.created_at&&!ev.at)ev.at=wire.created_at;
             run.cursor = id || run.cursor;
             if(ev.type === "run_started"){
               run.runId = ev.run_id; remember(run); continue;
@@ -1248,13 +1293,26 @@ async function send(){
   if(activeAgentRun) return cancelAgentRun();
   if(!(await requireModelKey())) return;          // 没配 Key：先提示去设置，不发请求
   const ta=$("ask"); const text=ta.value.trim(); if(!text && !atts.length) return;
-  // 没对话（或 localStorage 里那条已经删了）就直接发 → 自动新建一条不绑项目的对话，不弹框拦人
+  // 没对话（或 localStorage 里那条已经删了）就直接发 → 自动新建一条以第一句话命名的对话，不弹框拦人
+  const firstSentenceTitle = (raw) => {
+    const clean = chatUserInputKey(raw || "").replace(/^[#>*\-\s]+/, "").trim();
+    const first = (clean.split(/\r?\n/).find(l => l.trim()) || "").trim();
+    if (!first) return "新对话";
+    return first.length > 30 ? first.slice(0, 30) + "…" : first;
+  };
   if(!curChat || !(S.chats||[]).some(c=>c.id===curChat)){
     try{
-      const r = await api("/api/chat/create", {title:""});
+      const r = await api("/api/chat/create", {title: firstSentenceTitle(text)});
       curChat = r.chat.id; localStorage.setItem("rw-chat", curChat);
       await refreshState(false); render();        // 侧栏与抬头立刻换成这条新对话
     }catch(e){ return uiNotify("新建对话失败：" + e.message); }
+  } else {
+    const existingChat = (S.chats||[]).find(c=>c.id===curChat);
+    if(existingChat && ["", "新对话", "新的课题讨论", "课题讨论", "新会话"].includes((existingChat.title||"").trim()) && text){
+      const nextTitle = firstSentenceTitle(text);
+      existingChat.title = nextTitle;
+      api("/api/chat/rename", {id: curChat, title: nextTitle}).catch(()=>{});
+    }
   }
   const msg = atts.length ? (text?text+"\n\n":"") + "[附件]\n" + atts.map(a=> a.url ? `- ${a.url}`
       : `- ${a.name}${a.paper_id?`（已入库 PDF，paper_id=${a.paper_id}，${a.pages} 页）`:`（本地文件：${a.path}）`}`).join("\n") : text;

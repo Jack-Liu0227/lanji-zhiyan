@@ -8,6 +8,25 @@ import usage_stats
 
 
 class UsagePricingTest(unittest.TestCase):
+    def test_persisted_request_limit_stops_second_transport_call(self):
+        from unittest.mock import patch
+        import runtime
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+            with workflow.WorkflowDB(Path(folder) / 'budget.sqlite3') as db:
+                model = db.add_model('Fixture', 'http://localhost:8/v1', 'fixture')
+                profile = {**model, '_usage_context': {'db_path': str(db.path), 'source': 'conversation',
+                                                       'budget_key': 'conversation:test'}}
+                usage_stats.route('POST', '/api/usage/budgets', {'scope': 'conversation', 'requests': 1}, {}, db)
+                with patch.object(runtime, '_call_wire_openai_completions', return_value={'content': 'ok'}) as request:
+                    messages = [{'role': 'user', 'content': 'fixture'}]
+                    runtime.call(profile, messages)
+                    with self.assertRaisesRegex(runtime.BudgetExceededError, '未发送'):
+                        runtime.call(profile, messages)
+                    self.assertEqual(request.call_count, 1)
+                records = usage_stats.report(db, {})['requests']
+                self.assertEqual([row['source'] for row in records], ['conversation'])
+                self.assertIsNone(records[0]['prompt_tokens'])
+
     def row(self, **kwargs):
         return {'prompt_tokens':1000, 'output_tokens':200, 'cached_tokens':800,
                 'cache_write_tokens':0, 'created_at':'2026-10-28T15:00:00+00:00', **kwargs}

@@ -8,6 +8,7 @@ import uuid
 
 
 MODES = frozenset(("supervised", "full_access"))
+WORKFLOW_REVIEW_MODES = frozenset(("human_review", "auto"))
 _ROLE = re.compile(r"^[A-Za-z0-9_.:-]{1,120}$")
 
 
@@ -196,6 +197,24 @@ def list_bindings(db, project_id):
             binding.update(available=False, disabled_reason=str(exc))
         result.append(binding)
     return result
+
+
+def workflow_review_mode(db):
+    import service_settings
+    if not _table(db, "service_settings"):
+        return "human_review"
+    sec = service_settings.read(db, "security")
+    return "auto" if str(sec.get("workflow_review_mode") or "") == "auto" else "human_review"
+
+
+def set_workflow_review_mode(db, mode):
+    import service_settings
+    if mode not in WORKFLOW_REVIEW_MODES:
+        raise ValueError("workflow_review_mode 只能是 human_review 或 auto")
+    sec = service_settings.read(db, "security")
+    sec["workflow_review_mode"] = mode
+    service_settings.write(db, "security", sec)
+    return mode
 
 
 def settings(db, project_id):

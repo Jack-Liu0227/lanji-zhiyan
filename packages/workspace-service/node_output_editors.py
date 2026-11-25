@@ -11,6 +11,8 @@ MAX_STRUCTURED_BYTES = 8 * 1024 * 1024
 def describe(snapshot, node):
     if node.get('node_kind') == 'tool':
         return 'tool'
+    if node.get('output_contract', {}).get('required_files'):
+        return 'files'
     stage = node.get('step', node.get('stage', 'task'))
     return {'idea': 'idea', 'search': 'table', 'download': 'papers', 'notes': 'bilingual',
             'map': 'evidence_graph', 'entrans': 'bilingual', 'review': 'checklist',

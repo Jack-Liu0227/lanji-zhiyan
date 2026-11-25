@@ -12,10 +12,11 @@ const ProjectResources=(()=>{
     return `<li class="pr-item-row">
       <span class="pr-kind" data-kind="${h(row.kind)}">${labels[row.kind]||'文件'}</span>
       <button type="button" class="pr-item" data-pr-item="${index}" title="${h(location)}">
-        <strong>${h(title)}</strong><small>${h(location)}</small>
+        <strong>${h(title)}</strong><small>${h(location)}</small>${row.produced_by?`<small>${h(row.produced_by.node_label)}${row.produced_by.attempt?' · 第 '+h(row.produced_by.attempt)+' 次执行':''} · ${row.produced_by.is_snapshot?'固定核查版本':'当前工作文件'}${row.produced_by.working_relative?' · 工作文件 '+h(row.produced_by.working_relative):''}</small>`:''}
       </button>
       ${status?`<span class="pr-review-state" data-status="${h(row.review_status)}">${status}</span>`:''}
       <div class="pr-item-actions">
+        ${row.produced_by?.workflow_run_id?`<button type="button" class="pw-text-button" data-pr-action="workflow" data-pr-row="${index}">来源流程</button>`:''}
         ${canUse?`<button type="button" class="pw-text-button" data-pr-action="reference" data-pr-row="${index}" title="引用到对话">引用</button><button type="button" class="pw-text-button" data-pr-action="handoff" data-pr-row="${index}" title="交给默认执行者">交给处理</button>`:''}
         <button type="button" class="btn ghost" data-pr-item="${index}" aria-label="${row.exists?'打开':'查看记录'}：${h(title)}">${row.exists?'打开':'查看记录'}</button>
       </div>
@@ -101,6 +102,7 @@ const ProjectResources=(()=>{
           try{
             if(button.dataset.prAction==='reference')await ProjectWorkspace.referenceResource(row,projectId);
             else if(button.dataset.prAction==='handoff')await ProjectWorkspace.handoffResource(row,projectId);
+            else if(button.dataset.prAction==='workflow')await ProjectWorkspace.openWorkflowDock(projectId,row.produced_by.workflow_run_id,row.produced_by.node_id);
             else await openItem(row,projectId);
           }catch(error){if(live())err.textContent=error.message;}
           finally{if(button.isConnected)button.disabled=false;}

@@ -605,8 +605,10 @@ def command(db, task_id, body, *, authority):
         import project_task_execution
         node = task['metadata'].get('node_config') or {}
         specs, _ = project_task_execution._tools(db, task, run, node)
-        readonly_tools = [spec['function']['name'] for spec in specs
-                          if spec['function']['name'] in ('doc_read', 'map_read', 'workflow_context_read', 'library_overview', 'asset_read', 'project_sources', 'paper_info', 'note_read')]
+        allowed_names = ('doc_read', 'map_read', 'workflow_context_read', 'library_overview', 'asset_read',
+                         'project_sources', 'paper_info', 'note_read', 'web_search', 'read_pdf', 'doc_search',
+                         'scholar_search', 'pdf_read', 'search', 'calculator')
+        readonly_tools = [spec['function']['name'] for spec in specs if spec['function']['name'] in allowed_names]
         job = agent_jobs.start(db.path, {'task_id': task['chat_id'], 'message': prompt,
                                         'executor_binding_id': task['executor_binding_id'], 'member_id': task['member_id'],
                                         '_node_discussion': True, '_node_discussion_tools': readonly_tools,

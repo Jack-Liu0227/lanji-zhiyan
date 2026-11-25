@@ -189,10 +189,11 @@ class FollowupAuditTest(unittest.TestCase):
 
     def test_embedding_response_cannot_resurrect_deleted_project(self):
         self.db.save_md_note("", "Delete while indexing", "ORPHAN_AUDIT_NEEDLE pending embedding data. " * 4, task_id=self.pid)
-        def delete_during_embed(texts, cfg):
-            with workflow.WorkflowDB(self.db.path) as other:
-                other.delete_task(self.pid)
-            return self.embed(texts, cfg)
+        def delete_during_embed(texts, cfg, timeout=120):
+            if any("ORPHAN_AUDIT_NEEDLE" in text for text in texts):
+                with workflow.WorkflowDB(self.db.path) as other:
+                    other.delete_task(self.pid)
+            return self.embed(texts, cfg, timeout=timeout)
         with patch.object(semantic, "embed", side_effect=delete_during_embed):
             semantic.sync(self.db)
         for table in ("sem_chunks", "sem_state", "sem_fts"):

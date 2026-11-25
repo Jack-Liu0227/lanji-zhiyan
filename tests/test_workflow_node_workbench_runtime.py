@@ -116,6 +116,7 @@ class WorkflowNodeWorkbenchRuntimeTest(unittest.TestCase):
             self.page.locator('.wnw-added').first.wait_for()
             self.capture('node-version-diff')
             self.assertIn('BROWSER_WORKBENCH_DRAFT', self.page.locator('[data-wnw-diff-body]').inner_text())
+            self.page.locator('[data-wnw-drawer-toggle]').click()
             self.page.locator('[data-wnw-instruction]').fill('CHECK_CURRENT_WORKBENCH_REVISION and preserve its evidence')
             self.page.locator('[data-wnw-rework]').click()
             updated = self.poll_json('/api/project-tasks/detail?project_id=' + self.pid + '&id=' + draft['id'],
@@ -131,6 +132,7 @@ class WorkflowNodeWorkbenchRuntimeTest(unittest.TestCase):
             self.assertTrue(following['node_result']['available'])
             self.page.locator('[data-wnw-origin]').click()
             self.page.locator('[data-wr-result="' + following['id'] + '"]').first.click()
+            self.page.locator('[data-wnw-drawer-toggle]').click()
             self.page.locator('[data-wnw-tool-fields]').wait_for()
             self.capture('node-fixed-tool')
             self.assertTrue(self.page.locator('[data-wnw-save]').is_disabled())
@@ -363,11 +365,13 @@ class WorkflowNodeWorkbenchRuntimeTest(unittest.TestCase):
         first_node = self.page.locator('[data-pw-run-list] .pw-output').filter(has_text='Reading workflow / Read first source')
         first_node.get_by_role('button', name='查看节点状态').click()
         self.page.locator('[data-wnw-step="' + check_id + '"]').click()
-        self.page.locator('[data-wnw-title]').get_by_text('Reading workflow / Check sources', exact=True).wait_for()
+        self.page.locator('[data-wnw-title]').get_by_text('Step 2: Reading workflow / Check sources', exact=True).wait_for()
+        self.assertEqual(self.page.locator('[data-wnw-step][aria-current="step"]').get_attribute('data-wnw-step'), check_id)
         self.page.locator('[data-wnw-step="' + read_id + '"]').click()
         self.page.locator('[data-wnw-start]').click()
         first = self.poll_json('/api/project-tasks/detail?project_id=' + self.pid + '&id=' + read_id,
                                lambda payload: payload['task']['status'] == 'awaiting_review')['task']
+        self.page.locator('[data-wnw-drawer-toggle]').click()
         tool_fields = self.page.locator('[data-wnw-tool-fields]')
         tool_fields.locator('summary').click()
         tool_fields.locator('[data-wnw-tool-args]').fill(json.dumps({'path': str(revised_path)}))
@@ -441,14 +445,16 @@ class WorkflowNodeWorkbenchRuntimeTest(unittest.TestCase):
             model.search_via_tool = True
             self.start(model)
             previous = None
-            for node_id, stage in zip(node_ids, stages):
+            for step_number, (node_id, stage) in enumerate(zip(node_ids, stages), start=1):
                 response = self.poll_json('/api/project-tasks?project_id=' + self.pid,
                     lambda data: any(t['workflow_node_id'] == node_id and t['status'] == 'awaiting_review' for t in data['tasks']))
                 task = next(t for t in response['tasks'] if t['workflow_node_id'] == node_id)
                 if previous and stage != 'write':
                     self.assertIn(previous, json.dumps(model.node_requests[-1], ensure_ascii=False))
-                self.page.evaluate('async value=>ProjectWorkspace.openTask(value.id,value.project)', {'id': task['id'], 'project': self.pid})
-                self.page.wait_for_function("s=>document.querySelector('[data-wnw-title]')?.textContent==='Stage '+s", arg=stage)
+                self.page.evaluate('async value=>ProjectWorkspace.openTask(value.id,value.project,{peek:false})', {'id': task['id'], 'project': self.pid})
+                self.page.wait_for_function("title=>document.querySelector('[data-wnw-title]')?.textContent===title",
+                                            arg=f'Step {step_number}: Stage {stage}')
+                self.assertEqual(self.page.locator('[data-wnw-step][aria-current="step"]').get_attribute('data-wnw-step'), task['id'])
                 self.assertEqual(self.page.locator('.pw-task-detail').count(), 0)
                 self.assertEqual(self.page.locator('[data-wnw-step]').count(), len(stages))
                 artifact = self.page.request.get(self.url + 'api/project-tasks/node-result?project_id=' + self.pid + '&id=' + task['id']).json()['result']

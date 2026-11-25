@@ -205,9 +205,98 @@ def recover(db_path):
             if key not in _workers:
                 if detail(db, row["id"])["settings"].get("prepared"):
                     continue
+                task_statuses = [
+                    r["status"]
+                    for r in db.db.execute("SELECT status FROM project_tasks WHERE workflow_run_id=?", (row["id"],)).fetchall()
+                ]
+                if task_statuses and "awaiting_review" in task_statuses and not any(
+                    s in ("running", "interrupted", "failed") for s in task_statuses
+                ):
+                    _status(db, row["id"], "awaiting_review", "")
+                    continue
+                if task_statuses and all(s in ("delivered", "succeeded") for s in task_statuses):
+                    _status(db, row["id"], "succeeded", "")
+                    continue
                 db.db.execute("UPDATE workflow_nodes SET status='interrupted',error='服务重启，请核对产物后重试' "
                               "WHERE run_id=? AND status='running'", (row["id"],))
                 _status(db, row["id"], "interrupted", "服务重启，已保存节点上下文；请核对当前产物后重试")
+
+
+def resume(db, run_id, *, restart_node=False, node_id='', request_key='', expected_task_run_id='', authority=None, allow_model_switch=False, model_id=''):
+    import project_tasks
+    import workflow_tasks
+    with _lock:
+        run = detail(db, run_id)
+        authority = authority or project_tasks.CommandContext.ui(run['project_id'])
+        project_tasks._authority(authority, run['project_id'])
+        if authority.parent_task_id:
+            raise ValueError('节点任务不能自行恢复整个工作流')
+        if restart_node and authority.source == 'agent':
+            raise ValueError('重新执行本节点须由用户明确操作')
+        model_id = str(model_id or '').strip()
+        if model_id:
+            allow_model_switch = True
+        receipts = run['settings'].get('resume_requests', {})
+        signature = {'node_id': node_id, 'restart_node': restart_node, 'expected_task_run_id': expected_task_run_id, 'allow_model_switch': bool(allow_model_switch), 'model_id': model_id}
+        if request_key and request_key in receipts:
+            if receipts[request_key] != signature:
+                raise ValueError('恢复请求标识已用于其他操作，请刷新后重试')
+            return run
+        if (str(Path(db.path).resolve()), run_id) in _workers:
+            raise ValueError('工作流仍在保存或等待其他分支结束，请稍后恢复')
+        if run["status"] not in ("failed", "blocked", "interrupted", "queued", "awaiting_review"):
+            raise ValueError("当前运行不能恢复，请先检查任务状态")
+        _exclusive(db, run)
+        run = workflow_tasks.compile_run(db, run)
+        tasks = project_tasks.list_tasks(db, run['project_id'], workflow_run_id=run_id)
+        if any(task['status'] == 'running' for task in tasks):
+            raise ValueError('工作流仍有节点执行中，请等待当前分支结束')
+        errors = dict(run['settings'].get('dag_errors', {}))
+        recoverable = []
+        for task in tasks:
+            attempt = task.get('latest_run') or {}
+            checkpoint = attempt.get('checkpoint', {})
+            nid = task['workflow_node_id']
+            if task['metadata'].get('node_config', {}).get('manual_execution') or checkpoint.get('waiting_children'):
+                continue
+            if task['status'] in ('delivered', 'awaiting_review', 'cancelled'):
+                continue
+            if task['status'] in ('failed', 'interrupted') or nid in errors or (
+                    task['status'] == 'blocked' and attempt.get('status') in ('failed', 'interrupted')):
+                recoverable.append(task)
+        targets = [task for task in recoverable if not node_id or task['workflow_node_id'] == node_id]
+        if not targets:
+            # Review approval queues continuations through its own command.
+            if run['status'] == 'queued' and not node_id:
+                kick(db.path, run_id)
+                return run
+            raise ValueError('没有可恢复的失败节点，请检查人工核查、人工提交或依赖状态')
+        if expected_task_run_id and (len(targets) != 1 or targets[0].get('latest_run_id') != expected_task_run_id):
+            raise ValueError('节点已有新的尝试，请刷新状态后重试')
+        for task in targets:
+            if (task.get('latest_run') or {}).get('checkpoint', {}).get('phase') == 'tool' and not restart_node:
+                raise ValueError('工具结果未确认，请核对后选择重新执行当前节点')
+        if run["settings"].get("handoff_id"):
+            import file_handoff
+            file_handoff.validate_run(db, run)
+        # Keep all non-target failures excluded when retrying a single branch.
+        for task in recoverable:
+            errors.setdefault(task['workflow_node_id'], (task.get('latest_run') or {}).get('error') or '节点等待恢复')
+        for task in targets:
+            nid = task['workflow_node_id']
+            project_tasks.start(db, task['id'], authority=authority,
+                                request_key=(request_key + ':' + nid) if request_key else '', restart=restart_node,
+                                allow_model_switch=allow_model_switch, model_id=model_id)
+            errors.pop(nid, None)
+            workflow_tasks._sync_workflow_node(db, run, project_tasks.get(db, task['id']))
+        run = detail(db, run_id)
+        run['settings']['dag_errors'] = errors
+        if request_key:
+            run['settings'].setdefault('resume_requests', {})[request_key] = signature
+        workflow_tasks._save(db, run)
+        _status(db, run_id, "queued")
+        kick(db.path, run_id)
+        return detail(db, run_id)
 
 
 def route(method, path, body, query, db):
@@ -216,6 +305,12 @@ def route(method, path, body, query, db):
         return None
     if method == "GET":
         project_id = (query.get("project_id") or [""])[0]
+        if path == prefix + "/preflight" and project_id:
+            import agent_settings
+            import project_workflows
+            template_id = (query.get("template_id") or [""])[0]
+            layout = project_workflows.current(db, project_id, template_id)
+            return agent_settings.preflight_layout(db, project_id, layout)
         if path == prefix and project_id and not query.get("id"):
             rows = db.db.execute(
                 "SELECT r.id, r.started_at, r.status, json_extract(e.layout_snapshot, '$.id') AS layout_id, "
@@ -233,13 +328,28 @@ def route(method, path, body, query, db):
         with _lock:
             return workflow_tasks.prepare_node(db, body)
     if action in ("prepare", "start"):
-        run = detail(db, run_id) if run_id else workflow_tasks.prepare(db,
+        existing = detail(db, run_id) if run_id else None
+        project_id = existing['project_id'] if existing else str(body.get('task_id') or body.get('project_id') or '')
+        if any(body.get(k) and str(body[k]) != project_id for k in ('task_id', 'project_id')):
+            raise ValueError('运行不属于当前项目')
+        origin_chat_id = ''
+        if 'chat_id' in body:
+            import workspace_trajectory
+            origin_chat_id = str(body.get('chat_id') or '')
+            workspace_trajectory.owner(db, origin_chat_id, project_id)
+        run = existing if existing else workflow_tasks.prepare(db,
             str(body.get("task_id") or body.get("project_id") or ""), body.get("goal", ""),
-            body.get("idempotency_key", ""), str(body.get("template_id") or ""))
+            body.get("idempotency_key", ""), str(body.get("template_id") or ""),
+            managed_artifacts=body.get("managed_artifacts", False),
+            review_mode=str(body.get("review_mode") or ""))
+        if origin_chat_id:
+            run['settings']['origin_chat_id'] = origin_chat_id
+            workflow_tasks._save(db, run)
         if any(body.get(k) and str(body[k]) != run["project_id"] for k in ("task_id", "project_id")):
             raise ValueError("运行不属于当前项目")
-        if body.get("autonomy_mode") is not None:
-            run = workflow_tasks.set_mode(db, run["id"], body["autonomy_mode"])
+        if body.get("autonomy_mode") is not None or body.get("review_mode") is not None:
+            run = workflow_tasks.set_mode(db, run["id"], str(body.get("autonomy_mode") or ""),
+                                          review_mode=str(body.get("review_mode") or ""))
         if action == "start":
             run["settings"]["prepared"] = False
             workflow_tasks._save(db, run)
@@ -261,40 +371,37 @@ def route(method, path, body, query, db):
                 if run["status"] == "queued":
                     kick(db.path, run_id)
             elif action == "mode":
-                run = workflow_tasks.set_mode(db, run_id, str(body.get("autonomy_mode") or ""))
+                run = workflow_tasks.set_mode(db, run_id, str(body.get("autonomy_mode") or ""),
+                                              review_mode=str(body.get("review_mode") or ""))
                 if run["status"] == "queued":
                     kick(db.path, run_id)
             elif action == "resume":
-                if run["status"] not in ("failed", "blocked", "interrupted", "queued"):
-                    raise ValueError("当前运行不能重试")
-                _exclusive(db, run)
-                import project_tasks
-                run = workflow_tasks.compile_run(db, run)
-                current = project_tasks.find_origin(db, "workflow_node", run["current_node"]) if run["current_node"] else None
-                if current:
-                    if body.get("restart_node") is True:
-                        old = next(n for n in run["nodes"] if n["id"] == run["current_node"])
-                        _checkpoint(db, old["id"], {**old["checkpoint"], "restart_approved": True})
-                        project_tasks.start(db, current["id"], authority=project_tasks.CommandContext.ui(run["project_id"]), restart=True)
-                    elif (current.get("latest_run") or {}).get("checkpoint", {}).get("phase") == "tool":
-                        raise ValueError("工具结果未确认，请核对后选择重新执行当前节点")
-                if run["settings"].get("handoff_id"):
-                    import file_handoff
-                    file_handoff.validate_run(db, run)
-                if run["settings"].get("dag_scheduler"):
-                    errors = run["settings"].get("dag_errors", {})
-                    node = (current or {}).get("workflow_node_id")
-                    if node not in errors and errors:
-                        node = next(iter(errors))
-                    errors.pop(node, None)
-                    workflow_tasks._save(db, run)
-                _status(db, run_id, "queued")
-                kick(db.path, run_id)
+                model_id = str(body.get('model_id') or '')
+                run = resume(db, run_id, restart_node=body.get("restart_node") is True,
+                             node_id=str(body.get('node_id') or ''), request_key=str(body.get('request_key') or ''),
+                             expected_task_run_id=str(body.get('expected_task_run_id') or ''),
+                             allow_model_switch=bool(body.get('allow_model_switch') is True or model_id),
+                             model_id=model_id)
             elif action == "cancel":
                 signal = _workers.get((str(Path(db.path).resolve()), run_id))
                 if signal:
                     signal.set()
                 run = workflow_tasks.cancel(db, run_id)
+            elif action == "delete":
+                if run["status"] == "running":
+                    raise ValueError("无法删除正在运行中的工作流，请先停止运行")
+                with db.db:
+                    db.db.execute("DELETE FROM workflow_runs WHERE id=?", (run_id,))
+                    db.db.execute("DELETE FROM workflow_executions WHERE run_id=?", (run_id,))
+                    task_ids = [r[0] for r in db.db.execute("SELECT id FROM project_tasks WHERE workflow_run_id=?", (run_id,)).fetchall()]
+                    for tid in task_ids:
+                        db.db.execute("DELETE FROM project_task_runs WHERE task_id=?", (tid,))
+                        db.db.execute("DELETE FROM project_task_deliveries WHERE task_id=?", (tid,))
+                        db.db.execute("DELETE FROM project_task_events WHERE task_id=?", (tid,))
+                        db.db.execute("DELETE FROM execution_conversations WHERE entity_id=?", (tid,))
+                    db.db.execute("DELETE FROM project_tasks WHERE workflow_run_id=?", (run_id,))
+                    db.db.execute("DELETE FROM execution_conversations WHERE entity_id=?", (run_id,))
+                return {"deleted": True, "id": run_id}
             else:
                 raise ValueError("不支持的工作流操作")
     return {"run": detail(db, run["id"])}

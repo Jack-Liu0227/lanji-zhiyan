@@ -49,7 +49,7 @@ CATCHUP_GRACE = 6 * 3600      # 启动补跑：错过超过 6 小时的点只重
 FREQ_LABELS = {"manual": "手动", "hourly": "每小时", "daily": "每天",
                "weekdays": "工作日", "weekly": "每周", "custom": "自定义 Cron"}
 RETRYABLE = {"failed", "blocked", "canceled", "partial"}
-RUN_STATUS = {"queued": "待执行", "running": "运行中", "completed": "完成", "partial": "部分完成",
+RUN_STATUS = {"queued": "待执行", "running": "运行中", "completed": "完成", "partial": "部分完成", "skipped": "跳过",
               "failed": "失败", "blocked": "已阻断", "canceled": "已取消",
               "awaiting_review": "等待人工审查", "interrupted": "中断待恢复"}
 
@@ -212,7 +212,7 @@ def next_run_at(expr: str, now: datetime | None = None) -> str:
     return nxt.isoformat(timespec="seconds") if nxt else ""
 
 
-def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None) -> dict[str, Any]:
+def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None, *, queued_id="") -> dict[str, Any]:
     key = (str(Path(_db_path()).resolve()), sched["id"])
     with _lock:
         if key in _running:
@@ -225,6 +225,8 @@ def run_once(sched: dict[str, Any], trigger: str = "scheduler", emit: Any = None
             if schedule_workflow.pending(db, sched['id']):
                 db.schedule_mark_run(sched['id'], sched.get('last_run_at', ''), next_run_at(sched['cron']))
                 return {'id': '', 'schedule_id': sched['id'], 'status': 'skipped', 'reason': '上次工作流仍在执行或等待审查'}
+        if queued_id:
+            return _run_once(sched, trigger, emit, signal.is_set, queued_id=queued_id)
         return _run_once(sched, trigger, emit, signal.is_set)
     finally:
         with _lock:
@@ -262,10 +264,10 @@ def archive_note(db, sched: dict, run: dict, content: str, output_asset: dict) -
     return note
 
 
-def _run_once(sched: dict[str, Any], trigger: str, emit: Any = None, cancel_check=None) -> dict[str, Any]:
+def _run_once(sched: dict[str, Any], trigger: str, emit: Any = None, cancel_check=None, *, queued_id="") -> dict[str, Any]:
     """跑一次并落运行记录。返回运行记录 dict。"""
     started = datetime.now()
-    run = {"id": uuid.uuid4().hex, "schedule_id": sched["id"], "name": sched["name"],
+    run = {"id": queued_id or uuid.uuid4().hex, "schedule_id": sched["id"], "name": sched["name"],
            "trigger": trigger, "status": "running", "started_at": started.isoformat(timespec="seconds"),
            "ended_at": "", "output_path": "", "summary": "", "reason": ""}
     with workflow.WorkflowDB(_db_path()) as db:
@@ -288,7 +290,7 @@ def _run_once(sched: dict[str, Any], trigger: str, emit: Any = None, cancel_chec
                                          run_id=run.get("workflow_run_id", ""), assets=run.get("output_assets"))
         return run
 
-    if not sched.get("enabled") and trigger != "manual":
+    if not current.get("enabled") and trigger != "manual":
         return finish("canceled", reason="任务已暂停")
     if not str(sched.get("project_id") or "").strip():
         return finish("blocked", reason="未绑定项目：Agent 需要项目上下文（本应用的 Agent 按项目组织）")
@@ -327,6 +329,68 @@ def _run_once(sched: dict[str, Any], trigger: str, emit: Any = None, cancel_chec
 _lock = threading.Lock()
 _running: dict[tuple[str, str], threading.Event] = {}
 _started = False
+_queue_workers = set()
+QUEUE_CONCURRENCY = 2
+
+
+def _enqueue(db, sched, trigger, now):
+    due = sched["next_run_at"]
+    if not due:
+        return False
+    ident = uuid.uuid4().hex
+    with db.db:
+        changed = db.db.execute("UPDATE schedules SET next_run_at=? WHERE id=? AND enabled=1 AND next_run_at=?",
+                                (next_run_at(sched["cron"], now), sched["id"], due))
+        if not changed.rowcount:
+            return False
+        if db.db.execute("SELECT 1 FROM schedule_trigger_queue WHERE schedule_id=?", (sched["id"],)).fetchone():
+            return False
+        db.db.execute("INSERT INTO schedule_trigger_queue(id,schedule_id,due_at,trigger) VALUES (?,?,?,?)",
+                      (ident, sched["id"], due, trigger))
+        db.db.execute("INSERT INTO schedule_runs(id,schedule_id,name,trigger,status,started_at) VALUES (?,?,?,?,?,?)",
+                      (ident, sched["id"], sched["name"], trigger, "queued", now.isoformat(timespec="seconds")))
+    return True
+
+
+def _launch_pending(db_path=None):
+    path = str(Path(db_path or _db_path()).resolve())
+    with _lock, workflow.WorkflowDB(path) as db:
+        capacity = QUEUE_CONCURRENCY - sum(key[0] == path for key in _queue_workers)
+        if capacity <= 0:
+            return
+        rows = db.db.execute("SELECT * FROM schedule_trigger_queue WHERE claimed=0 ORDER BY due_at,id LIMIT ?", (capacity,)).fetchall()
+        for row in rows:
+            queued = dict(row)
+            changed = db.db.execute("UPDATE schedule_trigger_queue SET claimed=1 WHERE id=? AND claimed=0", (queued["id"],))
+            db.db.commit()
+            if changed.rowcount:
+                _queue_workers.add((path, queued["id"]))
+                threading.Thread(target=_execute_queued, args=(path, queued), daemon=True, name="schedule-worker").start()
+
+
+def _execute_queued(path, queued):
+    ident = queued["id"]
+    status, reason = "failed", "定时任务执行未完成"
+    try:
+        with workflow.WorkflowDB(path) as db:
+            sched = db.schedule(queued["schedule_id"])
+        if sched:
+            result = run_once(sched, trigger=queued["trigger"], queued_id=ident)
+            status, reason = result["status"], result.get("reason", "")
+        else:
+            status, reason = "canceled", "自动化规则已删除"
+    except Exception as exc:
+        reason = str(exc)[:500]
+    finally:
+        try:
+            with workflow.WorkflowDB(path) as db, db.db:
+                db.db.execute("UPDATE schedule_runs SET status=?,reason=?,ended_at=? WHERE id=? AND status='queued'",
+                              (status, reason, datetime.now().isoformat(timespec="seconds"), ident))
+                db.db.execute("DELETE FROM schedule_trigger_queue WHERE id=?", (ident,))
+        finally:
+            with _lock:
+                _queue_workers.discard((path, ident))
+        _launch_pending(path)
 
 
 def due_list(now: datetime | None = None) -> list[dict[str, Any]]:
@@ -366,8 +430,8 @@ def catch_up() -> int:
         if missed >= now:
             continue
         if (now - missed).total_seconds() <= CATCHUP_GRACE:
-            run_once(s, trigger="catchup")
-            done += 1
+            with workflow.WorkflowDB(_db_path()) as db:
+                done += _enqueue(db, s, "catchup", now)
         else:
             with workflow.WorkflowDB(_db_path()) as db:
                 db.schedule_mark_run(s["id"], s["last_run_at"], next_run_at(s["cron"], now))
@@ -375,14 +439,15 @@ def catch_up() -> int:
 
 
 def tick(now: datetime | None = None) -> int:
-    """到点了就按顺序跑（同一规则不重入）。返回本次跑了几条。"""
+    """Persist due triggers, then fill the independent worker slots."""
     ran = 0
+    now = now or datetime.now()
     import schedule_workflow
     with workflow.WorkflowDB(_db_path()) as db:
         schedule_workflow.reconcile(db)
-    for sched in due_list(now):
-        if run_once(sched, trigger="scheduler")["status"] != "skipped":
-            ran += 1
+        for sched in due_list(now):
+            ran += _enqueue(db, sched, "scheduler", now)
+    _launch_pending()
     return ran
 
 
@@ -401,7 +466,8 @@ def recover_runs() -> int:
     count = 0
     with workflow.WorkflowDB(_db_path()) as db:
         project_todos.ensure_table(db)
-        rows = db.db.execute("SELECT * FROM schedule_runs WHERE status IN ('queued','running')").fetchall()
+        rows = db.db.execute("SELECT * FROM schedule_runs WHERE status IN ('queued','running') AND id NOT IN "
+                             "(SELECT id FROM schedule_trigger_queue WHERE claimed=0)").fetchall()
         for record in rows:
             row = dict(record)
             if db.db.execute('SELECT 1 FROM schedule_workflow_runs WHERE schedule_run_id=?', (row['id'],)).fetchone():
@@ -442,6 +508,8 @@ def recover_runs() -> int:
             if linked and linked["stage"]:
                 db.log_step(linked["project_id"], linked["stage"], "failed", row["reason"])
             count += 1
+        db.db.execute("DELETE FROM schedule_trigger_queue WHERE claimed=1")
+        db.db.commit()
     return count
 
 

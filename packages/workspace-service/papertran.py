@@ -44,8 +44,6 @@ def babeldoc_command() -> list[str]:
 _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 _CREATE_NEW_PROCESS_GROUP = 0x00000200 if os.name == "nt" else 0   # 控制台事件不再传播给子进程
 STALL_SECONDS = 900                        # 多久没有任何输出就判定卡死（版式识别偶尔会安静几分钟）
-ZHIPU_BASE = "https://open.bigmodel.cn/api/paas/v4"
-ZHIPU_MODEL = "glm-4-flash"
 # 实测（2026-10，DeepSeek v4-flash，同一篇 38 页真跑）：
 #  ① thinking 默认开时 reasoning token 会吃掉 babeldoc 硬编码的 max_tokens=2048，正文 JSON 被挤空
 #    → 整批退回「逐段单句翻译」（44s vs 4s，fallback 30/31 → 0/31）；
@@ -130,24 +128,41 @@ def paper_meta(db: Any, paper_id: str) -> dict[str, Any]:
 
 
 # ---------------- 翻译任务（BabelDOC） ----------------
-def _llm_cfg(db: Any, model_id: str = "") -> dict[str, str]:
-    """优先用应用里配好的模型；没有就退回环境里的智谱（实测可用）。"""
-    m = db.model(model_id) if model_id else db.active_model()
-    m = m or {}
-    base = (m.get("base_url") or "").strip()
-    key = (m.get("api_key") or "").strip()
-    if base and (key or model_id):
-        from workflow_db import _assert_key_host
-        _assert_key_host(m)
-        host = urllib.parse.urlsplit(base).hostname
-        local = host in {"localhost", "127.0.0.1", "::1"}
-        if m.get("api") not in (None, "", "openai-chat", "openai-completions"):
-            raise ValueError("PDF 翻译需要 OpenAI 兼容的 Chat Completions 模型")
-        return {"base": base, "key": key or ("local" if local else ""),
-                "model": (m.get("model") or ZHIPU_MODEL).strip()}
-    if model_id:
-        raise ValueError("所选翻译模型缺少接口地址")
-    return {"base": ZHIPU_BASE, "key": os.environ.get("ZHIPUAI_API_KEY", "").strip(), "model": ZHIPU_MODEL}
+def model_config(profile):
+    from workflow_db import _assert_key_host
+    if not profile or profile.get("api", "openai-completions") not in {"openai-chat", "openai-completions"}:
+        raise ValueError("PDF 翻译需要 Chat Completions 模型，请在设置 → 模型列表中选择")
+    base, key = profile["base_url"], profile.get("api_key") or ""
+    _assert_key_host(profile)
+    address = urllib.parse.urlsplit(base)
+    if address.scheme not in {"http", "https"} or not address.hostname:
+        raise ValueError("PDF 翻译模型缺少有效接口地址")
+    if not key and address.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("远程 PDF 翻译模型缺少 API Key")
+    return {"base": base, "key": key or "local", "model": profile["model"]}
+
+
+def model_choices(db):
+    import service_settings
+    selected = service_settings.read(db, "pdf_translation_model").get("model_id", "")
+    choices = []
+    for profile in db.models():
+        try:
+            model_config(profile)
+        except (ValueError, RuntimeError):
+            continue
+        choices.append({"id": profile["id"], "name": profile["name"]})
+    return {"model_id": selected, "models": choices}
+
+
+def _llm_cfg(db: Any, model_id: str = "") -> dict[str, Any]:
+    import service_settings
+    identifier = model_id or service_settings.read(db, "pdf_translation_model").get("model_id", "")
+    try:
+        profile = db.model(identifier) if identifier else db.active_model()
+        return {**model_config(profile), "profile": profile}
+    except KeyError as exc:
+        raise ValueError("PDF 翻译模型已不可用，请重新选择") from exc
 
 
 def out_paths(pdf: Path, out_dir: Path) -> tuple[Path, Path]:
@@ -555,11 +570,19 @@ def _merge_translation_pages(dest, part, source, a, b, completed):
     tmp.replace(dest)
 
 
-def _run(paper_id: str, path: Path, out_dir: Path, cfg: dict[str, str],
+def _run(paper_id: str, path: Path, out_dir: Path, cfg: dict[str, Any],
          plan: list[tuple[int, int]], mono: Path, env: dict[str, str], identity: str,
          total: int, requested: set[int], completed: set[int]) -> None:
     """Translate missing ranges in parallel and commit only completed pages."""
     log = mono.parent / f"trans_{paper_id[:8]}.log"
+    if cfg.get("profile"):
+        from model_checks import generate
+        try:
+            generate(cfg["profile"], source="pdf_translation_check")
+        except Exception as exc:
+            with _LOCK:
+                JOBS[paper_id].update(state="partial" if completed else "error", msg="翻译模型未通过生成测试：" + str(exc)[:240])
+            return
 
     def one(idx: int, a: int, b: int):
         part_dir = out_dir / "_parts" / paper_id[:12] / identity[:16] / f"p{a}-{b}"

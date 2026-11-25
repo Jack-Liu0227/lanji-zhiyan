@@ -31,7 +31,7 @@ import project_notes
 import securestore      # 凭据保护（DPAPI，见 securestore.py）
 from research_core import ResearchDB
 from workflow_catalog import STAGE_LABEL, STAGES
-from workflow_search import make_project_tree   # 建项目骨架（pdir 里懒建目录用）
+from workflow_search import make_project_tree, reserve_default_project_root
 
 
 HERE = Path(__file__).resolve().parent
@@ -64,6 +64,11 @@ def _host_of(url: object) -> str:
         return (urllib.parse.urlsplit(str(url or "")).hostname or "").lower()
     except ValueError:
         return ""
+
+
+def _provider_key(base_url: str, value: str) -> tuple[str, str]:
+    stored = _stored_key(value)
+    return stored, _host_of(base_url) if stored else ""
 
 
 def _assert_key_host(profile: dict[str, Any]) -> None:
@@ -423,14 +428,15 @@ class WorkflowDB(ResearchDB):
 
     def create_task(self, title: str, question: str = "", material_system: str = "", base_dir: str = "") -> str:
         chosen = str(base_dir or "").strip()
+        default_root = None
         if chosen:
             paths.validate_project_dir(chosen)
+        elif str(self.path) != ":memory:":
+            default_root = reserve_default_project_root(self, title)
+            chosen = str(default_root)
         task_id = super().create_task(title, question, material_system, chosen)
-        if not chosen and str(self.path) != ":memory:":
-            base = self.path.resolve().parent / "projects" / task_id
-            self.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?", (str(base), task_id))
-            self.db.commit()
-            make_project_tree(base, self.summary(task_id)["task"])
+        if default_root is not None:
+            make_project_tree(default_root, self.summary(task_id)["task"])
         root = self.base_dir(task_id)
         if root:
             import note_catalog
@@ -443,9 +449,10 @@ class WorkflowDB(ResearchDB):
         if tid and self.base_dir(tid):
             paths.validate_project_dir(self.base_dir(tid))
         if tid and not self.base_dir(tid):
-            if not self.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone():
+            task = self.db.execute("SELECT title FROM research_tasks WHERE id=?", (tid,)).fetchone()
+            if not task:
                 raise ValueError("没有这个项目")
-            base = self.path.resolve().parent / "projects" / tid
+            base = reserve_default_project_root(self, task["title"])
             self.db.execute("UPDATE research_tasks SET base_dir=? WHERE id=?", (str(base), tid))
             self.db.commit()
             make_project_tree(base, self.summary(tid)["task"])
@@ -1071,20 +1078,29 @@ class WorkflowDB(ResearchDB):
 
     def team_member_add(self, task_id: str, name: str, role: str = "member", step: str = "",
                         prompt: str = "", assistant_id: str = "", color: int = 0, *,
-                        model_id: str = "", reasoning: str = "auto", permission: str = "auto") -> dict[str, Any]:
+                        model_id: str = "", fallback_model_ids: Any = None,
+                        reasoning: str = "auto", permission: str = "auto") -> dict[str, Any]:
         import agent_settings
-        agent_settings.validate_runtime_fields(self, {"model_id": model_id, "reasoning": reasoning, "permission": permission})
+        fields: dict[str, Any] = {"model_id": model_id, "reasoning": reasoning, "permission": permission}
+        if fallback_model_ids is not None:
+            fields["fallback_model_ids"] = fallback_model_ids
+        agent_settings.validate_runtime_fields(self, fields)
+        fallbacks_json = json.dumps(agent_settings._normalize_fallback_ids(fallback_model_ids), ensure_ascii=False)
         row = (uuid.uuid4().hex, task_id, name, role, step, prompt, "idle", "", now(), now(),
                assistant_id, int(color or 0), model_id, reasoning, permission)
         self.db.execute("INSERT INTO team_members (id,task_id,name,role,step,prompt,status,note,created_at,"
                        "updated_at,assistant_id,color,model_id,reasoning,permission) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+        if any(r["name"] == "fallback_model_ids" for r in self.db.execute("PRAGMA table_info(team_members)")):
+            self.db.execute("UPDATE team_members SET fallback_model_ids=? WHERE id=?", (fallbacks_json, row[0]))
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM team_members WHERE id=?", (row[0],)).fetchone())
 
     def team_member_update(self, mid: str, **fields: Any) -> dict[str, Any]:
         import agent_settings
-        allow = {k: v for k, v in fields.items() if k in ("name", "step", "prompt", "status", "note", "assistant_id", "model_id", "reasoning", "permission") and v is not None}
+        allow = {k: v for k, v in fields.items() if k in ("name", "step", "prompt", "status", "note", "assistant_id", "model_id", "fallback_model_ids", "reasoning", "permission") and v is not None}
         agent_settings.validate_runtime_fields(self, allow)
+        if "fallback_model_ids" in allow:
+            allow["fallback_model_ids"] = json.dumps(agent_settings._normalize_fallback_ids(allow["fallback_model_ids"]), ensure_ascii=False)
         if allow.get("assistant_id"):
             self.require_assistant(allow["assistant_id"])
             member = self.team_member(mid)
@@ -1239,8 +1255,10 @@ class WorkflowDB(ResearchDB):
 
     def assistant_save(self, aid: str, **f: Any) -> dict[str, Any]:
         import agent_settings
-        allow = {k: v for k, v in f.items() if k in ("name", "avatar", "description", "rules", "prompts", "model_id", "enabled", "reasoning", "permission") and v is not None}
+        allow = {k: v for k, v in f.items() if k in ("name", "avatar", "description", "rules", "prompts", "model_id", "fallback_model_ids", "enabled", "reasoning", "permission") and v is not None}
         agent_settings.validate_runtime_fields(self, allow)
+        if "fallback_model_ids" in allow:
+            allow["fallback_model_ids"] = json.dumps(agent_settings._normalize_fallback_ids(allow["fallback_model_ids"]), ensure_ascii=False)
         if "enabled" in allow:
             allow["enabled"] = int(bool(allow["enabled"]))
         if isinstance(allow.get("prompts"), list):
@@ -1254,7 +1272,7 @@ class WorkflowDB(ResearchDB):
             row = (aid, "user", allow.get("name") or "新专家", allow.get("avatar", ""), allow.get("description", ""),
                    allow.get("rules", ""), allow.get("prompts", "[]"), allow.get("model_id", ""), 1, 99, now(), now())
             self.db.execute("INSERT INTO assistants (id,source,name,avatar,description,rules,prompts,model_id,enabled,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", row)
-            extra = {k: allow[k] for k in ("enabled", "reasoning", "permission") if k in allow}
+            extra = {k: allow[k] for k in ("enabled", "reasoning", "permission", "fallback_model_ids") if k in allow}
             if extra:
                 self.db.execute("UPDATE assistants SET %s WHERE id=?" % ", ".join("%s=?" % k for k in extra), (*extra.values(), aid))
         self.db.commit()
@@ -1438,14 +1456,19 @@ class WorkflowDB(ResearchDB):
         return self.model(mid)
 
     def model(self, mid: str) -> dict[str, Any]:
-        row = self.db.execute("SELECT * FROM model_profiles WHERE id=?", (mid,)).fetchone()
+        row = self.db.execute("SELECT m.*,p.enabled AS provider_enabled FROM model_profiles m "
+                              "LEFT JOIN providers p ON p.id=m.provider_id WHERE m.id=?", (mid,)).fetchone()
         if not row:
             raise KeyError(mid)
+        if row["retired"] or (row["provider_id"] and not row["provider_enabled"]):
+            raise ValueError("所选模型或 Provider 已停用，请重新启用或选择其他模型")
         import usage_stats
         return usage_stats.profile(self,_reveal_key(dict(row)))
 
     def models(self) -> list[dict[str, Any]]:
-        return [_reveal_key(dict(r)) for r in self.db.execute("SELECT * FROM model_profiles ORDER BY created_at")]
+        rows = self.db.execute("SELECT m.* FROM model_profiles m LEFT JOIN providers p ON p.id=m.provider_id "
+                               "WHERE m.retired=0 AND (m.provider_id='' OR p.enabled=1) ORDER BY m.created_at")
+        return [_reveal_key(dict(r)) for r in rows]
 
     def set_active(self, mid: str) -> dict[str, Any]:
         self.model(mid)  # 不存在则抛 KeyError
@@ -1455,16 +1478,20 @@ class WorkflowDB(ResearchDB):
         return self.model(mid)
 
     def delete_model(self, mid: str) -> None:
-        self.db.execute("DELETE FROM model_profiles WHERE id=?", (mid,))
+        row = self.db.execute("SELECT provider_id,model FROM model_profiles WHERE id=?", (mid,)).fetchone()
+        if row and row["provider_id"] and self.db.execute("SELECT 1 FROM providers WHERE id=?", (row["provider_id"],)).fetchone():
+            self.adopt_model(row["provider_id"], row["model"], False)
+            return
+        self.db.execute("UPDATE model_profiles SET retired=1,api_key='',key_host='',is_active=0 WHERE id=?", (mid,))
         self.db.commit()
 
     def active_model(self) -> dict[str, Any] | None:
         # Model-backed tools in a workflow node use its selected assistant/member.
         if getattr(self, "runtime_model", None) is not None:
             return self.runtime_model
-        row = self.db.execute("SELECT * FROM model_profiles WHERE is_active=1").fetchone()
-        import usage_stats
-        return usage_stats.profile(self,_reveal_key(dict(row))) if row else None
+        row = self.db.execute("SELECT m.id FROM model_profiles m LEFT JOIN providers p ON p.id=m.provider_id "
+                              "WHERE m.is_active=1 AND m.retired=0 AND (m.provider_id='' OR p.enabled=1)").fetchone()
+        return self.model(row["id"]) if row else None
 
     # ---------- Provider（模型与 Agent 卡片） ----------
     def providers(self) -> list[dict[str, Any]]:
@@ -1510,27 +1537,40 @@ class WorkflowDB(ResearchDB):
         self.db.commit()
         return self.provider(pid)
 
-    def add_provider(self, name: str, base_url: str, api: str = "openai-completions", api_key: str = "") -> dict[str, Any]:
+    def save_provider(self, name: str, base_url: str, api: str, api_key: str | None,
+                      *, pid: str = "", enabled: bool | None = None) -> dict[str, Any]:
         if not name.strip() or not base_url.strip():
             raise ValueError("Provider 需要名称和接口地址")
-        pid = "custom:" + uuid.uuid4().hex[:12]
-        self.db.execute("INSERT INTO providers (id,name,base_url,api,api_key,models,source,enabled,created_at,key_host)"
-                        " VALUES (?,?,?,?,?,?,?,?,?,?)",
-                        (pid, name.strip(), base_url.strip().rstrip("/"), api, _stored_key(api_key),
-                         "[]", "custom", 1 if api_key.strip() else 0, now(),
-                         _host_of(base_url) if api_key.strip() else ""))
-        self.db.commit()
+        import agent_settings
+        name, base_url = name.strip(), base_url.strip().rstrip("/")
+        if pid:
+            previous = self.ensure_provider(pid)
+            fields = {"name": name, "base_url": base_url, "api": api,
+                      "enabled": int(previous["enabled"] if enabled is None else enabled)}
+            if api_key is not None:
+                fields["api_key"], fields["key_host"] = _provider_key(base_url, api_key)
+            elif previous.get("api_key") and not previous.get("key_host"):
+                fields["key_host"] = _host_of(previous["base_url"])
+            with self.db:
+                self.db.execute("UPDATE providers SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?",
+                                (*fields.values(), pid))
+                agent_settings.sync_provider_models(self, pid, commit=False)
+        else:
+            pid = "custom:" + uuid.uuid4().hex[:12]
+            key, host = _provider_key(base_url, api_key or "")
+            with self.db:
+                self.db.execute("INSERT INTO providers (id,name,base_url,api,api_key,models,source,enabled,created_at,key_host)"
+                                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                                (pid, name, base_url, api, key, "[]", "custom", int(bool(key) if enabled is None else enabled), now(), host))
         return self.provider(pid)
+
+    def add_provider(self, name: str, base_url: str, api: str = "openai-completions", api_key: str = "") -> dict[str, Any]:
+        return self.save_provider(name, base_url, api, api_key)
 
     def set_provider_key(self, pid: str, api_key: str) -> dict[str, Any]:
         p = self.ensure_provider(pid)
-        self.db.execute("UPDATE providers SET api_key=?, key_host=?, enabled=? WHERE id=?",
-                        (_stored_key(api_key), _host_of(p["base_url"]) if api_key.strip() else "",
-                         1 if api_key.strip() else 0, pid))
-        self.db.commit()
-        import agent_settings
-        agent_settings.sync_provider_models(self, pid)
-        return self.provider(pid)
+        return self.save_provider(p["name"], p["base_url"], p["api"], api_key, pid=pid,
+                                  enabled=bool(api_key.strip() or p["models"]))
 
     def delete_provider(self, pid: str) -> None:
         """内置的只能复位（卡片要一直在）；自定义的整行删掉。"""
@@ -1538,8 +1578,8 @@ class WorkflowDB(ResearchDB):
         if not row or row["source"] == "custom":
             self.db.execute("DELETE FROM providers WHERE id=?", (pid,))
         else:
-            self.db.execute("UPDATE providers SET api_key='', models='[]', enabled=0 WHERE id=?", (pid,))
-        self.db.execute("DELETE FROM model_profiles WHERE provider_id=?", (pid,))
+            self.db.execute("UPDATE providers SET api_key='',key_host='',models='[]',enabled=0 WHERE id=?", (pid,))
+        self.db.execute("UPDATE model_profiles SET retired=1,api_key='',key_host='',is_active=0 WHERE provider_id=?", (pid,))
         self.db.commit()
 
     def adopt_model(self, pid: str, model: str, on: bool = True) -> dict[str, Any]:
@@ -1553,7 +1593,7 @@ class WorkflowDB(ResearchDB):
         if not on and model in names:
             names.remove(model)
         self.db.execute("UPDATE providers SET models=?, enabled=? WHERE id=?",
-                        (json.dumps(names, ensure_ascii=False), 1 if (names or p["api_key"]) else 0, pid))
+                        (json.dumps(names, ensure_ascii=False), 1 if on else p["enabled"], pid))
         self.db.commit()
         import agent_settings
         agent_settings.sync_provider_models(self, pid)

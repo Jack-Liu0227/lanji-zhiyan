@@ -18,9 +18,12 @@ def category(path, kind='', metadata=None):
     parts = Path(path).parts
     if kind == 'paper': return 'literature'
     if metadata.get('category_id') == 'experiment_analysis' or any(p in ('实验', '实验记录', '实验数据') for p in parts): return 'experiment'
-    if '论文正文' in parts or kind == 'manuscript': return 'manuscript'
-    if kind == 'note' or '笔记' in parts: return 'note'
-    if kind in ('report', 'output', 'task_output', 'schedule_output') or any(p in ('阶段产物', '定时任务', '.tasks') for p in parts): return 'output'
+    if '.tasks' not in parts:
+        if '论文正文' in parts or kind == 'manuscript': return 'manuscript'
+        if kind == 'note' or '笔记' in parts: return 'note'
+        if '文献库' in parts: return 'literature'
+        if '最终产物' in parts: return 'output'
+    if kind in ('report', 'output', 'task_output', 'schedule_output') or any(p in ('阶段产物', '定时任务', '.tasks', '最终产物') for p in parts): return 'output'
     return 'file'
 
 
@@ -31,6 +34,10 @@ def catalog(db, project_id, kind='', query='', *, review_status=''):
               'unverified', 'blocked', 'queued', 'running', 'failed', 'interrupted', 'cancelled'}
     if review_status and review_status not in states: raise ValueError('核查状态无效')
     eligibility_index = asset_service.eligibility_index(db, project_id)
+    producers = {row['id']: dict(row) for row in db.db.execute(
+        'SELECT id,title,workflow_run_id,workflow_node_id FROM project_tasks WHERE project_id=?', (project_id,))}
+    attempts = {row['id']: row['attempt'] for row in db.db.execute(
+        'SELECT r.id,r.attempt FROM project_task_runs r JOIN project_tasks t ON t.id=r.task_id WHERE t.project_id=?', (project_id,))}
     rows = {}
     for row in db.db.execute('SELECT * FROM assets WHERE project_id=? ORDER BY updated_at DESC', (project_id,)):
         asset = dict(row)
@@ -48,6 +55,13 @@ def catalog(db, project_id, kind='', query='', *, review_status=''):
                 'metadata': metadata, 'exists': path.is_file() if path else False,
                 'read_only': relative.startswith('.tasks/') or bool(path and not relative)}
         item.update(asset_service.eligibility(db, asset, index=eligibility_index))
+        producer = producers.get(metadata.get('project_task_id'))
+        if producer:
+            item['produced_by'] = {'task_id': producer['id'], 'node_label': producer['title'],
+                'workflow_run_id': producer['workflow_run_id'], 'node_id': producer['workflow_node_id'],
+                'attempt': attempts.get(metadata.get('task_run_id')),
+                'is_snapshot': relative.startswith('.tasks/'), 'working_relative': metadata.get('working_relative', ''),
+                'working_asset_id': metadata.get('working_asset_id', '')}
         rows[str(path) if path else asset['canonical_uri']] = item
     # Disk Markdown is visible even before the user explicitly rebuilds the index.
     for note in project_notes.dashboard(db, project_id)['items']:
@@ -118,7 +132,9 @@ def index(db, project_id):
             existing = db.db.execute('SELECT * FROM assets WHERE canonical_uri=?', (str(path.resolve()),)).fetchone()
             metadata = json.loads(existing['metadata'] or '{}') if existing else {}
             body = path.read_text(encoding='utf-8', errors='replace') if path.suffix.lower() in TEXT and path.stat().st_size <= project_notes.MAX_NOTE_BYTES else ''
-            file_kind = existing['kind'] if existing else ('note' if '笔记' in path.relative_to(root).parts else 'document')
+            rel_parts = path.relative_to(root).parts
+            inferred_kind = ('note' if '笔记' in rel_parts else 'manuscript' if '论文正文' in rel_parts else 'output' if any(p in ('最终产物', '阶段产物') for p in rel_parts) else 'document')
+            file_kind = existing['kind'] if existing else inferred_kind
             asset_service.register_file(db, path, project_id=project_id, kind=file_kind,
                 title=existing['title'] if existing else path.stem, source=existing['source'] if existing else 'project_index',
                 metadata=metadata, body=body)

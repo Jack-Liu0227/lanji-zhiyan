@@ -23,7 +23,7 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
         self.load_workspace()
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True, prefix="rw-project-base-") as base:
             self.page.route('**/api/folder/pick?*',lambda route:route.fulfill(json={'dir':base}))
-            self.page.evaluate("openTab('tasks')")
+            self.page.evaluate("ProjectManager.open()")
             self.page.locator('dialog.project-manager').wait_for()
             self.page.locator('dialog.project-manager details > summary').click()
             self.page.locator('#t-dir-pick').click()
@@ -68,12 +68,12 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
 
     def test_platform_switches_saved_workflow_and_restores_custom_step(self):
         self.load_workspace()
-        self.page.evaluate("openTab('workflow')")
+        workspace_section(self.page, 'workflow')
         self.page.locator('#pwWorkflowChoice').wait_for()
         project=self.page.evaluate('curTask')
         response=self.page.evaluate("""async()=>api('/api/workflow/layouts/save',{
             name:'Browser translated paper',nodes:[{id:'translate',step:'notes',label:'Custom translation'}],edges:[]})""")
-        self.page.evaluate('render()')
+        self.page.evaluate('ProjectWorkspace.showResource("workflow")')
         picker=self.page.locator('#pwWorkflowChoice')
         picker.locator(f'option[value="{response["layout"]["id"]}"]').wait_for(state='attached')
         picker.select_option(response['layout']['id'])
@@ -84,7 +84,7 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
         state=self.page.request.get(self.url+'api/workflow/layouts/state?task_id='+project).json()
         self.assertEqual(state['selected_node'],'translate')
         self.page.reload(wait_until='networkidle')
-        self.page.evaluate("openTab('workflow')")
+        workspace_section(self.page, 'workflow')
         self.page.locator('[data-pwg-label]').wait_for()
         self.assertEqual(self.page.locator('[data-pwg-label]').input_value(),'Custom translation')
         self.assertEqual(self.errors,[])
@@ -101,9 +101,9 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
           await api('/api/workflow/layouts/select', {
             task_id:project, layout_id:layout.id, node_id:'search'
           });
-          await openTab('workflow');
           return layout.id;
         }""", project)
+        workspace_section(self.page, 'workflow')
         self.page.evaluate("window.uiConfirm = async () => true")
         self.assertEqual(self.page.locator('[data-pwg-label]').input_value(), 'search')
         self.page.locator('[data-pwg-remove]').click()
@@ -161,20 +161,23 @@ class WorkflowLayoutRuntimeTest(unittest.TestCase):
         self.load_workspace()
         self.page.evaluate("""async()=>{
           await api('/api/workflow/layouts/select',{task_id:curTask,layout_id:'builtin.workflow.research',node_id:'write'});
-          await openTab('workspace');await ProjectWorkspace.showResource('workflow');
         }""")
+        workspace_section(self.page, 'workflow')
         self.assertEqual(self.page.locator('[data-pwg-step]').input_value(),'write')
         self.page.evaluate("""async()=>{
           await api('/api/workflow/layouts/select',{task_id:curTask,layout_id:'builtin.workflow.writing',node_id:'outline'});
           await ProjectWorkspace.showResource('workflow');
         }""")
+        if self.page.locator('#pwResource .pwg-empty [data-pwg-template]').count():
+            self.page.locator('#pwResource .pwg-empty [data-pwg-template]').click()
         self.assertEqual(self.page.locator('[data-pwg-step]').input_value(),'outline')
         self.assertEqual(self.errors,[])
 
 
     def test_rapid_node_selection_keeps_last_choice_when_saves_are_delayed(self):
         self.load_workspace()
-        self.page.evaluate("""async()=>{await api('/api/workflow/layouts/select',{task_id:curTask,layout_id:'builtin.workflow.research'});await openTab('workflow');}""")
+        self.page.evaluate("""async()=>{await api('/api/workflow/layouts/select',{task_id:curTask,layout_id:'builtin.workflow.research'});}""")
+        workspace_section(self.page, 'workflow')
         self.page.locator('[data-pwg-label]').wait_for()
         self.page.evaluate("""()=>{
           const original=api;window.savedChoices=[];

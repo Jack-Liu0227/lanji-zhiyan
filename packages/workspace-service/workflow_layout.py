@@ -5,6 +5,7 @@ import json
 import re
 import uuid
 from datetime import datetime, timedelta
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 import service_settings
@@ -31,6 +32,57 @@ DEFAULT_LAYOUT_ID = "builtin.workflow.research"    # 项目没选过布局时默
 _DONE = {"done", "completed", "success", "succeeded", "downloaded", "delivered"}
 _RUNNING = {"running", "in_progress", "downloading", "reading", "translating"}
 _FAILED = {"failed", "error", "manual"}
+_OUTPUT_LINE = re.compile(r"(?:目标产出文件|目标文件|产物路径)\s*[:：]\s*([^\r\n]+)")
+
+
+def required_outputs(node: dict[str, Any]) -> list[str]:
+    """Resolve declared output paths, including paths embedded in legacy prompts."""
+    contract = node.get("output_contract") or {}
+    values = []
+    for declared in ((contract.get("required_files") or []) if isinstance(contract, dict) else [], node.get("outputs") or []):
+        if not isinstance(declared, list):
+            raise ValueError("工作流产物路径必须用数组声明")
+        values.extend(declared)
+    prompt = str(node.get("prompt") or node.get("goal") or "")
+    for match in _OUTPUT_LINE.finditer(prompt):
+        values.extend(re.split(r"[、,，;；]\s*", match.group(1).strip()))
+
+    result = []
+    for value in values:
+        if isinstance(value, dict):
+            value = value.get("relative") or value.get("path") or ""
+        raw = str(value or "").strip().replace("\\", "/")
+        path = PurePosixPath(raw)
+        if (not raw or path.is_absolute() or PureWindowsPath(raw).drive or
+                any(part in ("", ".", "..") or part.startswith(".") for part in raw.split("/")) or
+                any(c in raw for c in '<>:"|?*\x00')):
+            raise ValueError("工作流产物路径必须是项目内的普通相对路径")
+        if raw not in result:
+            result.append(raw)
+    return result
+
+
+def normalize_agent_tools(node: dict[str, Any]) -> list[str] | None:
+    """Expand explicit agent tool allowlists so contract writes and batch OA downloads work."""
+    raw_tools = node.get("tools")
+    if raw_tools is None:
+        return None
+    tools = list(dict.fromkeys(str(t) for t in raw_tools if t))
+    if node.get("node_kind") in ("tool", "workflow"):
+        return tools
+    if required_outputs(node):
+        for name in ("project_artifact_write", "workflow_context_read"):
+            if name not in tools:
+                tools.append(name)
+    if (node.get("output_contract") or {}).get("requires_evidence"):
+        for name in ("paper_focus", "paper_excerpt", "paper_evidence_record", "paper_evidence_get"):
+            if name not in tools:
+                tools.append(name)
+    if node.get("step") in ("search", "download") and ("paper_search" in tools or "paper_download" in tools):
+        for name in ("paper_download", "paper_download_batch"):
+            if name not in tools:
+                tools.append(name)
+    return tools
 
 
 def _linear(stages: list[str]) -> dict[str, Any]:
@@ -51,7 +103,8 @@ def ensure_schema(db: Any) -> None:
         ("builtin.workflow.writing", "论文写作", "大纲、写作、审查与导出", ["outline", "map", "write", "review", "entrans", "convert"]),
     ]
     # Seed only once, including after the user deliberately deletes a template.
-    if not db.db.execute("SELECT 1 FROM workflow_layouts LIMIT 1").fetchone():
+    catalog = service_settings.read(db, "workflow_catalog")
+    if not catalog.get("seeded") and not db.db.execute("SELECT 1 FROM workflow_layouts LIMIT 1").fetchone():
         # now() 在 Windows 上同一时钟刻度里连着调三次会给出一模一样的字符串，
         # 那样 ORDER BY created_at,id 就退化成按 id 排序（"reading" < "research"），
         # 新项目默认打开的工作流会随机变成「文献精读」。逐条 +1µs，让列表顺序 = 声明顺序。
@@ -60,7 +113,7 @@ def ensure_schema(db: Any) -> None:
             stamp = (base + timedelta(microseconds=index)).isoformat()
             db.db.execute("INSERT INTO workflow_layouts VALUES (?,?,?,?,?,?)",
                           (wid, name, description, json.dumps(_linear(stages), ensure_ascii=False), stamp, stamp))
-    if not service_settings.read(db, "workflow_catalog").get("labels_migrated"):
+    if not catalog.get("labels_migrated"):
         for row in db.db.execute("SELECT id,definition FROM workflow_layouts").fetchall():
             definition = json.loads(row["definition"])
             changed = False
@@ -72,7 +125,7 @@ def ensure_schema(db: Any) -> None:
             if changed:
                 db.db.execute("UPDATE workflow_layouts SET definition=? WHERE id=?",
                               (json.dumps(definition, ensure_ascii=False), row["id"]))
-        service_settings.write(db, "workflow_catalog", {"labels_migrated": True})
+    service_settings.write(db, "workflow_catalog", {**catalog, "labels_migrated": True, "seeded": True})
     db.db.commit()
     db._workflow_layout_initialized = True
 
@@ -142,6 +195,31 @@ def validate_definition(data: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(value, str) or len(value) > (20000 if key == "prompt" else 120):
                 raise ValueError("节点执行配置无效：" + key)
             config[key] = value.strip()
+        model_id = raw.get("model_id", "")
+        if model_id is not None:
+            if not isinstance(model_id, str) or len(model_id) > 120:
+                raise ValueError("节点模型配置无效：model_id")
+            if model_id.strip():
+                config["model_id"] = model_id.strip()
+        if raw.get("fallback_model_ids") is not None:
+            fallbacks = raw.get("fallback_model_ids")
+            if not isinstance(fallbacks, list) or len(fallbacks) > 20 or any(not isinstance(x, str) or len(x) > 120 for x in fallbacks):
+                raise ValueError("节点备用模型列表无效")
+            clean_fb = list(dict.fromkeys(x.strip() for x in fallbacks if x.strip()))
+            if clean_fb:
+                config["fallback_model_ids"] = clean_fb
+        node_reasoning = raw.get("reasoning", "")
+        if node_reasoning:
+            if node_reasoning not in ("auto", "none", "minimal", "low", "medium", "high", "xhigh"):
+                raise ValueError("不支持的节点推理强度：" + str(node_reasoning))
+            if node_reasoning != "auto":
+                config["reasoning"] = node_reasoning
+        model_policy = raw.get("model_policy", "")
+        if model_policy:
+            if model_policy not in ("fallback", "strict"):
+                raise ValueError("不支持的节点模型容错策略：" + str(model_policy))
+            if model_policy != "fallback":
+                config["model_policy"] = model_policy
         role = str(raw.get("executor_role_id") or raw.get("executor_role") or raw.get("role_id") or nid)
         if not _ID.fullmatch(role):
             raise ValueError("执行角色 ID 格式无效")
@@ -149,6 +227,12 @@ def validate_definition(data: dict[str, Any]) -> dict[str, Any]:
         contract = raw.get("output_contract") or {}
         if not isinstance(contract, dict):
             raise ValueError("节点输出约定必须是 JSON 对象")
+        contract = dict(contract)
+        required_files = required_outputs({**raw, "output_contract": contract})
+        if required_files:
+            contract["required_files"] = required_files
+        import artifact_quality
+        artifact_quality.validate_rules(contract)
         config["output_contract"] = contract
         for key in ("tools", "skills"):
             value = raw.get(key)
@@ -180,9 +264,14 @@ def validate_definition(data: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("交接文件和工具参数必须为文本")
         artifact, argument = artifact.strip(), argument.strip()
         if artifact:
-            if len(artifact) > 255 or artifact in (".", "..") or any(c in artifact for c in '/\\\\:'):
-                raise ValueError("交接文件必须填写产物文件名")
-            link["artifact"] = artifact
+            raw_norm = artifact.replace("\\", "/")
+            norm_artifact = raw_norm.strip("/")
+            parts = [part for part in norm_artifact.split("/") if part]
+            if (len(norm_artifact) > 255 or not norm_artifact or raw_norm.startswith("/")
+                    or ":" in artifact or "\x00" in artifact
+                    or any(part in (".", "..") for part in parts) or raw_norm.endswith("/")):
+                raise ValueError("交接文件必须填写有效的产物文件名或项目内相对路径")
+            link["artifact"] = norm_artifact
         if argument:
             if not artifact or by_id[target].get("node_kind") != "tool" or not argument.isidentifier():
                 raise ValueError("工具参数绑定需要文件名和有效的固定工具参数名")
@@ -232,6 +321,11 @@ def _project(db: Any, task_id: str) -> None:
         raise ValueError("请先选择有效项目")
 
 
+def list_layouts(db: Any) -> dict[str, Any]:
+    ensure_schema(db)
+    return {"layouts": [_public(row) for row in db.db.execute("SELECT * FROM workflow_layouts ORDER BY created_at,id")]}
+
+
 def resolve_node(db: Any, project_id: str, layout_id: str, node: dict, *, materialize=True) -> dict:
     """Read the effective binding of a node, including legacy built-in offices."""
     if node.get('executor_binding_id'):
@@ -274,6 +368,13 @@ def resolve_node(db: Any, project_id: str, layout_id: str, node: dict, *, materi
 
 
 def save_layout(db: Any, body: dict[str, Any]) -> dict[str, Any]:
+    ensure_schema(db)
+    import project_tasks
+    with project_tasks._lock, project_tasks._atomic(db):
+        return _save_layout(db, body)
+
+
+def _save_layout(db: Any, body: dict[str, Any]) -> dict[str, Any]:
     name, description = str(body.get("name", "")).strip(), str(body.get("description", "")).strip()
     if not name or len(name) > 120:
         raise ValueError("工作流名称须为 1 至 120 字符")
@@ -282,8 +383,30 @@ def save_layout(db: Any, body: dict[str, Any]) -> dict[str, Any]:
     import shared_executors
     definition = validate_definition({**body,'nodes':[shared_executors.portable_node(db,node) for node in body.get('nodes',[])]})
     wid, stamp = str(body.get("id") or ""), now()
-    if wid:
-        _layout(db, wid)
+    import workflow_template_catalog as catalog
+    key = catalog.identity({"name": name, **definition})
+    matches = []
+    name_conflict = False
+    for item in list_layouts(db)['layouts']:
+        if item['id'] == wid:
+            continue
+        try:
+            other = catalog.identity(item)
+        except (ValueError, KeyError, TypeError):
+            continue
+        if other == key:
+            matches.append(item)
+        elif other[0] == key[0]:
+            name_conflict = True
+    if matches:
+        match = max(matches, key=lambda item: (item['updated_at'], item['id']))
+        if wid and db.db.execute('SELECT 1 FROM workflow_layouts WHERE id=?', (wid,)).fetchone():
+            # An explicit edit owns its ID. Reject collisions without changing references.
+            raise ValueError('保存后与已有模板完全重复，请使用已有模板：' + match['name'] + ' (' + match['id'] + ')')
+        if match['description'] != description:
+            db.db.execute('UPDATE workflow_layouts SET description=?,updated_at=? WHERE id=?', (description, stamp, match['id']))
+        return {"ok": True, "reused": True, "layout": _layout(db, match['id'])}
+    if wid and db.db.execute("SELECT 1 FROM workflow_layouts WHERE id=?", (wid,)).fetchone():
         db.db.execute("UPDATE workflow_layouts SET name=?,description=?,definition=?,updated_at=? WHERE id=?",
                       (name, description, json.dumps(definition, ensure_ascii=False), stamp, wid))
         valid = {n["id"] for n in definition["nodes"]}
@@ -292,14 +415,10 @@ def save_layout(db: Any, body: dict[str, Any]) -> dict[str, Any]:
                 db.db.execute("UPDATE project_workflow_layouts SET selected_node=?,updated_at=? WHERE task_id=?",
                               (definition["order"][0], stamp, binding["task_id"]))
     else:
-        wid = uuid.uuid4().hex
+        wid = wid or uuid.uuid4().hex
         db.db.execute("INSERT INTO workflow_layouts VALUES (?,?,?,?,?,?)",
                       (wid, name, description, json.dumps(definition, ensure_ascii=False), stamp, stamp))
-    db.db.commit()
-    import project_bindings
-    for binding in db.db.execute("SELECT task_id FROM project_workflow_layouts WHERE layout_id=?", (wid,)).fetchall():
-        project_bindings.import_legacy(db, binding["task_id"])
-    return {"ok": True, "layout": _layout(db, wid)}
+    return {"ok": True, "name_conflict": name_conflict, "layout": _layout(db, wid)}
 
 
 def select_layout(db: Any, body: dict[str, Any]) -> dict[str, Any]:
@@ -393,8 +512,11 @@ def state(db: Any, task_id: str) -> dict[str, Any]:
     _project(db, task_id)
     layouts = [_public(row) for row in db.db.execute("SELECT * FROM workflow_layouts ORDER BY created_at,id")]
     binding = db.db.execute("SELECT * FROM project_workflow_layouts WHERE task_id=?", (task_id,)).fetchone()
-    fallback = next((item for item in layouts if item["id"] == DEFAULT_LAYOUT_ID), layouts[0])
-    layout = next((item for item in layouts if binding and item["id"] == binding["layout_id"]), fallback)
+    fallback = next((item for item in layouts if item["id"] == DEFAULT_LAYOUT_ID), layouts[0] if layouts else None)
+    layout = next((item for item in layouts if binding and item["id"] == binding["layout_id"]), None) if binding else fallback
+    if not layout:
+        return {"task_id": task_id, "layouts": layouts, "layout": None, "selected_node": "",
+                "stages": STAGE_CATALOG, "nodes": [], "edges": [], "observed_at": now()}
     import project_workflows
     layout=project_workflows.effective(db,task_id,layout)
     if not binding or binding["layout_id"] != layout["id"]:
@@ -425,23 +547,102 @@ def state(db: Any, task_id: str) -> dict[str, Any]:
             "observed_at": now(), "status_note": "节点状态来自真实步骤、对话、团队任务和下载队列；依赖展示不会自动执行步骤。"}
 
 
+def delete_node_from_layout(layout: dict[str, Any], node_id: str, restitch: bool = True) -> dict[str, Any]:
+    nodes = list(layout.get("nodes", []))
+    edges = list(layout.get("edges", []))
+    if len(nodes) <= 1:
+        raise ValueError("工作流必须保留至少一个节点，无法删除唯一节点")
+    if not any(n["id"] == node_id for n in nodes):
+        raise ValueError(f"节点 {node_id} 不存在于当前工作流")
+
+    parents = [e["source"] for e in edges if e["target"] == node_id]
+    children = [e["target"] for e in edges if e["source"] == node_id]
+
+    new_edges = [e for e in edges if e["source"] != node_id and e["target"] != node_id]
+
+    if restitch and parents and children:
+        for p in parents:
+            for c in children:
+                if p != c and not any(e["source"] == p and e["target"] == c for e in new_edges):
+                    new_edges.append({"source": p, "target": c})
+
+    new_nodes = [n for n in nodes if n["id"] != node_id]
+
+    in_degree = {n["id"]: 0 for n in new_nodes}
+    for e in new_edges:
+        if e["target"] in in_degree:
+            in_degree[e["target"]] += 1
+
+    queue = [nid for nid, deg in in_degree.items() if deg == 0]
+    order = []
+    while queue:
+        u = queue.pop(0)
+        order.append(u)
+        for e in new_edges:
+            if e["source"] == u:
+                v = e["target"]
+                if v in in_degree:
+                    in_degree[v] -= 1
+                    if in_degree[v] == 0:
+                        queue.append(v)
+
+    if len(order) != len(new_nodes):
+        raise ValueError("删除节点并缝合后检测到依赖环路，操作已终止")
+
+    updated = dict(layout)
+    updated["nodes"] = new_nodes
+    updated["edges"] = new_edges
+    updated["order"] = order
+    return updated
+
+
+def delete_layout(db: Any, wid: str) -> dict[str, Any]:
+    ensure_schema(db)
+    layout = _layout(db, wid)
+    import workflow_template_catalog as catalog
+    import project_tasks
+    refs = catalog.references(db, wid)
+    with project_tasks._lock, project_tasks._atomic(db):
+        catalog.archive(db, 'delete', layout, refs)
+        db.db.execute("UPDATE project_workflow_layouts SET layout_id='',selected_node='',updated_at=? WHERE layout_id=?", (now(), wid))
+        db.db.execute("DELETE FROM project_workflow_roles WHERE template_id=?", (wid,))
+        # Keep subworkflow definitions intact so the editor can identify the missing reference.
+        # Schedule links remain explicit missing references and cannot silently run another template.
+        db.db.execute("DELETE FROM workflow_layouts WHERE id=?", (wid,))
+    return {"ok": True, "references": {key: len(value) for key, value in refs.items()}}
+
+
 def route(method: str, path: str, body: dict[str, Any] | None, query: dict[str, Any], db: Any) -> dict[str, Any] | None:
     import project_workflows
     project_response=project_workflows.route(method,path,body or {},query,db)
     if project_response is not None:return project_response
     endpoints = {("GET", "/api/workflow/layouts"), ("GET", "/api/workflow/layouts/state"),
+                 ("GET", "/api/workflow/layouts/delete-impact"),
                  ("POST", "/api/workflow/layouts/save"), ("POST", "/api/workflow/layouts/delete"),
-                 ("POST", "/api/workflow/layouts/select")}
+                 ("POST", "/api/workflow/layouts/select"), ("POST", "/api/workflow/layouts/delete-node")}
     if (method, path) not in endpoints:
         return None
     ensure_schema(db)
     body = body or {}
+    if path.endswith('/delete-impact'):
+        import workflow_template_catalog
+        raw = query.get('id', '')
+        wid = str(raw[0] if isinstance(raw, list) and raw else raw)
+        _layout(db, wid)
+        refs = workflow_template_catalog.references(db, wid)
+        return {'projects': len(refs['project_workflow_layouts']), 'schedules': len(refs['schedule_workflows']),
+                'subworkflows': len(refs['subworkflows'])}
     if path == "/api/workflow/layouts":
+        import agent_settings
         import capabilities
+        import model_health
+        health_map = model_health.list_states(db)
+        models = [{**agent_settings.public(m), "health": health_map.get(m["id"], model_health.get(db, m["id"]))} for m in db.models()]
         return {"layouts": [_public(row) for row in db.db.execute("SELECT * FROM workflow_layouts ORDER BY created_at,id")],
                 "stages": STAGE_CATALOG,
                 "execution_options": {"assistants": db.selectable_assistants(),
                     "teams": [{**t, "members": db.team_members(t["id"])} for t in db.teams() if t.get("status") != "archived"],
+                    "models": models,
                     "tools": capabilities.list_tools(db), "skills": capabilities.list_skills()}}
     if path.endswith("/state"):
         raw = query.get("task_id", query.get("id", ""))
@@ -450,11 +651,10 @@ def route(method: str, path: str, body: dict[str, Any] | None, query: dict[str, 
         return save_layout(db, body)
     if path.endswith("/select"):
         return select_layout(db, body)
+    if path.endswith("/delete-node"):
+        layout = body.get("layout") or {}
+        node_id = str(body.get("node_id") or "")
+        restitch = bool(body.get("restitch", True))
+        return {"ok": True, "layout": delete_node_from_layout(layout, node_id, restitch=restitch)}
     wid = str(body.get("id", ""))
-    _layout(db, wid)
-    if db.db.execute("SELECT COUNT(*) FROM workflow_layouts").fetchone()[0] <= 1:
-        raise ValueError("至少保留一个工作流")
-    db.db.execute("DELETE FROM project_workflow_layouts WHERE layout_id=?", (wid,))
-    db.db.execute("DELETE FROM workflow_layouts WHERE id=?", (wid,))
-    db.db.commit()
-    return {"ok": True}
+    return delete_layout(db, wid)

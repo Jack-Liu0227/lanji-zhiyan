@@ -115,7 +115,7 @@ class WorkflowLayoutTest(unittest.TestCase):
         self.call("POST", "/save", edited)
         self.assertEqual(self.call("GET", "/state", query={"task_id": self.tid})["selected_node"], "a")
         self.call("POST", "/delete", {"id": saved["id"]})
-        self.assertNotEqual(self.call("GET", "/state", query={"task_id": self.tid})["layout"]["id"], saved["id"])
+        self.assertIsNone(self.call("GET", "/state", query={"task_id": self.tid})["layout"])
 
     def test_project_node_and_layout_selection_must_exist(self):
         self.call("GET")

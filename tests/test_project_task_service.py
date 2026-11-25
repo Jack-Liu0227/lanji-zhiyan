@@ -207,9 +207,13 @@ class ProjectTaskServiceTest(unittest.TestCase):
         task = self.create()
         node = {"id": "legacy-interrupted", "status": "interrupted", "checkpoint": {"agent": {"phase": "tools_ready", "messages": [{"role": "tool", "content": "Saved result"}], "done_tools": {"one": True}}}}
         restored = tasks.restore_attempt(self.db, task["id"], node)
-        run = tasks.start(self.db, task["id"], authority=self.ui)
-        self.assertEqual(run["id"], restored["latest_run"]["id"])
-        self.assertEqual(run["checkpoint"]["done_tools"], {"one": True})
+        self.assertEqual(restored['latest_run']['checkpoint']['done_tools'], {'one': True})
+        self.assertFalse(restored['recovery']['can_continue'])
+        with self.assertRaisesRegex(ValueError, '旧检查点缺少模型与执行配置快照'):
+            tasks.start(self.db, task["id"], authority=self.ui)
+        run = tasks.start(self.db, task["id"], authority=self.ui, restart=True)
+        self.assertNotEqual(run["id"], restored["latest_run"]["id"])
+        self.assertNotIn('done_tools', run['checkpoint'])
         tasks.claim(self.db, run["id"])
         tasks.save_checkpoint(self.db, run["id"], phase="tool", inflight={"name": "write"})
         tasks.fail(self.db, run["id"], "Unknown outcome")

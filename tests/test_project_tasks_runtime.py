@@ -283,6 +283,6 @@ class ProjectTasksRuntimeTest(unittest.TestCase):
             self.assertEqual([node["status"] for node in completed["nodes"]], ["delivered", "delivered"])
             self.assertTrue(all(node["checkpoint"]["delivery_source"] == "policy" for node in completed["nodes"]))
             self.page.get_by_text("全部完成", exact=True).wait_for(timeout=15000)
-            self.assertEqual(self.page.locator("[data-sequence-decision-source]").filter(has_text="Full access").count(), 2)
+            self.assertEqual(self.page.locator("[data-sequence-decision-source]").filter(has_text="已按运行策略自动验收").count(), 2)
             self.assertNotIn("[object Object]", self.page.locator("dialog.connected-dialog").inner_text())
         self.assertEqual(self.errors, [])

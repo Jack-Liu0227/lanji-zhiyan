@@ -9,6 +9,8 @@ import workflow
 import workflow_execution as engine
 import workflow_layout
 import workflow_state
+import project_tasks
+import project_task_execution
 
 
 class WorkflowExecutionTest(unittest.TestCase):
@@ -51,6 +53,145 @@ class WorkflowExecutionTest(unittest.TestCase):
         self.assertEqual(listing["runs"][0]["id"], run["id"])
         self.assertEqual(listing["runs"][0]["layout_id"], layout["id"])
         self.assertEqual(listing["runs"][0]["node_order"], ["search-node"])
+
+    def test_agent_prepare_freezes_managed_paths_and_review_mode_before_start(self):
+        self.layout([{"step": "search", "review_required": False,
+                      "output_contract": {"required_files": ["candidate_papers.csv"]}},
+                     {"step": "notes", "review_required": False}])
+        result = workflow._tool_impl("workflow_prepare", self.db, self.pid, {
+            "goal": "Review the literature",
+            "template_id": workflow_layout.state(self.db, self.pid)["layout"]["id"],
+            "request_key": "prepared-managed-review",
+            "managed_artifacts": True,
+            "review_mode": "human_review",
+        })
+        run = result["run"]
+        self.assertEqual(run["status"], "queued")
+        self.assertTrue(run["settings"]["prepared"])
+        self.assertEqual(run["settings"]["review_mode"], "human_review")
+        self.assertTrue(run["settings"]["managed_artifacts"])
+        import project_tasks
+        node_id = run["layout"]["nodes"][0]["id"]
+        task = project_tasks.get(self.db, run["settings"]["task_ids"][node_id])
+        self.assertEqual(task["output_contract"]["required_files"], [
+            f"研究过程/{run['id']}/search/candidate_papers.csv"])
+
+    def test_project_workflow_text_instructions_are_not_treated_as_file_inputs(self):
+        self.layout([{"step": "notes", "review_required": False, "prompt": "Produce the requested handoff."}])
+        source = Path(self.db.base_dir(self.pid)) / "materials" / "source.md"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("Source material.", encoding="utf-8")
+        prepared = workflow._tool_impl("workflow_prepare", self.db, self.pid, {
+            "goal": "Complete the evidence review",
+            "template_id": workflow_layout.state(self.db, self.pid)["layout"]["id"],
+            "request_key": "project-workspace-text-guidance",
+            "inputs": [
+                {"type": "text", "content": "Preserve existing deliveries and cite every source."},
+                {"relative": "materials/source.md"},
+            ],
+        })["run"]
+
+        task_id = prepared["settings"]["task_ids"]["notes"]
+        task = project_tasks.get(self.db, task_id)
+        self.assertEqual(task["inputs"], [{"relative": "materials/source.md"}])
+        self.assertIn("Preserve existing deliveries and cite every source.", task["goal"])
+
+        def complete_without_model(db, task_run_id, _cancel_check):
+            task_run = project_tasks.get_run(db, task_run_id)
+            task = project_tasks.get(db, task_run["task_id"])
+            output = project_task_execution._outputs(
+                db, task, task_run, {"reply": "Evidence handoff saved."}, None)
+            project_tasks.complete(db, task_run_id, {
+                "reply": "Evidence handoff saved.",
+                "output_snapshot": output,
+            })
+
+        with patch.object(project_task_execution, "execute", side_effect=complete_without_model):
+            completed = engine.advance(self.db, prepared["id"])
+
+        self.assertEqual(completed["status"], "succeeded", completed)
+        latest_task = project_tasks.get(self.db, task_id)
+        self.assertEqual(latest_task["latest_run"]["input_snapshot"]["assets"][0]["relative"],
+                         "materials/source.md")
+
+    def test_resume_repairs_saved_text_guidance_before_retrying_blocked_node(self):
+        self.layout([{"step": "notes", "review_required": False, "prompt": "Produce the requested handoff."}])
+        prepared = workflow._tool_impl("workflow_prepare", self.db, self.pid, {
+            "goal": "Complete the evidence review",
+            "template_id": workflow_layout.state(self.db, self.pid)["layout"]["id"],
+            "request_key": "project-workspace-resume-guidance",
+        })["run"]
+        task_id = prepared["settings"]["task_ids"]["notes"]
+        legacy_text = {"type": "text", "content": "Preserve the accepted source files during retry."}
+        settings = {**prepared["settings"], "task_inputs": [legacy_text], "dag_errors": {
+            "notes": "输入须引用项目资产或相对文件"}}
+        self.db.db.execute("UPDATE workflow_executions SET settings=? WHERE run_id=?",
+                           (json.dumps(settings, ensure_ascii=False), prepared["id"]))
+        self.db.db.execute("UPDATE workflow_runs SET status='blocked',error=? WHERE id=?",
+                           ("输入须引用项目资产或相对文件", prepared["id"]))
+        self.db.db.execute("UPDATE project_tasks SET status='blocked',inputs=? WHERE id=?",
+                           (json.dumps([legacy_text], ensure_ascii=False), task_id))
+        self.db.db.commit()
+
+        def complete_without_model(db, task_run_id, _cancel_check):
+            task_run = project_tasks.get_run(db, task_run_id)
+            task = project_tasks.get(db, task_run["task_id"])
+            output = project_task_execution._outputs(
+                db, task, task_run, {"reply": "Evidence handoff saved."}, None)
+            project_tasks.complete(db, task_run_id, {
+                "reply": "Evidence handoff saved.",
+                "output_snapshot": output,
+            })
+
+        with patch.object(project_task_execution, "execute", side_effect=complete_without_model), \
+                patch.object(engine, "kick", side_effect=lambda _path, run_id: engine.advance(self.db, run_id)):
+            resumed = engine.route("POST", "/api/workflow/execution/resume", {
+                "id": prepared["id"], "request_key": "retry-text-guidance"}, {}, self.db)
+
+        task = project_tasks.get(self.db, task_id)
+        self.assertEqual(resumed["run"]["status"], "succeeded", resumed["run"])
+        self.assertEqual(task["inputs"], [])
+        self.assertIn("Preserve the accepted source files during retry.", task["goal"])
+
+    def test_workflow_node_agent_has_a_bounded_model_turn_budget(self):
+        self.layout([{"step": "outline", "review_required": False}])
+        run = engine.create(self.db, self.pid, "Prepare a source-grounded outline")
+        observed = {}
+
+        def write_outline(db, project_id, prompt, **kwargs):
+            observed.update(kwargs)
+            workflow.doc_write(db, project_id, "outline", "# Outline\nVerified outline content")
+            return {"reply": "Outline saved."}
+
+        with patch.object(workflow, "run_agent", side_effect=write_outline):
+            completed = engine.advance(self.db, run["id"])
+
+        self.assertEqual(completed["status"], "succeeded", completed)
+        self.assertEqual(observed["max_steps"], 64)
+
+    def test_evidence_node_without_registration_tool_is_rejected_before_run_creation(self):
+        self.layout([{"step": "notes", "review_required": True,
+                      "tools": ["paper_focus", "paper_evidence_get", "project_artifact_write"],
+                      "output_contract": {"required_files": ["evidence_analysis.md"],
+                                          "requires_evidence": True}}])
+        with self.assertRaisesRegex(ValueError, "paper_evidence_record"):
+            workflow._tool_impl("workflow_prepare", self.db, self.pid, {
+                "goal": "Extract full-text evidence", "request_key": "missing-evidence-registration"})
+        self.assertIsNone(engine.latest(self.db, self.pid))
+
+    def test_execution_prepare_route_accepts_managed_artifact_setting(self):
+        self.layout([{"step": "search", "review_required": False,
+                      "output_contract": {"required_files": ["candidate_papers.csv"]}},
+                     {"step": "notes", "review_required": False}])
+        layout_id = workflow_layout.state(self.db, self.pid)["layout"]["id"]
+        response = engine.route("POST", "/api/workflow/execution/prepare", {
+            "project_id": self.pid, "template_id": layout_id, "goal": "Review the literature",
+            "idempotency_key": "api-prepared-managed-review", "managed_artifacts": True,
+            "review_mode": "human_review",
+        }, {}, self.db)
+        run = response["run"]
+        self.assertEqual(run["settings"]["review_mode"], "human_review")
+        self.assertTrue(run["settings"]["managed_artifacts"])
 
     def test_default_review_stops_each_node_and_feedback_flows_downstream(self):
         self.layout([{"step": "outline"}, {"step": "write"}, {"step": "review"}])

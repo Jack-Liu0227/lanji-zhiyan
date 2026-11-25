@@ -72,3 +72,82 @@ class ResearchReadingTest(unittest.TestCase):
             item = workflow._tool_impl("paper_abstracts", db, project, {})["papers"][0]
             self.assertEqual((item["paper_id"], item["status"]), (paper_id, "missing"))
             self.assertNotIn("abstract", item)
+
+    def test_evidence_registration_uses_source_offsets_from_focus(self):
+        with tempfile.TemporaryDirectory() as temporary, WorkflowDB(Path(temporary) / "r.sqlite") as db:
+            project = db.create_task("Offset evidence", "Register exact source text", "")
+            page_text = "Methods\nCells were tested at 4.2 V after cycling."
+            source = write_text_pdf(db.base_dir(project) / "offset.pdf", [page_text])
+            with patch("pdfio.page_texts", return_value=[page_text]):
+                paper_id = db.ingest_pdf(project, source)["id"]
+            focused = workflow._tool_impl("paper_focus", db, project, {
+                "question": "Which voltage was used?", "paper_ids": [paper_id], "keywords": ["4.2 V"],
+            })
+            match = focused["matches"][0]
+            result = workflow._tool_impl("paper_evidence_record", db, project, {
+                "paper_id": paper_id,
+                "items": [{"page_no": match["page_no"], "start": match["start"], "end": match["end"],
+                           "field": "test voltage", "value": "4.2 V"}],
+            })
+            self.assertEqual(result["rejected"], [])
+            recorded = db.evidence(project)[0]
+            expected = " ".join(page_text[match["start"]:match["end"]].split())
+            self.assertEqual(recorded["excerpt"], expected)
+            self.assertIn("4.2 V", recorded["excerpt"])
+
+    def test_search_record_includes_download_instruction_and_is_not_a_pdf_id(self):
+        with tempfile.TemporaryDirectory() as temporary, WorkflowDB(Path(temporary) / 'r.sqlite') as db:
+            project = db.create_task('Metadata', 'Read a real source', '')
+            result_id = db.cache_result(project, {'title': 'Indexed metadata', 'doi': '10.test/metadata',
+                                                  'abstract': 'An abstract with no locally indexed PDF.'})
+            item = workflow._tool_impl('paper_abstracts', db, project, {})['papers'][0]
+            self.assertEqual(item['result_id'], result_id)
+            self.assertEqual(item['fulltext_status'], 'not_indexed')
+            self.assertEqual(item['download_with'], {'tool': 'paper_download', 'result_id': result_id})
+            with self.assertRaisesRegex(ValueError, 'paper_download'):
+                workflow._tool_impl('paper_focus', db, project, {'question': 'Check source',
+                    'paper_ids': [result_id], 'keywords': ['abstract']})
+            other = db.create_task('Other project', '', '')
+            with self.assertRaises(PermissionError):
+                workflow._tool_impl('paper_focus', db, other, {'question': 'Check source',
+                    'paper_ids': [result_id], 'keywords': ['abstract']})
+
+    def test_selected_abstract_pool_pages_only_requested_results_and_rejects_other_projects(self):
+        with tempfile.TemporaryDirectory() as temporary, WorkflowDB(Path(temporary) / 'r.sqlite') as db:
+            project = db.create_task('Focused screening', '', '')
+            first = db.cache_result(project, {'title': 'Selected first', 'doi': '10.test/first',
+                'authors': 'A. Researcher', 'year': '2026', 'source': 'crossref',
+                'abstract': 'Visible source abstract for the first selected work.'})
+            db.cache_result(project, {'title': 'Unselected history', 'doi': '10.test/history'})
+            second = db.cache_result(project, {'title': 'Selected second', 'doi': '10.test/second'})
+            page = workflow._tool_impl('paper_abstracts', db, project, {
+                'result_ids': [first, second], 'offset': 0, 'limit': 1})
+            self.assertEqual([item['title'] for item in page['papers']], ['Selected first'])
+            self.assertEqual(page['next_offset'], 1)
+            self.assertEqual(page['papers'][0]['authors'], 'A. Researcher')
+            self.assertEqual(page['papers'][0]['year'], '2026')
+            last = workflow._tool_impl('paper_abstracts', db, project, {
+                'result_ids': [first, second], 'offset': page['next_offset'], 'limit': 1})
+            self.assertEqual([item['title'] for item in last['papers']], ['Selected second'])
+            self.assertIsNone(last['next_offset'])
+            other = db.create_task('Other screening project', '', '')
+            foreign = db.cache_result(other, {'title': 'Foreign work', 'doi': '10.test/foreign'})
+            with self.assertRaisesRegex(ValueError, '当前项目'):
+                workflow._tool_impl('paper_abstracts', db, project, {'result_ids': [foreign]})
+
+    def test_linked_search_metadata_reports_existing_pdf_and_focus_instruction(self):
+        import project_library
+        with tempfile.TemporaryDirectory() as temporary, WorkflowDB(Path(temporary) / 'r.sqlite') as db:
+            project = db.create_task('Linked full text', '', '')
+            source = write_text_pdf(db.base_dir(project) / 'source.pdf', [
+                'Abstract\nAn interface coating reduced resistance under matched test conditions.\n1 Introduction\nBody.'])
+            paper = db.ingest_pdf(project, source)
+            result_id = db.cache_result(project, {'title': 'Interface coating study', 'doi': '10.test/coating',
+                'abstract': 'An interface coating reduced resistance under matched test conditions.'})
+            project_library.link_pdf(db, project, result_id, paper['id'])
+            result = workflow._tool_impl('paper_abstracts', db, project, {'result_ids': [result_id]})
+            item = next(row for row in result['papers'] if row.get('result_id') == result_id)
+            self.assertEqual(item['fulltext_status'], 'indexed')
+            self.assertEqual(item['paper_id'], paper['id'])
+            self.assertEqual(item['read_with'], {'tool': 'paper_focus', 'paper_ids': [paper['id']]})
+            self.assertNotIn('download_with', item)

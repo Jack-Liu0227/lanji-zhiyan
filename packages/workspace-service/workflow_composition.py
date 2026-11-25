@@ -17,7 +17,11 @@ def expand(db, project_id, layout, ancestors=()):
         if node.get('node_kind') != 'workflow':
             nodes.append(node); order.append(nid); endpoints[nid] = ([nid], [nid])
             continue
-        child = expand(db, project_id, project_workflows.current(db, project_id, node['workflow_template_id']), (*ancestors, layout['id']))
+        try:
+            child_layout = project_workflows.current(db, project_id, node['workflow_template_id'])
+        except KeyError as exc:
+            raise ValueError('子工作流模板已删除，请重新选择：' + node['label']) from exc
+        child = expand(db, project_id, child_layout, (*ancestors, layout['id']))
         names = {item['id']: nid + '.' + item['id'] for item in child['nodes']}
         entries = [item for item in child['order'] if not any(edge['target'] == item for edge in child['edges'])]
         exits = [item for item in child['order'] if not any(edge['source'] == item for edge in child['edges'])]

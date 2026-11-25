@@ -118,8 +118,17 @@ def route(method,path,body,query,db):
                        ) END AS run_id
                 FROM chats c LEFT JOIN execution_conversations x ON x.chat_id=c.id AND x.project_id=c.task_id
                 WHERE c.task_id=? AND c.channel IN ('conversation','toolbox')
+                  AND COALESCE(x.kind, '') != 'workflow'
+                  AND c.id NOT IN (SELECT 'execution-' || id FROM workflow_runs WHERE project_id=?)
+                  AND NOT (
+                    COALESCE(x.kind, '') = 'task' AND EXISTS (
+                      SELECT 1 FROM project_tasks pt
+                      WHERE (pt.id = x.entity_id OR c.id = 'execution-' || pt.id)
+                        AND pt.workflow_run_id IS NOT NULL AND pt.workflow_run_id != ''
+                    )
+                  )
                 ORDER BY c.pinned_at DESC,c.updated_at DESC,c.id
-            """, (project,))]
+            """, (project, project))]
         else:
             rows = [dict(row) for row in db.db.execute("SELECT * FROM chats WHERE channel='conversation' AND id NOT LIKE 'execution-%' ORDER BY pinned_at DESC,updated_at DESC")]
     elif kind=='team':

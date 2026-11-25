@@ -8,6 +8,7 @@ const UsageView=(()=>{
   const when=value=>new Date(value).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
   const labels={overview:'概览',requests:'请求明细',sessions:'会话',context:'上下文',prices:'模型价格'};
   const components={system:'系统提示词',tools:'工具定义',tool_results:'工具结果',conversation:'会话内容'};
+  const sources={conversation:'会话',workflow:'工作流',schedule:'定时规则',project_task:'项目任务',agent:'专家调用',model_check:'模型测试',evidence_extraction:'证据抽取',pdf_translation_check:'PDF 翻译预检'};
   let view='overview',days=30,page=1,model='',status='',project='',query='',generation=0,priceSearch='';
 
   function table(head,rows){
@@ -64,7 +65,7 @@ const UsageView=(()=>{
     host.querySelector('[data-price-search]').oninput=event=>{priceSearch=event.target.value;priceTable(data,host.querySelector('[data-price-table]'));};
   }
   async function exportCSV(data){
-    const keys=['created_at','model','provider','title','status','attempt','prompt_tokens','output_tokens','cached_tokens','reasoning_tokens','duration_ms','first_token_ms','currency','cost_min','cost','cost_reason'];
+    const keys=['created_at','model','provider','source','title','status','attempt','prompt_tokens','output_tokens','cached_tokens','reasoning_tokens','duration_ms','first_token_ms','currency','cost_min','cost','cost_reason'];
     const cell=value=>'"'+String(value??'').replace(/^[=+@-]/,"'$&").replaceAll('"','""')+'"';
     const csv='\uFEFF'+[keys,...data.requests.map(row=>keys.map(key=>row[key]))].map(row=>row.map(cell).join(',')).join('\r\n');
     try{
@@ -87,6 +88,24 @@ const UsageView=(()=>{
       host.innerHTML=`<section class="usage-page"><header class="usage-header"><div><p class="usage-eyebrow"><i></i>模型运行观测</p><h2>用量统计<span>每一次调用，都有迹可循</span></h2></div><button class="btn ghost" data-usage-refresh>↻ 刷新</button></header><nav class="usage-tabs" aria-label="用量统计视图">${Object.entries(labels).map(([id,label])=>`<button type="button" data-view="${id}" aria-pressed="${view===id}">${label}</button>`).join('')}</nav>${view==='prices'?'':`<div class="usage-filters"><label>时间范围<select data-days class="control">${[1,7,30,90,365].map(value=>`<option value="${value}" ${days===value?'selected':''}>${value===1?'最近 24 小时':'最近 '+value+' 天'}</option>`).join('')}</select></label><label>模型<select data-model class="control"><option value="">全部模型</option>${[...new Set(data.models.map(item=>item.model))].map(value=>`<option ${model===value?'selected':''}>${h(value)}</option>`).join('')}</select></label><label>项目<select data-project class="control"><option value="">全部项目</option>${S.tasks.map(item=>`<option value="${h(item.id)}" ${project===item.id?'selected':''}>${h(item.title)}</option>`).join('')}</select></label><label>状态<select data-status class="control"><option value="">全部请求</option><option value="ok" ${status==='ok'?'selected':''}>成功</option><option value="error" ${status==='error'?'selected':''}>失败</option></select></label><button class="btn ghost usage-export" data-export>↓ 导出当前页请求 CSV</button></div><div class="usage-kpis">${metrics.map(([label,value,hint],index)=>`<article class="${index===0?'usage-primary':''}"><small>${label}</small><strong>${value}</strong><span>${hint}</span></article>`).join('')}</div><div class="usage-coverage"><span><i class="${totals.requests&&!known?'is-warn':''}"></i>${totals.metered} / ${totals.requests} 次请求返回用量</span><p>未返回的数值显示「—」，不计入合计。费用按当前价格估算。</p>${Object.keys(totals.unpriced).length?`<span>${h(Object.entries(totals.unpriced).map(([reason,count])=>reason+' '+count+' 次').join(' · '))}</span>`:''}</div>`}<div data-usage-body></div></section>`;
       const body=host.querySelector('[data-usage-body]');
       body.innerHTML=view==='overview'?overview(data):view==='requests'?requests(data):view==='sessions'?`<section class="usage-card"><div class="usage-card-head"><h3>会话用量</h3><span>按 Token 排序 · 最多 200 条</span></div>${sessionTable(data.sessions,true)}</section>`:view==='context'?contexts(data):prices(data);
+      if(view==='requests'){
+        const cells=body.querySelectorAll('tbody tr td:nth-child(2)');
+        data.requests.forEach((row,index)=>{
+          if(!cells[index]||!sources[row.source])return;
+          const label=document.createElement('small');label.textContent=sources[row.source];cells[index].append(label);
+        });
+      }
+      if(view==='overview'){
+        body.insertAdjacentHTML('afterend',`<details class="usage-card"><summary>模型运行预算</summary><p class="usage-note">请求数包含重试。Token 和费用按供应商已返回且可计价的数值阻止后续请求；已发出的请求仍可完成。0 表示不限。BabelDOC 内部调用和未知用量不计入，费用为估算值。</p><form data-usage-budget class="usage-price-form"><label>计数范围<select name="scope" class="control"><option value="conversation">每个会话</option><option value="workflow">每次图流运行</option><option value="schedule">每条定时规则（每天）</option></select></label><label>请求数上限<input name="requests" type="number" min="0" step="1" class="control"></label><label>Token 上限<input name="tokens" type="number" min="0" step="1" class="control"></label><label>费用上限（USD）<input name="usd" type="number" min="0" step="any" class="control"></label><label>费用上限（CNY）<input name="cny" type="number" min="0" step="any" class="control"></label><button class="btn">保存预算</button><p role="status"></p></form></details>`);
+        const form=host.querySelector('[data-usage-budget]'); let budgets=data.budgets||{};
+        const fill=()=>{const limits=budgets[form.elements.scope.value]||{};for(const field of ['requests','tokens','usd','cny'])form.elements[field].value=limits[field]||0;};
+        form.elements.scope.onchange=fill;fill();
+        form.onsubmit=async event=>{
+          event.preventDefault();const message=form.querySelector('[role=status]'),button=form.querySelector('button');button.disabled=true;
+          try{const result=await api('/api/usage/budgets',Object.fromEntries(new FormData(form)));budgets=result.budgets;message.textContent='预算已保存。';}
+          catch(error){message.textContent=error.message;}finally{button.disabled=false;}
+        };
+      }
       if(['requests','context'].includes(view))body.insertAdjacentHTML('beforeend',`<div class="usage-pager"><span>共 ${full(totals.requests)} 次请求 · 每页 100 条</span><button class="btn ghost" data-prev ${page<=1?'disabled':''}>上一页</button><span>${page} / ${data.pages}</span><button class="btn ghost" data-next ${page>=data.pages?'disabled':''}>下一页</button></div>`);
       host.querySelectorAll('[data-view],[data-go]').forEach(button=>button.onclick=()=>{view=button.dataset.view||button.dataset.go;page=1;render(host);});
       for(const [selector,set] of [['days',value=>days=Number(value)],['model',value=>model=value],['project',value=>project=value],['status',value=>status=value]]){const input=host.querySelector('[data-'+selector+']');if(input)input.onchange=event=>{set(event.target.value);page=1;render(host);};}

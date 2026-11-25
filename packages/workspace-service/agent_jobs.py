@@ -107,6 +107,8 @@ def _execute(db_path, run, request, step):
         db.resuming = bool(checkpoint.get("messages") or checkpoint.get("completed_calls"))
         owner=db.db.execute('SELECT task_id FROM chats WHERE id=?',(tid,)).fetchone()
         db.usage_context={'owner_id':tid,'project_id':owner['task_id'] if owner else tid,'run_id':run.run_id,'assistant_id':(request.get('_runtime_snapshot') or {}).get('assistant_id','')}
+        if owner:
+            db.usage_context.update(source='conversation', budget_key='conversation:' + tid)
         import workspace_chat
         selected = request.get('_runtime_snapshot') or {}
 

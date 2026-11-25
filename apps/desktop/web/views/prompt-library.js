@@ -9,6 +9,20 @@ window.PromptLibrary=(()=>{
     const state={project:options.project_id||curTask||projects[0]?.id||'',data:null,key:'',note:null,dirty:false,saving:false,loading:false,sequence:0,loadSequence:0};
     const dialog=Notebook.dialog('提示词模板库',`<div class="pl-toolbar"><label>模板归属项目<select class="control" data-pl-project aria-label="模板归属项目"><option value="">仅查看内置模板</option>${projects.map(p=>`<option value="${h(p.id)}">${h(p.title)}</option>`).join('')}</select></label><button type="button" class="btn" data-pl-new>新建模板</button><button type="button" class="btn ghost" data-pl-categories>管理分类</button><button type="button" class="btn ghost" data-pl-bindings>模板绑定</button><button type="button" class="btn ghost" data-pl-refresh>刷新</button></div><div class="pl-filters"><input type="search" class="control" data-pl-search aria-label="搜索模板" placeholder="搜索名称、分类或标签"><select class="control" data-pl-source aria-label="模板来源"><option value="all">全部模板</option><option value="project">项目模板</option><option value="builtin">内置模板</option></select><span class="hint" data-pl-count></span></div><div class="pl-layout"><nav class="pl-list" data-pl-list aria-label="模板列表"></nav><section class="pl-editor" data-pl-editor aria-label="模板详情"></section></div>`);
     dialog.classList.add('prompt-library');
+    if(typeof SplitResizer !== 'undefined'){
+      const layout = dialog.querySelector('.pl-layout');
+      if(layout && !layout.dataset.resizerBound){
+        layout.dataset.resizerBound = 'true';
+        SplitResizer.bind(layout, {
+          mode: 'fixed-left',
+          storageKey: 'pl-layout',
+          defaultSize: 270,
+          min: 180,
+          max: 420,
+          cssVar: '--pl-list-w'
+        });
+      }
+    }
     const el=name=>dialog.querySelector('[data-pl-'+name+']');
     const fail=err=>Notebook.error(dialog,err);
     el('project').value=state.project;

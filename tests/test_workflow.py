@@ -293,6 +293,129 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("建议先检索", out["reply"])
         self.assertEqual([m["role"] for m in self.db.messages(self.task)], ["user", "assistant"])
 
+    def test_agent_retries_empty_model_response_once_without_streaming(self):
+        import hashlib
+        import json
+        from unittest.mock import patch
+        self.db.add_model("retry model", "http://127.0.0.1:1/v1", "fake-retry", "sk", activate=True)
+        checkpoint = {
+            "messages": [
+                {"role": "system", "content": "Saved workflow context"},
+                {"role": "user", "content": "Continue from the saved checkpoint"},
+                {"role": "assistant", "tool_calls": [{"id": "saved-call", "function": {
+                    "name": "paper_focus", "arguments": "{}"}}]},
+                {"role": "tool", "name": "paper_focus", "tool_call_id": "saved-call",
+                 "content": "Saved result that must not run again"},
+            ],
+            "events": [],
+            "turn": 7,
+            "done_tools": {},
+        }
+        signature = hashlib.sha256(json.dumps([[self.task, "Continue"], ""], default=str).encode()).hexdigest()
+        self.db.job_checkpoint = {**checkpoint, "signature": signature}
+        self.db.save_agent_checkpoint = lambda **_values: None
+        responses = [
+            {"content": "", "tool_calls": [], "finish_reason": "stop", "stream_complete": True},
+            {"content": "Recovered from the saved checkpoint", "tool_calls": [], "finish_reason": "stop"},
+        ]
+        requests = []
+
+        def fake_chat_raw(_profile, messages, tools=None, **kwargs):
+            requests.append((messages, kwargs))
+            return responses.pop(0)
+
+        with patch.object(workflow, "chat_raw", side_effect=fake_chat_raw), \
+                patch.object(workflow, "_tool_impl", wraps=workflow._tool_impl) as tool:
+            result = run_agent(self.db, self.task, "Continue", emit=lambda _event: None, publish=False)
+
+        self.assertEqual(result["reply"], "Recovered from the saved checkpoint")
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[0][1]["max_tokens"], workflow.WRITE_MAX_TOKENS)
+        self.assertEqual(requests[1][1]["max_tokens"], workflow.WRITE_MAX_TOKENS * 2)
+        self.assertIsNone(requests[1][1].get("on_delta"))
+        self.assertIn("Saved result that must not run again", json.dumps(requests[1][0]))
+        tool.assert_not_called()
+
+    def test_checkpoint_resume_can_refresh_system_rules_without_losing_saved_results(self):
+        import hashlib
+        import json
+        from unittest.mock import patch
+        self.db.add_model("resume model", "http://127.0.0.1:1/v1", "fake-resume", "sk", activate=True)
+        checkpoint = {
+            "messages": [
+                {"role": "system", "content": "Previous workflow rules"},
+                {"role": "user", "content": "Continue source analysis"},
+                {"role": "tool", "name": "paper_focus", "content": "Saved original evidence"},
+            ],
+            "events": [],
+            "turn": 12,
+            "done_tools": {"paper_focus\u0000{}": {"evidence": "saved"}},
+        }
+        signature = hashlib.sha256(json.dumps([[self.task, "Continue source analysis"], ""], default=str).encode()).hexdigest()
+        self.db.job_checkpoint = {**checkpoint, "signature": signature}
+        self.db.save_agent_checkpoint = lambda **_values: None
+        requests = []
+
+        def fake_chat_raw(_profile, messages, tools=None, **_kwargs):
+            requests.append(messages)
+            return {"content": "Continue with the verified candidate mapping.", "tool_calls": []}
+
+        with patch.object(workflow, "chat_raw", side_effect=fake_chat_raw):
+            run_agent(self.db, self.task, "Continue source analysis", system="Updated candidate mapping rules",
+                      publish=False, refresh_system_prompt=True)
+
+        self.assertEqual(requests[0][0]["role"], "system")
+        self.assertIn("Updated candidate mapping rules", requests[0][0]["content"])
+        self.assertIn("Saved original evidence", json.dumps(requests[0]))
+
+    def test_agent_discards_tool_calls_from_incomplete_stream_before_retry(self):
+        from unittest.mock import patch
+        self.db.add_model("retry model", "http://127.0.0.1:1/v1", "fake-retry", "sk", activate=True)
+        incomplete_call = {"id": "partial-call", "type": "function", "function": {
+            "name": "library_overview", "arguments": "{}"}}
+        responses = [
+            {"content": "", "tool_calls": [incomplete_call], "stream_complete": False},
+            {"content": "Completed response", "tool_calls": [], "finish_reason": "stop"},
+        ]
+
+        def fake_chat_raw(_profile, _messages, tools=None, **_kwargs):
+            return responses.pop(0)
+
+        with patch.object(workflow, "chat_raw", side_effect=fake_chat_raw), \
+                patch.object(workflow, "_tool_impl", wraps=workflow._tool_impl) as tool:
+            result = run_agent(self.db, self.task, "Continue", emit=lambda _event: None, publish=False)
+
+        self.assertEqual(result["reply"], "Completed response")
+        self.assertFalse(any(event["type"] == "tool_call" for event in result["events"]))
+        tool.assert_not_called()
+
+    def test_agent_reuses_saved_tools_when_repair_prompt_changes(self):
+        from unittest.mock import patch
+        self.db.add_model("retry model", "http://127.0.0.1:1/v1", "fake-retry", "sk", activate=True)
+        self.db.job_checkpoint = {
+            "signature": "previous-prompt",
+            "done_tools": {"library_overview\x00{}": {"summary": "Saved library state"}},
+            "output_assets": ["asset-from-this-attempt"],
+        }
+        self.db.save_agent_checkpoint = lambda **_values: None
+        tool_call = {"id": "saved-tool", "type": "function", "function": {
+            "name": "library_overview", "arguments": "{}"}}
+        responses = [
+            {"content": "", "tool_calls": [tool_call]},
+            {"content": "Repair complete", "tool_calls": []},
+        ]
+
+        def fake_chat_raw(_profile, _messages, tools=None, **_kwargs):
+            return responses.pop(0)
+
+        with patch.object(workflow, "chat_raw", side_effect=fake_chat_raw), \
+                patch.object(workflow, "_tool_impl", wraps=workflow._tool_impl) as tool:
+            result = run_agent(self.db, self.task, "Repair prompt", emit=lambda _event: None,
+                               publish=False, resume_saved_tools=True)
+
+        self.assertEqual(result["reply"], "Repair complete")
+        tool.assert_not_called()
+
     def test_agent_tool_failure_is_reported_not_raised(self) -> None:
         def fake_chat_raw(profile, messages, tools=None, **kw):
             if not any(m.get("role") == "tool" for m in messages):
@@ -327,7 +450,12 @@ class WorkflowTest(unittest.TestCase):
             self.assertIn("还要调整检索式吗", seen["ctx"])
             run_agent(self.db, self.task, "看下现状", step="notes", scope="notes")
             self.assertNotIn("还要调整检索式吗", seen["ctx"])
+            self.db.workflow_end_to_end = True
+            run_agent(self.db, self.task, "按工作流文件合同交付", step="search", scope="search")
+            self.assertNotIn("还要调整检索式吗", seen["ctx"])
+            self.assertIn("工作流检索节点交付", seen["ctx"])
         finally:
+            self.db.workflow_end_to_end = False
             workflow.chat_raw = old
 
     def test_检索完不提问就补一句(self) -> None:
@@ -352,7 +480,12 @@ class WorkflowTest(unittest.TestCase):
             workflow.chat_raw = make_chat("检索完了，共 3 条。还要按年份筛一下吗？")
             out2 = run_agent(self.db, self.task, "再检索", step="search", scope="search", publish=False)
             self.assertEqual(out2["reply"].count("？"), 1)          # 自己问过了，不重复补
+            self.db.workflow_end_to_end = True
+            workflow.chat_raw = make_chat("已按文件合同交付，共 3 条。")
+            out3 = run_agent(self.db, self.task, "工作流检索交付", step="search", scope="search", publish=False)
+            self.assertNotIn("还要调整检索式吗", out3["reply"])
         finally:
+            self.db.workflow_end_to_end = False
             workflow.chat_raw, workflow._tool_impl = old_chat, old_tool
 
     def test_agent_roles_leader_vs_partner(self) -> None:

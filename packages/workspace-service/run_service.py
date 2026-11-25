@@ -20,7 +20,13 @@ def agent_scope(function):
             return completed[signature]
         previous = getattr(db, "asset_run", None)
         previous_resume = getattr(db, "agent_resume", None)
-        db.agent_resume = dict(checkpoint) if checkpoint.get("signature") == signature else {}
+        if checkpoint.get("signature") == signature:
+            db.agent_resume = dict(checkpoint)
+        elif kwargs.get("resume_saved_tools") is True:
+            db.agent_resume = {key: checkpoint[key] for key in ("done_tools", "output_assets", "template_snapshot")
+                               if key in checkpoint}
+        else:
+            db.agent_resume = {}
         db.asset_run = None
         try:
             with execution.scope(kwargs.get("cancel_check")):

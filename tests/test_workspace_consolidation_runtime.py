@@ -26,15 +26,33 @@ class SearchWorkflowModelFixture:
             def do_POST(self):
                 payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 messages = payload['messages']
+                tool_names = [message.get('name') for message in messages if message.get('role') == 'tool']
+                reply_json = json.dumps([m for m in messages if m.get('role') in ('assistant', 'tool')])
                 available = {tool['function']['name'] for tool in payload.get('tools', [])}
-                searched = any(message.get('role') == 'tool'
-                               and message.get('name') == 'paper_search' for message in messages)
-                call = 'paper_search' in available and not searched
-                if call:
+                searched = 'paper_search' in tool_names
+                wrote_csv = 'candidate_papers.csv' in reply_json
+                wrote_md = 'screening_notes.md' in reply_json
+                call = ('paper_search' in available and not searched) or (
+                    'project_artifact_write' in available and (not wrote_csv or not wrote_md)
+                )
+                if 'paper_search' in available and not searched:
                     fixture.calls.append('paper_search')
                     delta = {'tool_calls': [{'index': 0, 'id': 'workflow-paper-search', 'type': 'function',
                         'function': {'name': 'paper_search', 'arguments': json.dumps({
                             'query': 'Verified literature', 'sources': ['crossref'], 'rows': 1})}}]}
+                elif 'project_artifact_write' in available and not wrote_csv:
+                    rows_csv = 'title,doi,abstract_evidence,screening_decision,decision_reason,full_text_availability\n' + '\n'.join(
+                        f'Verified literature {i},10.1000/v{i},Abstract check,include,Matches interface question,abstract_only'
+                        for i in range(1, 9)
+                    )
+                    delta = {'tool_calls': [{'index': 0, 'id': 'workflow-csv', 'type': 'function',
+                        'function': {'name': 'project_artifact_write', 'arguments': json.dumps({
+                            'path': 'candidate_papers.csv', 'content': rows_csv})}}]}
+                elif 'project_artifact_write' in available and not wrote_md:
+                    notes_md = '# Screening Notes\n\n' + ('Reviewed crossref literature candidates and screening criteria for interface stability and modification strategies. ' * 6)
+                    delta = {'tool_calls': [{'index': 0, 'id': 'workflow-notes', 'type': 'function',
+                        'function': {'name': 'project_artifact_write', 'arguments': json.dumps({
+                            'path': 'screening_notes.md', 'content': notes_md})}}]}
                 else:
                     delta = {'content': '# Search results\n\nThe deterministic search completed.'}
                 value = {'choices': [{'delta': delta, 'finish_reason': 'tool_calls' if call else 'stop'}]}
@@ -94,7 +112,8 @@ class WorkspaceConsolidationRuntimeTest(unittest.TestCase):
         self.page.get_by_text('ONE_SHARED_AUTOMATION',exact=True).wait_for()
         data=self.page.request.get(self.url+'api/schedules').json()
         rule=next(row for row in data['schedules'] if row['name']=='ONE_SHARED_AUTOMATION')
-        self.assertEqual(self.page.locator('#sidebar [data-nav="task-center"]').count(),1)
+        self.page.evaluate("openTab('workspace')")
+        self.assertEqual(self.page.locator('[data-pw-quick="tasks"]').count(),1)
         self.page.evaluate("openTab('schedules')")
         self.page.locator('[data-ec-view="automation"][aria-pressed="true"]').wait_for()
         self.assertEqual(self.page.evaluate('route()'),'task-center')
@@ -152,6 +171,8 @@ class WorkspaceConsolidationRuntimeTest(unittest.TestCase):
         self.assertEqual(self.page.locator('.project-workflow-graph').count(),1)
         self.assertEqual(self.page.locator('#pwLegacyGraphHost,#pwLgCompactBar,[data-pw-view="tools"],#pwWorkflowTool').count(),0)
         self.page.evaluate("ProjectWorkspace.showResource('tools')")
+        if self.page.locator('#pwResource .pwg-empty [data-pwg-template]').count():
+            self.page.locator('#pwResource .pwg-empty [data-pwg-template]').click()
         self.page.locator('[data-pwg-label]').wait_for()
         self.assertEqual(self.page.locator('#pwToolChoice,.wf-stage').count(),0)
         self.assertEqual(self.errors,[])
@@ -169,14 +190,14 @@ class WorkspaceConsolidationRuntimeTest(unittest.TestCase):
             self.assertEqual(saved['id'],started['id'])
             self.assertEqual(saved['status'],'awaiting_review',saved)
             self.assertEqual(model.calls,['paper_search'])
-            self.page.evaluate("ProjectWorkspace.showResource('workflow')")
-            self.page.locator('#pwWorkflowChoice').wait_for()
-            self.assertEqual(self.page.locator('#pwWorkflowChoice').input_value(),saved['layout']['id'])
+            self.page.evaluate('r=>ProjectWorkspace.openWorkflowRun(r.pid,r.id)',{'pid':self.pid,'id':saved['id']})
+            self.page.locator('.project-workflow-graph').wait_for()
+            self.assertEqual(self.page.locator('[data-wfl-node]').count(),5)
             tasks=self.page.request.get(self.url+'api/project-tasks?project_id='+self.pid).json()['tasks']
-            self.assertEqual(len(tasks),4)
+            self.assertEqual(len(tasks),5)
             self.assertTrue(all(task['workflow_run_id']==saved['id'] for task in tasks))
             search=next(task for task in tasks if task['workflow_node_id']=='literature_retrieval')
-            self.assertEqual(search['latest_run']['output_snapshot']['content'][0]['title'], 'Verified literature')
+            self.assertIn('Verified literature', str(search['latest_run']['output_snapshot']['content']))
         self.assertEqual(self.errors,[])
 
     def test_global_chat_runtime_is_per_conversation_and_used_by_model(self):

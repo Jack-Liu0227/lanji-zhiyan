@@ -57,6 +57,8 @@ def record(profile, messages, tools, duration_ms, usage, status, attempt, first_
     for key in ('memory_chars', 'profile_chars'):
         if key in context:
             sizes[key] = context[key]
+    if context.get('source'):
+        sizes['source'] = context['source']
     values=[uuid.uuid4().hex,datetime.now(timezone.utc).isoformat(),
             *[str(context.get(key) or '') for key in ('project_id','owner_id','assistant_id','run_id')],
             str(profile.get('id') or ''),model_pricing.provider_for(profile),
@@ -70,6 +72,51 @@ def record(profile, messages, tools, duration_ms, usage, status, attempt, first_
             connection.commit()
     except sqlite3.Error:
         logging.getLogger(__name__).exception('Unable to persist model metering')
+
+
+def reserve_request(profile):
+    context = profile.get('_usage_context') or {}
+    path, key = context.get('db_path'), context.get('budget_key')
+    if not path or not key or not Path(path).is_file():
+        return None
+    with closing(sqlite3.connect(path, timeout=10)) as conn, conn:
+        row = conn.execute("SELECT data FROM service_settings WHERE service='model_budgets' AND owner=''").fetchone()
+        if not row:
+            return None
+        limits = json.loads(row[0]).get(key.partition(':')[0], {})
+        requests, tokens = limits.get('requests', 0), limits.get('tokens', 0)
+        usd, cny = limits.get('usd', 0), limits.get('cny', 0)
+        if not (requests or tokens or usd or cny):
+            return None
+        changed = conn.execute('''INSERT INTO model_budget_counters(scope_key,requests) VALUES (?,1)
+            ON CONFLICT(scope_key) DO UPDATE SET requests=requests+1
+            WHERE (?=0 OR requests<?) AND (?=0 OR known_tokens<?) AND (?=0 OR estimated_usd<?) AND (?=0 OR estimated_cny<?)''',
+            (key, requests, requests, tokens, tokens, usd, usd, cny, cny))
+        if not changed.rowcount:
+            from runtime import BudgetExceededError
+            raise BudgetExceededError('已达到本范围的模型请求、已报告 Token 或估算费用上限，未发送下一次请求。')
+    return path, key, bool(usd or cny)
+
+
+def account_request(reservation, profile, usage):
+    if not reservation or not usage.get('exact'):
+        return
+    path, key, track_cost = reservation
+    with closing(sqlite3.connect(path, timeout=10)) as conn, conn:
+        usd = cny = 0
+        if track_cost:
+            provider, model = model_pricing.provider_for(profile), profile['model']
+            row = conn.execute("SELECT data FROM service_settings WHERE service='usage_prices' AND owner=''").fetchone()
+            price = json.loads(row[0]).get(profile.get('id')) if row else None
+            if not price or price.get('model') != model or price.get('provider') != provider:
+                price = model_pricing.lookup(provider, model)
+            estimate = model_pricing.estimate({'prompt_tokens': usage['prompt'], 'output_tokens': usage['completion'],
+                'cached_tokens': usage.get('cached'), 'cache_write_tokens': usage.get('cache_write'),
+                'created_at': datetime.now(timezone.utc).isoformat()}, price)
+            if estimate['currency'] == 'USD': usd = estimate['cost'] or 0
+            if estimate['currency'] == 'CNY': cny = estimate['cost'] or 0
+        conn.execute('UPDATE model_budget_counters SET known_tokens=known_tokens+?,estimated_usd=estimated_usd+?,estimated_cny=estimated_cny+? WHERE scope_key=?',
+                     (usage['prompt'] + usage['completion'], usd, cny, key))
 
 
 def report(db, query):
@@ -99,6 +146,7 @@ def report(db, query):
     totals={'requests':len(rows),'failed':0,'input':0,'output':0,'cached':0,'reasoning':0,'metered':0,'cached_reported':0,'reasoning_reported':0,'priced':0,'cost':0,'costs':{},'unpriced':{}}
     for row in rows:
         row['context']=json.loads(row.pop('context_json'));row['title']=names.get(row['owner_id'],row['owner_id'] or '独立调用')
+        row['source'] = row['context'].get('source', '')
         row['project_title']=projects.get(row['project_id'],'未关联项目')
         profile=profiles.get(row['profile_id'],{})
         # Old records stored a provider ID or wire; only use a still-matching profile.
@@ -143,12 +191,33 @@ def report(db, query):
             'prices':prices,'profile_prices':profile_prices,'price_catalog':model_pricing.MODEL_PRICES,
             'price_checked_at':model_pricing.CHECKED_AT,'price_sources':model_pricing.SOURCES,
             'model_totals':sorted(model_groups.values(),key=lambda item:item['tokens'],reverse=True),
-            'currency':'USD','days':days}
+            'currency':'USD','days':days, 'budgets': service_settings.read(db, 'model_budgets')}
 
 
 def route(method,path,body,query,db):
     if not path.startswith('/api/usage'):return None
     if method=='GET' and path=='/api/usage':return report(db,query)
+    if method=='POST' and path=='/api/usage/budgets':
+        scope = body.get('scope')
+        if scope not in ('conversation','workflow','schedule'):
+            raise ValueError('请选择会话、工作流或定时规则范围')
+        limits = {}
+        for key in ('requests','tokens'):
+            raw = str(body.get(key) or '0')
+            if not raw.isdecimal() or len(raw) > 10 or int(raw) > 1_000_000_000:
+                raise ValueError('预算上限须为 0 至 10 亿之间的整数')
+            limits[key] = int(raw)
+        for key in ('usd','cny'):
+            try:
+                value = float(body.get(key) or 0)
+            except (TypeError, ValueError) as exc:
+                raise ValueError('费用上限须为非负数字') from exc
+            if not math.isfinite(value) or not 0 <= value <= 1_000_000:
+                raise ValueError('费用上限须在 0 至 100 万之间')
+            limits[key] = value
+        values = service_settings.read(db, 'model_budgets')
+        values[scope] = limits
+        return {'budgets': service_settings.write(db, 'model_budgets', values)}
     if method=='POST' and path=='/api/usage/prices':
         profile_id=str(body.get('profile_id') or '');profile=db.model(profile_id)
         prices=service_settings.read(db,'usage_prices')

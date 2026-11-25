@@ -115,8 +115,8 @@ class ConnectedResearchRuntimeTest(unittest.TestCase):
                        {id:'w',step:'write',label:'Write',assistant_id:'builtin-steward',prompt:'BROWSER_WRITE',review_required:false}],
                 edges:[{source:'o',target:'w'}],order:['o','w']});
               await api('/api/workflow/layouts/select',{task_id:pid,layout_id:result.layout.id});
-              openTab('workflow');
             }""", pid)
+            workspace_section(self.page, 'workflow')
             self.page.locator('#pwWorkflowRun').click()
             self.page.locator("[data-sequence-start]").click()
             state = self.poll_json('/api/workflow/execution?task_id=' + pid, lambda d: (d.get('run') or {}).get('status') in ('awaiting_review', 'failed'))['run']

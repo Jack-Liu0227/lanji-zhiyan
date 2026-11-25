@@ -99,6 +99,7 @@ class WorkspaceUIAuditRuntimeTest(unittest.TestCase):
         self.assertEqual(self.page.locator('.tool-output pre').count(),1)
         self.assertFalse(self.page.locator('.tool-card details').evaluate('el=>el.open'))
         self.shot('messages-collapsed')
+        self.page.locator('.chat-process > summary').click()
         self.page.locator('.tool-card summary').click()
         self.assertIn('evidence.md',self.page.locator('.tool-body').inner_text())
         self.shot('messages-expanded')
@@ -178,9 +179,9 @@ class WorkspaceUIAuditRuntimeTest(unittest.TestCase):
             if name=='knowledge':
                 field=self.page.get_by_role('searchbox',name='搜索知识库项目',exact=True)
                 field.fill('NO_MATCH_AUDIT');self.assertEqual(self.page.locator('[data-sm-project]:visible').count(),0)
-                field.fill('研究工作区验收');self.page.locator('[data-sm-card]:visible').first.click()
+                field.fill('研究工作区验收');self.page.locator('[data-sm-project]:visible').first.click()
                 self.assertIn('task=',self.page.locator('#kbFrame').get_attribute('src'))
-                self.page.locator('.sm-back').click();self.assertTrue(self.page.locator('.sm-projects').is_visible())
+                self.page.locator('.sm-back').click();self.assertNotIn('task=',self.page.locator('#kbFrame').get_attribute('src') or '')
         self.page.evaluate('pid=>ProjectWorkspace.openProject(pid)',self.pid)
         for section in ('catalog','files','notes','papers','stars','workflow'):
             web.workspace_section(self.page,section)

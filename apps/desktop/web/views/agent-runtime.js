@@ -8,5 +8,18 @@ const AgentRuntime=(()=>{
     return `<div class="agent-runtime" id="${prefix}Runtime">${select(modelId,'模型',[['','跟随专家'],...(S.models||[]).map(m=>[m.id,m.name||m.model])],chat.model_id||'')}${select(prefix+'Reasoning','推理强度',reasoning,chat.reasoning||'auto')}${select(prefix+'Permission','工具权限',permissions,chat.permission||'auto')}<span class="agent-runtime-hint" id="${prefix}RuntimeHint" role="status"></span></div>`;
   }
   async function save(chatId,key,value){const result=await api('/api/agent-settings/runtime-save',{id:chatId,[key]:value});const chat=S.chats.find(row=>row.id===chatId);if(chat)Object.assign(chat,result.chat);return result.chat;}
-  return {markup,save};
+  async function effective(prefix,chatId,executor={},controlsDisabled=false){
+    const hint=document.getElementById(prefix+'RuntimeHint'),select=document.getElementById(prefix+'Reasoning');
+    if(!hint||!select||!chatId)return;
+    const key=JSON.stringify([chatId,executor,controlsDisabled,S.active?.id,S.chats.find(row=>row.id===chatId)?.model_id]);
+    hint.dataset.effective=key;
+    try{
+      const config=await api('/api/agent-settings/runtime-effective?'+new URLSearchParams({id:chatId,...executor}));
+      if(!hint.isConnected||hint.dataset.effective!==key)return;
+      const sources={conversation:'会话设置',assistant:'专家设置',team_member:'团队成员',default:'系统默认'};
+      hint.textContent=config.model?`${config.model} · ${sources[config.source]||''}${config.reasoning_control?'':' · 推理跟随客户端'}`:'尚未配置可用模型';
+      select.disabled=controlsDisabled||!config.reasoning_control;
+    }catch(error){if(hint.isConnected&&hint.dataset.effective===key)hint.textContent=error.message;}
+  }
+  return {markup,save,effective};
 })();

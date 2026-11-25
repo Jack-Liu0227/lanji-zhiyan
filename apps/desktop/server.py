@@ -108,6 +108,7 @@ import easyscholar_routes
 import zotero_mcp_routes
 import module_composition
 import langgraph_workflow        # 项目工作流图（LangGraph）执行与断点恢复
+import evoflow_sdk               # EvoFlow SDK 自动化工作流编排与 /api/platform 控制平面总线
 # handlers/ 是本目录下的包：被 importlib 按文件加载（测试）或从别处 import 时，本目录不一定在 sys.path 上
 if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -120,14 +121,14 @@ from run_manager import RunManager
 from api_registry import ApiRegistry
 from workflow import (ACTION, CUSTOM_WIRES, OAUTH_CONSOLE, PROVIDER_CATALOG, STAGES, STAGE_LABEL,
                       TOOL_SPECS, USABLE_WIRES, WIRE_LABEL, WorkflowDB, chat, compose_draft,
-                      discover_models, litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
+                      litgraph, make_project_tree, run_agent, run_idea, run_outline, run_write, run_review,
                       outline_write, doc_read, doc_write, doc_seed, run_map, map_read, map_write, map_sources,
                       map_seed, project_outs, map_tidy, open_write,
                       cite_read, conv_files, conv_compile, conv_open,
                       fig_list, fig_rename, conv_preview, open_convert, convert_system,
                       tree_list, files_system,
                       en_state, en_run, _safe_path, step_plan, step_done, step_delivery,
-                      stage_download_selected, stage_zotero_import, test_provider,
+                      stage_download_selected, stage_zotero_import,
                       deepread_kick, deepread_state, deepread_stop)
 
 # Built-in API modules are registered here; registry order preserves existing route precedence.
@@ -139,7 +140,7 @@ for _module_id, _module in (
     ("zotero-sync", zotero_sync), ("reproduction", reproduction_routes),
     ("easyscholar", easyscholar_routes), ("zotero-mcp", zotero_mcp_routes),
     ("rss", rss_routes), ("literature-import", literature_import_routes),
-    ("langgraph", langgraph_workflow),
+    ("langgraph", langgraph_workflow), ("evoflow-platform", evoflow_sdk),
     ("project-features-core", feature_routes),
 ):
     API_ROUTES.register(_module_id, _module.route, version="1.0.0", requires=("database",))
@@ -795,7 +796,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
             "/api/paper-toolbox",
             # 2.0 项目工作区：项目任务 / 图流 / 资料库 / 计划 / 产物交接 / 用量
             "/api/project-tasks", "/api/project/files/", "/api/project/resources",
-            "/api/workflow/execution", "/api/workflow/reviews", "/api/langgraph/",
+            "/api/workflow/execution", "/api/workflow/reviews", "/api/langgraph/", "/api/platform",
             "/api/plans", "/api/execution-board", "/api/execution-conversations",
             "/api/handoff/", "/api/calendar/linked", "/api/conversation-history",
             "/api/usage", "/api/message-channels",
@@ -1707,6 +1708,8 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                         raise ValueError("项目不存在")
                     if data.get("expected_updated_at") and existing["updated_at"] != data["expected_updated_at"]:
                         raise ValueError("项目已更新，请重新打开后编辑")
+                    import project_data
+                    project_data.align_legacy_default_directory(db, tid, title=title)
                     with db.db:
                         db.db.execute("UPDATE research_tasks SET title=?,question=?,material_system=?,updated_at=? WHERE id=?",
                             (title, str(data.get("question") or "")[:20000], str(data.get("material_system") or "")[:2000], workflow.now(), tid))
@@ -1762,6 +1765,11 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                         if mode not in ("all", "ask"):
                             return self._json({"error": "permission_mode 只能是 all 或 ask"}, 400)
                         sec["permission_mode"] = mode
+                    if "workflow_review_mode" in data:
+                        rmode = str(data.get("workflow_review_mode") or "")
+                        if rmode not in ("human_review", "auto"):
+                            return self._json({"error": "workflow_review_mode 只能是 human_review 或 auto"}, 400)
+                        sec["workflow_review_mode"] = rmode
                     if "history_chars" in data:          # Agent 每次对话喂多少字历史（设置页「权限」里调）
                         try:
                             chars = int(data.get("history_chars") or 0)
@@ -1771,6 +1779,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                             return self._json({"error": "上下文预算要在 2000–400000 字之间"}, 400)
                         sec["history_chars"] = chars
                     kv_store.write(db, "security", sec)
+                    sec["workflow_review_mode"] = "auto" if str(sec.get("workflow_review_mode") or "") == "auto" else "human_review"
                     return self._json({"ok": True, **sec})
                 if path == "/api/step/plan":                  # 三栏页右栏：本步专家看着上一步的交付现写「进度同步 + 计划」
                     tid = str(data.get("task_id") or "")
@@ -1823,12 +1832,12 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                     db.delete_model(data.get("id", ""))
                     return self._json({"deleted": True})
                 if path == "/api/models/test":
+                    import model_checks
                     prof = db.model(data.get("id", "")) if data.get("id") else db.active_model()
-                    reply = chat(prof, [{"role": "user", "content": "只回复两个字：可用"}], max_tokens=64, timeout=60)
-                    return self._json({"ok": True, "reply": reply})
+                    return self._json(model_checks.generate(prof, str(data.get("capability") or "text")))
                 if path == "/api/providers/add":
                     p = db.add_provider(data.get("name", ""), data.get("base_url", ""),
-                                        data.get("api", "openai-chat"), data.get("api_key", ""))
+                                        data.get("api", "openai-completions"), data.get("api_key", ""))
                     return self._json({**{k: v for k, v in p.items() if k != "api_key"}, "key_present": bool(p["api_key"])})
                 if path == "/api/providers/key":
                     p = db.set_provider_key(data.get("id", ""), data.get("api_key", ""))
@@ -1842,15 +1851,16 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                 if path == "/api/providers/default":
                     return self._json({"default": db.set_default(data.get("id", ""), data.get("model", ""))})
                 if path == "/api/providers/discover":
+                    from agent_protocols import discover
                     p = db.provider(data.get("id", ""))
-                    return self._json({"candidates": discover_models(p["base_url"], p["api_key"])})
+                    return self._json({"candidates": discover(p)})
                 if path == "/api/providers/test":
+                    import model_checks
                     p = db.provider(data.get("id", ""))
                     model = data.get("model") or (p["models"][0] if p["models"] else "")
                     if not model:
                         raise ValueError("先采用或填写一个模型，再测试")
-                    return self._json({"model": model,
-                                       "reply": test_provider(p["base_url"], p["api_key"], model)})
+                    return self._json(model_checks.generate({**p, "model": model}))
                 if path == "/api/deepread/stop":             # 停精读（当前这篇读完后不再往下读）
                     return self._json(deepread_stop(data.get("task_id", "")))
                 if path.startswith("/api/workflow/"):

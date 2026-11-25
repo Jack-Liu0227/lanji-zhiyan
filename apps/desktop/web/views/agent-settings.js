@@ -14,7 +14,7 @@
   let viewEpoch = 0;
   let dialog = null;
   const css = document.createElement("style");
-  css.textContent = `.ag-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}.ag-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.ag-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px;margin-top:14px}.ag-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.ag-form label,.ag-stack{display:flex;flex-direction:column;gap:6px}.ag-wide{grid-column:1/-1}.ag-modal{width:min(760px,calc(100vw - 32px));max-height:88vh;overflow:auto;background:var(--surface,var(--bg));color:var(--text);border:1px solid var(--line,var(--border));border-radius:16px;padding:24px;box-shadow:0 24px 90px #0006}.ag-modal::backdrop{background:#0008;backdrop-filter:blur(3px)}.ag-list{display:flex;flex-direction:column;gap:8px;max-height:270px;overflow:auto}.ag-model{display:flex;align-items:center;gap:10px;padding:8px;border-bottom:1px solid var(--line,var(--border));overflow-wrap:anywhere}.ag-danger{padding:10px 12px;border-left:3px solid var(--err,#b54b45);background:color-mix(in srgb,var(--err,#b54b45) 9%,transparent);font-size:12px}.ag-meta{font-size:12px;color:var(--muted);overflow-wrap:anywhere}.ag-team{display:grid;grid-template-columns:220px minmax(0,1fr);gap:14px}.ag-team-nav{display:flex;flex-direction:column;gap:8px}.ag-team-nav button{text-align:left}.ag-transcript{max-height:52vh;min-height:180px;overflow:auto;display:flex;flex-direction:column;gap:10px;margin:14px 0}.ag-message{padding:12px;border:1px solid var(--line,var(--border));border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere}.ag-message strong{font-size:12px;color:var(--brand)}.ag-member{cursor:pointer}.ag-status{min-height:20px;margin:10px 0}.ag-model-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:8px;max-height:320px;overflow:auto}@media(max-width:720px){.ag-form,.ag-team{grid-template-columns:1fr}.ag-team-nav{flex-direction:row;overflow:auto}.ag-team-nav button{min-width:160px}.ag-modal{padding:16px}.ag-head{align-items:flex-start}}`;
+  css.textContent = `.ag-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}.ag-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.ag-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px;margin-top:14px}.ag-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.ag-form label,.ag-stack{display:flex;flex-direction:column;gap:6px}.ag-wide{grid-column:1/-1}.ag-modal{width:min(760px,calc(100vw - 32px));max-height:88vh;overflow:auto;background:var(--surface,var(--bg));color:var(--text);border:1px solid var(--line,var(--border));border-radius:16px;padding:24px;box-shadow:0 24px 90px #0006}.ag-modal::backdrop{background:#0008;backdrop-filter:blur(3px)}.ag-list{display:flex;flex-direction:column;gap:8px;max-height:270px;overflow:auto}.ag-model{display:flex;align-items:center;gap:10px;padding:8px;border-bottom:1px solid var(--line,var(--border));overflow-wrap:anywhere}.ag-danger{padding:10px 12px;border-left:3px solid var(--err,#b54b45);background:color-mix(in srgb,var(--err,#b54b45) 9%,transparent);font-size:12px}.ag-meta{font-size:12px;color:var(--muted);overflow-wrap:anywhere}.ag-team{display:grid;grid-template-columns:var(--ag-team-nav-w,220px) minmax(0,1fr);gap:14px;position:relative}.ag-team-nav{display:flex;flex-direction:column;gap:8px}.ag-team-nav button{text-align:left}.ag-transcript{max-height:52vh;min-height:180px;overflow:auto;display:flex;flex-direction:column;gap:10px;margin:14px 0}.ag-message{padding:12px;border:1px solid var(--line,var(--border));border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere}.ag-message strong{font-size:12px;color:var(--brand)}.ag-member{cursor:pointer}.ag-status{min-height:20px;margin:10px 0}.ag-model-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:8px;max-height:320px;overflow:auto}@media(max-width:720px){.ag-form,.ag-team{grid-template-columns:1fr}.ag-team-nav{flex-direction:row;overflow:auto}.ag-team-nav button{min-width:160px}.ag-modal{padding:16px}.ag-head{align-items:flex-start}}`;
   document.head.append(css);
 
   async function load() {
@@ -40,15 +40,46 @@
     return d;
   }
   async function saved() { await refreshState(false); await load(); window.refreshCapabilities?.(); }
+  const parseFallbacks = value => {
+    if (Array.isArray(value)) return value.map(x => String(x || "").trim()).filter(Boolean);
+    if (typeof value === "string" && value.trim()) {
+      try { const parsed = JSON.parse(value); if (Array.isArray(parsed)) return parsed.map(x => String(x || "").trim()).filter(Boolean); } catch {}
+      return value.split(",").map(x => x.trim()).filter(Boolean);
+    }
+    return [];
+  };
+  const healthBadge = mm => {
+    const st = mm?.health?.status || "unknown";
+    const labels = {healthy:["可用","var(--ok, #10b981)"],cooldown:["冷却中","var(--warn, #d97706)"],degraded:["异常降级","var(--warn, #d97706)"],unavailable:["不可用","var(--err, #b54b45)"],auth_error:["鉴权失败","var(--err, #b54b45)"],quota_exceeded:["额度不足","var(--err, #b54b45)"],unknown:["未探测","var(--muted)"]};
+    const [text, color] = labels[st] || labels.unknown;
+    const extra = mm?.health?.in_cooldown && mm.health.cooldown_remaining_seconds ? ` (${mm.health.cooldown_remaining_seconds}s)` : "";
+    const title = mm?.health?.last_error ? ` title="${h(mm.health.last_error)}"` : "";
+    return `<span class="pill" style="border-color:${color};color:${color}"${title}>${h(text + extra)}</span>`;
+  };
   const modelOptions = current => `<option value="">跟随当前模型</option>${(S.models || []).map(m => `<option value="${h(m.id)}" ${m.id === current ? "selected" : ""}>${h(m.name)}${m.name.includes(m.model) ? "" : " · " + h(m.model)}</option>`).join("")}`;
   function policyFields(a, prefix) {
+    const selectedFallbacks = new Set(parseFallbacks(a.fallback_model_ids));
     return `<label><span>模型</span><select class="control" id="${prefix}-model">${modelOptions(a.model_id)}</select></label>
       <label><span>推理强度</span><select class="control" id="${prefix}-reasoning">${options(efforts,a.reasoning || "auto",effortLabels)}</select></label>
       <label><span>权限</span><select class="control" id="${prefix}-permission">${options(permissions,a.permission || "auto",permissionLabels)}</select></label>
+      <label><span>备用模型链（按 Ctrl/⌘ 多选，主模型不可用时自动切换）</span><select class="control" id="${prefix}-fallbacks" multiple size="3">${(S.models || []).map(m => `<option value="${h(m.id)}" ${selectedFallbacks.has(m.id) ? "selected" : ""}>${h(m.name || m.model)}</option>`).join("")}</select></label>
       <div class="ag-danger ag-wide">Full Access 将允许所有已启用工具执行写入和外发操作，不再逐项确认，可能修改数据或泄露资料。只对可信专家启用。技能与工具矩阵的禁用规则仍然生效。</div>`;
   }
+  function bindReasoning(prefix) {
+    const model = el(prefix + "-model"), reasoning = el(prefix + "-reasoning");
+    const update = () => {
+      const selected = model.value ? S.models.find(item => item.id === model.value) : S.active;
+      const account = ["codex-cli","claude-code-cli","antigravity-cli"].includes(selected?.api);
+      reasoning.disabled = account;
+      reasoning.querySelector('option[value="auto"]').textContent = account ? "跟随官方客户端" : effortLabels.auto;
+      if (account) reasoning.value = "auto";
+    };
+    model.addEventListener('change', update); update();
+  }
   function policies(prefix) {
-    return {model_id:el(prefix + "-model").value,reasoning:el(prefix + "-reasoning").value,permission:el(prefix + "-permission").value};
+    const fb = el(prefix + "-fallbacks");
+    return {model_id:el(prefix + "-model").value,reasoning:el(prefix + "-reasoning").value,permission:el(prefix + "-permission").value,
+      fallback_model_ids:fb ? [...fb.selectedOptions].map(o => o.value).filter(Boolean) : []};
   }
   async function risk(oldValue, nextValue) {
     return nextValue !== "full_access" || oldValue === "full_access" || await uiConfirm("危险：Full Access 允许文件/数据库修改、邮件外发和第三方写入，无需逐次确认。确认仅为可信专家开启？");
@@ -150,11 +181,16 @@
     if (!S.loaded || !container) return;
     const expectedRoute = route(), epoch = ++viewEpoch;
     try {
-      await load();
+      const [, translation] = await Promise.all([load(), request("translation-model")]);
       if (!container.isConnected || route() !== expectedRoute || epoch !== viewEpoch) return;
-      container.innerHTML = `<div class="ag-head"><div><h3>模型与 Provider</h3><p class="hint">先选择 Provider 配置，再拉取或手动添加模型。已配置的模型可在专家和团队中选择。</p></div></div>
+      const routing = registry.routing || {fallback_model_ids:[],auto_fallback:true,cooldown_seconds:120};
+      const routingSet = new Set(routing.fallback_model_ids || []);
+      container.innerHTML = `<div class="ag-head"><div><h3>模型与 Provider</h3><p class="hint">先选择 Provider 配置，再拉取或手动添加模型。已配置的模型可在专家、团队和工作流节点中选择。</p></div><div class="ag-row"><button class="btn ghost" data-ag-batch-test ${S.models.length ? "" : "disabled"}>批量检测可用性</button><button class="btn ghost" data-ag-health-reset ${S.models.length ? "" : "disabled"}>清除冷却状态</button></div></div>
         <div class="card ag-row"><label style="flex:1">支持的 Provider <select class="control" id="ag-provider-select"><option value="">选择 Provider…</option>${registry.catalog.map(p => `<option value="${h(p.id)}">${h(p.name)}${p.supported ? "" : "（请改选兼容协议）"}</option>`).join("")}<option value="custom">自定义兼容接口</option></select></label><button class="btn btn-primary" id="ag-provider-add">配置</button></div>
-        <h4 style="margin-top:20px">可选模型 · ${S.models.length}</h4><div class="ag-model-grid">${S.models.map(mm => `<div class="card"><b>${h(mm.name)}</b><p class="ag-meta">${h(mm.api || "openai-completions")}</p><button class="btn ghost" data-ag-active="${h(mm.id)}">${S.active?.id === mm.id ? "当前默认" : "设为默认"}</button></div>`).join("") || `<p class="hint">还没有配置模型。请先添加 Provider。</p>`}</div>
+        <h4 style="margin-top:20px">可选模型 · ${S.models.length}</h4><div class="ag-model-grid">${S.models.map(mm => `<div class="card"><div class="ag-head" style="margin-bottom:6px"><b>${h(mm.name)}</b>${healthBadge(mm)}</div><p class="ag-meta">${h(mm.api || "openai-completions")} · 已采用${mm.health?.last_error ? `<br><span style="color:var(--err,#b54b45)">${h(mm.health.last_error.slice(0,90))}</span>` : ""}</p><div class="ag-row"><button class="btn ghost" data-ag-active="${h(mm.id)}">${S.active?.id === mm.id ? "当前默认" : "设为默认"}</button><button class="btn ghost" data-ag-test="${h(mm.id)}">测试生成</button></div></div>`).join("") || `<p class="hint">还没有配置模型。请先添加 Provider。</p>`}</div>
+        <div class="card" style="margin-top:16px"><h4>全局备用模型链与自动容错</h4><p class="hint">当节点或专家的主模型不可用（无渠道、限流、配额不足、超时）时，自动切换到全局备用模型继续执行。</p><div class="ag-form" style="margin-top:10px"><label class="ag-wide"><span><input type="checkbox" data-ag-routing-auto ${routing.auto_fallback !== false ? "checked" : ""}> 启用主模型不可用时自动故障转移（Auto-Fallback）</span></label><label><span>全局备用模型（按 Ctrl/⌘ 多选）</span><select class="control" data-ag-routing-fallbacks multiple size="4">${S.models.map(mm => `<option value="${h(mm.id)}" ${routingSet.has(mm.id) ? "selected" : ""}>${h(mm.name)}</option>`).join("")}</select></label><label><span>熔断冷却时长（秒，15–3600）</span><input type="number" min="15" max="3600" class="control" data-ag-routing-cooldown value="${h(routing.cooldown_seconds || 120)}"></label></div><div class="ag-row" style="margin-top:10px"><button class="btn ghost" data-ag-routing-save>保存容错策略</button><span class="hint" role="status" data-ag-routing-status></span></div></div>
+        <div class="card" style="margin-top:16px"><label>PDF 翻译默认模型<select class="control" data-ag-translation><option value="">跟随系统默认（须兼容）</option>${translation.models.map(mm => `<option value="${h(mm.id)}" ${translation.model_id === mm.id ? "selected" : ""}>${h(mm.name)}</option>`).join("")}</select></label><button class="btn ghost" data-ag-translation-save>保存翻译模型</button><p class="hint" role="status" data-ag-translation-status>${translation.model_id && !translation.models.some(mm => mm.id === translation.model_id) ? "先前选择的模型不可用，请重新选择。" : "BabelDOC 使用 Chat Completions 模型。"}</p></div>
+        <div class="card" style="margin-top:16px"><button class="btn ghost" data-ag-embedding>配置语义检索</button></div>
         <h4 style="margin-top:24px">已配置的 Provider · ${registry.providers.length}</h4><div class="ag-grid">${registry.providers.map(p => `<article class="card"><div class="ag-head"><b>${h(p.name)}</b><span class="pill">${p.models.length} 模型</span></div><p class="ag-meta">${h(p.base_url)}<br>${h(p.api)} · ${["codex-cli","claude-code-cli","antigravity-cli"].includes(p.api) ? "账号会话由官方客户端管理" : `Key ${p.key_invalid ? '<span style="color:var(--err,#bd3f34);font-weight:600">解密失败，请重填</span>' : (p.key_present ? "已保存" : "未设置")}`}</p><div class="ag-row"><button class="btn" data-ag-provider="${h(p.id)}">查看 / 编辑</button><button class="btn ghost" data-ag-provider-del="${h(p.id)}">移除</button></div></article>`).join("")}</div>`;
       el("ag-provider-add").onclick = () => {
         const id = el("ag-provider-select").value;
@@ -164,8 +200,98 @@
         providerEditor(configured || (c ? {...c,api:c.supported ? c.api : "openai-completions",models:[]} : null));
       };
       container.querySelectorAll("[data-ag-provider]").forEach(b => b.onclick = () => providerEditor(registry.providers.find(p => p.id === b.dataset.agProvider)));
+      for (const card of container.querySelectorAll("[data-ag-provider]")) {
+        const p = registry.providers.find(item => item.id === card.dataset.agProvider);
+        const toggle = document.createElement("button");
+        toggle.className = "btn ghost"; toggle.textContent = p.enabled ? "停用" : "启用";
+        toggle.onclick = async () => {
+          toggle.disabled = true;
+          try { await request("provider-save", {id:p.id,name:p.name,base_url:p.base_url,api:p.api,enabled:!p.enabled}); await saved(); render(); }
+          catch(e) { uiNotify(e.message); } finally { toggle.disabled = false; }
+        };
+        card.after(toggle);
+      }
       container.querySelectorAll("[data-ag-provider-del]").forEach(b => b.onclick = async () => { if (!await uiConfirm("移除此 Provider 和已采用模型？专家中原来的模型绑定将需要重新选择。")) return; try { await request("provider-delete",{id:b.dataset.agProviderDel}); await saved(); render(); } catch(e) { uiNotify(e.message); } });
       container.querySelectorAll("[data-ag-active]").forEach(b => b.onclick = async () => { try { await api("/api/models/active",{id:b.dataset.agActive}); await saved(); render(); } catch(e) { uiNotify(e.message); } });
+      const batchBtn = container.querySelector("[data-ag-batch-test]");
+      if (batchBtn) batchBtn.onclick = async () => {
+        batchBtn.disabled = true;
+        const oldText = batchBtn.textContent; batchBtn.textContent = "检测中…";
+        try {
+          const res = await request("model-batch-test", {});
+          const okCount = (res.results || []).filter(r => r.ok).length;
+          await saved(); render();
+          uiNotify(`已检测 ${(res.results || []).length} 个模型：${okCount} 个可用`);
+        } catch(e) { uiNotify(e.message); } finally { batchBtn.disabled = false; batchBtn.textContent = oldText; }
+      };
+      const resetHealthBtn = container.querySelector("[data-ag-health-reset]");
+      if (resetHealthBtn) resetHealthBtn.onclick = async () => {
+        resetHealthBtn.disabled = true;
+        try { await request("model-health-reset", {}); await saved(); render(); uiNotify("已清除模型冷却状态"); }
+        catch(e) { uiNotify(e.message); } finally { resetHealthBtn.disabled = false; }
+      };
+      const routingBtn = container.querySelector("[data-ag-routing-save]");
+      if (routingBtn) routingBtn.onclick = async () => {
+        const status = container.querySelector("[data-ag-routing-status]");
+        routingBtn.disabled = true;
+        try {
+          const fallback_model_ids = [...container.querySelector("[data-ag-routing-fallbacks]").selectedOptions].map(o => o.value).filter(Boolean);
+          const auto_fallback = container.querySelector("[data-ag-routing-auto]").checked;
+          const cooldown_seconds = Number(container.querySelector("[data-ag-routing-cooldown]").value || 120);
+          await request("model-routing", {fallback_model_ids, auto_fallback, cooldown_seconds});
+          await saved();
+          if (status) status.textContent = "全局容错策略已保存。";
+        } catch(e) { if (status) error(status, e); } finally { routingBtn.disabled = false; }
+      };
+      container.querySelector("[data-ag-translation-save]").onclick = async event => {
+        const button = event.currentTarget, status = container.querySelector("[data-ag-translation-status]");
+        button.disabled = true;
+        try {
+          await request("translation-model", {model_id:container.querySelector("[data-ag-translation]").value});
+          status.textContent = "PDF 翻译默认模型已保存。";
+        } catch(e) { error(status,e); } finally { button.disabled = false; }
+      };
+      container.querySelectorAll("[data-ag-test]").forEach(button => button.onclick = () => {
+        const id = button.dataset.agTest;
+        const d = modal("测试模型生成", `<p>${h(S.models.find(mm => mm.id === id)?.name || id)}</p><label>测试能力<select class="control" data-test-capability><option value="text">文本生成</option><option value="tools">工具调用</option><option value="vision">图片输入</option></select></label><button class="btn" data-test-start>开始测试</button>`);
+        const start = d.querySelector("[data-test-start]"), status = d.querySelector("[role=status]");
+        start.onclick = async () => {
+          start.disabled = true;
+          status.textContent = "正在发送测试请求…";
+          try {
+            const result = await request("model-test", {id,capability:d.querySelector("[data-test-capability]").value});
+            status.className = "ag-status";
+            status.textContent = `测试通过 · ${fmtDate(result.tested_at)}${result.reply ? " · " + result.reply : ""}`;
+          } catch(e) { error(status,e); } finally { start.disabled = false; }
+        };
+      });
+      container.querySelector("[data-ag-embedding]").onclick = async () => {
+        try {
+          const snapshot = await request("embedding");
+          const d = modal("语义检索", `<label>嵌入接口<input class="control" name="base" value="${h(snapshot.endpoint)}"></label><label>嵌入模型<input class="control" name="model" value="${h(snapshot.model)}"></label><label>API Key<input type="password" class="control" name="key" autocomplete="off" placeholder="${snapshot.key_present?'已保存；不编辑则保留':'本机服务可留空'}"></label><p class="hint" data-embedding-state></p><div class="ag-row"><button class="btn" data-embedding-save>保存</button><button class="btn ghost" data-embedding-test>测试当前配置</button><button class="btn ghost" data-embedding-rebuild>重建索引</button></div>`);
+          const input = name => d.querySelector(`[name=${name}]`), status = d.querySelector("[role=status]");
+          let edited = false;
+          input("key").oninput = () => { edited = true; };
+          const show = value => {
+            d.querySelector("[data-embedding-state]").textContent = value.index_state === "empty" ? "还没有可索引的资料。" :
+              `向量索引：${value.sources_indexed}/${value.sources_total} 个来源，${value.chunks} 个分块。${value.index_state === "unindexed" ? "当前用词法检索。" : ""}`;
+          };
+          show(snapshot);
+          const bind = (action, run) => d.querySelector(`[data-embedding-${action}]`).onclick = async event => {
+            const button = event.currentTarget; button.disabled = true;
+            try { status.textContent = await run(); } catch(e) { error(status,e); } finally { button.disabled = false; }
+          };
+          bind("save", async () => {
+            show(await request("embedding", {base:input("base").value,model:input("model").value,key:edited?input("key").value:null}));
+            edited = false; input("key").value = ""; return "嵌入配置已保存。";
+          });
+          bind("test", async () => {
+            const result = await request("embedding-test", {});
+            return result.status === "online" ? `服务可用 · ${result.dim} 维` : `服务不可用，使用词法检索。${result.reason || ''}`;
+          });
+          bind("rebuild", async () => (await request("embedding-rebuild", {})).started ? "已在后台开始重建，稍后重新打开查看覆盖量。" : "索引正在运行，请稍后再试。");
+        } catch(e) { uiNotify(e.message); }
+      };
     } catch(e) { error(container,e); }
   };
 
@@ -173,6 +299,7 @@
     let prompts = [];
     try { prompts = Array.isArray(a.prompts) ? a.prompts : JSON.parse(a.prompts || "[]"); } catch (_) { /* Legacy malformed prompts remain editable. */ }
     const d = modal(a.id ? "编辑专家" : "新建专家", `<div class="ag-form"><label><span>名称</span><input class="control" id="ag-a-name" value="${h(a.name)}"></label><label><span>头像</span><input class="control" id="ag-a-avatar" value="${h(a.avatar)}"></label><label class="ag-wide"><span>描述</span><input class="control" id="ag-a-desc" value="${h(a.description)}"></label>${policyFields(a,"ag-a")}<label class="ag-wide"><span>规则（进入系统提示）</span><textarea class="control" rows="7" id="ag-a-rules">${h(a.rules)}</textarea></label><label class="ag-wide"><span>推荐问题（一行一条）</span><textarea class="control" rows="3" id="ag-a-prompts">${h(prompts.join("\n"))}</textarea></label><label class="ag-wide ag-row"><span><input type="checkbox" id="ag-a-enabled" ${a.enabled !== 0 ? "checked" : ""}>启用公开专家（我的专家始终可选）</span></label><button class="btn btn-primary" id="ag-a-save">保存专家</button></div>`);
+    bindReasoning("ag-a");
     el("ag-a-save").onclick = async () => {
       try {
         const policy = policies("ag-a"); if (!(await risk(a.permission,policy.permission))) return;
@@ -273,6 +400,7 @@
     const pool = (registry.selectable || []).filter(a=>a.id!=="builtin-steward");
     const d = modal(member.id ? "编辑团队角色" : "添加团队成员", `<div class="ag-form"><label><span>专家</span><select class="control" id="ag-m-assistant"><option value="">使用自定义角色</option>${pool.map(a => `<option value="${h(a.id)}" ${a.id === member.assistant_id ? "selected" : ""}>${h(a.name)}</option>`).join("")}</select></label><label><span>角色名称</span><input class="control" id="ag-m-name" value="${h(member.name)}"></label>${policyFields(member,"ag-m")}<label class="ag-wide"><span>团队内职责（叠加专家规则）</span><textarea class="control" id="ag-m-prompt" rows="5">${h(member.prompt)}</textarea></label><button class="btn btn-primary" id="ag-m-save">保存角色</button>${member.id && member.role !== "leader" ? `<button class="btn" id="ag-m-leader">设为 Leader</button><button class="btn ghost" id="ag-m-remove">移出团队</button>` : ""}</div>`);
     el("ag-m-assistant").onchange = () => { const a = pool.find(x => x.id === el("ag-m-assistant").value); if (a) { el("ag-m-name").value = a.name; el("ag-m-prompt").value = a.rules || ""; } };
+    bindReasoning("ag-m");
     el("ag-m-save").onclick = async () => {
       try { const policy = policies("ag-m"); if (!(await risk(member.permission,policy.permission))) return; await request("member-save",{team_id:tid,member_id:member.id,assistant_id:el("ag-m-assistant").value,name:el("ag-m-name").value,prompt:el("ag-m-prompt").value,...policy}); d.close(); teamList = null; render(); } catch(e) { error(d.querySelector("[role=status]"),e); }
     };

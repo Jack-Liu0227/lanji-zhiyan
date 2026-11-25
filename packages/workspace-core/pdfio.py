@@ -30,7 +30,8 @@ def page_texts(path: Path | str, limit: int = 0) -> list[str]:
     with pdfplumber.open(str(path)) as pdf:
         pages = pdf.pages if not limit else pdf.pages[:limit]
         for pg in pages:
-            out.append((pg.extract_text() or "").strip())
+            # Preserve PDF column flow and word gaps relative to the font size.
+            out.append((pg.extract_text(x_tolerance_ratio=0.15, use_text_flow=True) or "").strip())
     return out
 
 

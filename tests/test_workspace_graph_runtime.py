@@ -148,6 +148,7 @@ class WorkspaceGraphRuntimeTest(unittest.TestCase):
         run=self.poll_json('/api/workflow/execution?task_id='+self.pid,lambda data:bool((data.get('run') or {}).get('settings',{}).get('task_ids')))['run']
         self.page.locator('[data-sequence-close]').click()
         self.page.locator('[data-pwg-mode="run"]:not(:disabled)').wait_for()
+        self.page.locator('[data-pwg-mode="config"]').click()
         self.page.locator('[data-wfl-node="check"]').click()
         self.page.locator('[data-pwg-prompt]').fill('NEXT_RUN_ONLY_INSTRUCTION')
         self.page.locator('[data-pwg-save]').click()
@@ -171,7 +172,7 @@ class WorkspaceGraphRuntimeTest(unittest.TestCase):
         self.page.route('**/api/workflow/layouts/project',lambda route:route.fulfill(status=409,json={'error':'NODE_SAVE_FAILED'}))
         self.page.locator('#pwTab-library').click()
         self.page.wait_for_function("document.querySelector('[data-pwg-error]').textContent.includes('NODE_SAVE_FAILED')")
-        self.assertEqual(self.page.locator('#pwTab-flow').get_attribute('aria-selected'),'true')
+        self.assertEqual(self.page.locator('#pwTab-chat').get_attribute('aria-selected'),'true')
         self.assertEqual(self.page.locator('[data-pwg-prompt]').input_value(),'KEEP_UNSAVED_NODE_DRAFT')
         self.page.unroute('**/api/workflow/layouts/project')
         self.page.locator('#pwTab-library').click()
@@ -204,8 +205,9 @@ class WorkspaceGraphRuntimeTest(unittest.TestCase):
             import task_tools
             with workflow.WorkflowDB(self.database_path) as db:
                 task_tools.call(db, self.pid, 'workflow_start', {})
-            self.poll_json('/api/workflow/execution?task_id='+self.pid,lambda data:(data.get('run') or {}).get('status')=='awaiting_review')
+            run=self.poll_json('/api/workflow/execution?task_id='+self.pid,lambda data:(data.get('run') or {}).get('status')=='awaiting_review')['run']
             self.page.locator('[data-sequence-close]').click()
+            self.page.evaluate('x=>ProjectWorkspace.openWorkflowDock(x.project,x.run)',{'project':self.pid,'run':run['id']})
             self.page.locator('[data-pwg-task]').wait_for()
             self.page.locator('[data-pwg-task]').click()
             self.page.locator('[data-wnw-mode="edit"]').wait_for()
@@ -260,6 +262,79 @@ class WorkspaceGraphRuntimeTest(unittest.TestCase):
         self.assertLessEqual(heights[1],heights[0]+2)
         self.screenshot('workflow-narrow.png')
         self.assertEqual(self.errors,[])
+
+    def test_evoflow_sdk_sidebar_dag_and_inline_node_review(self):
+        self.seed()
+        import re
+        class W5ModelFixture:
+            def __enter__(self):
+                fixture = self
+                class Handler(http.server.BaseHTTPRequestHandler):
+                    def log_message(self, *_args): pass
+                    def do_POST(self):
+                        payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                        messages = payload['messages']
+                        system = '\n'.join(str(m.get('content') or '') for m in messages if m.get('role') == 'system')
+                        wrote = any(m.get('role') == 'tool' and m.get('name') == 'project_artifact_write' for m in messages)
+                        req_files = re.findall(r'outputs/wfW5/[^\s"\'\]]+', system)
+                        if req_files and not wrote:
+                            calls = [{'index': i, 'id': f'w5-{i}', 'type': 'function', 'function': {
+                                'name': 'project_artifact_write',
+                                'arguments': json.dumps({'path': path, 'content': f'# {path}\nPROJECT_TASK_REAL_OUTPUT'})
+                            }} for i, path in enumerate(dict.fromkeys(req_files))]
+                            delta = {'tool_calls': calls}
+                        else:
+                            delta = {'content': '# W5 节点产物\nPROJECT_TASK_REAL_OUTPUT\n已保存实际产物。'}
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'text/event-stream' if payload.get('stream') else 'application/json')
+                        self.end_headers()
+                        if payload.get('stream'):
+                            self.wfile.write(('data: ' + json.dumps({'choices': [{'delta': delta, 'finish_reason': 'tool_calls' if 'tool_calls' in delta else 'stop'}]}) + '\n\ndata: [DONE]\n\n').encode())
+                        else:
+                            self.wfile.write(json.dumps({'choices': [{'message': {'role': 'assistant', **delta}, 'finish_reason': 'stop'}]}).encode())
+                        self.wfile.flush()
+                self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+                threading.Thread(target=self.server.serve_forever, daemon=True).start()
+                self.url = f'http://127.0.0.1:{self.server.server_address[1]}/v1'
+                return self
+            def __exit__(self, *_args):
+                self.server.shutdown(); self.server.server_close()
+
+        with W5ModelFixture() as model:
+            self.use_model(model.url)
+            res = self.page.request.post(self.url + 'api/platform', data={
+                'action': 'workflow.generate',
+                'args': {
+                    'project_id': self.pid,
+                    'name': '验证W5·串并混合六节点文档流',
+                    'goal': '帮我编排一个有五六个节点的流程，任务有并行的也有串行的',
+                    'auto_start': True,
+                },
+                'confirm': True,
+            })
+            self.assertTrue(res.ok, res.text())
+            payload = res.json()
+            self.assertTrue(payload['ok'])
+            run_id = payload['result']['run']['id']
+            self.poll_json('/api/project-tasks?project_id=' + self.pid,
+                           lambda d: any(t['workflow_node_id'] == 's1_seed' and t['status'] == 'awaiting_review' for t in d['tasks']))
+            self.page.evaluate('value => ProjectWorkspace.openWorkflowDock(value.pid, value.run)', {'pid': self.pid, 'run': run_id})
+            self.page.locator('.project-workflow-graph').wait_for()
+            self.assertTrue(self.page.locator('#pwAsk').is_visible())
+            self.assertTrue(self.page.locator('#pwProjectNav').is_visible())
+            self.assertEqual(self.page.locator('[data-wfl-node]').count(), 6)
+            self.page.locator('[data-pwg-mode="config"]').click()
+            self.page.locator('[data-wfl-node="s1_seed"]').click()
+            self.page.locator('[data-pwg-inline-doc]').wait_for(state='visible')
+            self.page.locator('[data-pwg-doc-tab="edit"]').click()
+            self.page.locator('[data-pwg-doc-editor]').fill('# S1 种子素材 (人工在线修订)\nEVOFLOW_INLINE_EDITED_SEED')
+            self.page.locator('[data-pwg-doc-save]').click()
+            self.page.wait_for_function("document.querySelector('[data-pwg-notice]').textContent.includes('已保存为新的节点产物修订版本')")
+            self.page.locator('[data-pwg-inline-feedback]').fill('S1 素材审查通过，放行 P1/P2/P3 并行分支')
+            self.page.locator('[data-pwg-inline-approve]').click()
+            self.poll_json('/api/project-tasks?project_id=' + self.pid,
+                           lambda d: any(t['workflow_node_id'] == 's1_seed' and t['status'] == 'delivered' for t in d['tasks']))
+        self.assertEqual(self.errors, [])
 
 
 if __name__=='__main__':unittest.main()

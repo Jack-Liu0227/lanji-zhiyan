@@ -5,7 +5,7 @@
   const statuses = {draft:"已准备",prepared:"已准备",queued:"等待执行",running:"执行中",awaiting_review:"等待人工审查",delivered:"已交付",succeeded:"全部完成",failed:"失败",cancelled:"已停止",blocked:"等待修改",interrupted:"中断待恢复",rejected:"已退回"};
   let dialog = null, currentRun = null, currentProject = "", focusedRun = "", rendered = "", pollBusy = false, calendarRendered = "";
   const feedback = new Map(), goalDrafts = new Map(), modeDrafts = new Map(), manualDrafts = new Map();
-  let nodeTasks=new Map();
+  let nodeTasks=new Map(),originChatId="";
   const modeOptions=mode=>`<option value="supervised" ${mode!=="full_access"?"selected":""}>人工核查模式</option><option value="full_access" ${mode==="full_access"?"selected":""}>按规则自动验收</option>`;
   const style = document.createElement("style");
   style.textContent = `.connected-dialog{width:min(900px,calc(100vw - 28px));max-height:88vh;overflow:auto;border:1px solid var(--line);border-radius:14px;padding:22px;background:var(--bg);color:var(--fg)}.connected-dialog::backdrop{background:#0007}.connected-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.connected-dialog textarea{width:100%;min-height:80px}.connected-node{padding:12px 0;border-bottom:1px solid var(--line)}.connected-node pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;font-size:12px}.connected-node details{margin:8px 0}.connected-status{font-size:12px;color:var(--muted);margin:10px 0}.connected-error{color:var(--err);white-space:pre-wrap}.connected-library{font-size:12px;margin:10px 0;color:var(--muted)}`;
@@ -15,6 +15,7 @@
   function signature(run) { return JSON.stringify(run && [run.id,run.status,run.error,run.current_node,run.settings,run.nodes.map(n=>[n.id,n.status,n.ended_at,n.error,n.checkpoint])]); }
   async function fetchRun() {
     const project=currentProject;
+    if(!project)return;
     const [result,taskData]=await Promise.all([api("/api/workflow/execution?"+(dialog?.open && focusedRun?"id="+encodeURIComponent(focusedRun):"task_id="+encodeURIComponent(project))),api('/api/project-tasks?project_id='+encodeURIComponent(project))]);
     if(project!==currentProject) return;
     currentRun=result.run;
@@ -33,7 +34,7 @@
     host.innerHTML=`<p class="hint">每个节点以项目任务承接上游交付、项目记忆及人工反馈。自动验收模式会在产物和版本校验通过后继续。标为强制人工核查的节点仍需确认。</p>
       ${!active?`<label class="field"><span>本次研究目标，可选</span><textarea class="control" data-sequence-goal placeholder="例如：围绕当前项目的研究问题完成文献到成稿流程">${h(goalDrafts.get(currentProject) || "")}</textarea></label><label class="field"><span>本次执行模式</span><select class="control" data-sequence-mode>${modeOptions(modeDrafts.get(currentProject) || "supervised")}</select></label><div class="connected-row"><button class="btn" data-sequence-prepare>准备工作流任务</button><button class="btn btn-primary" data-sequence-start>开始顺序执行</button></div>`:""}
       ${run?`<div class="connected-row" style="margin-top:12px"><b>${h(run.layout.name)}</b><span class="pill">${h(statuses[run.status] || run.status)}</span>
-        ${["failed","blocked","interrupted"].includes(run.status)?'<button class="btn" data-sequence-resume>从已保存进度继续</button><button class="btn ghost" data-sequence-restart>核对后重新执行当前节点</button>':""}
+        ${["failed","blocked","interrupted"].includes(run.status)?`${(S.models||[]).length?`<select class="control" style="width:auto" data-sequence-switch-model><option value="">保持原模型继续</option>${(S.models||[]).map(m=>`<option value="${h(m.id)}">${h(m.name||m.model)}</option>`).join("")}</select>`:""}<button class="btn" data-sequence-resume>从已保存进度继续</button><button class="btn ghost" data-sequence-restart>核对后重新执行当前节点</button>`:""}
         ${prepared?'<button class="btn btn-primary" data-sequence-start-prepared>开始已准备的工作流</button>':""}
         <button class="btn" data-sequence-chat>打开 LangGraph</button><button class="btn ghost" data-sequence-project-tasks>查看任务状态</button>
         ${!["succeeded","cancelled"].includes(run.status)?'<button class="btn ghost" data-sequence-cancel>停止本次运行</button>':""}</div>
@@ -87,23 +88,23 @@
         currentRun=result.run || currentRun; if(currentRun) focusedRun=currentRun.id; rendered=""; drawRun();
       } catch(error) { dialog.querySelector("[data-sequence-error]").textContent=error.message; button.disabled=false; }
     });
-    const newRun=()=>({id:"",goal:host.querySelector("[data-sequence-goal]").value,autonomy_mode:host.querySelector("[data-sequence-mode]").value});
+    const newRun=()=>({id:"",...(originChatId?{chat_id:originChatId}:{}),goal:host.querySelector("[data-sequence-goal]").value,autonomy_mode:host.querySelector("[data-sequence-mode]").value});
     bind("[data-sequence-start]","start",newRun);
     bind("[data-sequence-prepare]","prepare",newRun);
     bind("[data-sequence-start-prepared]","start",()=>({autonomy_mode:host.querySelector("[data-sequence-run-mode]").value}));
     bind("[data-sequence-mode-apply]","mode",()=>({autonomy_mode:host.querySelector("[data-sequence-run-mode]").value}));
-    bind("[data-sequence-resume]","resume");
+    bind("[data-sequence-resume]","resume",()=>{const mid=host.querySelector("[data-sequence-switch-model]")?.value||"";return mid?{model_id:mid,allow_model_switch:true}:{};});
     bind('[data-manual-submit]','submit-manual',()=>({
       node_id:manual.node_id,text:manualDraft.text||'',
       paths:(manualDraft.paths||'').split(/\r?\n/).map(value=>value.trim()).filter(Boolean)
     }));
-    bind('[data-sequence-restart]','resume',()=>({restart_node:true}));
+    bind('[data-sequence-restart]','resume',()=>{const mid=host.querySelector("[data-sequence-switch-model]")?.value||"";return {restart_node:true,...(mid?{model_id:mid,allow_model_switch:true}:{})};});
     bind("[data-sequence-cancel]","cancel");
     bind("[data-sequence-approve]","review",button=>({node_id:button.dataset.sequenceApprove,approved:true,reviewed_run_id:button.dataset.sequenceTaskRun,reviewed_output_version:Number(button.dataset.sequenceOutputVersion||0),feedback:feedback.get(button.dataset.sequenceApprove) || ""}));
     bind("[data-sequence-reject]","review",button=>({node_id:button.dataset.sequenceReject,approved:false,reviewed_run_id:button.dataset.sequenceTaskRun,reviewed_output_version:Number(button.dataset.sequenceOutputVersion||0),feedback:feedback.get(button.dataset.sequenceReject) || ""}));
   }
-  async function openRun(project,runId="") {
-    currentProject=project;
+  async function openRun(project,runId="",chatId="") {
+    currentProject=project;originChatId=chatId;
     if(dialog) dialog.close();
     focusedRun=runId;
     dialog=document.createElement("dialog"); dialog.className="connected-dialog"; dialog.setAttribute("aria-label","工作流顺序执行与人工审查");
@@ -198,7 +199,7 @@
     if(pollBusy || document.hidden) return;
     pollBusy=true;
     try {
-      if(dialog?.open || uiRouteIs("workflow")) await fetchRun();
+      if(dialog?.open) await fetchRun();
       await refreshLibrary();
       await refreshCalendar();
       await refreshReviews();

@@ -204,6 +204,20 @@ function flBind(){
     }
   };
   const rl = $("flReload"); if(rl) rl.onclick = ()=> flInitTree();
+  if(typeof SplitResizer !== "undefined"){
+    const flGrid = document.querySelector("#panel-files .fl-grid");
+    if(flGrid && !flGrid.dataset.resizerBound){
+      flGrid.dataset.resizerBound = "true";
+      SplitResizer.bind(flGrid, {
+        mode: "fixed-left",
+        storageKey: "fl-sidebar",
+        defaultSize: 214,
+        min: 160,
+        max: 420,
+        cssVar: "--fl-sidebar-w"
+      });
+    }
+  }
   const hand = $("flHand"); if(hand) hand.onclick = ()=>{
     if(!flSel){ flMsg("先在左边点一个文件"); return; }
     FileHandoff.open({project_id:curTask,relative:flSel});
@@ -343,6 +357,23 @@ function flRenderContent(){
         if(btn) btn.textContent = flCurrentFile.text !== flCurrentFile.originalText ? "💾 保存 *" : "💾 保存";
       };
       ta.onkeydown = flEditorKeydown;
+    }
+    if(typeof SplitResizer !== "undefined"){
+      const splitEl = stage.querySelector(".fl-editor-split");
+      const dividerEl = stage.querySelector(".fl-split-divider");
+      if(splitEl && dividerEl && !splitEl.dataset.resizerBound){
+        splitEl.dataset.resizerBound = "true";
+        SplitResizer.bind(splitEl, {
+          mode: "ratio",
+          storageKey: "fl-editor",
+          defaultSize: 0.5,
+          min: 0.2,
+          max: 0.8,
+          cssVar: "--fl-split-ratio",
+          gutter: dividerEl,
+          positioning: "flow"
+        });
+      }
     }
   }
 }

@@ -117,6 +117,111 @@ class ResearchSetupTest(unittest.TestCase):
         self.assertEqual(prepared_solo['kind'], 'assistant')
         self.assertEqual(prepared_team['kind'], 'team')
 
+    def test_review_stage_is_a_human_gate_in_the_frozen_run(self):
+        pid = self.db.create_task('Manual review acceptance')
+        args = {'idea': 'Complete a real literature review', 'project': pid,
+            'graph_type': 'full_research', 'auto_start_graph': False,
+            'experts': [{'role_id': node, 'name': node} for node in
+                        ('search', 'download', 'map', 'write', 'review')],
+            'workflow': {'nodes': [
+                {'id': 'A', 'step': 'search', 'label': 'Search', 'executor_role_id': 'search',
+                 'tools': ['paper_search'], 'output_contract': {
+                     'required_files': ['candidate_papers.csv'], 'requires_evidence': True}},
+                {'id': 'B', 'step': 'notes', 'label': 'Evidence', 'executor_role_id': 'download', 'depends_on': ['A'],
+                 'tools': ['paper_focus'], 'output_contract': {
+                     'required_files': ['evidence_analysis.md'], 'requires_evidence': True}},
+                {'id': 'C', 'step': 'map', 'label': 'Comparison', 'executor_role_id': 'map', 'depends_on': ['A']},
+                {'id': 'D', 'step': 'write', 'label': 'Draft', 'executor_role_id': 'write', 'depends_on': ['B', 'C']},
+                {'id': 'E', 'step': 'review', 'label': 'Review', 'executor_role_id': 'review', 'depends_on': ['D']}],
+                'edges': [{'source': source, 'target': target} for source, target in
+                          [('A','B'),('A','C'),('B','D'),('C','D'),('D','E')]]}}
+        configured = research_setup.configure(self.db, args, project_id=pid, origin_chat_id=self.chat)
+        layout = project_workflows.current(self.db, pid, configured['layout_id'])
+        review = next(node for node in layout['nodes'] if node['id'] == 'E')
+        search = next(node for node in layout['nodes'] if node['id'] == 'A')
+        self.assertIn('project_artifact_write', search['tools'])
+        self.assertTrue(review['review_required'])
+        self.assertTrue(review['manual_review_required'])
+        run = workflow_tasks.prepare(self.db, pid, args['idea'], 'manual-review', configured['layout_id'])
+        tasks = {task['workflow_node_id']: task for task in project_tasks.list_tasks(
+            self.db, pid, workflow_run_id=run['id'])}
+        task = tasks['E']
+        self.assertFalse(tasks['A']['output_contract'].get('requires_evidence', False))
+        self.assertTrue(tasks['B']['output_contract']['requires_evidence'])
+        self.assertIn('paper_evidence_record', tasks['B']['scope']['tools'])
+        self.assertIn('paper_evidence_get', tasks['B']['scope']['tools'])
+        self.assertEqual(tasks['A']['output_contract']['file_rules'][
+            run['layout']['nodes'][0]['output_contract']['required_files'][0]]['required_columns'], [
+                'title', 'authors', 'year', 'doi_or_stable_url', 'source', 'oa_status',
+                'screening_status', 'screening_reason', 'evidence_level', 'full_text_availability'])
+        self.assertTrue(task['scope']['manual_review_required'])
+
+    def test_default_literature_study_is_five_nodes_with_quality_and_storage_contracts(self):
+        pid = self.db.create_task('Battery interface review')
+        configured = research_setup.configure(self.db, {'idea': '全固态锂电池界面机理与改性策略综述',
+            'project': pid, 'graph_type': 'literature_study', 'auto_start_graph': False},
+            project_id=pid, origin_chat_id=self.chat)
+        layout = project_workflows.current(self.db, pid, configured['layout_id'])
+        self.assertEqual([node['id'] for node in layout['nodes']], [
+            'literature_retrieval', 'mechanism_evidence', 'strategy_metrics',
+            'literature_survey', 'citation_review'])
+        edges = {(edge['source'], edge['target']) for edge in layout['edges']}
+        self.assertIn(('literature_retrieval', 'mechanism_evidence'), edges)
+        self.assertIn(('literature_retrieval', 'strategy_metrics'), edges)
+        self.assertIn(('mechanism_evidence', 'literature_survey'), edges)
+        self.assertIn(('strategy_metrics', 'literature_survey'), edges)
+        final = layout['nodes'][-1]
+        self.assertTrue(final['manual_review_required'])
+        self.assertTrue(final['tools'] is None or 'paper_search' in final['tools'])
+        with patch('workflow_execution.kick'):
+            result = research_setup.configure(self.db, {'idea': '全固态锂电池界面机理与改性策略综述',
+                'project': pid, 'graph_type': 'literature_study', 'request_key': 'quality-lifecycle',
+                'workflow_name': '质量规则实跑', 'auto_start_graph': True},
+                project_id=pid, origin_chat_id=self.chat)
+        run = workflow_execution.detail(self.db, result['run_id'])
+        self.assertTrue(run['settings']['managed_artifacts'])
+        tasks = {task['workflow_node_id']: task for task in project_tasks.list_tasks(
+            self.db, pid, workflow_run_id=run['id'])}
+        a = tasks['literature_retrieval']['output_contract']
+        self.assertFalse(a.get('requires_evidence', False))
+        self.assertGreaterEqual(a['file_rules']['研究过程/' + run['id'] + '/literature_retrieval/candidate_papers.csv']['min_rows'], 8)
+        candidate_columns = a['file_rules']['研究过程/' + run['id'] + '/literature_retrieval/candidate_papers.csv']['required_columns']
+        self.assertIn('doi_or_stable_url', candidate_columns)
+        self.assertIn('screening_reason', candidate_columns)
+        self.assertIn('full_text_availability', candidate_columns)
+        c = tasks['strategy_metrics']['output_contract']
+        self.assertFalse(c.get('requires_evidence', False))
+        metric_columns = c['file_rules']['研究过程/' + run['id'] + '/strategy_metrics/methods_metrics.csv']['required_columns']
+        self.assertIn('modification_method', metric_columns)
+        self.assertIn('comparability_note', metric_columns)
+        self.assertIn('doi_or_stable_url', metric_columns)
+        e = tasks['citation_review']['output_contract']
+        self.assertEqual(e['file_rules']['最终产物/' + run['id'] + '/references.bib']['min_entries'], 8)
+        self.assertTrue(tasks['citation_review']['scope']['manual_review_required'])
+
+    def test_custom_notes_step_uses_the_same_csv_columns_in_prompt_and_frozen_contract(self):
+        pid = self.db.create_task('Custom comparison review')
+        args = {'idea': 'Compare interface modifications', 'graph_type': 'literature_study',
+                'request_key': 'custom-notes-columns', 'auto_start_graph': True,
+                'experts': [{'role_id': 'comparison', 'name': 'Comparison expert'}],
+                'workflow': {'nodes': [
+                    {'id': 'C', 'step': 'notes', 'label': 'Methods',
+                     'executor_role_id': 'comparison', 'prompt': 'Compare the accepted papers.',
+                     'output_contract': {'required_files': ['methods_metrics.csv'],
+                         'file_rules': {'methods_metrics.csv': {'required_columns': ['legacy_column']}}}}
+                ], 'edges': []}}
+        with patch('workflow_execution.kick'):
+            result = research_setup.configure(self.db, args, project_id=pid)
+        run = workflow_execution.detail(self.db, result['run_id'])
+        node = run['layout']['nodes'][0]
+        task = project_tasks.list_tasks(self.db, pid, workflow_run_id=run['id'])[0]
+        path = task['output_contract']['required_files'][0]
+        columns = task['output_contract']['file_rules'][path]['required_columns']
+        self.assertEqual(columns, ['citation', 'interface', 'modification_method', 'material_system',
+                                  'conditions', 'metric', 'value', 'unit', 'evidence_level',
+                                  'comparability_note', 'doi_or_stable_url'])
+        self.assertIn(','.join(columns), node['prompt'])
+
     def test_failed_setup_resumes_existing_objects_and_configuration_conflicts_fail(self):
         args = {'idea': 'Recover interrupted research setup', 'request_key': 'recover', 'auto_start_graph': False}
         original = project_workflows.save

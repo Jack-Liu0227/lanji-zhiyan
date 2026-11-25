@@ -108,7 +108,19 @@ class WorkflowCheckpointsTest(unittest.TestCase):
             node.update(node_kind='tool', tool_name='library_overview', tool_args={}, review_required=index == 1)
         workflow_layout.save_layout(self.db, layout)
         run = engine.create(self.db, self.pid)
-        run = engine.advance(self.db, run['id'])
+        from threading import Barrier
+        import project_task_execution as worker
+        barrier = Barrier(2, timeout=5)
+        execute = worker.execute
+        branches = {run['settings']['task_ids'][node] for node in ('n1', 'n2')}
+
+        def synchronize(db, attempt, cancel):
+            if tasks.get_run(db, attempt)['task_id'] in branches:
+                barrier.wait()
+            return execute(db, attempt, cancel)
+
+        with patch.object(worker, 'execute', side_effect=synchronize):
+            run = engine.advance(self.db, run['id'])
         ids = run['settings']['task_ids']
         self.assertEqual(run['status'], 'awaiting_review', run['error'])
         self.assertEqual(tasks.get(self.db, ids['n1'])['status'], 'awaiting_review')

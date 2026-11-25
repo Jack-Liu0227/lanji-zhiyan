@@ -16,6 +16,16 @@ class ExecutionConversationsTest(unittest.TestCase):
     create=service.ProjectTaskServiceTest.create
     result=service.ProjectTaskServiceTest.result
 
+    def test_same_question_after_a_reply_is_a_separate_turn(self):
+        messages = [
+            {'id':'first','role':'user','content':'Check this result'},
+            {'id':'legacy-duplicate','role':'user','content':'Check this result'},
+            {'id':'answer','role':'assistant','content':'The evidence is incomplete'},
+            {'id':'followup','role':'user','content':'Check this result'},
+        ]
+        self.assertEqual([row['id'] for row in conversations.visible_messages(messages)],
+                         ['first','answer','followup'])
+
     def test_desktop_http_route_opens_the_bound_execution_conversation(self):
         from pathlib import Path
         import sys
@@ -56,6 +66,9 @@ class ExecutionConversationsTest(unittest.TestCase):
         data=conversations.read(self.db,cid,self.pid)
         self.assertEqual([row['sender'] for row in data['messages'][1:]],['Writer','Changed expert'])
         self.assertEqual(len(data['messages'][1]['events']),2)
+        self.assertEqual(data['messages'][1]['started_at'],first['started_at'])
+        self.assertTrue(data['messages'][1]['ended_at'])
+        self.assertTrue(all(event.get('at') for event in data['messages'][1]['events']))
         self.assertNotIn('NEVER_DISPLAY',json.dumps(data))
         exported=conversation_history.command(self.db,'chat',cid,'export')
         self.assertIn('SECOND_RESULT',exported['content'])
@@ -218,3 +231,38 @@ class ExecutionConversationsTest(unittest.TestCase):
         saved=self.db.messages(cid,'team:identity')[0]
         self.assertEqual(saved['sender'],'证据分析员')
         self.assertEqual(saved['events'][0]['sender'],'Writer')
+
+    def test_workflow_step_tasks_are_filtered_from_project_conversations_and_healed(self):
+        w_run_id = 'wr-step-test'
+        self.db.db.execute("INSERT INTO workflow_runs(id,project_id,workflow,status,started_at) VALUES (?,?,'default','running',datetime('now'))", (w_run_id, self.pid))
+        layout = {
+            'id': 'layout-step-test',
+            'name': 'Test Step Flow',
+            'nodes': [
+                {'id': 'n1', 'label': 'S1 起步', 'step': 'task'},
+                {'id': 'n2', 'label': 'P1 并行A', 'step': 'task'},
+                {'id': 'n3', 'label': 'P2 并行B', 'step': 'task'},
+                {'id': 'n4', 'label': 'J1 汇合', 'step': 'task'}
+            ],
+            'edges': [
+                {'source': 'n1', 'target': 'n2'},
+                {'source': 'n1', 'target': 'n3'},
+                {'source': 'n2', 'target': 'n4'},
+                {'source': 'n3', 'target': 'n4'}
+            ]
+        }
+        self.db.db.execute("INSERT INTO workflow_executions(run_id,layout_snapshot,settings,updated_at) VALUES (?,?,'{}',datetime('now'))", (w_run_id, json.dumps(layout)))
+        step_task = tasks.create(self.db, {"project_id": self.pid, "title": "Legacy Unformatted Step Title", "goal": "Analyze the evidence", "executor_binding_id": self.binding["id"], "workflow_run_id": w_run_id, "workflow_node_id": "n2", "scope": {"kind": "workflow", "allowed_binding_ids": [self.binding["id"]]}, "metadata": {}}, authority=tasks.CommandContext.system(self.pid))
+
+        conversations.ensure_project(self.db, self.pid)
+        res = conversation_history.route('GET', '/api/conversation-history', {}, {'project_id': [self.pid]}, self.db)
+        conv_titles = [c['title'] for c in res['conversations']]
+
+        self.assertNotIn('Legacy Unformatted Step Title', conv_titles)
+        self.assertNotIn('Step 2.1: P1 并行A', conv_titles)
+        self.assertNotIn('Test Step Flow', conv_titles)
+
+        healed_task = tasks.get(self.db, step_task['id'])
+        self.assertEqual(healed_task['title'], 'Step 2.1: P1 并行A')
+        self.assertEqual(healed_task['metadata']['workflow_node']['step_no'], '2.1')
+        self.assertTrue(healed_task['metadata']['workflow_node']['is_parallel'])

@@ -181,8 +181,31 @@ def _path_key(path):
     return os.path.normcase(str(Path(path).resolve()))
 
 
+def _is_ingested_paper(asset):
+    return (asset.get("kind") == "paper" and asset.get("source") == "paper_ingest" and
+            asset.get("storage") == "file")
+
+
 def eligibility(db, asset, *, index=None):
     """Derive publication state from canonical attempts and accepted deliveries."""
+    if _is_ingested_paper(asset):
+        expected_hash = asset.get("content_hash", "")
+        result = {"controlled": False, "consumable": False, "review_status": "source",
+                  "task_id": "", "task_run_id": "", "output_revision": 0, "delivery_id": "",
+                  "workflow_run_id": "", "workflow_node_id": "", "node_result": None,
+                  "expected_hash": expected_hash}
+        if asset.get("status") == "active":
+            path = Path(asset.get("canonical_uri") or "")
+            try:
+                valid = bool(expected_hash and path.is_file() and sha256_file(path) == expected_hash)
+            except OSError:
+                valid = False
+            if valid:
+                result["consumable"] = True
+            else:
+                result["review_status"] = "modified"
+        return result
+
     metadata = _metadata(asset.get("metadata"))
     uri = asset.get("canonical_uri", "")
     path_key = _path_key(uri) if asset.get("storage") == "file" and uri else ""
@@ -277,6 +300,8 @@ def require_input(db, asset, allow_draft=False, *, index=None):
     result = eligibility(db, asset, index=index)
     if asset.get("status") != "active" or is_instruction_asset(asset):
         raise ValueError("输入资料不可用或属于指令模板")
+    if _is_ingested_paper(asset) and not result["consumable"]:
+        raise ValueError("项目论文源文件不存在或哈希已变化，请重新核查后再采纳")
     if result["controlled"] and not result["consumable"] and not allow_draft:
         raise ValueError("任务产物尚未交付或版本已被替代，请选择已交付版本；使用草稿需要明确选择")
     if result["controlled"] and result["consumable"] and asset.get("storage") == "file":
@@ -292,6 +317,8 @@ def require_context(db, asset, *, index=None):
     result = eligibility(db, asset, index=index)
     if asset.get("status") != "active" or is_instruction_asset(asset):
         raise ValueError("资料不可用或属于指令模板")
+    if _is_ingested_paper(asset) and not result["consumable"]:
+        raise ValueError("项目论文源文件不存在或哈希已变化，请重新核查后再读取")
     if result["consumable"]:
         return result
     context = getattr(db, "project_task_context", None)
@@ -360,7 +387,7 @@ def require_path_context(db, project_id, path, *, index=None):
     index = index if index is not None else eligibility_index(db, project_id)
     asset = path_asset(db, project_id, path, index=index)
     if asset.get("project_id") != project_id:
-        index = eligibility_index(db, asset.get("project_id", ""))
+        raise PermissionError("不能读取其他项目的资料")
     return require_context(db, asset, index=index)
 
 

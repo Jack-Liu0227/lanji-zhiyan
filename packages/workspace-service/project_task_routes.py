@@ -5,6 +5,9 @@ from __future__ import annotations
 def route(method, path, body, query, db):
     if not path.startswith("/api/project-tasks"):
         return None
+    if path == '/api/project-tasks/file-preview':
+        import workflow_file_preview
+        return workflow_file_preview.route(method, path, body, query, db)
     import project_bindings as bindings
     import project_tasks as tasks
     import project_task_execution as worker
@@ -133,14 +136,25 @@ def route(method, path, body, query, db):
                 import execution_board
                 execution_board.link_plan(db,project_id,plan_id,task['id'])
         elif action == "start":
+            model_id = str(body.get("model_id") or "")
             run = tasks.start(db, task_id, authority=authority,
-                request_key=str(body.get("request_key") or ""), autonomy_mode=body.get("autonomy_mode"), restart=body.get("restart") is True)
+                request_key=str(body.get("request_key") or ""), autonomy_mode=body.get("autonomy_mode"),
+                restart=body.get("restart") is True,
+                allow_model_switch=bool(body.get("allow_model_switch") is True or model_id),
+                model_id=model_id)
             if task.get("workflow_run_id") and not task.get("parent_task_id"):
                 import workflow_execution
                 workflow_execution.kick(db.path, task["workflow_run_id"])
             else:
                 worker.kick(db.path, run["id"])
             return {"task": tasks.get(db, task_id, project_id=project_id), "run": run}
+        elif action == "switch-model":
+            task = tasks.switch_model(
+                db, task_id, str(body.get("model_id") or ""),
+                authority=authority,
+                reasoning=str(body.get("reasoning") or ""),
+                model_policy=str(body.get("model_policy") or ""),
+            )
         elif action == "review":
             task = tasks.review(db, task_id, approved=body.get("approved"), feedback=body.get("feedback", ""),
                                 authority=authority, request_key=str(body.get("request_key") or ""),

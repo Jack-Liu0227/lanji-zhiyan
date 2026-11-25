@@ -147,6 +147,16 @@ class IndexTest(unittest.TestCase):
         self.assertEqual(st["sources_indexed"], 2)
         self.assertIn(st["dim"], (0, 64))
 
+    def test_endpoint_change_invalidates_vectors_but_keeps_lexical(self):
+        from unittest.mock import patch
+        semantic.sync(self.db)
+        old = semantic.config(self.db)
+        with patch.object(semantic, 'config', return_value={**old, 'base': 'http://127.0.0.1:12345/v1'}):
+            self.assertEqual(semantic.status(self.db)['index_state'], 'unindexed')
+            self.assertEqual(semantic.hybrid(self.db, '铜掺杂')['mode'], 'lexical')
+            self.assertEqual(semantic.sync(self.db)['indexed'], 2)
+            self.assertEqual(semantic.hybrid(self.db, '铜掺杂')['mode'], 'hybrid')
+
 
 class KnowledgeQueryWiringTest(unittest.TestCase):
     """Agent 真正调用的入口必须吃到语义层，且索引没建时不能空手回去。"""
@@ -175,9 +185,8 @@ class KnowledgeQueryWiringTest(unittest.TestCase):
 
     def test_knowledge_query_falls_back_when_index_empty(self):
         out = workflow._knowledge_query(self.db, self.project, "铜掺杂")     # 没 sync 过
-        self.assertIn(out["mode"], ("lexical", "vector", "hybrid"))
-        self.assertEqual(out["hits"], [])                                  # 索引空 + 子串也空
-        self.assertIn("reason", out)
+        self.assertEqual(out["mode"], "lexical")
+        self.assertEqual(out["hits"][0]["citation"], "cu.pdf p.3")
 
     def test_semantic_index_tool_exposes_status(self):
         res = workflow._tool_impl("semantic_index", self.db, self.project, {"action": "status"})

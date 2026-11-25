@@ -13,17 +13,19 @@ const WorkspaceTrajectory=(()=>{
       else if(kind==='assistant'){rows.push({key:'assistant:'+event.event_id,kind:'assistant',name:'专家回复',status:'done',output:data.content,at:event.created_at});}
       else if(['error','cancelled','sub','team','template_used','done'].includes(kind)){const detail=kind==='error'?(data.message||data.detail||data.error||data.summary||data.output?.message||data.result?.message||'运行失败'):'';rows.push({key:kind+':'+event.event_id,kind,name:kind==='error'?'运行错误 · '+detail:({cancelled:'停止运行',done:'本轮结束',sub:'子调度',team:'团队协作',template_used:'应用模板'}[kind]||kind),status:kind==='error'?'failed':kind==='cancelled'?'cancelled':'done',summary:detail||data.summary||'',output:data,at:event.created_at});}
     }
-    if(['done','failed','cancelled','interrupted'].includes(status))rows.filter(row=>row.status==='pending').forEach(row=>row.status='interrupted');
+    if(['done','succeeded','delivered','awaiting_review','blocked','failed','cancelled','interrupted'].includes(status))rows.filter(row=>row.status==='pending').forEach(row=>row.status='interrupted');
     return rows;
   }
   function mount(host,options){
-    if(host.__trajectoryKey===options.projectId+':'+options.chatId)return;
-    host.__trajectoryDispose?.();host.__trajectoryKey=options.projectId+':'+options.chatId;
-    let runs=[],runId='',events=[],after=0,hasMore=false,busy=false,selected='',request=0,signature='',olderCursor=null;
+    const key=options.projectId+':'+options.chatId+':'+(options.runId||'');
+    if(host.__trajectoryKey===key)return;
+    host.__trajectoryDispose?.();host.__trajectoryKey=key;
+    let runs=[],runId=options.runId||'',monitoring=null,disposed=false,events=[],after=0,hasMore=false,busy=false,selected='',request=0,signature='',olderCursor=null;
     host.innerHTML=`<header class="wt-heading"><div><span class="pw-eyebrow">AGENT ACTIVITY</span><h3>执行时间线</h3></div><span class="wt-live" data-wt-live></span></header><div class="wt-toolbar"><label>运行<select class="control" data-wt-runs aria-label="选择执行轮次"></select></label><input class="control" type="search" data-wt-search aria-label="筛选执行轨迹" placeholder="搜索工具、参数或结果"><label class="wt-errors"><input type="checkbox" data-wt-errors>只看异常</label><button class="pw-text-button" data-wt-refresh>刷新</button></div><p class="wt-summary" data-wt-summary></p><div class="wt-error" data-wt-error role="status"></div><div class="wt-body"><div class="wt-timeline" data-wt-list role="list" aria-label="执行事件时间线"></div></div><button type="button" class="pw-text-button" data-wt-more hidden>加载后续记录</button>`;
     host.querySelector('.wt-toolbar').insertAdjacentHTML('beforeend','<button type="button" class="pw-text-button" data-wt-older hidden>更早轮次</button>');
+    host.querySelector('[data-wt-summary]').insertAdjacentHTML('afterend','<p class="wt-monitor" data-wt-monitor role="status"></p>');
     const el=name=>host.querySelector('[data-wt-'+name+']');
-    const current=()=>host.isConnected&&options.live();
+    const current=()=>!disposed&&host.isConnected&&options.live();
     const serialize=value=>typeof value==='string'?value:JSON.stringify(value,null,2);
     const atTime=value=>{const date=new Date(value);return Number.isNaN(date.getTime())?'时间未记录':date.toLocaleTimeString('zh-CN',{hour12:false});};
     const kinds={model:['◈','模型请求'],tool:['⌘','工具调用'],reasoning:['◌','思考摘要'],assistant:['↗','专家回复'],error:['!','运行错误'],cancelled:['■','已停止'],done:['✓','本轮完成'],team:['⑂','团队协作'],sub:['⑂','子调用'],template_used:['▤','模板']};
@@ -31,6 +33,10 @@ const WorkspaceTrajectory=(()=>{
       const run=runs.find(row=>row.id===runId),all=records(events,run?.status),query=el('search').value.toLowerCase();
       const shown=all.filter(row=>(!el('errors').checked||['failed','cancelled','interrupted'].includes(row.status))&&(!query||JSON.stringify(row).toLowerCase().includes(query)));
       const scroll=el('list').scrollTop;
+      const phases={preparing:'准备输入',model:'等待模型响应',tool:'执行工具',complete:'执行结束'};
+      const last=monitoring?.last_progress_at,elapsed=last?Math.max(0,Math.floor((Date.now()-new Date(last).getTime())/1000)):null;
+      el('monitor').textContent=monitoring?.heartbeat_at?`${monitoring.worker_alive?'执行进程在线':'执行进程当前未报告存活'} · ${phases[monitoring.phase]||monitoring.phase||'等待状态'} · 上次进展 ${elapsed??'未记录'} 秒前` : '';
+      el('monitor').classList.toggle('is-stale',!!monitoring?.heartbeat_at&&!monitoring.worker_alive&&run?.status==='running');
       el('live').textContent=run?statusLabels[run.status]||run.status:'等待运行';el('live').classList.toggle('is-running',run?.status==='running');
       el('summary').textContent=run?`${run.model_name||'模型未记录'} · ${all.filter(row=>row.kind==='tool').length} 次工具调用 · ${all.filter(row=>row.status==='failed').length} 项异常`:'发送一条消息后，模型请求、工具调用与产物会按时间出现在这里。';
       el('list').innerHTML=shown.map((row,index)=>{
@@ -46,23 +52,24 @@ const WorkspaceTrajectory=(()=>{
       if(!runId||!current())return;const ticket=++request,id=runId;
       const data=await api('/api/agent-settings/trajectory/events?chat_id='+encodeURIComponent(options.chatId)+'&project_id='+encodeURIComponent(options.projectId)+'&run_id='+encodeURIComponent(id)+'&after='+(reset?0:after));
       if(!current()||ticket!==request||id!==runId)return;
+      monitoring=data.monitoring||null;const run=runs.find(row=>row.id===id);if(run)run.status=data.status;
       events=reset?data.events:[...events,...data.events.filter(row=>!events.some(old=>old.event_id===row.event_id))];after=data.next_after;hasMore=data.has_more;
       if(!selected){const firstError=records(events,data.status).find(row=>row.kind==='error');if(firstError)selected=firstError.key;}
-      const mark=JSON.stringify([id,data.status,events]);if(mark!==signature){signature=mark;render();}
+      const mark=JSON.stringify([id,data.status,events,monitoring]);if(mark!==signature){signature=mark;render();}
     }
     async function refresh(){
       if(busy||!current()||!options.chatId)return;busy=true;
       try{const data=await api('/api/agent-settings/trajectory?chat_id='+encodeURIComponent(options.chatId)+'&project_id='+encodeURIComponent(options.projectId));if(!current())return;if(!runs.length)olderCursor=data.next_before;runs=[...data.runs,...runs.filter(old=>!data.runs.some(row=>row.id===old.id))];el('older').hidden=!olderCursor;
-        if(!runs.some(row=>row.id===runId)){runId=runs[0]?.id||'';events=[];after=0;selected='';}
+        if(!runs.some(row=>row.id===runId)){runId=options.runId||runs[0]?.id||'';if(runId&&!runs.some(row=>row.id===runId))runs.unshift({id:runId,status:'queued',created_at:'',message:'节点执行尝试'});events=[];after=0;selected='';}
         if(document.activeElement!==el('runs')){el('runs').innerHTML=runs.map(row=>`<option value="${h(row.id)}">${h(fmtDate(row.created_at))} · ${h(statusLabels[row.status]||row.status)} · ${h(row.message.slice(0,32))}</option>`).join('');el('runs').value=runId;}
-        if(runId)await loadEvents(!events.length);else render();el('error').textContent='';
+        if(runId){await loadEvents(!events.length);while(hasMore&&current())await loadEvents();}else render();el('error').textContent='';
       }catch(error){if(current())el('error').textContent='轨迹读取失败：'+error.message;}finally{busy=false;}
     }
-    el('runs').onchange=()=>{runId=el('runs').value;events=[];after=0;selected='';loadEvents(true).catch(error=>el('error').textContent=error.message);};
+    el('runs').onchange=()=>{runId=el('runs').value;options.onSelectRun?.(runId);events=[];after=0;selected='';loadEvents(true).catch(error=>el('error').textContent=error.message);};
     el('older').onclick=async()=>{if(!olderCursor)return;try{const data=await api('/api/agent-settings/trajectory?chat_id='+encodeURIComponent(options.chatId)+'&project_id='+encodeURIComponent(options.projectId)+'&before='+olderCursor);if(!current())return;runs.push(...data.runs.filter(row=>!runs.some(old=>old.id===row.id)));olderCursor=data.next_before;await refresh();}catch(error){if(current())el('error').textContent=error.message;}};
     el('search').oninput=render;el('errors').onchange=render;el('refresh').onclick=refresh;el('more').onclick=()=>loadEvents().catch(error=>el('error').textContent=error.message);
     const timer=setInterval(()=>{if(!host.isConnected){clearInterval(timer);return;}if(!document.hidden&&!host.hidden)refresh();},1500);
-    host.__trajectoryDispose=()=>{clearInterval(timer);request++;};refresh();render();
+    host.__trajectoryDispose=()=>{disposed=true;clearInterval(timer);request++;host.__trajectoryKey='';};refresh();render();
   }
   return {mount};
 })();

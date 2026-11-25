@@ -119,4 +119,36 @@ class BuiltinScheduleSkillsTest(unittest.TestCase):
             now = datetime.now()
             self.db.schedule_mark_run(rule['id'], first['ended_at'], now.isoformat(timespec='seconds'))
             self.assertEqual(schedule.tick(now), 1)
+            import time
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and sum(row['status'] == 'completed' for row in self.db.schedule_runs()) < 2:
+                time.sleep(0.02)
         self.assertEqual(sum(row['status'] == 'completed' for row in self.db.schedule_runs()), 2)
+
+    def test_due_rules_run_concurrently_without_duplicate_triggers(self):
+        from threading import Barrier, Event
+        import time
+        ids = {self.configure(suffix, 'daily')['id'] for suffix in ('last30days', 'literature-matrix')}
+        now = datetime.now()
+        for identifier in ids:
+            self.db.schedule_mark_run(identifier, '', now.isoformat(timespec='seconds'))
+        running, release = Barrier(3, timeout=6), Event()
+
+        def model(*args, **kwargs):
+            running.wait()
+            release.wait(6)
+            return {'reply': 'Independent scheduled report'}
+
+        with patch.object(workflow, 'run_agent', side_effect=model):
+            try:
+                self.assertEqual(schedule.tick(now), 2)
+                running.wait()
+                self.assertEqual(schedule.tick(now), 0)
+            finally:
+                release.set()
+            deadline = time.monotonic() + 6
+            while time.monotonic() < deadline and len([row for row in self.db.schedule_runs() if row['status'] == 'completed']) < 2:
+                time.sleep(0.02)
+        records = [row for row in self.db.schedule_runs() if row['schedule_id'] in ids]
+        self.assertEqual(sorted((row['schedule_id'], row['status']) for row in records),
+                         sorted((identifier, 'completed') for identifier in ids))

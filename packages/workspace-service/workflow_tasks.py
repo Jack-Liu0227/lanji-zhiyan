@@ -11,10 +11,175 @@ import workflow_layout
 import workflow_state
 
 
+def compute_node_hierarchical_steps(nodes: list[dict], edges: list[dict]) -> dict[str, dict]:
+    """计算工作流节点的拓扑波次与标准分层编号（如 Step 1, Step 2.1, Step 2.2, Step 3, Step 4）."""
+    if not nodes:
+        return {}
+    in_deg = {n["id"]: 0 for n in nodes}
+    adj = {n["id"]: [] for n in nodes}
+    for e in edges or []:
+        src, dst = e.get("source"), e.get("target")
+        if src in adj and dst in in_deg:
+            in_deg[dst] += 1
+            adj[src].append(dst)
+
+    depth = {}
+    queue = [nid for nid, deg in in_deg.items() if deg == 0]
+    for nid in queue:
+        depth[nid] = 0
+
+    rem_in_deg = dict(in_deg)
+    while queue:
+        u = queue.pop(0)
+        d = depth.get(u, 0)
+        for v in adj.get(u, []):
+            depth[v] = max(depth.get(v, 0), d + 1)
+            rem_in_deg[v] -= 1
+            if rem_in_deg[v] == 0:
+                queue.append(v)
+
+    for idx, n in enumerate(nodes):
+        if n["id"] not in depth:
+            depth[n["id"]] = idx
+
+    level_map = {}
+    for n in nodes:
+        lvl = depth.get(n["id"], 0)
+        level_map.setdefault(lvl, []).append(n)
+
+    result = {}
+    import re
+    for major_idx, lvl in enumerate(sorted(level_map.keys())):
+        group = level_map[lvl]
+        major_no = major_idx + 1
+        is_parallel = len(group) > 1
+        for sub_idx, n in enumerate(group):
+            minor_no = sub_idx + 1
+            step_no = f"{major_no}.{minor_no}" if is_parallel else f"{major_no}"
+            raw = str(n.get("label") or n.get("title") or n.get("id") or "").strip()
+            clean = re.sub(r"^Step\s*\d+(\.\d+)?\s*[:：]\s*", "", raw, flags=re.IGNORECASE).strip()
+            canonical_title = f"Step {step_no}: {clean}"
+            result[n["id"]] = {
+                "step_no": step_no,
+                "major_no": major_no,
+                "minor_no": minor_no,
+                "is_parallel": is_parallel,
+                "clean_title": clean,
+                "canonical_title": canonical_title,
+                "wave_index": major_idx,
+                "wave_total": len(group)
+            }
+    return result
+
+
 def _save(db, run):
     db.db.execute("UPDATE workflow_executions SET settings=? WHERE run_id=?",
                   (json.dumps(run["settings"], ensure_ascii=False), run["id"]))
     db.db.commit()
+
+
+def _separate_inputs(inputs):
+    """Keep free-text workflow guidance out of the project-file input contract."""
+    if inputs is None:
+        return [], ""
+    if not isinstance(inputs, list):
+        raise ValueError("工作流 inputs 必须是项目资产或相对文件列表")
+    references, guidance = [], []
+    for item in inputs:
+        if isinstance(item, str) and item.strip():
+            references.append(item)
+            continue
+        if isinstance(item, dict) and item.get("type") == "text":
+            text = str(item.get("content") or "").strip()
+            if text:
+                guidance.append(text)
+            continue
+        if not isinstance(item, dict) or not (item.get("asset_id") or item.get("relative")):
+            raise ValueError("输入须引用项目资产或相对文件；文本要求请放在工作流目标中")
+        references.append(item)
+    combined = "\n\n".join(guidance)
+    if len(combined) > 20000:
+        raise ValueError("工作流文本要求不能超过 20000 字符")
+    return references, combined
+
+
+def _repair_prepared_guidance(db, run):
+    """Migrate old prepared runs that stored free text as file inputs."""
+    settings = run["settings"]
+    references, input_guidance = _separate_inputs(settings.get("task_inputs") or [])
+    guidance = []
+    for text in (settings.get("task_guidance") or "", input_guidance):
+        if text and text not in guidance:
+            guidance.append(text)
+    pending = []
+    for task_id in settings.get("task_ids", {}).values():
+        task = tasks.get(db, task_id)
+        if task.get("latest_run_id"):
+            continue
+        task_references, task_guidance = _separate_inputs(task.get("inputs") or [])
+        if task_guidance and task_guidance not in guidance:
+            guidance.append(task_guidance)
+        pending.append((task, task_references))
+    combined_guidance = "\n\n".join(guidance)
+    changed = settings.get("task_inputs") != references or settings.get("task_guidance", "") != combined_guidance
+    settings["task_inputs"] = references
+    settings["task_guidance"] = combined_guidance
+    for task, task_references in pending:
+        goal = task["goal"]
+        if combined_guidance:
+            block = "【本次工作流要求】\n" + combined_guidance
+            if block not in goal:
+                goal = goal.rstrip() + "\n\n" + block
+        if task["inputs"] != task_references or task["goal"] != goal:
+            db.db.execute("UPDATE project_tasks SET inputs=?,goal=?,updated_at=? WHERE id=?",
+                          (tasks._json(task_references), goal, tasks._now(), task["id"]))
+            changed = True
+    if changed:
+        _save(db, run)
+
+
+def auto_bind_layout_roles(db, project_id, layout):
+    """Automatically bind unbound roles in a layout to available project executors."""
+    bindings.import_legacy(db, project_id)
+    available = [b for b in bindings.list_bindings(db, project_id) if b.get("enabled") and b.get("available", True)]
+    if not available:
+        existing_steward = db.db.execute(
+            "SELECT id, enabled FROM project_executor_bindings WHERE project_id=? AND kind='assistant' AND target_id='builtin-steward'",
+            (project_id,),
+        ).fetchone()
+        if not existing_steward:
+            steward = db.assistant("builtin-steward")
+            if steward and steward.get("enabled"):
+                available = [bindings.register(db, project_id, "assistant", "builtin-steward", source="auto")]
+    if not available:
+        return
+    roles = {r["role_id"]: r for r in bindings.list_roles(db, project_id, layout["id"])}
+    from workflow_catalog import LEGACY_MEMBER_STAGES
+    stage_to_aid = {stage: aid for aid, stages in LEGACY_MEMBER_STAGES.items() for stage in stages}
+    for node in layout.get("nodes", []):
+        if node.get("node_kind") == "workflow" or node.get("executor_binding_id"):
+            continue
+        role = bindings.role_id(node)
+        saved = roles.get(role, {})
+        if saved.get("binding_id"):
+            continue
+        explicit_aid = node.get("assistant_id") or ""
+        stage_aid = stage_to_aid.get(node.get("step", ""), "")
+        chosen = None
+        if node.get("execution_mode") == "team" or node.get("team_id"):
+            chosen = next((b for b in available if b["kind"] == "team" and (not node.get("team_id") or b["target_id"] == node["team_id"])), None)
+        if not chosen and explicit_aid:
+            chosen = next((b for b in available if b["kind"] == "assistant" and b["target_id"] == explicit_aid), None)
+        if not chosen:
+            chosen = next((b for b in available if b["kind"] == "assistant" and b.get("source") not in ("legacy", "auto") and b["target_id"] != "builtin-steward"), None)
+        if not chosen and stage_aid:
+            chosen = next((b for b in available if b["kind"] == "assistant" and b["target_id"] == stage_aid), None)
+        if not chosen:
+            chosen = next((b for b in available if b["kind"] == "assistant" and b["target_id"] != "builtin-steward"), None) or available[0]
+        if chosen:
+            real_grant = bindings.register(db, project_id, chosen["kind"], chosen["target_id"], source="auto")
+            bindings.bind_role(db, project_id, layout["id"], role, real_grant["id"])
+            node["executor_binding_id"] = real_grant["id"]
 
 
 def _executor(db, project_id, layout, raw, selected=None):
@@ -48,15 +213,28 @@ def _executor(db, project_id, layout, raw, selected=None):
     resolved_node = {**raw, "execution_mode": "team" if executor.get("team_id") else "assistant",
                      **{k: executor.get(k, "") for k in ("assistant_id", "team_id", "member_id")}}
     engine._actor(db, project_id, resolved_node)
+    if raw.get("node_kind", "executor") == "executor" and (raw.get("output_contract") or {}).get("requires_evidence"):
+        allowed = worker._allowlists(executor.get("tools"), raw.get("tools"))
+        needed = "paper_evidence_record" if raw.get("step") in ("task", "notes", "download") else "paper_evidence_get"
+        if allowed is not None and needed not in allowed:
+            raise ValueError(f"节点「{raw['label']}」要求全文证据，但未配置 {needed}；请先修正节点工具再准备运行")
     return executor, resolved_node
 
 
 def compile_run(db, run):
     """Idempotent conversion, including a file-handoff run created by the old adapter."""
     if run["settings"].get("task_ids"):
+        _repair_prepared_guidance(db, run)
         return run
     project_id, layout = run["project_id"], run["layout"]
     layout = {**layout, **workflow_layout.validate_definition(layout)}
+    managed = run["settings"].get("managed_artifacts")
+    if managed:
+        from workflow_artifact_paths import bind_managed_paths
+        if not isinstance(managed, dict) or managed.get("version") != 1:
+            raise ValueError("不支持的托管产物路径策略")
+        layout = bind_managed_paths(layout, run_segment=managed["run_segment"])
+        layout = {**layout, **workflow_layout.validate_definition(layout)}
     run["layout"] = layout
     db.db.execute("UPDATE workflow_executions SET layout_snapshot=? WHERE run_id=?", (json.dumps(layout, ensure_ascii=False), run["id"]))
     db.db.commit()
@@ -85,12 +263,19 @@ def compile_run(db, run):
     allowed = sorted({executor["binding_id"] for executor, _ in resolved.values()})
     members = sorted({executor["member_id"] for executor, _ in resolved.values() if executor.get("member_id")})
     stages = [n["step"] for n in layout["nodes"]]
-    current_layout = workflow_state.definition(db, project_id)
+    try:
+        current_layout = workflow_state.definition(db, project_id)
+    except (ValueError, KeyError):
+        current_layout = {'id': ''}
     compat = (current_layout["id"] == layout["id"] and all(s in workflow_layout.STAGES for s in stages)
-              and len(stages) == len(set(stages)))
+              and len(stages) == len(set(stages))
+              and not any(workflow_layout.required_outputs(n) for n in layout["nodes"]))
+    step_info_map = compute_node_hierarchical_steps(layout.get("nodes", []), layout.get("edges", []))
     mapping = {}
     for nid in selected_ids:
         executor, node = resolved[nid]
+        step_info = step_info_map.get(nid, {})
+        canonical_title = step_info.get("canonical_title") or node["label"]
         incoming = [e for e in layout["edges"] if e["target"] == nid and e["source"] in mapping]
         deps = [mapping[e["source"]] for e in incoming]
         handoffs = [{**e, "task_id": mapping[e["source"]]} for e in incoming if e.get("artifact")]
@@ -102,8 +287,13 @@ def compile_run(db, run):
             inputs = [{"relative": Path(source["path"]).resolve().relative_to(root).as_posix(), "sha256": source["sha256"]}]
             inputs.extend({"relative": Path(f["path"]).resolve().relative_to(root).as_posix(), "sha256": f["sha256"]} for f in source.get("related_inputs", []))
         scope = {"kind": "workflow", "allowed_binding_ids": allowed}
+        run_review_mode = run["settings"].get("review_mode") or bindings.workflow_review_mode(db)
+        if run_review_mode in bindings.WORKFLOW_REVIEW_MODES:
+            scope["workflow_review_mode"] = run_review_mode
         if node.get('manual_review_required'):
             scope['manual_review_required'] = True
+        if node.get('manual_execution'):
+            scope['manual_execution'] = True
         if members:
             # Team-wide nodes can dispatch to their own configured members only.
             members_for_flow = set(members)
@@ -113,14 +303,16 @@ def compile_run(db, run):
             scope["allowed_member_ids"] = sorted(members_for_flow)
         if node.get("tools") is not None:
             scope["tools"] = node["tools"]
-        goal = (run["settings"].get("goal") if run["settings"].get("single_node") else node.get("prompt")) or run["settings"].get("goal") or ("完成「" + node["label"] + "」，保存实际产物并说明结果。")
-        task = tasks.create(db, {"project_id": project_id, "title": node["label"], "goal": goal,
+        goal = (run["settings"].get("goal") if run["settings"].get("single_node") else node.get("prompt")) or run["settings"].get("goal") or ("完成「" + canonical_title + "」，保存实际产物并说明结果。")
+        if run["settings"].get("task_guidance"):
+            goal += "\n\n【本次工作流要求】\n" + run["settings"]["task_guidance"]
+        task = tasks.create(db, {"project_id": project_id, "title": canonical_title, "goal": goal,
             "executor_binding_id": executor["binding_id"], "member_id": executor.get("requested_member_id", "") if not run["settings"].get("actor") else executor.get("member_id", ""),
             "inputs": inputs, "dependencies": deps, "output_contract": node.get("output_contract") or {},
             "review_required": node.get("review_required", True), "workflow_run_id": run["id"], "workflow_node_id": nid,
             "scope": scope, "metadata": {"stage": node["step"], "node_config": node, "handoffs": handoffs,
                 "legacy_stage_compat": compat, "layout_snapshot": layout,
-                "workflow_node": {"run_id": run["id"], "node_id": nid},
+                "workflow_node": {"run_id": run["id"], "node_id": nid, **step_info},
                 **({"template_ref": run["settings"]["task_template_ref"]} if run["settings"].get("task_template_ref") else {})}},
             authority=tasks.CommandContext.system(project_id), request_key="workflow:" + run["id"] + ":" + nid)
         mapping[nid] = task["id"]
@@ -136,12 +328,14 @@ def compile_run(db, run):
     return run
 
 
-def prepare(db, project_id, goal="", idempotency_key="", template_id="", *, inputs=None):
+def prepare(db, project_id, goal="", idempotency_key="", template_id="", *, inputs=None, managed_artifacts=False, review_mode=""):
     import workflow_execution as engine
     import run_service
     import workflow
     workflow_layout._project(db, project_id)
     workflow_layout.ensure_schema(db)
+    if review_mode and review_mode not in bindings.WORKFLOW_REVIEW_MODES:
+        raise ValueError("review_mode 只能是 human_review 或 auto")
     if idempotency_key:
         row = db.db.execute("SELECT id FROM workflow_runs WHERE project_id=? AND idempotency_key=?", (project_id, idempotency_key)).fetchone()
         if row:
@@ -151,29 +345,47 @@ def prepare(db, project_id, goal="", idempotency_key="", template_id="", *, inpu
         if old["workflow"] == "file-handoff":
             raise ValueError("项目有未结束的文件节点任务，请先完成审查或停止该任务")
         return old
+    if not isinstance(managed_artifacts, bool):
+        raise ValueError("managed_artifacts 必须是布尔值")
+    inputs, task_guidance = _separate_inputs(inputs)
     import project_workflows
     layout = project_workflows.current(db,project_id,template_id) if template_id else workflow_state.definition(db, project_id)
     from workflow_composition import expand
     frozen = expand(db, project_id, layout)
     bindings.import_legacy(db, project_id)
+    resolved_executors = {}
     for node in frozen["nodes"]:
         executor, _ = _executor(db, project_id, frozen, node)
+        resolved_executors[node["id"]] = executor
         if node.get('node_kind') == 'tool':
             arguments = [edge['argument'] for edge in frozen['edges']
                          if edge['target'] == node['id'] and edge.get('argument')]
             worker.validate_fixed_tool(db, project_id, node, executor, bound_arguments=arguments)
+    import agent_settings
+    preflight = agent_settings.preflight_layout(db, project_id, frozen, executors=resolved_executors)
+    if not preflight["ok"]:
+        raise ValueError(preflight["errors"][0])
     if any(n["step"] == "idea" for n in frozen["nodes"]) and not db.idea_input(project_id).strip():
         project = db.summary(project_id)["task"]
         db.idea_input_save(project_id, str(goal).strip() or project.get("question") or project["title"])
     run = run_service.start(db, project_id, "research-sequence", idempotency_key=idempotency_key or "workflow:" + uuid.uuid4().hex)
-    settings = {"goal": str(goal)[:20000], "policy": bindings.settings(db, project_id), "prepared": True, "task_inputs": inputs or []}
+    effective_review = review_mode or bindings.workflow_review_mode(db)
+    settings = {"goal": str(goal)[:20000], "policy": bindings.settings(db, project_id), "review_mode": effective_review,
+                "prepared": True, "task_inputs": inputs, "task_guidance": task_guidance, "preflight": preflight}
+    if managed_artifacts:
+        settings["managed_artifacts"] = {"version": 1, "run_segment": run["id"]}
     order = frozen["order"]
     links = {(edge["source"], edge["target"]) for edge in frozen["edges"]}
     if links != set(zip(order, order[1:])):
         settings["dag_scheduler"] = True
     db.db.execute("INSERT INTO workflow_executions VALUES (?,?,?,?)", (run["id"], json.dumps(frozen, ensure_ascii=False), json.dumps(settings, ensure_ascii=False), workflow.now()))
     engine._status(db, run["id"], "queued")
-    compile_run(db, engine.detail(db, run["id"]))
+    try:
+        compile_run(db, engine.detail(db, run["id"]))
+    except ValueError as exc:
+        if managed_artifacts:
+            engine._status(db, run["id"], "failed", str(exc))
+        raise
     return engine.detail(db, run["id"])
 
 
@@ -287,7 +499,7 @@ def _sync_workflow_node(db, run, task, task_run=None):
     origin = next((item for item in task.get("origins", [])
                    if item.get("kind") == "workflow_node" and
                    (not attempt_id or item.get("task_run_id") == attempt_id)), None)
-    if not origin:
+    if not origin and not attempt_id:
         origin = next((item for item in task.get("origins", []) if item.get("kind") == "workflow_node"), None)
     if not origin:
         return
@@ -386,8 +598,10 @@ def submit_manual(db, run, body):
 
 def advance(db, run_id, cancel_check=None):
     import workflow_execution as engine
-    import run_service
     import execution
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+    from threading import Event
+    from workflow_db import WorkflowDB
     run = engine.detail(db, run_id)
     if run["status"] in ("awaiting_review", "succeeded", "cancelled"):
         return run
@@ -400,7 +614,7 @@ def advance(db, run_id, cancel_check=None):
             import file_handoff
             file_handoff.validate_run(db, run)
         engine._status(db, run_id, "running")
-        def execute_node(nid, task_id):
+        def prepare_node_attempt(nid, task_id):
             with execution.scope(cancel_check):
                 execution.check()
                 run = engine.detail(db, run_id)
@@ -438,23 +652,109 @@ def advance(db, run_id, cancel_check=None):
                 db.db.commit()
                 task_run = tasks.start(db, task_id, authority=tasks.CommandContext.system(run["project_id"]))
                 _record_attempt(db, run, nid, tasks.get(db, task_id), task_run, snapshot)
-                task = worker.execute(db, task_run["id"], cancel_check)
-                task = tasks.get(db, task_id)
-                _sync_workflow_node(db, run, task, task.get("latest_run"))
-                if task["status"] != "delivered":
-                    status = task["status"] if task["status"] in ("awaiting_review", "blocked", "cancelled", "running", "queued") else "failed"
-                    if run["settings"].get("dag_scheduler"):
-                        return {"status": status}
-                    attempt = task["latest_run"] or {}
-                    error = attempt.get("error", "")
-                    if status == "blocked" and attempt.get("checkpoint", {}).get("waiting_children"):
-                        error = "等待团队成员交付"
-                    engine._status(db, run_id, status, error)
-                    return {"status": engine.detail(db, run_id)["status"]}
-            _sync_workflow_node(db, run, task, task.get("latest_run"))
-            return {"status": "delivered"}
+                return {"attempt_id": task_run["id"]}
+
+        def finish_node(task_id):
+            current = engine.detail(db, run_id)
+            task = tasks.get(db, task_id)
+            _sync_workflow_node(db, current, task, task.get("latest_run"))
+            status = task["status"] if task["status"] in ("delivered", "awaiting_review", "blocked", "cancelled", "running", "queued") else "failed"
+            if status != "delivered" and not current["settings"].get("dag_scheduler"):
+                attempt = task["latest_run"] or {}
+                error = attempt.get("error", "")
+                if status == "blocked" and attempt.get("checkpoint", {}).get("waiting_children"):
+                    error = "等待团队成员交付"
+                engine._status(db, run_id, status, error)
+            return {"status": status}
+
+        def execute_node(nid, task_id):
+            prepared = prepare_node_attempt(nid, task_id)
+            if "attempt_id" not in prepared:
+                return prepared
+            worker.execute(db, prepared["attempt_id"], cancel_check)
+            return finish_node(task_id)
+
+        def execute_worker(attempt_id, stopped):
+            with WorkflowDB(db.path) as node_db:
+                worker.execute(node_db, attempt_id, lambda: stopped.is_set() or bool(cancel_check and cancel_check()))
+
+        def execute_wave(batch, *, excluded=()):
+            """Drain the ready frontier, including successors unlocked by completed workers."""
+            if str(db.path) == ':memory:':
+                outcomes = {}
+                for nid, task_id in batch:
+                    try:
+                        outcomes[nid] = execute_node(nid, task_id)
+                    except (ValueError, OSError) as exc:
+                        tasks.block_start(db, task_id, exc, authority=tasks.CommandContext.system(run['project_id']))
+                        outcomes[nid] = {"status": "failed", "error": str(exc)}
+                    if outcomes[nid]['status'] == 'cancelled':
+                        break
+                return outcomes
+            outcomes, pending, attempted = {}, {}, set(excluded)
+            stopped = Event()
+
+            def finish_future(future):
+                nid, task_id = pending.pop(future)
+                try:
+                    future.result()
+                except execution.Cancelled:
+                    outcomes[nid] = {'status': 'cancelled'}
+                except (ValueError, OSError) as exc:
+                    outcomes[nid] = {'status': 'failed', 'error': str(exc)}
+                else:
+                    outcomes[nid] = finish_node(task_id)
+                if outcomes[nid]['status'] == 'cancelled':
+                    stopped.set()
+
+            # Only this connection prepares/finalizes attempts. Each worker opens its own connection.
+            with ThreadPoolExecutor(max_workers=3, thread_name_prefix='workflow-node') as pool:
+                try:
+                    while batch or pending:
+                        with execution.scope(cancel_check):
+                            if stopped.is_set() or engine.detail(db, run_id)['status'] == 'cancelled':
+                                raise execution.Cancelled('运行已中断')
+                            for nid, task_id in batch:
+                                if len(pending) >= 3:
+                                    break
+                                if nid in attempted:
+                                    continue
+                                attempted.add(nid)
+                                try:
+                                    prepared = prepare_node_attempt(nid, task_id)
+                                except (ValueError, OSError) as exc:
+                                    tasks.block_start(db, task_id, exc, authority=tasks.CommandContext.system(run['project_id']))
+                                    prepared = {'status': 'failed', 'error': str(exc)}
+                                if 'attempt_id' in prepared:
+                                    future = pool.submit(execute_worker, prepared['attempt_id'], stopped)
+                                    pending[future] = (nid, task_id)
+                                else:
+                                    outcomes[nid] = prepared
+                                    if prepared['status'] == 'cancelled':
+                                        raise execution.Cancelled('运行已中断')
+                        if pending:
+                            completed, _ = wait(pending, timeout=0.05, return_when=FIRST_COMPLETED)
+                            for future in completed:
+                                finish_future(future)
+                            if not completed:
+                                continue
+                        rows = {item['id']: item for item in tasks.list_tasks(db, run['project_id'], workflow_run_id=run_id)}
+                        in_flight = {task_id for _, task_id in pending.values()}
+                        batch = [(nid, task_id) for nid, task_id in run['settings']['task_ids'].items()
+                                 if nid not in attempted and rows[task_id]['status'] in ('ready', 'queued', 'blocked', 'failed', 'interrupted')
+                                 and not rows[task_id]['metadata']['node_config'].get('manual_execution')
+                                 and all(parent not in in_flight and rows[parent]['status'] == 'delivered'
+                                         for parent in rows[task_id]['dependencies'])]
+                    with execution.scope(cancel_check):
+                        if stopped.is_set() or engine.detail(db, run_id)['status'] == 'cancelled':
+                            raise execution.Cancelled('运行已中断')
+                finally:
+                    stopped.set()
+                    for future in list(pending):
+                        finish_future(future)
+            return outcomes
         from workflow_checkpoint import drive
-        result = drive(db, run, execute_node)
+        result = drive(db, run, execute_node, execute_wave)
         if result.get('__interrupt__') or result["status"] != "delivered":
             return engine.detail(db, run_id)
         engine._status(db, run_id, "succeeded")
@@ -589,15 +889,25 @@ def return_for_rework(db, task, attempt, target_node, feedback, request_key, req
     return {"workflow_run_id": run_id, "target_task_id": target, "target_node_id": target_node}
 
 
-def set_mode(db, run_id, mode):
+def set_mode(db, run_id, mode, *, review_mode=""):
     import workflow_execution as engine
     run = compile_run(db, engine.detail(db, run_id))
-    if mode not in ("supervised", "full_access"):
+    if mode:
+        if mode not in ("supervised", "full_access"):
+            raise ValueError("无效的执行模式")
+        for task in tasks.list_tasks(db, run["project_id"], workflow_run_id=run_id):
+            if task["status"] not in ("delivered", "cancelled"):
+                tasks.set_mode(db, task["id"], mode, authority=tasks.CommandContext.ui(run["project_id"]))
+        run["settings"]["policy"] = {"autonomy_mode": mode, "source": "user"}
+    if review_mode:
+        if review_mode not in bindings.WORKFLOW_REVIEW_MODES:
+            raise ValueError("无效的工作流审查模式")
+        for task in tasks.list_tasks(db, run["project_id"], workflow_run_id=run_id):
+            if task["status"] not in ("delivered", "cancelled"):
+                tasks.set_review_mode(db, task["id"], review_mode, authority=tasks.CommandContext.ui(run["project_id"]))
+        run["settings"]["review_mode"] = review_mode
+    if not mode and not review_mode:
         raise ValueError("无效的执行模式")
-    for task in tasks.list_tasks(db, run["project_id"], workflow_run_id=run_id):
-        if task["status"] not in ("delivered", "cancelled"):
-            tasks.set_mode(db, task["id"], mode, authority=tasks.CommandContext.ui(run["project_id"]))
-    run["settings"]["policy"] = {"autonomy_mode": mode, "source": "user"}
     _save(db, run)
     return engine.detail(db, run_id)
 

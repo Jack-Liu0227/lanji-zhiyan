@@ -52,7 +52,9 @@ class WorkflowContinuityTest(unittest.TestCase):
                 engine.route('POST', '/api/workflow/execution/resume', {'id': run['id']}, {}, self.db)
             kick.assert_not_called()
             engine.route('POST', '/api/workflow/execution/resume', {'id': run['id'], 'restart_node': True}, {}, self.db)
-            self.assertTrue(engine.detail(self.db, run['id'])['nodes'][-1]['checkpoint']['restart_approved'])
+            task_id = run['settings']['task_ids'][run['settings']['current_node_id']]
+            self.assertTrue(project_tasks.get(self.db, task_id)['latest_run']['checkpoint']['restart_approved'])
+            self.assertEqual(engine.detail(self.db, run['id'])['nodes'][-1]['checkpoint']['agent']['phase'], 'tool')
 
     def test_crash_between_tools_resumes_pending_calls_before_next_model_request(self):
         self.layout([{'step':'outline'}])
@@ -101,6 +103,31 @@ class WorkflowContinuityTest(unittest.TestCase):
         self.assertLess(len(json.dumps(bounded)), 60000)
         self.assertEqual(bounded[2]['tool_calls'][0]['id'], bounded[3]['tool_call_id'])
         self.assertEqual(len(messages[0]['content']), 100000)
+
+    def test_long_history_keeps_recent_source_excerpt_readable_for_the_model(self):
+        messages = [{'role': 'system', 'content': 'Use verified evidence.'},
+                    {'role': 'user', 'content': 'Finish the report from the saved sources.'}]
+        for index in range(90):
+            messages.extend([
+                {'role': 'assistant', 'tool_calls': [{'id': f'old-{index}', 'function': {
+                    'name': 'paper_focus', 'arguments': '{}'}}]},
+                {'role': 'tool', 'name': 'paper_focus', 'tool_call_id': f'old-{index}',
+                 'content': 'Old result context ' * 600},
+            ])
+        latest = {'excerpt_id': 'focus-last', 'paper_id': 'source-paper',
+                  'page_no': 7, 'start': 150, 'end': 900,
+                  'excerpt': 'Verified source words. ' * 30 + 'THE COATING BLOCKED SULFUR PROPAGATION.'}
+        messages.extend([
+            {'role': 'assistant', 'tool_calls': [{'id': 'last-call', 'function': {
+                'name': 'paper_focus', 'arguments': '{}'}}]},
+            {'role': 'tool', 'name': 'paper_focus', 'tool_call_id': 'last-call',
+             'content': json.dumps({'matches': [latest]})},
+        ])
+        bounded = workflow_context.bounded_messages(messages)
+        source = next(item for item in bounded if item.get('tool_call_id') == 'last-call')
+        self.assertEqual(json.loads(source['content'])['matches'][0], latest)
+        self.assertLessEqual(len(json.dumps(bounded, ensure_ascii=False)), 60000)
+        self.assertIn('Finish the report from the saved sources.', json.dumps(bounded))
 
     def test_reminders_never_approve_and_calendar_preserves_received_time(self):
         self.layout([{'step': 'outline'}])

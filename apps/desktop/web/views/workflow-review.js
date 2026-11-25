@@ -25,70 +25,134 @@ const WorkflowReview=(()=>{
             tasks=details.filter(Boolean);
           }catch{}
         }
+        const orderList=run?.layout?.order||(run?.layout?.nodes||[]).map(n=>n.id);
+        const orderMap=new Map(orderList.map((nid,idx)=>[nid,idx]));
+        tasks=[...tasks].sort((a,b)=>{
+          const ia=orderMap.has(a.workflow_node_id)?orderMap.get(a.workflow_node_id):999;
+          const ib=orderMap.has(b.workflow_node_id)?orderMap.get(b.workflow_node_id):999;
+          if(ia!==ib)return ia-ib;
+          return String(a.created_at||'').localeCompare(String(b.created_at||''));
+        });
         const pending=tasks.filter(task=>task.status==='awaiting_review');
         const failed=tasks.find(task=>['failed','blocked','interrupted'].includes(task.status));
         const runStatus=String(run?.status||'');
         const taskStatuses=tasks.map(task=>task.status);
-        const status=runStatus==='failed'||runStatus==='blocked'||runStatus==='interrupted'||failed?'工作流需要处理':
+        const isWaitingReview=pending.length>0&&!failed;
+        const status=isWaitingReview?'工作流等待你的审查':
+          runStatus==='failed'||runStatus==='blocked'||runStatus==='interrupted'||failed?'工作流需要处理':
           ['succeeded','completed'].includes(runStatus)||(tasks.length&&tasks.every(task=>task.status==='delivered'))?'工作流已完成':
           runStatus==='cancelled'||(tasks.length&&tasks.every(task=>task.status==='cancelled'))?'工作流已停止':
-          runStatus==='awaiting_review'||pending.length?'工作流等待你的审查':
+          runStatus==='awaiting_review'?'工作流等待你的审查':
           runStatus==='running'||taskStatuses.some(value=>value==='running')?'工作流执行中':
           runStatus==='queued'||taskStatuses.some(value=>['queued','ready','draft'].includes(value))?'工作流排队中':'工作流任务已保存';
-        const error=failed?.error||run?.error||'';
-        const nodeButtons=tasks.map(task=>{
-          if(WorkflowNodeWorkbench.eligible(task))return `<button type="button" class="btn btn-primary" data-wr-result="${h(task.id)}">${h(task.title)} · 查看并编辑产物</button><button type="button" class="btn ghost" data-wr-task="${h(task.id)}">打开核查 · ${h(task.title)}</button>`;
-          const label=task.status==='awaiting_review'?'打开核查':task.status==='succeeded'?'查看节点产物':'查看节点状态';
-          return `<button type="button" class="btn ghost" data-wr-task="${h(task.id)}">${label} · ${h(task.title)} · ${h(statusLabels[task.status]||task.status||'待执行')}</button>`;
-        }).join('');
+        const error=isWaitingReview?'':(failed?.error||run?.error||'');
+
+        const layoutNodes = run?.layout?.nodes?.length ? run.layout.nodes : tasks.map(t=>({id:t.workflow_node_id||t.id,label:t.title}));
+        const layoutEdges = run?.layout?.edges || [];
+        const stepMap = (window.WorkflowLayout?.computeHierarchicalStepNumbers || window.WorkflowGraph?.computeHierarchicalStepNumbers)?.(layoutNodes, layoutEdges) || new Map();
+        const getTaskStep = (task, idx) => {
+          const nid = task.workflow_node_id || task.id;
+          const info = stepMap.get(nid);
+          if (info) return info;
+          const raw = String(task.title||'').trim().replace(/^Step\s*\d+(\.\d+)?\s*[:：]\s*/i,'');
+          return {
+            id: nid,
+            majorNo: idx + 1,
+            minorNo: 1,
+            isParallel: false,
+            stepNum: String(idx + 1),
+            stepLabel: `Step ${idx + 1}`,
+            badgeLabel: `#${idx + 1}`,
+            cleanTitle: raw,
+            formattedTitle: `Step ${idx + 1}: ${raw}`,
+            waveIndex: idx,
+            waveTotal: 1,
+          };
+        };
+
         const signature=JSON.stringify({status,error,tasks:tasks.map(task=>({id:task.id,title:task.title,status:task.status,version:task.version,run_id:task.latest_run_id,result:task.node_result||null}))});
         if(signature===lastSignature){if(tasks.length&&tasks.every(task=>['delivered','cancelled'].includes(task.status)))clearInterval(timer);return;}
-        // Do not replace a button while the user is hovering it or moving
-        // focus into it. The next poll will apply the pending state after the
-        // click has either opened the node or left the card.
         if(lastSignature&&(host.matches(':hover')||host.contains(document.activeElement))){pendingSignature=signature;return;}
         pendingSignature='';
-        const configureNodeButton=(button,task)=>{
-          if(!task)return;
-          const available=WorkflowNodeWorkbench.eligible(task);
-          const resultButton=button.hasAttribute('data-wr-result');
-          if(resultButton&&!available){button.remove();return;}
-          if(resultButton){
-            button.className='btn btn-primary';button.dataset.wrResult=task.id;button.removeAttribute('data-wr-task');
-            button.textContent=`${task.title} · 查看并编辑产物`;
-            button.onclick=()=>ProjectWorkspace.openNodeResult(WorkflowNodeWorkbench.availableSelection(task),target.project_id,{chatId:target.chat_id||'',peek:true});
-            return;
+        const doneCount=tasks.filter(t=>['delivered','succeeded'].includes(t.status)).length;
+        const runningCount=tasks.filter(t=>['running','queued'].includes(t.status)).length;
+        const pct=tasks.length?Math.round((doneCount/tasks.length)*100):0;
+        const wfName=run?.layout?.name?`${run.layout.name} · `:'';
+        const stateSummary=pending.length?`${pending.length} 个待审查`:runningCount?`${runningCount} 个执行中`:doneCount===tasks.length&&tasks.length?'全部已完成':`${tasks.length-doneCount} 个待执行`;
+        const noteText=tasks.length?`${wfName}${tasks.length} 个阶段 · 已完成 ${doneCount}/${tasks.length} (${pct}%) · ${stateSummary}`:'正在同步工作流节点…';
+
+        // 按波次聚合串行与并行节点
+        const waveGroups = [];
+        const waveMap = new Map();
+        tasks.forEach((task, idx) => {
+          const info = getTaskStep(task, idx);
+          const waveKey = info.waveIndex ?? info.majorNo;
+          if(!waveMap.has(waveKey)){
+            const group = { waveKey, majorNo: info.majorNo, items: [] };
+            waveMap.set(waveKey, group);
+            waveGroups.push(group);
           }
-          button.className='btn ghost';button.dataset.wrTask=task.id;button.removeAttribute('data-wr-result');
-          button.textContent=available?`打开核查 · ${task.title}`:`${task.status==='awaiting_review'?'打开核查':task.status==='succeeded'?'查看节点产物':'查看节点状态'} · ${task.title} · ${statusLabels[task.status]||task.status||'待执行'}`;
-          button.onclick=()=>ProjectWorkspace.openTask(task.id,target.project_id,{chatId:target.chat_id||'',peek:true});
+          waveMap.get(waveKey).items.push({ task, info });
+        });
+
+        const renderChip = ({ task, info }) => {
+          const st = task.status || 'ready';
+          const dot = st==='delivered'||st==='succeeded'?'●':st==='awaiting_review'?'🟠':st==='running'?'◐':st==='failed'||st==='blocked'?'✖':'○';
+          const label = info.formattedTitle;
+          const available = WorkflowNodeWorkbench.eligible(task);
+          const badgeText = st==='delivered'||st==='succeeded'?'1/1':st==='awaiting_review'?'待审':st==='running'?'运行中':'0/1';
+          return `<span class="wr-stage-group is-${h(st)}">`+
+            `<button type="button" class="wr-stage-chip is-${h(st)}" data-wr-task="${h(task.id)}" title="${h(label)} · ${h(statusLabels[st]||st)}"><span class="wr-dot">${dot}</span><span>${h(label)}</span></button>`+
+            (available?`<button type="button" class="wr-stage-badge is-${h(st)}" data-wr-result="${h(task.id)}" title="${h(label)} · 查看并编辑产物">${badgeText}</button>`:`<small class="wr-stage-badge is-${h(st)}">${badgeText}</small>`)+
+            `</span>`;
         };
-        const existingNodeActions=host.querySelector('[data-wr-node-actions]');
-        if(lastSignature&&existingNodeActions){
-          const keyOf=button=>(button.hasAttribute('data-wr-result')?'result:':'task:')+(button.dataset.wrTask||button.dataset.wrResult);
-          const byId=new Map([...existingNodeActions.querySelectorAll('[data-wr-task],[data-wr-result]')].map(button=>[keyOf(button),button]));
-          const keep=new Set();
-          for(const task of tasks){
-            const needsResult=WorkflowNodeWorkbench.eligible(task);
-            const desired=[...(needsResult?['result:']:[]),'task:'].map(prefix=>prefix+task.id);
-            for(const key of desired){let button=byId.get(key);if(!button){button=document.createElement('button');if(key.startsWith('result:'))button.dataset.wrResult=task.id;else button.dataset.wrTask=task.id;existingNodeActions.append(button);}configureNodeButton(button,task);keep.add(button);}
+
+        const pipelineHtml = waveGroups.map((group, gIdx) => {
+          const isParallel = group.items.length > 1;
+          const prevGroup = gIdx > 0 ? waveGroups[gIdx - 1] : null;
+          const prevParallel = prevGroup && prevGroup.items.length > 1;
+          const conn = gIdx === 0 ? '' : (!prevParallel && isParallel)
+            ? '<span class="wr-pipe-line is-fork" title="分叉为并行执行">⑂──</span>'
+            : (prevParallel && !isParallel)
+            ? '<span class="wr-pipe-line is-join" title="并行分支汇合">──⤙</span>'
+            : '<span class="wr-pipe-line">──</span>';
+
+          if(!isParallel){
+            return conn + renderChip(group.items[0]);
           }
-          for(const button of byId.values())if(!keep.has(button))button.remove();
-          host.querySelector('[data-wr-status]').textContent=status;
-          host.querySelector('[data-wr-note]').textContent=tasks.length?`已载入 ${tasks.length} 个工作流节点；完成节点会在这里直接打开产物预览和编辑工作台。`:'正在同步工作流节点…';
-          const errorNode=host.querySelector('[data-wr-error]');if(errorNode){errorNode.textContent=error;errorNode.hidden=!error;}
-          lastSignature=signature;
-          if(tasks.length&&tasks.every(task=>['delivered','cancelled'].includes(task.status)))clearInterval(timer);
-          return;
-        }
+
+          const chipsHtml = group.items.map(renderChip).join('<span class="wr-pipe-line">·</span>');
+          return conn + `<div class="wr-parallel-wave">`+
+            `<div class="wr-parallel-wave-head"><span class="wr-parallel-badge">⑂ Step ${group.majorNo} 并行分支 (${group.items.length}路)</span></div>`+
+            `<div class="wr-parallel-wave-body">${chipsHtml}</div>`+
+            `</div>`;
+        }).join('');
+        const bindActions=()=>{
+          host.querySelectorAll('[data-wr-task]').forEach(button=>{
+            button.onclick=()=>{
+              const task=tasks.find(item=>item.id===button.dataset.wrTask);
+              if(!task)return;
+              ProjectWorkspace.openTask(task.id,target.project_id,{chatId:target.chat_id||'',peek:true});
+            };
+          });
+          host.querySelectorAll('[data-wr-result]').forEach(button=>{
+            button.onclick=()=>{
+              const task=tasks.find(item=>item.id===button.dataset.wrResult);
+              if(!task)return;
+              ProjectWorkspace.openNodeResult(WorkflowNodeWorkbench.availableSelection(task),target.project_id,{chatId:target.chat_id||'',peek:true});
+            };
+          });
+          const dockBtn=host.querySelector('[data-wr-dock]');
+          if(dockBtn)dockBtn.onclick=()=>ProjectWorkspace.openWorkflowDock?ProjectWorkspace.openWorkflowDock(target.project_id,target.workflow_run_id):ProjectWorkspace.openWorkflowRun(target.project_id,target.workflow_run_id);
+          host.querySelector('[data-wr-graph]').onclick=()=>ProjectWorkspace.openWorkflowRun(target.project_id,target.workflow_run_id);
+          host.querySelector('[data-wr-run]').onclick=()=>ProjectWorkspace.openWorkflowRun(target.project_id,target.workflow_run_id);
+          host.querySelector('[data-wr-refresh]').onclick=refresh;
+        };
         lastSignature=signature;
-        host.innerHTML=`<strong data-wr-status>${status}</strong>${error?`<p class="pw-error" data-wr-error>${h(error)}</p>`:'<p class="pw-error" data-wr-error hidden></p>'}<p class="pt-muted" data-wr-note>${tasks.length?`已载入 ${tasks.length} 个工作流节点；完成节点会在这里直接打开产物预览和编辑工作台。`:'正在同步工作流节点…'}</p><div class="pt-row"><button type="button" class="btn" data-wr-graph>打开 LangGraph</button><button type="button" class="btn ghost" data-wr-run>查看运行状态</button><button type="button" class="btn ghost" data-wr-refresh>刷新节点</button></div><div class="pt-row" data-wr-node-actions>${nodeButtons}</div>`;
-        host.querySelector('[data-wr-graph]').onclick=()=>ProjectWorkspace.openWorkflowRun(target.project_id,target.workflow_run_id);
-        host.querySelector('[data-wr-run]').onclick=()=>ProjectWorkspace.openWorkflowRun(target.project_id,target.workflow_run_id);
-        host.querySelector('[data-wr-refresh]').onclick=refresh;
-        host.querySelectorAll('[data-wr-task],[data-wr-result]').forEach(button=>configureNodeButton(button,tasks.find(item=>item.id===(button.dataset.wrTask||button.dataset.wrResult))));
+        host.innerHTML=`<div class="wr-head-row"><div class="wr-head-main"><strong data-wr-status>${status}</strong><span class="pt-muted" data-wr-note>${h(noteText)}</span></div><div class="wr-head-actions"><button type="button" class="btn btn-primary sm wr-dock-btn" data-wr-dock>右侧工作流 ↗</button><button type="button" class="btn ghost sm" data-wr-graph hidden>打开 DAG 工作流</button><button type="button" class="btn ghost sm" data-wr-run hidden>查看运行状态</button><button type="button" class="pw-text-button" data-wr-refresh title="刷新工作流进度">↻</button></div></div>${error?`<p class="pw-error" data-wr-error>${h(error)}</p>`:'<p class="pw-error" data-wr-error hidden></p>'}<div data-wr-pipeline-wrap class="wr-pipeline" data-wr-pipeline>${pipelineHtml}</div><div data-wr-node-actions hidden></div>`;
+        bindActions();
         if(tasks.length&&tasks.every(task=>['delivered','cancelled'].includes(task.status)))clearInterval(timer);
-      }catch(error){if(card.isConnected)host.textContent='运行状态暂时无法读取：'+error.message;}finally{busy=false;}
+        }catch(error){if(card.isConnected)host.textContent='运行状态暂时无法读取：'+error.message;}finally{busy=false;}
     }
     host.addEventListener('mouseleave',()=>{if(pendingSignature)refresh();});
     timer=setInterval(refresh,2500);refresh();

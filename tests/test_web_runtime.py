@@ -41,15 +41,27 @@ def workspace_section(page, section):
         workspace_section(page,'catalog')
         page.locator('[data-pr-kind="'+{'manuscripts':'manuscript','experiments':'experiment','outputs':'output'}[section]+'"]').click()
         return
+    if section in ('workflow','tools'):
+        if not page.locator('#projectWorkspace').is_visible():
+            page.evaluate("openTab('workspace')")
+        tab = page.locator('#pwTab-chat')
+        tab.wait_for()
+        if tab.get_attribute('aria-selected') != 'true':
+            tab.click()
+        if not page.locator('#pwDocumentPane').is_visible() or not page.locator('.project-workflow-graph,.pwg-empty').count():
+            page.locator('#pwTopLanggraph').click()
+        page.locator('.project-workflow-graph,.pwg-empty').wait_for()
+        template_btn = page.locator('#pwResource .pwg-empty [data-pwg-template]')
+        if template_btn.count():
+            template_btn.click()
+            page.locator('#pwResource .project-workflow-graph').wait_for()
+        return
     surface = {'catalog':'library','manuscripts':'library','experiments':'library','outputs':'library','files':'library','papers':'library','notes':'library','stars':'library',
-               'tasks':'tasks','automation':'tasks','plan':'tasks','workflow':'flow','tools':'flow'}[section]
+               'tasks':'tasks','automation':'tasks','plan':'tasks'}[section]
     tab = page.locator('#pwTab-' + surface)
     tab.wait_for()
     if tab.get_attribute('aria-selected') != 'true':
         tab.click()
-    if surface == 'flow':
-        page.locator('#pwWorkflowChoice').wait_for()
-        return
     target = page.locator(f'[data-pw-view="{section}"]')
     if not target.is_visible():
         page.locator('#pwToggleNav').click()

@@ -7,6 +7,9 @@ import math
 import re
 import os
 import tempfile
+import time
+import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, datetime
@@ -354,6 +357,41 @@ PROJ_DIRS: list[tuple[str, str]] = [
 ]
 
 
+def reserve_default_project_root(db, title: str) -> Path:
+    """Exclusively reserve a title-based root without adopting existing data."""
+    title = title.strip()
+    if not title:
+        raise ValueError("task title is required")
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", unicodedata.normalize("NFC", title)).strip()
+    name = name.encode("utf-16-le")[:160].decode("utf-16-le", errors="ignore").rstrip(". ") or "未命名项目"
+    device = name.split(".", 1)[0].rstrip(" ")
+    if re.fullmatch(r"CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|CLOCK\$|COM[1-9¹²³]|LPT[1-9¹²³]", device, re.I):
+        name = "_" + name
+
+    parent = db.path.resolve().parent / "projects"
+    paths.validate_project_dir(parent)
+    registered = [Path(row[0]).expanduser().resolve() for row in db.db.execute(
+        "SELECT base_dir FROM research_tasks WHERE base_dir<>'' UNION ALL "
+        "SELECT base_dir FROM deleted_project_locations WHERE base_dir<>''")]
+    if any(parent.resolve().is_relative_to(root) for root in registered):
+        raise ValueError("默认项目目录位于另一项目的目录内，请选择独立项目位置")
+    parent.mkdir(parents=True, exist_ok=True)
+    index = 1
+    while True:
+        candidate = parent / (name if index == 1 else f"{name} ({index})")
+        if not os.path.lexists(candidate):
+            resolved = candidate.resolve()
+            if not any(resolved.is_relative_to(root) or root.is_relative_to(resolved) for root in registered):
+                try:
+                    candidate.mkdir(exist_ok=False)
+                except OSError:
+                    if not os.path.lexists(candidate):
+                        raise
+                else:
+                    return candidate
+        index += 1
+
+
 def make_project_tree(base: str | Path, task: dict[str, Any] | None = None) -> list[str]:
     """在用户选的项目位置里建好固定子目录 + 每个目录一个 README，再写一个根 README 说明结构。"""
     root = Path(str(base)).expanduser()
@@ -443,6 +481,27 @@ def _extract_pdf_url_from_html(html_text: str, base_url: str) -> str | None:
     return None
 
 
+def _oa_pdf_candidates(doi: str) -> list[str]:
+    if not doi:
+        return []
+    url = "https://api.openalex.org/works?" + urllib.parse.urlencode({
+        "filter": "doi:" + doi.lower(), "per-page": 1,
+    })
+    data = json.loads(_get(url, timeout=20).decode("utf-8", "replace"))
+    works = data.get("results") or []
+    if not works:
+        return []
+    work = works[0]
+    locations = [work.get("best_oa_location") or {}, *(work.get("locations") or [])]
+    urls = list(dict.fromkeys(
+        str(location.get("pdf_url") or "").strip()
+        for location in locations if location.get("pdf_url")
+    ))
+    urls.extend(str(location["landing_page_url"]).strip()
+                for location in locations if location.get("is_oa") and location.get("landing_page_url"))
+    return list(dict.fromkeys(urls))[:8]
+
+
 def download_pdf(item: dict[str, Any], target_dir: Path | None = None) -> Path:
     raw_url = (item.get("pdf_url") or item.get("url") or "").strip()
     doi = (item.get("doi") or "").strip()
@@ -471,49 +530,105 @@ def download_pdf(item: dict[str, Any], target_dir: Path | None = None) -> Path:
 
     execution.check()
     last_err = None
+    errors = []
     temporary = None
+    oa_checked = False
 
-    for cand_url in candidates:
-        headers = dict(DOWNLOAD_HEADERS)
-        headers["Referer"] = cand_url
-        req = urllib.request.Request(cand_url, headers=headers)
+    def add_oa_fallback() -> None:
+        nonlocal oa_checked, last_err
+        if oa_checked or not doi:
+            return
+        oa_checked = True
         try:
-            with execution.interruptible(open_url, req, timeout=60) as res, \
-                    tempfile.NamedTemporaryFile(dir=target_dir, suffix=".part", delete=False) as fh:
-                temporary = Path(fh.name)
-                head = execution.interruptible(res.read, 1024)
-                if head[:4] != b"%PDF":
-                    if b"<!doc" in head.lower() or b"<html" in head.lower():
-                        remainder = execution.interruptible(res.read, 262144)
-                        html_text = (head + remainder).decode("utf-8", "replace")
-                        extracted_pdf = _extract_pdf_url_from_html(html_text, cand_url)
-                        if extracted_pdf and extracted_pdf != cand_url and extracted_pdf not in candidates:
-                            candidates.append(extracted_pdf)
+            candidates.extend(url for url in _oa_pdf_candidates(doi) if url not in candidates)
+        except execution.Cancelled:
+            raise
+        except Exception as fallback_error:
+            last_err = f"{last_err}；OpenAlex 开放版本查询失败：{type(fallback_error).__name__}: {fallback_error}"
+
+    for candidate_index, cand_url in enumerate(candidates):
+        if candidate_index >= 12:
+            break
+        for attempt in range(3):
+            execution.check()
+            headers = dict(DOWNLOAD_HEADERS)
+            headers["Referer"] = cand_url
+            req = urllib.request.Request(cand_url, headers=headers)
+            try:
+                fd, temporary_name = tempfile.mkstemp(dir=target_dir, suffix=".part")
+                temporary = Path(temporary_name)
+                is_pdf = False
+                with os.fdopen(fd, "wb") as fh:
+                    with execution.interruptible(open_url, req, timeout=60) as res:
+                        head = execution.interruptible(res.read, 1024)
+                        if head[:4] == b"%PDF":
+                            is_pdf = True
+                            fh.write(head)
+                            while True:
+                                chunk = execution.interruptible(res.read, 1 << 16)
+                                if not chunk:
+                                    break
+                                execution.check()
+                                fh.write(chunk)
+                        else:
+                            remainder = execution.interruptible(res.read, 262144)
+                            if b"<!doc" in head.lower() or b"<html" in head.lower():
+                                html_text = (head + remainder).decode("utf-8", "replace")
+                                base_url = res.geturl() if hasattr(res, "geturl") else cand_url
+                                extracted_pdf = _extract_pdf_url_from_html(html_text, base_url)
+                                if extracted_pdf and extracted_pdf != cand_url and extracted_pdf not in candidates:
+                                    candidates.append(extracted_pdf)
+                            last_err = f"目标地址返回非 PDF 内容（{cand_url}）"
+                if not is_pdf:
                     temporary.unlink(missing_ok=True)
                     temporary = None
-                    last_err = f"目标地址返回非 PDF 网页（{cand_url}）"
-                    continue
-
-                fh.write(head)
-                while True:
-                    chunk = execution.interruptible(res.read, 1 << 16)
-                    if not chunk:
-                        break
-                    execution.check()
-                    fh.write(chunk)
-
-            import fileguard
-            fileguard.before_write(dest, "下载论文")
-            os.replace(temporary, dest)
-            temporary = None
-            return dest
-        except Exception as exc:
-            if temporary:
-                temporary.unlink(missing_ok=True)
+                    errors.append(last_err)
+                    add_oa_fallback()
+                    break
+                import fileguard
+                fileguard.before_write(dest, "下载论文")
+                os.replace(temporary, dest)
                 temporary = None
-            last_err = str(exc)
-            continue
+                return dest
+            except urllib.error.HTTPError as exc:
+                last_err = f"HTTP {exc.code}（{cand_url}）"
+                if temporary:
+                    temporary.unlink(missing_ok=True)
+                    temporary = None
+                if exc.code in (429, 503) and attempt < 2:
+                    delay = min(4.0, 0.8 * (2 ** attempt))
+                    try:
+                        hdrs = getattr(exc, "headers", None)
+                        retry_after = float(hdrs.get("Retry-After")) if hdrs and hdrs.get("Retry-After") else 0.0
+                        if 0.0 < retry_after <= 5.0:
+                            delay = retry_after
+                    except (TypeError, ValueError):
+                        pass
+                    step = 0.0
+                    while step < delay:
+                        execution.check()
+                        chunk_wait = min(0.25, delay - step)
+                        time.sleep(chunk_wait)
+                        step += chunk_wait
+                    continue
+                errors.append(last_err)
+                add_oa_fallback()
+                break
+            except execution.Cancelled:
+                if temporary:
+                    temporary.unlink(missing_ok=True)
+                    temporary = None
+                raise
+            except Exception as exc:
+                if temporary:
+                    temporary.unlink(missing_ok=True)
+                    temporary = None
+                last_err = f"{type(exc).__name__}: {exc}（{cand_url}）"
+                errors.append(last_err)
+                add_oa_fallback()
+                break
 
     if temporary:
         temporary.unlink(missing_ok=True)
-    raise ValueError(f"下载文献失败（403/非PDF）：{last_err or '未找到有效开放获取PDF直链'}。建议在 Zotero 或浏览器中手动下载后导入项目文献库。")
+    detail = "；".join(dict.fromkeys([*errors, *([last_err] if last_err else [])]))
+    raise ValueError(f"下载文献失败：{detail or '未找到有效开放获取 PDF 直链'}。可在 Zotero 或浏览器中手动下载后导入项目文献库。")

@@ -88,4 +88,8 @@ def portable_node(db,node):
             value.update(execution_mode='team',team_id=target,assistant_id='')
         else:value.update(execution_mode='assistant',assistant_id=target,team_id='',member_id='')
         value['executor_binding_id']=''
+    if value.get('model_id'):
+        value['model_id'] = str(value['model_id']).strip()
+    if isinstance(value.get('fallback_model_ids'), list):
+        value['fallback_model_ids'] = [str(x).strip() for x in value['fallback_model_ids'] if str(x or '').strip()]
     return value

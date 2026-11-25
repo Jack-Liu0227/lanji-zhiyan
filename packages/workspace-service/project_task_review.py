@@ -23,6 +23,8 @@ def can_edit_file(task, item):
     name = item.get('name') or Path(item.get('path', '')).name
     structured = not isinstance((task.get('latest_run') or {}).get('output_snapshot', {}).get('content', ''), str)
     summary = name in ('result.md', 'reviewed-result.json')
+    if task.get('output_contract', {}).get('required_files'):
+        return not _tool(task) and Path(name).suffix.lower() in TEXT
     return (not _tool(task) and stage in _TEXT_STAGES and Path(name).suffix.lower() in TEXT and
             not (structured and (stage in {'entrans', 'review'} or summary and stage in DOCUMENT_STAGES | {'notes'})))
 
@@ -249,13 +251,14 @@ def revise(db, task_id, body, *, authority):
             output['reply'] = text
         tasks._validate_contract(task['output_contract'], output)
         stage = task['metadata'].get('stage', 'task')
+        file_contract = bool(task['output_contract'].get('required_files'))
         originals = {str(Path(v['path']).resolve()): v['sha256'] for v in output.get('original_versions', [])}
         replacements = []
         folder = _folder(db, task, run)
         for file_index in matching:
             file = output['files'][file_index]
             changed = _candidate_file(db, task, run, file, folder / (str(file_index) + '-' + Path(file['path']).name), text, revision)
-            if stage in DOCUMENT_STAGES | {'entrans', 'notes'} and file.get('original_path'):
+            if (file_contract or stage in DOCUMENT_STAGES | {'entrans', 'notes'}) and file.get('original_path'):
                 source = Path(file['original_path']).resolve()
                 expected = originals.get(str(source), file.get('content_hash', file.get('sha256')))
                 if str(source) not in {r['path'] for r in replacements}:
@@ -264,7 +267,7 @@ def revise(db, task_id, body, *, authority):
         if stage in DOCUMENT_STAGES and not replacements:
             raise ValueError('没有找到对应的研究文档，请在研究工具中编辑')
         rows = []
-        if stage == 'write' and primary:
+        if stage == 'write' and primary and not file_contract:
             from lineage_draft import author_revision
 
             rows = author_revision(db, task['project_id'], old_text, text)
@@ -272,7 +275,7 @@ def revise(db, task_id, body, *, authority):
         operation = versions.begin(db, task, run, revision, replacements, rows=rows)
         try:
             versions.apply(db, task, operation)
-            if replacements:
+            if replacements and not file_contract:
                 capture = workflow_state.capture(db, task['project_id'], stage)
                 if not capture['valid']:
                     raise ValueError('修订后的研究文档未形成有效产物')

@@ -5,8 +5,6 @@ import json
 import re
 import sqlite3
 import threading
-import urllib.error
-import urllib.request
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -610,30 +608,20 @@ class ResearchDB:
 
 
 
-def extract_ai(db: ResearchDB, task_id: str, paper_id: str, base_url: str, api_key: str, model: str) -> dict[str, Any]:
-    """Optional OpenAI-compatible extraction; invalid page/excerpt claims are rejected."""
+def extract_ai(db: ResearchDB, task_id: str, paper_id: str, generate) -> dict[str, Any]:
+    """Extract evidence through the selected model; keep page and excerpt validation local."""
     paper = db.paper(paper_id)
-    payload = {
-        "model": model,
-        "temperature": 0,
-        "messages": [
-            {"role": "system", "content": 'Extract materials evidence. Return JSON only: {"evidence":[{"field":"composition|temperature|performance|method|other","value":"","page_no":1,"excerpt":"exact quote"}]}. Every item must quote the source exactly and include its page.'},
-            {"role": "user", "content": "\n\n".join(f"[PAGE {p['page_no']}]\n{p['text']}" for p in paper["pages"])[:60000]},
-        ],
-    }
-    req = urllib.request.Request(
-        base_url.rstrip("/") + "/chat/completions",
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        method="POST",
-    )
     run_id = db.create_run(task_id, "evidence.extract.ai", paper["sha256"])
     try:
-        with urllib.request.urlopen(req, timeout=120) as res:
-            raw = json.loads(res.read().decode())
-        content = raw["choices"][0]["message"]["content"].strip()
+        content = generate([
+            {"role": "system", "content": 'Extract materials evidence. Return JSON only: {"evidence":[{"field":"composition|temperature|performance|method|other","value":"","page_no":1,"excerpt":"exact quote"}]}. Every item must quote the source exactly and include its page.'},
+            {"role": "user", "content": "\n\n".join(f"[PAGE {p['page_no']}]\n{p['text']}" for p in paper["pages"])[:60000]},
+        ]).strip()
         content = re.sub(r"^```json\s*|```$", "", content, flags=re.I).strip()
-        items = json.loads(content).get("evidence", [])
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("evidence"), list):
+            raise ValueError("模型没有返回证据列表")
+        items = parsed["evidence"]
         accepted, rejected = [], []
         for item in items:
             try:
@@ -642,9 +630,9 @@ def extract_ai(db: ResearchDB, task_id: str, paper_id: str, base_url: str, api_k
                 rejected.append({"item": item, "reason": str(exc)})
         db.finish_run(run_id, "completed" if accepted else "completed-with-warnings")
         return {"run_id": run_id, "accepted": accepted, "rejected": rejected}
-    except (urllib.error.URLError, TimeoutError, KeyError, json.JSONDecodeError) as exc:
+    except Exception:
         db.finish_run(run_id, "failed")
-        raise RuntimeError(f"AI extraction failed: {exc}") from exc
+        raise
 
 
 if __name__ == "__main__":

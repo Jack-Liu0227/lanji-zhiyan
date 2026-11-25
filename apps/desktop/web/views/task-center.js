@@ -82,6 +82,20 @@ const TaskCenter=(()=>{
         board=`<div class="ec-lanes" data-lane-count="${shownLanes.length}">${shownLanes.map(lane=>{const tasks=rows.filter(row=>lane.statuses.includes(row.status));return `<section class="ec-status-lane" data-ec-lane="${lane.id}" data-tone="${lane.tone}"><header class="ec-lane-head"><h3><span class="ec-lane-dot" aria-hidden="true"></span>${lane.label}</h3><div class="ec-lane-actions"><span class="ec-count">${tasks.length}</span>${!state.trash?`<button type="button" class="pw-text-button" data-ec-clear="${lane.id}" aria-label="清理${h(lane.label)}本列记录" ${tasks.length?'':'disabled'}>清理本列</button>`:''}</div></header><div class="ec-lane-body">${tasks.map(runCard).join('')||'<p class="ec-lane-empty">暂无'+lane.label+'的任务</p>'}</div></section>`;}).join('')}</div>`;
       }
       el('content').innerHTML=`<div class="ec-live-layout"><div class="ec-live-groups">${board}</div><aside class="ec-run-inspector" data-ec-inspector ${state.selected&&state.inspectorOpen?'':'hidden'} aria-label="执行详情"></aside></div>`;
+      if(typeof SplitResizer !== "undefined"){
+        const liveLayout = el('content').querySelector('.ec-live-layout');
+        if(liveLayout && !liveLayout.dataset.resizerBound){
+          liveLayout.dataset.resizerBound = "true";
+          SplitResizer.bind(liveLayout, {
+            mode: "fixed-right",
+            storageKey: "ec-inspector",
+            defaultSize: 320,
+            min: 260,
+            max: 560,
+            cssVar: "--ec-inspector-w"
+          });
+        }
+      }
       el('content').querySelectorAll('[data-ec-task]').forEach(card=>{
         const row=state.items.find(item=>item.id===card.dataset.ecTask);
         const open=()=>{if(row.deleted_at){state.selected=row.id;return inspect();}return openExecutionConversation(row);};

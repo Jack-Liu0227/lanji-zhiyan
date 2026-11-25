@@ -67,6 +67,9 @@ def config(db: Any) -> dict[str, str]:
             for k in ("base", "model", "key"):
                 if str(data.get(k) or "").strip():
                     out[k] = str(data[k]).strip()
+            if out["key"]:
+                import securestore
+                out["key"] = securestore.unprotect(out["key"])
     except (sqlite3.Error, ValueError):
         pass
     for env, k in (("LANJI_EMBED_BASE", "base"), ("LANJI_EMBED_MODEL", "model"), ("LANJI_EMBED_KEY", "key")):
@@ -74,6 +77,10 @@ def config(db: Any) -> dict[str, str]:
             out[k] = _env(env)
     out["base"] = out["base"].rstrip("/")
     return out
+
+
+def _embedding_id(cfg, dim):
+    return hashlib.sha256(json.dumps([cfg["base"], cfg["model"], dim]).encode()).hexdigest()
 
 
 # ---------------------------------------------------------------- 嵌入
@@ -273,7 +280,7 @@ def _source_hash(src: dict[str, Any]) -> str:
 
 # ---------------------------------------------------------------- 建索引
 
-def sync(db: Any, limit: int = 0, progress: Any = None) -> dict[str, Any]:
+def sync(db: Any, limit: int = 0, progress: Any = None, *, force=False) -> dict[str, Any]:
     """增量建索引：哈希没变就跳过。可反复跑，幂等。
 
     limit>0 时最多处理这么多个源（后台预热和测试都靠它分片）。
@@ -284,20 +291,27 @@ def sync(db: Any, limit: int = 0, progress: Any = None) -> dict[str, Any]:
     conn.commit()
     stats = {"scanned": 0, "indexed": 0, "skipped": 0, "chunks": 0, "failed": 0,
              "model": cfg["model"], "errors": []}
-    state = {(r["source_kind"], r["source_id"]): (r["content_hash"], r["model"])
-             for r in conn.execute("SELECT source_kind, source_id, content_hash, model FROM sem_state")}
+    state = {(r["source_kind"], r["source_id"]): (r["content_hash"], r["embedding_id"], r["dim"])
+             for r in conn.execute("SELECT source_kind, source_id, content_hash, embedding_id, dim FROM sem_state")}
     done = 0
+    dim = None
     for src in _sources(conn):
         if limit and done >= limit:
             break
         stats["scanned"] += 1
         h = _source_hash(src)
         prev = state.get((src["kind"], src["id"]))
-        if prev and prev[0] == h and prev[1] == cfg["model"]:
+        if dim is None:
+            try:
+                dim = int(embed(["Embedding dimension check"], cfg, timeout=10).shape[1])
+            except EmbedError as exc:
+                stats.update(failed=1, errors=[str(exc)])
+                break
+        if not force and prev and prev[0] == h and prev[1] == _embedding_id(cfg, dim):
             stats["skipped"] += 1
             continue
         try:
-            n = _index_source(conn, src, h, cfg)
+            n = _index_source(conn, src, h, cfg, dim)
         except EmbedError as exc:
             stats["failed"] += 1
             stats["errors"].append(str(exc))
@@ -316,15 +330,16 @@ def sync(db: Any, limit: int = 0, progress: Any = None) -> dict[str, Any]:
     return stats
 
 
-def _index_source(conn: sqlite3.Connection, src: dict[str, Any], content_hash: str, cfg: dict[str, str]) -> int:
+def _index_source(conn: sqlite3.Connection, src: dict[str, Any], content_hash: str, cfg: dict[str, str], dim: int) -> int:
     chunks: list[tuple[int, int, str]] = []             # (page_no, ord, text)
     for page_no, text in src["parts"]:
         for i, piece in enumerate(chunk_text(text)):
             if _worth_indexing(piece):
                 chunks.append((int(page_no), i, piece))
     mat = embed([c[2] for c in chunks], cfg) if chunks else None
-    if chunks and mat.shape[0] != len(chunks):
-        raise EmbedError("嵌入条数与块数不符")
+    if chunks and mat.shape != (len(chunks), dim):
+        raise EmbedError("嵌入条数或维度与索引配置不符")
+    identity = _embedding_id(cfg, dim)
     # Acquire the SQLite write transaction before checking whether a source was
     # deleted while the embedding request was in flight.
     _drop_source(conn, src["kind"], src["id"])
@@ -333,24 +348,24 @@ def _index_source(conn: sqlite3.Connection, src: dict[str, Any], content_hash: s
         return 0
     if not chunks:
         conn.execute("""INSERT OR REPLACE INTO sem_state
-            (source_kind, source_id, project_id, content_hash, model, dim, chunks, indexed_at)
-            VALUES (?,?,?,?,?,0,0,?)""",
-                     (src["kind"], src["id"], src["project_id"], content_hash, cfg["model"], _now()))
+            (source_kind, source_id, project_id, content_hash, model, dim, chunks, indexed_at, embedding_id)
+            VALUES (?,?,?,?,?,?,0,?,?)""",
+                     (src["kind"], src["id"], src["project_id"], content_hash, cfg["model"], dim, _now(), identity))
         return 0
     dim = int(mat.shape[1])
     now_iso = _now()
     for (page_no, ordv, text), vec in zip(chunks, mat):
         cid = "%s:%s:%d:%d" % (src["kind"], src["id"], page_no, ordv)
         cur = conn.execute("""INSERT INTO sem_chunks
-            (id, source_kind, source_id, project_id, page_no, ord, title, text, model, dim, vec, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (id, source_kind, source_id, project_id, page_no, ord, title, text, model, dim, vec, created_at, embedding_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                            (cid, src["kind"], src["id"], src["project_id"], page_no, ordv,
-                            src["title"], text, cfg["model"], dim, vec.astype(np.float32).tobytes(), now_iso))
+                            src["title"], text, cfg["model"], dim, vec.astype(np.float32).tobytes(), now_iso, identity))
         conn.execute("INSERT INTO sem_fts (rowid, text) VALUES (?,?)", (cur.lastrowid, text))
     conn.execute("""INSERT OR REPLACE INTO sem_state
-        (source_kind, source_id, project_id, content_hash, model, dim, chunks, indexed_at)
-        VALUES (?,?,?,?,?,?,?,?)""",
-                 (src["kind"], src["id"], src["project_id"], content_hash, cfg["model"], dim, len(chunks), now_iso))
+        (source_kind, source_id, project_id, content_hash, model, dim, chunks, indexed_at, embedding_id)
+        VALUES (?,?,?,?,?,?,?,?,?)""",
+                 (src["kind"], src["id"], src["project_id"], content_hash, cfg["model"], dim, len(chunks), now_iso, identity))
     return len(chunks)
 
 
@@ -429,34 +444,38 @@ def _counts(conn: sqlite3.Connection) -> dict[str, int]:
 def status(db: Any) -> dict[str, Any]:
     conn = db.db
     cfg = config(db)
-    chunks = conn.execute("SELECT COUNT(*) FROM sem_chunks").fetchone()[0]
-    dim = conn.execute("SELECT COALESCE(MAX(dim),0) FROM sem_chunks").fetchone()[0]
-    model = conn.execute("SELECT COALESCE(MAX(model),'') FROM sem_chunks").fetchone()[0]
-    by_kind = {r[0]: r[1] for r in conn.execute("SELECT source_kind, COUNT(*) FROM sem_chunks GROUP BY 1")}
-    return {"chunks": int(chunks), "dim": int(dim), "model": model or cfg["model"],
-            "endpoint": cfg["base"], "by_kind": by_kind,
-            "sources_total": sum(_counts(conn).values()),
-            "sources_indexed": conn.execute("SELECT COUNT(*) FROM sem_state WHERE chunks > 0").fetchone()[0]}
+    by_kind, dims = {}, []
+    for row in conn.execute("SELECT source_kind,dim,embedding_id,count(*) FROM sem_chunks GROUP BY 1,2,3"):
+        if row[2] == _embedding_id(cfg, row[1]):
+            by_kind[row[0]] = by_kind.get(row[0], 0) + row[3]
+            dims.append(row[1])
+    chunks = sum(by_kind.values())
+    total = sum(_counts(conn).values())
+    indexed = sum(row[2] for row in conn.execute("SELECT dim,embedding_id,count(*) FROM sem_state WHERE chunks>0 GROUP BY 1,2")
+                  if row[1] == _embedding_id(cfg, row[0]))
+    return {"chunks": chunks, "dim": max(dims, default=0), "model": cfg["model"], "key_present": bool(cfg.get("key")),
+            "endpoint": cfg["base"], "by_kind": by_kind, "sources_total": total, "sources_indexed": indexed,
+            "index_state": "ready" if chunks else "unindexed" if total else "empty"}
 
 
 def _project_names(conn: sqlite3.Connection) -> dict[str, str]:
     return {r["id"]: r["title"] for r in conn.execute("SELECT id, title FROM research_tasks")}
 
 
-def _matrix(conn: sqlite3.Connection, db_path: str, model: str, dim: int) -> tuple[list[sqlite3.Row], Any]:
+def _matrix(conn: sqlite3.Connection, db_path: str, embedding_id: str, dim: int) -> tuple[list[sqlite3.Row], Any]:
     """整库向量矩阵，按 (行数, 最近写入时间) 判断是否重建。
 
     ponytail: 全量装进内存做暴力点积。万级块 <10ms；真涨到十万块再换 ANN 索引。
     """
     stamp = (conn.execute("SELECT COUNT(*) FROM sem_chunks").fetchone()[0],
              conn.execute("SELECT COALESCE(MAX(created_at),'') FROM sem_chunks").fetchone()[0])
-    key = (db_path, model)
+    key = (db_path, embedding_id)
     with _LOCK:
         hit = _MATRIX_CACHE.get(key)
         if hit and hit[0] == stamp:
             return hit[1], hit[2]
     rows = conn.execute("""SELECT rowid, id, source_kind, source_id, project_id, page_no, title, text, vec
-        FROM sem_chunks WHERE model=? AND dim=? ORDER BY rowid""", (model, dim)).fetchall()
+        FROM sem_chunks WHERE embedding_id=? AND dim=? ORDER BY rowid""", (embedding_id, dim)).fetchall()
     keep: list[sqlite3.Row] = []
     vecs: list[Any] = []
     for r in rows:
@@ -486,6 +505,8 @@ def search_vector(db: Any, query: str, project_ids: list[str] | None = None, k: 
     cfg = config(db)
     st = status(db)
     if not st["chunks"]:
+        if errors is not None and st["sources_total"]:
+            errors.append("当前嵌入配置尚无可用索引")
         return []
     try:
         qv = embed([q], cfg)[0]
@@ -494,8 +515,10 @@ def search_vector(db: Any, query: str, project_ids: list[str] | None = None, k: 
             errors.append(str(exc)[:200])
         return []
     conn = db.db
-    keep, mat = _matrix(conn, str(db.path), st["model"], int(qv.shape[0]))
+    keep, mat = _matrix(conn, str(db.path), _embedding_id(cfg, int(qv.shape[0])), int(qv.shape[0]))
     if not keep:
+        if errors is not None:
+            errors.append("嵌入维度已变更，请重建索引")
         return []
     scores = mat @ qv.astype(np.float32)
     order = np.argsort(-scores)
@@ -574,6 +597,22 @@ def lexical(db: Any, query: str, project_ids: list[str] | None = None, k: int = 
         out.append(hit)
         if len(out) >= k:
             break
+    if not out:
+        allowed = set(project_ids) if project_ids is not None else None
+        queries = [part.casefold() for part in (terms or [q])]
+        for source in _sources(conn):
+            if allowed is not None and source["project_id"] not in allowed:
+                continue
+            for page, text in source["parts"]:
+                lower = text.casefold()
+                match = next((lower.find(term) for term in queries if term in lower), -1)
+                if match < 0:
+                    continue
+                row = {"source_kind": source["kind"], "source_id": source["id"], "project_id": source["project_id"],
+                       "page_no": page, "title": source["title"], "text": text[max(match-120,0):match+400]}
+                out.append({**_hit(row, 1 / (len(out) + 1), names), "lexical": True})
+                if len(out) == k:
+                    return out
     return out
 
 
@@ -616,7 +655,7 @@ def hybrid(db: Any, query: str, project_ids: list[str] | None = None, limit: int
 
 # ---------------------------------------------------------------- 预热
 
-def warm(db_path: str, limit: int = 0, idle: float = 0.0) -> dict[str, Any]:
+def warm(db_path: str, limit: int = 0, idle: float = 0.0, *, force=False) -> dict[str, Any]:
     """后台预热用：自己开一条连接（主连接是 check_same_thread 的，不能跨线程借）。
 
     idle>0 时每处理完一个源歇一下，别跟正在跑的 agent 抢 IO。
@@ -627,7 +666,7 @@ def warm(db_path: str, limit: int = 0, idle: float = 0.0) -> dict[str, Any]:
         def _tick(_stats: dict[str, Any]) -> None:
             if idle:
                 time.sleep(idle)
-        return sync(dbb, limit=limit, progress=_tick)
+        return sync(dbb, limit=limit, progress=_tick, force=force)
 
 
 _WARMING: set[str] = set()
@@ -636,7 +675,7 @@ _WARMING: set[str] = set()
 _PENDING: set[str] = set()
 
 
-def warm_async(db_path: str) -> bool:
+def warm_async(db_path: str, *, force=False) -> bool:
     """起一个后台线程做增量建索引（同一进程同一个库只起一次）。
 
     返回 False 表示已经有线程在跑，但这次请求不会白来：记进 _PENDING，跑完再补一轮 ——
@@ -645,14 +684,18 @@ def warm_async(db_path: str) -> bool:
     key = str(db_path)
     with _LOCK:
         if key in _WARMING:
+            if force:
+                return False
             _PENDING.add(key)
             return False
         _WARMING.add(key)
 
     def _run() -> None:
+        forced = force
         try:
             while True:
-                stats = warm(key, idle=0.01)
+                stats = warm(key, idle=0.01, force=True) if forced else warm(key, idle=0.01)
+                forced = False
                 print("[semantic] 索引完成：%s" % {k: stats[k] for k in ("indexed", "skipped", "chunks", "failed")})
                 with _LOCK:
                     if key not in _PENDING:

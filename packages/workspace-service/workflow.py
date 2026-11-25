@@ -16,6 +16,7 @@ import hashlib
 import io
 import json
 import os
+import threading
 
 import fileguard        # 文件安全：子进程环境洗白 / 写前快照 / 打开白名单 / 审计
 import guards          # 出站脱敏 + 引用核验（见 guards.py）
@@ -24,6 +25,7 @@ import paths            # 唯一路径来源（data / user / executors 都在 HO
 import securestore      # 凭据保护（DPAPI，见 securestore.py）
 import re
 import socket
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -44,13 +46,35 @@ from workflow_db import (        # 库表层在 workflow_db.py，这里原样再
     _assert_key_host, _host_of, _stored_key, _reveal_key, _text, _norm_hhmm,
 )
 
+def _ssl_context() -> ssl.SSLContext:
+    ctx = ssl.create_default_context()
+    if hasattr(ssl, "OP_IGNORE_UNEXPECTED_EOF"):
+        ctx.options |= ssl.OP_IGNORE_UNEXPECTED_EOF
+    return ctx
+
+
+def _is_tls_eof_or_proxy_drop(exc: BaseException) -> bool:
+    reason = getattr(exc, "reason", exc)
+    if isinstance(reason, (ssl.SSLEOFError, ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+        return True
+    return "UNEXPECTED_EOF_WHILE_READING" in str(exc)
+
+
+_PROXY_DIRECT = threading.local()
+
+
 def open_url(req: Any, timeout: int = 30) -> Any:
     """出网统一入口。
 
     环境里可能挂着代理（HTTP(S)_PROXY=127.0.0.1:10090），但代理（猫猫云/mihomo）没开时，
     所有请求都会被"积极拒绝"→ 页面显示「无法连接」，跟 key 一点关系都没有。
     所以这里先探一下代理端口：活着就用代理，死了这一程直连（国内接口直连没问题，真被墙的站点再开代理）。
+    代理或上游发生 TLS EOF 中断时，附带 OP_IGNORE_UNEXPECTED_EOF 并在代理断流时尝试直连回退。
     """
+    https = urllib.request.HTTPSHandler(context=_ssl_context())
+    direct = urllib.request.build_opener(urllib.request.ProxyHandler({}), https)
+    if getattr(_PROXY_DIRECT, "active", False) and not os.environ.get("LANJI_PROXY_STRICT"):
+        return direct.open(req, timeout=timeout)
     proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy") or \
             os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy") or ""
     if proxy:
@@ -59,8 +83,17 @@ def open_url(req: Any, timeout: int = 30) -> Any:
             with socket.create_connection((parts.hostname, parts.port or 80), timeout=0.6):
                 pass                                    # 代理活着：走它
         except OSError:
-            return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=timeout)
-    return urllib.request.urlopen(req, timeout=timeout)
+            return direct.open(req, timeout=timeout)
+        try:
+            return urllib.request.build_opener(https).open(req, timeout=timeout)
+        except (ssl.SSLError, urllib.error.URLError, ConnectionError) as exc:
+            if not os.environ.get("LANJI_PROXY_STRICT") and _is_tls_eof_or_proxy_drop(exc):
+                try:
+                    return direct.open(req, timeout=timeout)
+                except Exception:
+                    pass
+            raise
+    return urllib.request.build_opener(https).open(req, timeout=timeout)
 
 
 def chat(profile: dict[str, Any], messages: list[dict[str, str]], temperature: float = 0.2,
@@ -125,47 +158,72 @@ def _chat_raw(profile: dict[str, Any], messages: list[dict[str, Any]], tools: li
     invoked = ModelInvoker.invoke(profile, messages, tools=tools, temperature=temperature, timeout=timeout, max_tokens=max_tokens)
     if invoked is not None:
         return invoked
-    try:
-        import runtime
-        return runtime.call(profile, messages, tools=tools, temperature=temperature, timeout=timeout,
-                            max_tokens=max_tokens, on_delta=on_delta, cancel_check=cancel_check,
-                            on_reasoning=on_reasoning)
-    except (ImportError, ModuleNotFoundError):
-        pass
-    guards.scrub(messages, note=f"→ {profile.get('model') or '?'}")   # 出站闸门：个人信息/密钥就地打码，再发出去
-    if profile.get("api", "openai-completions") != "openai-completions":
-        from agent_protocols import complete
-        return complete(profile, messages, tools, temperature, timeout, max_tokens,
-                        on_delta=on_delta, cancel_check=cancel_check, on_reasoning=on_reasoning)
-    payload = {"model": profile["model"], "temperature": temperature, "max_tokens": max_tokens, "messages": messages}
-    if profile.get("reasoning", "auto") != "auto":
-        payload["reasoning_effort"] = profile["reasoning"]
-    if tools:
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
-    req = urllib.request.Request(
-        profile["base_url"].rstrip("/") + "/chat/completions",
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {profile['api_key']}"} if profile.get("api_key") else {})},
-        method="POST",
+    import runtime
+    return runtime.call(profile, messages, tools=tools, temperature=temperature, timeout=timeout,
+                        max_tokens=max_tokens, on_delta=on_delta, cancel_check=cancel_check,
+                        on_reasoning=on_reasoning)
+
+
+def call_with_fallback(db: "WorkflowDB | None", candidates: list[dict[str, Any]],
+                       messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None,
+                       temperature: float = 0.2, timeout: int = 180, max_tokens: int = 4096,
+                       on_delta: Any = None, cancel_check: Any = None, on_reasoning: Any = None,
+                       emit: Any = None, round_no: int | None = None, retry_no: int = 0) -> dict[str, Any]:
+    """Call candidates in order, recording health state and emitting model_fallback events on failover."""
+    import model_health
+    import runtime
+
+    valid = [dict(c) for c in (candidates or []) if c is not None]
+    if not valid:
+        valid = [{}]
+
+    def on_attempt(prof: dict[str, Any], ok: bool, exc: Exception | None) -> None:
+        if db is None or not prof.get("id"):
+            return
+        if ok:
+            model_health.record_success(db, prof["id"])
+        else:
+            model_health.record_failure(
+                db, prof["id"], exc,
+                error_kind=getattr(exc, "error_kind", ""),
+                error_code=getattr(exc, "error_code", ""),
+                provider_id=prof.get("provider_id", ""),
+            )
+
+    def on_switch(failed: dict[str, Any], nxt: dict[str, Any], exc: Exception) -> None:
+        if emit:
+            payload = {
+                "type": "model_fallback",
+                "from_model": failed.get("model", ""),
+                "to_model": nxt.get("model", ""),
+                "from_profile_id": failed.get("id", ""),
+                "to_profile_id": nxt.get("id", ""),
+                "error_kind": getattr(exc, "error_kind", ""),
+                "reason": str(exc)[:300],
+            }
+            if round_no is not None:
+                payload["round"] = round_no
+            if retry_no:
+                payload["retry"] = retry_no
+            emit(payload)
+
+    def _invoke(prof: dict[str, Any], msgs: list[dict[str, Any]], **kw: Any) -> dict[str, Any]:
+        return chat_raw(
+            prof, msgs,
+            tools=kw.get("tools"),
+            temperature=kw.get("temperature", temperature),
+            timeout=kw.get("timeout", timeout),
+            max_tokens=kw.get("max_tokens", max_tokens),
+            on_delta=kw.get("on_delta"),
+            cancel_check=kw.get("cancel_check"),
+            on_reasoning=kw.get("on_reasoning"),
+        )
+
+    return runtime.call_with_fallback(
+        valid, messages, tools=tools, temperature=temperature, timeout=timeout, max_tokens=max_tokens,
+        cancel_check=cancel_check, on_delta=on_delta, on_reasoning=on_reasoning,
+        on_fallback=on_switch, on_attempt_result=on_attempt, caller=_invoke,
     )
-    try:
-        with open_url(req, timeout=timeout) as res:
-            data = json.loads(res.read().decode("utf-8", "replace"))
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"模型接口 HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:300]}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise RuntimeError(f"模型接口不可达：{exc}") from exc
-    try:
-        msg = data["choices"][0]["message"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError(f"模型回包无法解析：{str(data)[:300]}") from exc
-    usage = data.get("usage") or {}
-    return {"role": "assistant", "content": (msg.get("content") or "").strip(),
-            "tool_calls": msg.get("tool_calls") or [],
-            "usage": {"prompt": int(usage.get("prompt_tokens") or 0),
-                      "completion": int(usage.get("completion_tokens") or 0),
-                      "total": int(usage.get("total_tokens") or 0), "exact": bool(usage)}}
 
 
 def _json_in(text: str) -> Any | None:
@@ -251,12 +309,6 @@ def discover_models(base_url: str, api_key: str = "", timeout: int = 25) -> list
              "name": str(r.get("name") or r.get("id") or "")} for r in rows if (r.get("id") or r.get("name"))]
 
 
-def test_provider(base_url: str, api_key: str, model: str, timeout: int = 60) -> str:
-    """发一条最小消息，证明 Key/地址/模型名三者真的能打通。"""
-    return chat({"base_url": base_url, "api_key": api_key, "model": model},
-                [{"role": "user", "content": "回复两个字：可用"}], timeout=timeout, max_tokens=64)
-
-
 # ============================ 论文搜索（开放接口） ============================
 
 from workflow_search import (
@@ -267,7 +319,7 @@ from workflow_search import (
 # ============================ 七步工作流 ============================
 
 from workflow_stages import (
-    stage_idea, _relevant, stage_search, stage_download, stage_download_selected,
+    stage_idea, _relevant, stage_search, stage_download, stage_download_batch, stage_download_selected,
     stage_zotero_import, is_paper_pdf, deepread_state, deepread_stop, deepread_kick,
     stage_read, stage_notes, stage_write, stage_review, stage_convert,
     DeepreadStopped
@@ -407,7 +459,7 @@ def _knowledge_query(db: "WorkflowDB", task_id: str, query: str, project: str = 
         out['total'] = len(out['hits'])
         if out.get("hits"):
             return _fuse_literal(out, literal)
-        reason = out.get("mode") or "empty"
+        reason = out.get("counts", {}).get("vector_error") or out.get("mode") or "empty"
     except Exception as exc:                              # 语义层是增强，不是前置依赖
         reason = "semantic_failed: %s" % exc
     return dict(_knowledge_query_literal(db, q, scope, scoped), mode="lexical", reason=reason)
@@ -421,7 +473,8 @@ def _fuse_literal(out: dict[str, Any], literal: list[dict[str, Any]]) -> dict[st
     """
     hits = {(h["kind"], h["id"], h.get("page_no") or 0): dict(h) for h in out["hits"]}
     for rank, h in enumerate(literal):
-        key = (h["kind"], h["id"], h.get("page_no") or 0)   # 与语义腿同构，同一条不会被算成两条
+        kind = "md_note" if h["kind"] == "big-note" else h["kind"]
+        key = (kind, h["id"], h.get("page_no") or 0)
         gain = 1.0 / (60 + rank + 1)
         if key in hits:
             hits[key]["rrf"] = round(hits[key]["rrf"] + gain, 5)
@@ -432,7 +485,7 @@ def _fuse_literal(out: dict[str, Any], literal: list[dict[str, Any]]) -> dict[st
     import semantic as _sem
 
     merged = _sem.mark_weak(sorted(hits.values(), key=lambda h: -h["rrf"])[:20])
-    mode = "hybrid" if literal else out["mode"]
+    mode = "hybrid" if literal and out["mode"] == "vector" else out["mode"]
     result = {**out, "hits": merged, "total": len(merged), "mode": mode,
               "weak": sum(1 for h in merged if h["weak"])}
     if merged and result["weak"] == len(merged):     # 一条字面证据都没有
@@ -586,6 +639,7 @@ _SUB_DENY = {
     "delegate",                                              # 防递归：一层就够，别翻倍烧钱
     "project_create", "task_create", "task_start", "task_cancel", "task_handoff",
     "workflow_create", "workflow_prepare", "workflow_start", "workflow_cancel",
+    "plan", "supervisor", "platform",
     "team_create", "team_form", "team_manage", "team_assign",
     "schedule_manage", "calendar_add", "assistant_manage", "project_task_manage",
     "mcp_register", "skill_create",
@@ -598,6 +652,7 @@ _SUB_SUMMARY_MAX = 6000            # 超了就落盘只回摘要+路径，别把
 TOOL_RISK = {
     "task_create": "workspace_write", "task_start": "workspace_write", "task_handoff": "workspace_write", "task_status": "read_only", "task_cancel": "workspace_write",
     "workflow_prepare": "workspace_write", "workflow_start": "workspace_write", "workflow_status": "read_only", "workflow_cancel": "workspace_write", "workflow_templates": "read_only",
+    "plan": "workspace_write", "supervisor": "workspace_write", "platform": "workspace_write",
     # Pure reads stay available to read-only assistants.
     "library_overview": "read_only", "knowledge_query": "read_only", "workflow_context_read": "read_only",
     "outline_read": "read_only", "map_read": "read_only", "map_sources": "read_only",
@@ -611,7 +666,7 @@ TOOL_RISK = {
     "mail_accounts": "network_read", "mail_list": "network_read", "mail_read": "network_read",
     "zotero_collections": "network_read",
     "delegate": "local_execution", "format_convert": "local_execution", "manuscript_translate_en": "workspace_write",
-    "paper_download": "network_read", "download": "network_read",
+    "paper_download": "network_read", "paper_download_batch": "network_read", "download": "network_read",
     "outline_write": "workspace_write", "map_write": "workspace_write", "doc_write": "workspace_write",
     "cite_add": "workspace_write", "cite_bib": "workspace_write", "memory_save": "workspace_write", "notes": "workspace_write",
     "memory": "workspace_write", "recall": "read_only", "skill_write": "workspace_write",
@@ -623,6 +678,7 @@ TOOL_RISK = {
     "team_board": "read_only", "mail_send": "external_write", "feishu_send": "external_write",
     "zotero_write": "external_write", "zotero_sync": "external_write",
     "project_note_list": "read_only", "project_note_read": "read_only",
+    "project_artifact_write": "workspace_write",
     "prompt_template_search": "read_only", "prompt_template_read": "read_only", "prompt_template_render": "read_only",
     "project_task_manage": "workspace_write", "assistant_manage": "workspace_write",
     "project_list": "read_only", "skill_read": "read_only",
@@ -672,7 +728,7 @@ def enforce_project_scope(db: "WorkflowDB", project_id: str, name: str, args: di
         raise PermissionError("请在未绑定项目的智研管家对话中创建新项目")
     for field in ("path", "vault", "base_dir"):
         raw = args.get(field)
-        if not raw or name.startswith("project_note_") or name == "skill_read":
+        if not raw or name.startswith("project_note_") or name in ("skill_read", "project_artifact_write"):
             continue
         root = db.base_dir(project_id)
         candidate = Path(str(raw)).expanduser()
@@ -903,8 +959,21 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
             prompt_templates.usage(db, result, context["id"], context["node_id"])
             context.setdefault("templates", []).append(result)
         return result
-    if name in ("project_note_list", "project_note_read", "project_note_write", "project_task_manage", "team_create", "team_manage", "workflow_create", "skill_create"):
+    if name in ("plan", "supervisor", "platform"):
+        import evoflow_sdk
+        raw_project = str(args.get("project_id") or args.get("project") or "")
+        project_id = _team_project(db, task_id, raw_project)
+        if name == "plan":
+            return evoflow_sdk.evoflow_plan(db, project_id, args)
+        if name == "supervisor":
+            return evoflow_sdk.evoflow_supervisor(db, project_id, args)
+        return evoflow_sdk.platform_call(db, project_id, str(args.get("action") or ""), args.get("args"),
+                                         confirm=args.get("confirm", True) is True)
+    if name in ("project_note_list", "project_note_read", "project_note_write", "project_artifact_write", "project_task_manage", "team_create", "team_manage", "workflow_create", "skill_create"):
         project_id = _team_project(db, task_id, str(args.get("project") or ""))
+        if name == "project_artifact_write":
+            import project_artifacts
+            return project_artifacts.write(db, project_id, args)
         if name.startswith("project_note_"):
             import project_notes
             if name == "project_note_list":
@@ -1014,12 +1083,51 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
             raise ValueError("action 只支持 list/update/add_member/update_member/set_leader")
         if name == "workflow_create":
             import workflow_layout
+            import workflow_tasks
+            import workflow_execution
+            import workflow_node_workbench
+            import task_tools
             workflow_layout.ensure_schema(db)
             steps = [str(s) for s in (args.get("steps") or [])]
-            definition = {"nodes": args['nodes'], "edges": args.get('edges', [])} if 'nodes' in args else workflow_layout._linear(steps)
-            saved = workflow_layout.save_layout(db, {"name": str(args.get("name") or ""),
+            if "nodes" in args and isinstance(args["nodes"], list):
+                norm_nodes = []
+                for idx, raw_node in enumerate(args["nodes"]):
+                    if not isinstance(raw_node, dict):
+                        continue
+                    nid = str(raw_node.get("id") or f"step_{idx + 1}")
+                    step = str(raw_node.get("step") or "task")
+                    normalized = {
+                        "step": step,
+                        "label": str(raw_node.get("label") or STAGE_LABEL.get(step, nid)),
+                        "executor_role_id": str(raw_node.get("executor_role_id") or nid),
+                        "review_required": raw_node.get("review_required", True),
+                        **raw_node,
+                        "id": nid,
+                    }
+                    expanded_tools = workflow_layout.normalize_agent_tools(normalized)
+                    if expanded_tools is not None:
+                        normalized["tools"] = expanded_tools
+                    norm_nodes.append(normalized)
+                definition = {"nodes": norm_nodes, "edges": args.get("edges", [])}
+                if "order" in args and isinstance(args["order"], list):
+                    definition["order"] = args["order"]
+            else:
+                definition = workflow_layout._linear(steps)
+            saved = workflow_layout.save_layout(db, {"name": str(args.get("name") or "自定义 DAG 工作流"),
                                                        "description": str(args.get("description") or ""), **definition})
-            workflow_layout.select_layout(db, {"task_id": project_id, "layout_id": saved["layout"]["id"]})
+            layout_id = saved["layout"]["id"]
+            workflow_layout.select_layout(db, {"task_id": project_id, "layout_id": layout_id})
+            workflow_tasks.auto_bind_layout_roles(db, project_id, saved["layout"])
+            if args.get("auto_start"):
+                if workflow_execution.active(db, project_id):
+                    raise ValueError("项目已有未完成的工作流，请先完成或在工作区停止该运行")
+                goal = str(args.get("goal") or args.get("description") or args.get("name") or "")
+                run = workflow_tasks.prepare(db, project_id, goal, template_id=layout_id, inputs=args.get("inputs"))
+                workflow_node_workbench.mark_agent_started(db, run)
+                run["settings"]["prepared"] = False
+                workflow_tasks._save(db, run)
+                workflow_execution.kick(db.path, run["id"])
+                return {**saved, **task_tools.workflow_result(db, workflow_execution.detail(db, run["id"]))}
             return saved
         if name == "skill_create":
             import asset_service
@@ -1230,6 +1338,8 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
                             sort_by=str(args.get("sort_by") or "composite"))
     if name == "paper_download":
         return stage_download(db, task_id, args.get("result_id", ""))
+    if name == "paper_download_batch":
+        return stage_download_batch(db, task_id, args.get("result_ids"), int(args.get("limit") or 10))
     if name == "download":
         return stage_download(db, task_id, args.get("result_id", ""))
     if name in ("paper_read", "read"):
@@ -1244,7 +1354,8 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         import research_reading
         project = _team_project(db, task_id, args["project"]) if args.get("project") else task_id
         if name == "paper_abstracts":
-            return research_reading.abstracts(db, project, offset=args.get("offset", 0), limit=args.get("limit", 6))
+            return research_reading.abstracts(db, project, offset=args.get("offset", 0), limit=args.get("limit", 6),
+                                             result_ids=args.get("result_ids"))
         if name == "paper_focus":
             return research_reading.focus(db, project, args.get("question"), args.get("paper_ids"),
                                           args.get("keywords"), args.get("limit", 6))
@@ -1310,7 +1421,24 @@ def _tool_impl(name: str, db: "WorkflowDB", task_id: str, args: dict[str, Any], 
         return result
     if name == "doc_write":
         if scope == "write":
-            raise ValueError("正文走谱系图约束，请用 draft_write 按谱系图重新生成")
+            auth = getattr(db, "project_task_context", None)
+            allow_non_lineage_write = False
+            if auth and getattr(auth, "parent_task_id", ""):
+                row = db.db.execute(
+                    "SELECT workflow_run_id, metadata FROM project_tasks WHERE id=?",
+                    (auth.parent_task_id,),
+                ).fetchone()
+                if row and row["workflow_run_id"]:
+                    try:
+                        nodes = (json.loads(row["metadata"] or "{}").get("layout_snapshot") or {}).get("nodes") or []
+                    except (TypeError, ValueError):
+                        nodes = []
+                    allow_non_lineage_write = (
+                        not any(item.get("step") == "map" for item in nodes)
+                        and not map_read(db, task_id)["exists"]
+                    )
+            if not allow_non_lineage_write:
+                raise ValueError("正文走谱系图约束，请用 draft_write 按谱系图重新生成")
         return doc_write(db, task_id, scope or "outline", args.get("markdown", ""),
                          str(args.get("mode") or "replace"))       # append = 逐节写，写完一段左边长一段
     if name == "doc_read":
@@ -1464,7 +1592,23 @@ def agent_profile(db: "WorkflowDB", task_id: str) -> dict[str, Any] | None:
 
 from workflow_catalog import STEP_AGENT, STAGE_PURPOSE
 
-# 检索跑完要主动收口（问用户还改不改检索式）：提示词已要求，这里再兜一层——模型偶尔只回一句「检索完了」。
+DEFAULT_CHAT_TITLES = frozenset(("", "新对话", "新的课题讨论", "课题讨论", "新会话"))
+
+
+def derive_chat_title(raw_text: str) -> str:
+    clean = str(raw_text or "").strip()
+    for marker in ("【当前项目明确引用的材料】", "【@上下文】", "【用户明确使用的提示词模板：",
+                   "【用户选择的材料】", "【@提及的上下文】", "【材料选区：", "【本次使用的提示词模板："):
+        idx = clean.find(marker)
+        if idx > 0:
+            clean = clean[:idx].strip()
+    first_line = next((line.strip() for line in clean.splitlines() if line.strip()), "")
+    first_line = re.sub(r"^[#>*\-\s\"'“”‘’`]+", "", first_line).strip()
+    first_sentence = re.split(r"[。！？!?\r\n；;]", first_line)[0].strip() if first_line else ""
+    target = first_sentence or first_line
+    if not target:
+        return "新的课题讨论"
+    return target[:30] + ("…" if len(target) > 30 else "")
 SEARCH_CLOSING = ("\n\n检索完毕。还要调整检索式吗——加点或减点关键词，"
                   "或者按年份、期刊、只看开放获取再筛一遍？")
 
@@ -1675,7 +1819,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
               profile: dict[str, Any] | None = None, assistant_id: str = "",
               member: dict[str, Any] | None = None, step: str = "", cancel_check: Any = None,
               template_ref: dict | None = None, tool_allowlist: list[str] | None = None,
-              image_ids: list[str] | None = None, image_inputs: list[dict] | None = None, delegation_role: str = "") -> dict[str, Any]:
+              image_ids: list[str] | None = None, image_inputs: list[dict] | None = None,
+              delegation_role: str = "", resume_saved_tools: bool = False,
+              refresh_system_prompt: bool = False) -> dict[str, Any]:
     """工具调用循环。emit(event) 每产生一条事件调用一次（SSE 用）。
     system/tools 不传就是通用 Agent（AGENT_SYSTEM + 全量工具）；创新点审查/确认大纲那两步会传受限工具 + 记忆块。
     scope 决定这轮对话和哪一步共用历史（'' = 创新点审查/通用，'outline' = 确认大纲）。
@@ -1690,10 +1836,39 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     frozen = getattr(db,'agent_runtime_snapshot',None) if not assistant_id and member is None and not (profile or {}).get('assistant_id') else None
     cfg = frozen or agent_settings.runtime_config(db, task_id, assistant_id or (profile or {}).get("assistant_id", ""), member)
     if profile is None:
-        profile = db.model(cfg["model_id"]) if cfg["model_id"] else agent_profile(db, task_id)
+        if frozen:
+            profile = agent_settings.load_frozen_model(db, cfg, allow_credential_refresh=True)
+        elif cfg["model_id"]:
+            try:
+                profile = db.model(cfg["model_id"])
+            except (KeyError, ValueError):
+                if cfg.get("model_policy") == "strict":
+                    raise
+                chain = agent_settings.resolve_model_chain(db, cfg)
+                profile = chain[0] if chain else None
+                if not profile:
+                    raise
+        else:
+            profile = agent_profile(db, task_id)
     profile = dict(profile or {})
     for key in ("reasoning", "permission"):
         profile.setdefault(key, cfg[key])
+    req_caps = ("vision",) if (image_ids or image_inputs) else ()
+    raw_candidates = getattr(db, "runtime_model_candidates", None)
+    if raw_candidates:
+        candidates = [dict(c) for c in raw_candidates]
+        if profile and profile.get("base_url") and profile.get("model"):
+            pid_cur = profile.get("id", "")
+            if not any((pid_cur and c.get("id") == pid_cur) or (not pid_cur and c.get("model") == profile.get("model")) for c in candidates):
+                candidates = [profile, *candidates]
+            profile = dict(candidates[0])
+    else:
+        candidates = agent_settings.resolve_model_chain(db, cfg, required_capabilities=req_caps)
+        if profile and profile.get("base_url") and profile.get("model"):
+            pid_cur = profile.get("id", "")
+            candidates = [profile, *[c for c in candidates if (pid_cur and c.get("id") != pid_cur) or (not pid_cur and c.get("model") != profile.get("model"))]]
+        elif candidates:
+            profile = dict(candidates[0])
     permission = profile.get("permission", "auto")
     # Do not emit an empty context message. Besides wasting a model turn, an
     # empty system entry looks like duplicated workflow input to isolated
@@ -1720,6 +1895,13 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         say({"type": "user", "content": text})
     task = db.summary(task_id)["task"]
     chat_row = db.db.execute("SELECT * FROM chats WHERE id=?", (task_id,)).fetchone()
+    if new_user_turn and chat_row and (chat_row["title"] or "").strip() in DEFAULT_CHAT_TITLES:
+        auto_title = derive_chat_title(text)
+        if auto_title and auto_title not in DEFAULT_CHAT_TITLES:
+            db.db.execute("UPDATE chats SET title=?, updated_at=? WHERE id=?",
+                          (auto_title, datetime.now(timezone.utc).isoformat(), task_id))
+            db.db.commit()
+            chat_row = db.db.execute("SELECT * FROM chats WHERE id=?", (task_id,)).fetchone()
     bound = ""                                     # 这个对话绑的项目（'' = 随意对话）
     if chat_row:
         try:
@@ -1747,6 +1929,9 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
     profile['_usage_context']={**profile.get('_usage_context',{}),'db_path':str(db.path),
                                'project_id':bound or (task_id if not chat_row else ''),
                                'owner_id':task_id,'assistant_id':aid,'run_id':tracked_run['id']}
+    profile['_usage_context'].setdefault('source', 'conversation' if chat_row else 'agent')
+    if chat_row:
+        profile['_usage_context'].setdefault('budget_key', 'conversation:' + task_id)
     import workflow_state
     import asset_service
     handoff, _, input_assets = workflow_state.handoff(db, bound, scope) if bound and scope in STAGES else ("", "", [])
@@ -1834,7 +2019,12 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         ctx += (f"\n\n【你的身份】这一步你是「{who}」，只负责这一步的事；上面提到的「览籍智研 / 智研管家 / Partner Agent」是"
                 f"整台机器和首页的称呼，不是你的自称。有人问「你是谁」，就答「我是{who}」，再用一句话说这一步负责什么。")
         ctx += f"\n本步「{STAGE_LABEL[step or scope]}」职责：{STAGE_PURPOSE[step or scope]}。"
-    if step == "search":     # 检索完必须向用户收口 —— 只甩一串结果，用户不知道还能不能改检索式
+    if step == "search" and getattr(db, 'workflow_end_to_end', False):
+        ctx += ("\n\n【工作流检索节点交付】按本次文件合同完成检索、筛选及全文可得性记录。"
+                "权限预检或空表只是执行准备，不能作为研究交付。工具保存或格式校验失败时在本节点修正，"
+                "结束前核对候选数量、筛选说明与实际检索记录一致。为下游提供题录 ID、下载后的 paper.id、"
+                "DOI 与证据级别；未取得全文的条目明确标注。节点交付后由调度器推进，不再把检索式确认作为额外人工门禁。")
+    elif step == "search":     # Interactive search retains its refinement prompt.
         ctx += ("\n\n【本步收口】检索（paper_search）跑完或改关键词重跑完，最后一段必须收口："
                 "这次命中多少条、其中多少条有开放获取全文、入库多少条，然后问一句"
                 "「还要调整检索式吗——加点或减点关键词，或者按年份、期刊、只看开放获取再筛一遍？」"
@@ -1915,13 +2105,25 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         messages.insert(2, {"role": "system", "content": "【当前节点输入与前置交付】\n" + extra_context})
     if resume.get("messages"):
         messages = resume["messages"]
+        if refresh_system_prompt:
+            system_index = next((index for index, item in enumerate(messages)
+                                 if item.get("role") == "system"), None)
+            if system_index is None:
+                messages.insert(0, {"role": "system", "content": identity})
+            else:
+                messages[system_index] = {"role": "system", "content": identity}
         if extra_context and not any(str(m.get("content", "")).startswith("【当前节点输入与前置交付】") for m in messages):
             messages.insert(2, {"role": "system", "content": "【当前节点输入与前置交付】\n" + extra_context})
     elif image_ids or image_inputs:
         import image_tools
         import account_providers
         if profile.get('api') in account_providers.WIRES:
-            raise ValueError('此账号客户端不支持图片输入，请选择支持视觉的 API 模型')
+            vis_candidate = next((c for c in candidates if c.get('api') not in account_providers.WIRES), None)
+            if vis_candidate:
+                profile = dict(vis_candidate)
+                candidates = [profile, *[c for c in candidates if c.get('id') != profile.get('id')]]
+            else:
+                raise ValueError('此账号客户端不支持图片输入，请选择支持视觉的 API 模型')
         messages[-1]['content']=[{'type':'text','text':messages[-1]['content']},
                                  *image_tools.message_images(db,bound or task_id,image_ids,snapshots=image_inputs)]
     events: list[dict[str, Any]] = resume.get("events", [])
@@ -1944,6 +2146,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             raise execution.Cancelled("运行已中断")
         partial: list[str] = []
         reasoning_parts: list[str] = []
+        model_responses: list[dict[str, Any]] = []
         reasoning_id = f"{tracked_run['id']}:{turn}"
         model_started = time.monotonic()
         say({"type": "reasoning_start", "id": reasoning_id})
@@ -1962,14 +2165,54 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             else:
                 model_messages = messages
             if not resuming_tools:say({'type':'model_request','id':reasoning_id,'round':turn,'model':profile.get('model',''),'permission':permission})
-            msg = {"content": "", "tool_calls": pending_calls} if resuming_tools else chat_raw(profile, model_messages, tools=tool_specs,
-                           # 写作那步的产出（整份正文）就是一个大参数：4096 预算下推理模型的思维链把额度吃光，
-                           # doc_write / skill_write / project_note_write 的 markdown 直接被截断 → 工具调用变成「空参数」或半截。
-                           # 所以每一步都跟写作共用同一档预算（deepseek 这档上限 8192，取 8000 留余地）。
-                           max_tokens=WRITE_MAX_TOKENS,
-                           on_delta=forward_delta if emit else None, cancel_check=cancel_check,
-                           on_reasoning=forward_reasoning if emit else None)
-            if not resuming_tools:say({'type':'model_response','id':reasoning_id,'round':turn,'duration_ms':int((time.monotonic()-model_started)*1000),'usage':msg.get('usage') or {}})
+            msg = {"content": "", "tool_calls": pending_calls} if resuming_tools else call_with_fallback(
+                db, candidates or [profile], model_messages, tools=tool_specs,
+                # 写作那步的产出（整份正文）就是一个大参数：4096 预算下推理模型的思维链把额度吃光，
+                # doc_write / skill_write / project_note_write 的 markdown 直接被截断 → 工具调用变成「空参数」或半截。
+                # 所以每一步都跟写作共用同一档预算（deepseek 这档上限 8192，取 8000 留余地）。
+                max_tokens=WRITE_MAX_TOKENS,
+                on_delta=forward_delta if emit else None, cancel_check=cancel_check,
+                on_reasoning=forward_reasoning if emit else None,
+                emit=lambda ev: (say(ev), events.append(ev)), round_no=turn)
+            if not resuming_tools:
+                if msg.get("_selected_profile_id") and msg["_selected_profile_id"] != profile.get("id"):
+                    selected_cand = next((c for c in candidates if c.get("id") == msg["_selected_profile_id"]), None)
+                    if selected_cand:
+                        profile = dict(selected_cand)
+                        candidates = [profile, *[c for c in candidates if c.get("id") != profile.get("id")]]
+                model_responses.append(msg)
+                say({'type': 'model_response', 'id': reasoning_id, 'round': turn,
+                     'duration_ms': int((time.monotonic() - model_started) * 1000),
+                     'usage': msg.get('usage') or {}, 'finish_reason': msg.get('finish_reason'),
+                     'stream_complete': msg.get('stream_complete', True)})
+                incomplete = msg.get('stream_complete') is False
+                empty = not (msg.get('tool_calls') or []) and not str(msg.get('content') or '').strip()
+                if incomplete or empty:
+                    retry_started = time.monotonic()
+                    say({'type': 'model_request', 'id': reasoning_id, 'round': turn,
+                         'model': profile.get('model', ''), 'permission': permission, 'retry': 1})
+                    retry_msg = call_with_fallback(
+                        db, candidates or [profile], model_messages, tools=tool_specs,
+                        max_tokens=WRITE_MAX_TOKENS * 2, cancel_check=cancel_check,
+                        emit=lambda ev: (say(ev), events.append(ev)), round_no=turn, retry_no=1)
+                    if retry_msg.get("_selected_profile_id") and retry_msg["_selected_profile_id"] != profile.get("id"):
+                        selected_cand = next((c for c in candidates if c.get("id") == retry_msg["_selected_profile_id"]), None)
+                        if selected_cand:
+                            profile = dict(selected_cand)
+                            candidates = [profile, *[c for c in candidates if c.get("id") != profile.get("id")]]
+                    model_responses.append(retry_msg)
+                    say({'type': 'model_response', 'id': reasoning_id, 'round': turn, 'retry': 1,
+                         'duration_ms': int((time.monotonic() - retry_started) * 1000),
+                         'usage': retry_msg.get('usage') or {},
+                         'finish_reason': retry_msg.get('finish_reason'),
+                         'stream_complete': retry_msg.get('stream_complete', True)})
+                    if retry_msg.get('stream_complete') is False:
+                        raise RuntimeError('模型重试响应流未完整结束（finish_reason=' + str(retry_msg.get('finish_reason')) + '）')
+                    if not (retry_msg.get('tool_calls') or []) and not str(retry_msg.get('content') or '').strip():
+                        raise RuntimeError('模型加倍预算重试后仍未返回正文或工具调用（首次 finish_reason=' +
+                                           str(msg.get('finish_reason')) + '；重试 finish_reason=' +
+                                           str(retry_msg.get('finish_reason')) + '）')
+                    msg = retry_msg
             pending_calls = []
         except Exception as exc:
             say({"type": "reasoning_done", "id": reasoning_id, "content": "".join(reasoning_parts),
@@ -1987,9 +2230,11 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         say(reasoning_event)
         if reasoning_event["content"]:
             events.append(reasoning_event)
-        use = msg.get("usage") or {}
-        if use:
-            # 每次回包发「这一次」的用量（可累加），不发累计值——否则存进事件流后回放会重复计数
+        for response in model_responses:
+            use = response.get("usage") or {}
+            if not use:
+                continue
+            # Record each request separately because a bounded empty-response retry also consumes tokens.
             delta = {"prompt": use["prompt"], "completion": use["completion"],
                      "total": use["total"] or (use["prompt"] + use["completion"]), "exact": bool(use["exact"])}
             tokens["prompt"] += delta["prompt"]; tokens["completion"] += delta["completion"]
@@ -1997,7 +2242,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             ev = {"type": "usage", **delta}
             say(ev); events.append(ev)
         calls = msg.get("tool_calls") or []
-        if (not calls and step == "search"
+        if (not calls and step == "search" and not getattr(db, 'workflow_end_to_end', False)
                 and any(e.get("type") == "tool_result" and e.get("name") == "paper_search" for e in events)
                 and "？" not in (msg.get("content") or "") and "?" not in (msg.get("content") or "")):
             # 检索跑完了却没问「还改不改」→ 补一句（它自己问过就不重复问）
@@ -2105,7 +2350,7 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
             ev2 = {"type": "tool_result", "name": name, "ok": ok, "summary": brief,
                    "path": path or "", "id": call.get("id"),"round":turn,"duration_ms":duration_ms,
                    "result":workspace_trajectory.safe_result(event_result)}
-            if ok and name in ('project_create_from_idea', 'workflow_prepare', 'workflow_start', 'workflow_status', 'graph_workflow_run', 'graph_workflow_status') and result.get('navigation'):
+            if ok and name in ('project_create_from_idea', 'workflow_create', 'workflow_prepare', 'workflow_start', 'workflow_status', 'graph_workflow_run', 'graph_workflow_status', 'plan', 'supervisor', 'platform') and result.get('navigation'):
                 ev2['navigation'] = {**result['navigation'], 'chat_id': task_id if bound and bound != task_id else ''}
             say(ev2); events.append(ev2)
             model_result = result
@@ -2154,8 +2399,8 @@ def run_agent(db: "WorkflowDB", task_id: str, text: str, emit: Any = None, max_s
         if chat_row:  # 对话置顶 + 首次提问当标题（默认名用久了列表没法认）
             db.db.execute("UPDATE chats SET updated_at=? WHERE id=?",
                           (datetime.now(timezone.utc).isoformat(), task_id))
-            if chat_row["title"] in ("", "新对话"):
-                db.db.execute("UPDATE chats SET title=? WHERE id=?", (text.strip().replace("\n", " ")[:24], task_id))
+            if (chat_row["title"] or "").strip() in DEFAULT_CHAT_TITLES:
+                db.db.execute("UPDATE chats SET title=? WHERE id=?", (derive_chat_title(text), task_id))
             db.db.commit()
         say({"type": "done", "content": final})
     execution.check()
@@ -2190,7 +2435,7 @@ def _brief(name: str, result: Any) -> str:
         return "已建项目「%s」· %s" % (result.get("title", ""), str(result.get("project_id", ""))[:8])
     if name == 'project_create_from_idea':
         return '项目「%s」已装配：%d 位专家 · 团队与 LangGraph 流程 · %s' % (result.get('title', ''), len(result.get('experts', [])), result.get('status', 'configured'))
-    if name == 'project_resource_write':
+    if name in ('project_resource_write', 'project_artifact_write'):
         return '已保存项目资料：' + str(result.get('path') or '')
     if name == 'project_resources':
         if 'indexed' in result: return '已整理项目资料索引：%d 个文件' % result['indexed']

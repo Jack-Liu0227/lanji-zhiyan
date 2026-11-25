@@ -153,6 +153,30 @@ def get(db, task_id, *, project_id=""):
     task = _task(db, task_id)
     if project_id and task["project_id"] != project_id:
         raise ValueError("任务不属于当前项目")
+    if task.get("workflow_run_id") and task.get("workflow_node_id"):
+        meta = task.get("metadata") or {}
+        wn = meta.get("workflow_node") or {}
+        if not wn.get("step_no") or not str(task.get("title", "")).startswith("Step "):
+            try:
+                import workflow_tasks
+                layout = meta.get("layout_snapshot")
+                if not layout:
+                    row = db.db.execute("SELECT layout_snapshot FROM workflow_executions WHERE run_id=?", (task["workflow_run_id"],)).fetchone()
+                    if row and row[0]:
+                        layout = json.loads(row[0])
+                if layout and isinstance(layout, dict):
+                    step_map = workflow_tasks.compute_node_hierarchical_steps(layout.get("nodes", []), layout.get("edges", []))
+                    step_info = step_map.get(task["workflow_node_id"])
+                    if step_info:
+                        new_meta = {**meta, "workflow_node": {"run_id": task["workflow_run_id"], "node_id": task["workflow_node_id"], **step_info}}
+                        new_title = step_info["canonical_title"]
+                        db.db.execute("UPDATE project_tasks SET title=?, metadata=? WHERE id=?", (new_title, json.dumps(new_meta, ensure_ascii=False), task_id))
+                        db.db.execute("UPDATE chats SET title=? WHERE id=?", (new_title, 'execution-' + task_id))
+                        db.db.commit()
+                        task["title"] = new_title
+                        task["metadata"] = new_meta
+            except Exception:
+                pass
     import execution_conversations
     task['chat_id']=execution_conversations.ensure(db,'task',task_id)
     task["latest_run"] = get_run(db, task["latest_run_id"]) if task["latest_run_id"] else None
@@ -165,6 +189,7 @@ def get(db, task_id, *, project_id=""):
     task["events"] = [_decode(r, ("data",)) for r in db.db.execute("SELECT * FROM project_task_events WHERE task_id=? ORDER BY rowid", (task_id,))]
     import workflow_node_workbench
     task['node_result'] = workflow_node_workbench.target(db, task, task.get('latest_run'))
+    task['recovery'] = recovery_summary(task)
     return task
 
 
@@ -178,11 +203,19 @@ def public_view(task):
         if not run:
             return run
         checkpoint = run.get('checkpoint', {})
+        runtime_cfg = (run.get('executor_snapshot') or {}).get('runtime_config') or {}
+        model_ident = runtime_cfg.get('model_identity') or {}
         return {**run, 'input_snapshot': inputs(run.get('input_snapshot', {})),
-                'executor_snapshot': {k: v for k, v in run.get('executor_snapshot', {}).items()
+                'executor_snapshot': {**{k: v for k, v in run.get('executor_snapshot', {}).items()
                                       if k not in ('runtime_config', 'tools', 'skills')},
+                                      'model_info': {
+                                          'model_id': runtime_cfg.get('model_id') or model_ident.get('id', ''),
+                                          'model': model_ident.get('model', ''),
+                                          'model_source': runtime_cfg.get('model_source', ''),
+                                          'model_policy': runtime_cfg.get('model_policy', 'fallback'),
+                                      }},
                 'checkpoint': {k: v for k, v in checkpoint.items()
-                               if k in ('reply', 'phase', 'turn', 'output_revision', 'waiting_children', 'resumed_from', 'restart_approved')}}
+                               if k in ('reply', 'phase', 'turn', 'output_revision', 'waiting_children', 'resumed_from', 'restart_approved', 'last_error_kind', 'last_error_code', 'model_switched_from')}}
     return {**task, 'metadata': {k: v for k, v in task.get('metadata', {}).items() if k != 'upstream_context'},
             'latest_run': run_view(task.get('latest_run')),
             'runs': [run_view(run) for run in task.get('runs', [])],
@@ -420,6 +453,8 @@ def create(db, spec, *, authority, request_key=""):
     inputs, contract = spec.get("inputs") or [], spec.get("output_contract") or {}
     if not isinstance(inputs, list) or not isinstance(contract, dict):
         raise ValueError("任务输入须为数组，输出约定须为对象")
+    import artifact_quality
+    artifact_quality.validate_rules(contract)
     if contract.get("json_schema") or contract.get("schema"):
         _check_json_schema(contract.get("json_schema") or contract["schema"])
     review_required = spec.get("review_required", True)
@@ -440,9 +475,9 @@ def create(db, spec, *, authority, request_key=""):
         if parent["status"] in TERMINAL:
             raise ValueError("已结束的父任务不能派生新任务")
         inherited = parent["scope"]
-        for field in ("allowed_binding_ids", "allowed_member_ids", "tools"):
+        for field in ("allowed_binding_ids", "allowed_member_ids", "tools", "workflow_review_mode"):
             if field in inherited:
-                if field in scope and inherited[field] is not None and (scope[field] is None or not set(scope[field]).issubset(inherited[field])):
+                if field in scope and inherited[field] is not None and (scope[field] is None or (field != "workflow_review_mode" and not set(scope[field]).issubset(inherited[field]))):
                     raise ValueError("子任务不能扩大父任务授权范围")
                 scope.setdefault(field, inherited[field])
         if manual_review_required(parent, get_run(db, parent['latest_run_id']) if parent['latest_run_id'] else None):
@@ -454,6 +489,15 @@ def create(db, spec, *, authority, request_key=""):
             if node and node != parent["workflow_node_id"]:
                 raise ValueError("子任务不能切换工作流节点")
             node = parent["workflow_node_id"]
+    if "workflow_review_mode" in scope:
+        rm = str(scope["workflow_review_mode"] or "")
+        if authority.source == "agent":
+            if parent and parent["scope"].get("workflow_review_mode") in project_bindings.WORKFLOW_REVIEW_MODES:
+                scope["workflow_review_mode"] = parent["scope"]["workflow_review_mode"]
+            else:
+                scope.pop("workflow_review_mode", None)
+        elif rm not in project_bindings.WORKFLOW_REVIEW_MODES:
+            raise ValueError("workflow_review_mode 只能是 human_review 或 auto")
     if flow:
         if not parent_id and authority.source != "system":
             raise ValueError("工作流任务须由服务端解析当前实例范围")
@@ -579,7 +623,17 @@ def _snapshot_inputs(db, task, run_id):
     handoffs = []
     for binding in task["metadata"].get("handoffs", []):
         upstream = by_task[binding["task_id"]]
-        matches = [file for file in upstream["outputs"] if file.get("name") == binding["artifact"]]
+        wanted = str(binding["artifact"]).replace("\\", "/").strip("/")
+        matches = []
+        for file in upstream["outputs"]:
+            rel = str(file.get("relative") or "").replace("\\", "/").strip("/")
+            if not rel and file.get("original_path"):
+                try:
+                    rel = Path(file["original_path"]).resolve().relative_to(root).as_posix()
+                except ValueError:
+                    rel = ""
+            if rel == wanted or file.get("name") == wanted or (rel and rel.endswith("/" + wanted)):
+                matches.append(file)
         if len(matches) != 1:
             raise ValueError(f"上游节点 {binding['source']} 必须交付唯一的文件：{binding['artifact']}")
         output = matches[0]
@@ -615,29 +669,96 @@ def _policy(db, task, authority, mode=None):
         raise ValueError("未知的执行模式")
     parent_id = authority.parent_task_id or task["parent_task_id"]
     parent_mode = None
+    parent_review = None
     if parent_id:
         parent = get(db, parent_id)
         if parent["latest_run"]:
-            parent_mode = _effective_policy(parent, parent["latest_run"])["autonomy_mode"]
+            parent_policy = _effective_policy(parent, parent["latest_run"])
+            parent_mode = parent_policy["autonomy_mode"]
+            parent_review = parent_policy.get("workflow_review_mode")
+        elif parent["scope"].get("workflow_review_mode") in project_bindings.WORKFLOW_REVIEW_MODES:
+            parent_review = parent["scope"]["workflow_review_mode"]
     default = project_bindings.settings(db, task["project_id"]).get("autonomy_mode", "supervised")
     override = task["metadata"].get("_autonomy_override")
+    review_override = task["metadata"].get("_review_override")
     previous = get_run(db, task["latest_run_id"])["policy_snapshot"] if task["latest_run_id"] else {}
     inherited = (override or {}).get("autonomy_mode") or parent_mode or previous.get("autonomy_mode") or default
     selected = mode or inherited
     if authority.source != "ui" and selected == "full_access" and inherited != "full_access":
         raise ValueError("专家不能自行升级为 Full access")
+    workflow_review = (
+        (review_override or {}).get("workflow_review_mode")
+        or parent_review
+        or task["scope"].get("workflow_review_mode")
+        or previous.get("workflow_review_mode")
+        or project_bindings.workflow_review_mode(db)
+    )
+    workflow_review = "auto" if workflow_review == "auto" else "human_review"
     source = "user" if mode and authority.source == "ui" else (override or {}).get("source") or ("parent" if parent_mode else previous.get("source") or "project")
     return {"autonomy_mode": selected, "source": source,
+            "workflow_review_mode": workflow_review,
             "actor_id": authority.actor_id if authority.source == "ui" and (mode or override) else previous.get("actor_id", ""), "review_required": task["review_required"],
             'manual_review_required': manual_review_required(task)}
 
 
-def _resume_identity(task, inputs, executor):
+def _resume_identity(task, inputs, executor, *, allow_model_switch=False):
     assets = [{k: item.get(k) for k in ("asset_id", "content_hash", "relative")} for item in inputs.get("assets", [])]
+    context = inputs.get("execution_context")
+    if task.get('workflow_run_id') and isinstance(context, dict) and isinstance(context.get('upstream_context'), dict):
+        upstream = dict(context['upstream_context'])
+        if isinstance(upstream.get('history'), list):
+            dependencies = set(task.get('dependencies') or [])
+            upstream['history'] = [item for item in upstream['history']
+                                   if not isinstance(item, dict) or not item.get('task_id') or item['task_id'] in dependencies]
+        upstream.pop('memory', None)
+        context = {**context, 'upstream_context': upstream}
+    member = executor.get("member")
+    if isinstance(member, dict):
+        member = {k: member.get(k) for k in ("id", "task_id", "name", "role", "step", "prompt",
+                                             "assistant_id", "model_id", "reasoning", "permission")
+                  if k in member}
+    runtime_config = executor.get("runtime_config")
+    if isinstance(runtime_config, dict):
+        if allow_model_switch:
+            runtime_config = {k: v for k, v in runtime_config.items()
+                              if k not in ("model_id", "model_identity", "model_source", "fallback_model_ids", "model_policy")}
+        elif isinstance(runtime_config.get("model_identity"), dict):
+            ident = {k: v for k, v in runtime_config["model_identity"].items() if k != "revision"}
+            runtime_config = {**runtime_config, "model_identity": ident}
     return _digest({"goal": inputs.get("goal"), "assets": assets, "dependencies": inputs.get("dependencies"),
-        "children": inputs.get("children"), "feedback": inputs.get("feedback"), "context": inputs.get("execution_context"),
-        "assistant_id": executor.get("assistant_id"), "member": executor.get("member"), "tools": executor.get("tools"),
-        "runtime_config": executor.get("runtime_config"), "scope": task["scope"]})
+        "children": inputs.get("children"), "feedback": inputs.get("feedback"), "context": context,
+        "assistant_id": executor.get("assistant_id"), "member": member, "tools": executor.get("tools"),
+        "runtime_config": runtime_config, "scope": task["scope"]})
+
+
+def recovery_summary(task):
+    """Describe the saved boundary without exposing model messages or calling tools."""
+    attempt = task.get('latest_run') or {}
+    checkpoint = attempt.get('checkpoint') or {}
+    phase = checkpoint.get('phase') or ''
+    failed = task.get('status') in ('failed', 'interrupted', 'blocked')
+    legacy_unknown = bool(checkpoint.get('legacy_imported') and phase in ('model', 'tools_ready') and
+                          not attempt.get('executor_snapshot', {}).get('runtime_config'))
+    reason = ''
+    if not failed:
+        reason = '当前节点无需恢复'
+    elif legacy_unknown:
+        reason = '旧检查点缺少模型与执行配置快照，无法验证安全续接；请核对后重新执行本节点'
+    elif task.get('metadata', {}).get('node_config', {}).get('manual_execution'):
+        reason = '请在节点工作台提交人工产物'
+    elif checkpoint.get('waiting_children'):
+        reason = '正在等待子任务交付'
+    elif phase == 'tool':
+        reason = '上次工具可能已产生结果，请先核对产物，再明确选择重新执行本节点'
+    reusable = len(checkpoint.get('done_tools') or [])
+    pending = len(checkpoint.get('pending_calls') or [])
+    return {'can_continue': failed and not reason, 'can_restart': failed and (phase == 'tool' or legacy_unknown),
+            'mode': 'restart' if legacy_unknown else 'checkpoint' if phase in ('model', 'tools_ready') else 'retry',
+            'phase': phase, 'source_attempt_id': attempt.get('id', ''), 'attempt': attempt.get('attempt'),
+            'saved_at': (checkpoint.get('monitoring') or {}).get('last_progress_at') or attempt.get('ended_at') or '',
+            'reusable_calls': reusable, 'pending_calls': pending, 'reason': reason,
+            'description': reason or (f'复用 {reusable} 次已保存调用，继续 {pending} 次待执行调用；模型响应会重新请求'
+                                      if phase in ('model', 'tools_ready') else '尚无模型检查点，将从本节点起点重试，保留其他节点成果')}
 
 
 def block_start(db, task_id, error, *, authority):
@@ -657,12 +778,62 @@ def block_start(db, task_id, error, *, authority):
     return get(db, task_id)
 
 
-def start(db, task_id, *, authority, request_key="", autonomy_mode=None, restart=False, manual_submission=False):
+def switch_model(db, task_id, model_id="", *, authority, reasoning="", model_policy=""):
+    """Bind or clear a task-level model override so a blocked/failed node can resume on another model."""
+    import agent_settings
+    task = _task(db, task_id)
+    _authority(authority, task["project_id"])
+    if task["status"] in ("running", "queued"):
+        raise ValueError("任务正在执行或排队中，请先停止后再切换模型")
+    if task["status"] in TERMINAL:
+        raise ValueError("任务已结束，无法切换模型")
+    model_id = str(model_id or "").strip()
+    fields = {}
+    if model_id:
+        fields["model_id"] = model_id
+    if reasoning:
+        fields["reasoning"] = str(reasoning).strip()
+    if model_policy:
+        fields["model_policy"] = str(model_policy).strip()
+    if fields:
+        agent_settings.validate_runtime_fields(db, fields)
+    with _lock, _atomic(db):
+        current = _task(db, task_id)
+        metadata = dict(current["metadata"])
+        if fields:
+            override = dict(metadata.get("_model_override") or {})
+            override.update(fields)
+            metadata["_model_override"] = override
+        else:
+            metadata.pop("_model_override", None)
+        db.db.execute("UPDATE project_tasks SET metadata=?,version=version+1,updated_at=? WHERE id=?",
+                      (_json(metadata), _now(), task_id))
+        _event(db, task_id, "model_switched", {"model_id": model_id, "reasoning": reasoning, "model_policy": model_policy}, current.get("latest_run_id", ""))
+    _notify(db, task_id)
+    return get(db, task_id)
+
+
+def start(db, task_id, *, authority, request_key="", autonomy_mode=None, restart=False, manual_submission=False, allow_model_switch=False, model_id=""):
     import project_bindings
     task = _task(db, task_id)
     if task['metadata'].get('deleted_at'):
         raise ValueError('任务已删除，请先恢复任务记录')
     _authority(authority, task["project_id"])
+    model_id = str(model_id or "").strip()
+    if model_id:
+        if not allow_model_switch and authority.source != "ui":
+            raise ValueError("切换模型需要显式授权")
+        allow_model_switch = True
+        import agent_settings
+        agent_settings.validate_runtime_fields(db, {"model_id": model_id})
+        with _lock, _atomic(db):
+            latest_task = _task(db, task_id)
+            meta = dict(latest_task["metadata"])
+            override = dict(meta.get("_model_override") or {})
+            override["model_id"] = model_id
+            meta["_model_override"] = override
+            db.db.execute("UPDATE project_tasks SET metadata=?,updated_at=? WHERE id=?", (_json(meta), _now(), task_id))
+        task = _task(db, task_id)
     if task["metadata"].get("node_config", {}).get("manual_execution") and not manual_submission:
         raise ValueError("该节点由人工完成，请在工作流运行页提交产物")
     import research_plans
@@ -686,8 +857,29 @@ def start(db, task_id, *, authority, request_key="", autonomy_mode=None, restart
         if phase == "tool" and not restart:
             raise ValueError("工具结果未确认，请核查后明确重启当前节点")
         if interrupted and interrupted["status"] == "interrupted" and not restart:
+            if (interrupted['checkpoint'].get('legacy_imported') and phase in ('model', 'tools_ready')
+                    and not interrupted['executor_snapshot'].get('runtime_config')):
+                raise ValueError('旧检查点缺少模型与执行配置快照，无法验证安全续接；请核对后重新执行本节点')
             _validate_versions(db, task, interrupted, outputs=False)
-            db.db.execute("UPDATE project_task_runs SET status='queued',error='',ended_at='' WHERE id=?", (interrupted["id"],))
+            if phase in ('model', 'tools_ready'):
+                executor = project_bindings.resolve(db, task['project_id'], task['executor_binding_id'], member_id=task['member_id'])
+                import agent_settings
+                executor['runtime_config'] = agent_settings.freeze_model(db, agent_settings.runtime_config(
+                    db, task['project_id'], executor['assistant_id'], executor.get('member') or None,
+                    node=task['metadata'].get('node_config'), task=task))
+                snapshot = _snapshot_inputs(db, task, _id('resume-check-'))
+                if _resume_identity(task, snapshot, executor, allow_model_switch=allow_model_switch) != _resume_identity(
+                        task, interrupted['input_snapshot'], interrupted['executor_snapshot'], allow_model_switch=allow_model_switch):
+                    raise ValueError('输入或执行配置已变化，不能接续旧检查点；请核对后重新执行本节点')
+            if allow_model_switch:
+                interrupted_checkpoint = dict(interrupted["checkpoint"])
+                interrupted_checkpoint["model_switched_from"] = (
+                    (interrupted["executor_snapshot"].get("runtime_config") or {}).get("model_identity") or {}
+                ).get("model", "")
+                db.db.execute("UPDATE project_task_runs SET status='queued',error='',ended_at='',executor_snapshot=?,checkpoint=? WHERE id=?",
+                              (_json(executor), _json(interrupted_checkpoint), interrupted["id"]))
+            else:
+                db.db.execute("UPDATE project_task_runs SET status='queued',error='',ended_at='' WHERE id=?", (interrupted["id"],))
             db.db.execute("UPDATE project_tasks SET status='queued',updated_at=? WHERE id=?", (_now(), task_id))
             _event(db, task_id, "resumed", {}, interrupted["id"])
             return get_run(db, interrupted["id"])
@@ -699,20 +891,27 @@ def start(db, task_id, *, authority, request_key="", autonomy_mode=None, restart
             return get_run(db, active["id"])
         executor = project_bindings.resolve(db, task["project_id"], task["executor_binding_id"], member_id=task["member_id"])
         import agent_settings
-        executor["runtime_config"] = agent_settings.runtime_config(db, task["project_id"], executor["assistant_id"], executor.get("member") or None)
-        if not executor["runtime_config"].get("model_id"):
-            executor["runtime_config"]["model_id"] = (db.active_model() or {}).get("id", "")
+        config = agent_settings.runtime_config(db, task["project_id"], executor["assistant_id"], executor.get("member") or None,
+                                             node=task["metadata"].get("node_config"), task=task)
+        executor["runtime_config"] = agent_settings.freeze_model(db, config)
         _scope_binding(task["scope"], task["executor_binding_id"], executor.get("member_id", ""))
         policy = _policy(db, task, authority, autonomy_mode)
         run_id = _id("ptr-")
         snapshot = _snapshot_inputs(db, task, run_id)
         checkpoint = {"restart_approved": True} if restart else {}
         if interrupted and interrupted["status"] in ("failed", "interrupted") and phase in ("model", "tools_ready") and not restart:
-            if _resume_identity(task, snapshot, executor) == _resume_identity(task, interrupted["input_snapshot"], interrupted["executor_snapshot"]):
+            if _resume_identity(task, snapshot, executor, allow_model_switch=allow_model_switch) == _resume_identity(
+                    task, interrupted["input_snapshot"], interrupted["executor_snapshot"], allow_model_switch=allow_model_switch):
                 _validate_versions(db, task, interrupted, outputs=False)
                 checkpoint = dict(interrupted["checkpoint"])
                 origin = next((o for o in get(db, task_id)["origins"] if o["kind"] == "workflow_node" and o["task_run_id"] == interrupted["id"]), None)
                 checkpoint["resumed_from"] = origin["legacy_id"] if origin else interrupted["id"]
+                if allow_model_switch:
+                    checkpoint["model_switched_from"] = (
+                        (interrupted["executor_snapshot"].get("runtime_config") or {}).get("model_identity") or {}
+                    ).get("model", "")
+            else:
+                raise ValueError('输入或执行配置已变化，不能接续旧检查点；请核对后重新执行本节点')
         row = db.db.execute("SELECT COALESCE(MAX(attempt),0)+1 AS attempt FROM project_task_runs WHERE task_id=?", (task_id,)).fetchone()
         db.db.execute("INSERT INTO project_task_runs(id,task_id,attempt,status,request_key,policy_snapshot,input_snapshot,executor_snapshot,checkpoint,started_at) VALUES (?,?,?,'queued',?,?,?,?,?,?)",
                       (run_id, task_id, row["attempt"], request_key or _id("request-"), _json(policy), _json(snapshot), _json(executor), _json(checkpoint), _now()))
@@ -767,19 +966,35 @@ def manual_review_required(task, run=None):
 
 
 def _validate_contract(contract, output):
+    import artifact_quality
+    artifact_quality.validate_rules(contract)
     content = output.get("content", output.get("reply", ""))
     text = content if isinstance(content, str) else _json(content)
     if len(text.strip()) < int(contract.get("min_chars") or 0):
         raise ValueError("任务产物未达到约定的最小内容长度")
+    if contract.get("requires_evidence") and not any(eid in text for eid in output.get("evidence_ids") or []):
+        raise ValueError("证据抽取尚缺可核验的全文证据，请获取全文、登记原文证据并在产物中引用证据 ID")
     for section in contract.get("sections") or []:
         label = section.get("title", "") if isinstance(section, dict) else str(section)
         if label and label not in text:
             raise ValueError("任务产物缺少约定章节：" + label)
-    available = {item.get("relative") for item in output.get("files", [])}
+    files = {item.get("relative"): item for item in output.get("files", [])}
+    available = set(files)
     for item in contract.get("required_files") or []:
         relative = item.get("relative") or item.get("path") if isinstance(item, dict) else str(item)
         if relative not in available:
             raise ValueError("任务缺少约定文件：" + str(relative))
+        path = Path(files[relative].get("path") or "")
+        rule = (contract.get('file_rules') or {}).get(str(relative), {})
+        if path.suffix.lower() not in {".csv", ".json"} and not rule:
+            continue
+        try:
+            file_text = path.read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeError) as exc:
+            raise ValueError("约定产物无法按 UTF-8 读取：" + str(relative)) from exc
+        from project_artifacts import validate_text
+        validate_text(str(relative), file_text)
+        artifact_quality.validate(str(relative), file_text, rule)
     schema = contract.get("json_schema") or contract.get("schema")
     if contract.get("format") == "json" or contract.get("json") or schema:
         try:
@@ -866,8 +1081,20 @@ def _validate_versions(db, task, run, *, outputs=True):
             path = Path(item["path"]).resolve()
             if not path.is_relative_to(root) or not path.is_file() or _hash(path) != item.get("content_hash", item.get("sha256")):
                 raise ValueError("待验收产物已变化或超出项目范围")
-        _validate_contract(task["output_contract"], run["output_snapshot"])
-        if task.get("metadata", {}).get("stage") == "write":
+        contract = dict(task["output_contract"])
+        node = task.get("metadata", {}).get("node_config") or {}
+        if node:
+            import workflow_layout
+            required = workflow_layout.required_outputs({**node, "output_contract": contract})
+            if required:
+                contract["required_files"] = required
+        _validate_contract(contract, run["output_snapshot"])
+        if contract.get("requires_evidence"):
+            import research_reading
+            ids = run["output_snapshot"]["evidence_ids"]
+            for offset in range(0, len(ids), 12):
+                research_reading.evidence(db, task["project_id"], ids[offset:offset + 12])
+        if task.get("metadata", {}).get("stage") == "write" and not contract.get("required_files"):
             from lineage_draft import require_for_manuscript
             content = run["output_snapshot"].get("content") or ""
             require_for_manuscript(db, task["project_id"], content)
@@ -918,8 +1145,11 @@ def complete(db, run_id, result):
         task_output_versions.remember(db, task, {**candidate, 'status': 'succeeded'}, commit=False)
         _event(db, task["id"], "waiting_children" if waiting else "output_ready", {}, run_id)
         evidence_hold = checkpoint.get("claim_audit", {}).get("requires_review", False)
-        if not waiting and not evidence_hold and not manual_review_required(task, candidate) and (not task["review_required"] or policy["autonomy_mode"] == "full_access"):
-            _decision(db, task, candidate, approved=True, source="policy", actor_id="", feedback="", request_key="policy:" + run_id)
+        manual_exec = bool(task.get("scope", {}).get("manual_execution") or task.get("metadata", {}).get("node_config", {}).get("manual_execution"))
+        auto_review = policy.get("workflow_review_mode") == "auto" and not manual_exec
+        if not waiting and (auto_review or (not evidence_hold and not manual_review_required(task, candidate) and (not task["review_required"] or policy["autonomy_mode"] == "full_access"))):
+            feedback = "自动审查模式：存在证据核查提醒，已自动通过" if (auto_review and evidence_hold) else ""
+            _decision(db, task, candidate, approved=True, source="policy", actor_id="", feedback=feedback, request_key="policy:" + run_id)
     _notify(db, task["id"])
     value = get(db, task["id"])
     _wake_parent(db, value)
@@ -1015,6 +1245,18 @@ def rework(db, task_id, *, authority, base, instruction, request_key, selection=
             node = {**node, 'tool_args': tool_args}
             project_task_execution.validate_fixed_tool(db, task['project_id'], node, run['executor_snapshot'])
             context['node_config'] = node
+        import project_bindings
+        import agent_settings
+        rework_executor = dict(run['executor_snapshot'])
+        try:
+            fresh_exec = project_bindings.resolve(db, task['project_id'], task['executor_binding_id'], member_id=task.get('member_id', ''))
+            fresh_cfg = agent_settings.runtime_config(
+                db, task['project_id'], fresh_exec['assistant_id'], fresh_exec.get('member') or None,
+                node=context.get('node_config'), task=task)
+            fresh_exec['runtime_config'] = agent_settings.freeze_model(db, fresh_cfg)
+            rework_executor = fresh_exec
+        except (ValueError, KeyError):
+            pass
         policy = {**_effective_policy(task, run), 'manual_review_required': True,
                   'source': 'user_rework', 'actor_id': authority.actor_id}
         with _atomic(db):
@@ -1027,7 +1269,7 @@ def rework(db, task_id, *, authority, base, instruction, request_key, selection=
             attempt = db.db.execute('SELECT COALESCE(MAX(attempt),0)+1 FROM project_task_runs WHERE task_id=?', (task_id,)).fetchone()[0]
             db.db.execute("INSERT INTO project_task_runs(id,task_id,attempt,status,request_key,policy_snapshot,input_snapshot,executor_snapshot,checkpoint,started_at) VALUES (?,?,?,'queued',?,?,?,?,?,?)",
                           (run_id, task_id, attempt, 'rework:' + request_key, _json(policy), _json(snapshot),
-                           _json(run['executor_snapshot']), _json({'rework_of': run['id'], 'base_revision': base['output_revision']}), _now()))
+                           _json(rework_executor), _json({'rework_of': run['id'], 'base_revision': base['output_revision']}), _now()))
             db.db.execute("UPDATE project_tasks SET status='queued',latest_run_id=?,accepted_delivery_id='',version=version+1,updated_at=? WHERE id=?",
                           (run_id, _now(), task_id))
             db.db.execute('INSERT INTO project_task_rework_requests VALUES (?,?,?,?,?,?,?)',
@@ -1101,5 +1343,29 @@ def set_mode(db, task_id, mode, *, authority):
         with _lock, _atomic(db):
             if _task(db, task_id)["status"] == "awaiting_review":
                 _decision(db, task, run, approved=True, source="policy", actor_id="", feedback="", request_key="mode:" + run["id"])
+    _notify(db, task_id)
+    return get(db, task_id)
+
+
+def set_review_mode(db, task_id, review_mode, *, authority):
+    import project_bindings
+    task = _task(db, task_id)
+    _authority(authority, task["project_id"], human=True)
+    if review_mode not in project_bindings.WORKFLOW_REVIEW_MODES:
+        raise ValueError("workflow_review_mode 只能是 human_review 或 auto")
+    metadata = {**task["metadata"], "_review_override": {"workflow_review_mode": review_mode, "source": "user", "actor_id": authority.actor_id}}
+    with _lock, _atomic(db):
+        db.db.execute("UPDATE project_tasks SET metadata=?,version=version+1,updated_at=? WHERE id=?", (_json(metadata), _now(), task_id))
+        _event(db, task_id, "policy_changed", {"workflow_review_mode": review_mode, "actor_id": authority.actor_id}, task["latest_run_id"])
+    task = _task(db, task_id)
+    manual_exec = bool(task.get("scope", {}).get("manual_execution") or task.get("metadata", {}).get("node_config", {}).get("manual_execution"))
+    if task["status"] == "awaiting_review" and review_mode == "auto" and not manual_exec and task["latest_run_id"]:
+        run = get_run(db, task["latest_run_id"])
+        _validate_versions(db, task, run)
+        evidence_hold = (run.get("checkpoint") or {}).get("claim_audit", {}).get("requires_review", False)
+        feedback = "自动审查模式：存在证据核查提醒，已自动通过" if evidence_hold else ""
+        with _lock, _atomic(db):
+            if _task(db, task_id)["status"] == "awaiting_review":
+                _decision(db, task, run, approved=True, source="policy", actor_id="", feedback=feedback, request_key="review_mode:" + run["id"])
     _notify(db, task_id)
     return get(db, task_id)

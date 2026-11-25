@@ -1,0 +1,237 @@
+/* Workflow Studio: Full-screen Template Management and Deep DAG Node Editing */
+.wfs-container {
+  display: flex;
+  height: 100%;
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.wfs-sidebar {
+  width: 280px;
+  min-width: 240px;
+  max-width: 340px;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.wfs-sidebar-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wfs-sidebar-head h3 {
+  font-size: 14px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wfs-template-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wfs-template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  text-align: left;
+  background: var(--panel2, var(--bg));
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+
+.wfs-template-card:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+}
+
+.wfs-template-card.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.wfs-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wfs-card-head b {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wfs-card-badge {
+  font-size: 9.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--muted) 15%, transparent);
+  color: var(--muted);
+}
+
+.wfs-card-badge.builtin {
+  background: color-mix(in srgb, #3b82f6 15%, transparent);
+  color: #3b82f6;
+}
+
+.wfs-template-card small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Center DAG Canvas */
+.wfs-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  position: relative;
+  background: var(--bg);
+}
+
+.wfs-toolbar {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wfs-title-input {
+  font-size: 14px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg);
+  border-radius: 6px;
+  max-width: 240px;
+}
+
+.wfs-title-input:hover, .wfs-title-input:focus {
+  border-color: var(--line);
+  background: var(--bg);
+}
+
+.wfs-canvas-area {
+  flex: 1;
+  overflow: auto;
+  position: relative;
+  padding: 24px;
+  box-sizing: border-box;
+  background-image: radial-gradient(color-mix(in srgb, var(--line) 85%, transparent) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Right Node Inspector */
+.wfs-inspector {
+  width: 360px;
+  min-width: 300px;
+  max-width: 420px;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.wfs-inspector-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wfs-inspector-head h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.wfs-inspector-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wfs-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.wfs-field span {
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--muted);
+}
+
+.wfs-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.wfs-check input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+}
+
+.wfs-dep-box {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.wfs-dep-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border-bottom: 1px dashed var(--line);
+}
+
+.wfs-dep-item:last-child {
+  border-bottom: none;
+}

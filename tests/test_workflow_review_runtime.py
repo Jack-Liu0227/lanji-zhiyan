@@ -147,6 +147,7 @@ class WorkflowReviewRuntimeTest(unittest.TestCase):
             # parameters and execute it again instead of fabricating an edit.
             tool_args = {'data': {'nodes': [{'id': 'claim', 'type': 'section', 'label': 'BROWSER_VERIFIED_CLAIM',
                 'detail': 'Checked experimental measurements and source.'}], 'edges': []}}
+            self.page.locator('[data-wnw-drawer-toggle]').click()
             self.page.locator('[data-wnw-tool-fields] summary').click()
             self.page.locator('[data-wnw-tool-args]').fill(json.dumps(tool_args))
             self.page.locator('[data-wnw-instruction]').fill('Use the checked claim and regenerate the graph.')
@@ -178,9 +179,11 @@ class WorkflowReviewRuntimeTest(unittest.TestCase):
                            lambda data: data['task']['status'] == 'awaiting_review')
             self.page.locator('[data-wnw-origin]').click()
             self.page.locator('[data-wr-task="' + next_id + '"]').first.click()
+            self.page.locator('[data-wnw-title]').get_by_text('Step 3: Check subworkflow / Check evidence', exact=True).wait_for()
             self.page.locator('[data-wnw-feedback]').fill('Please check once more with my feedback.')
             self.page.locator('[data-wnw-reject]').click()
             self.page.wait_for_function("document.querySelector('[data-wnw-status]').textContent.includes('退回')")
+            self.page.locator('[data-wnw-drawer-toggle]').click()
             self.page.locator('[data-wnw-instruction]').fill('Please check once more with my feedback.')
             self.page.locator('[data-wnw-rework]').click()
             retried = self.poll_json('/api/project-tasks/detail?project_id=' + self.pid + '&id=' + next_id,

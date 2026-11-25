@@ -16,11 +16,13 @@ const ExecutionConversation=(()=>{
     await ProjectWorkspace.openConversation(data.execution.chat_id,project);
   }
   function render(box,data,refresh){
+    ChatPresentation.replace(box,data.execution.chat_id,()=>renderMessages(box,data,refresh));
+  }
+  function renderMessages(box,data,refresh){
     const execution=data.execution,project=execution.project_id,flow=execution.kind==='workflow';
     const header=box.closest('.pw-chat')?.querySelector('.pw-conversation-tabs');
     if(header){let indicator=header.querySelector('[data-execution-indicator]');if(!indicator){indicator=document.createElement('button');indicator.type='button';indicator.className='execution-chat-indicator';indicator.dataset.executionIndicator='';header.append(indicator);}indicator.textContent=(flow?'工作流':'任务')+' · '+(labels[execution.status]||execution.status);indicator.title='查看执行进度和操作';indicator.onclick=()=>box.querySelector('.execution-chat-summary')?.scrollIntoView({block:'start'});}
     const opened=new Set([...box.querySelectorAll('details[open]')].map(node=>node.dataset.executionDetail).filter(Boolean));
-    const oldScroll=box.scrollTop,atBottom=box.scrollHeight-box.clientHeight-oldScroll<70;
     box.innerHTML=`<section class="execution-chat-summary" data-execution-id="${h(execution.entity_id)}"><div><span class="execution-chat-kind">${flow?'工作流对话':'任务对话'}</span><strong>${h(execution.title)}</strong><span class="pw-state">${h(labels[execution.status]||execution.status)}</span></div><div class="execution-chat-actions"><button type="button" class="btn ghost" data-execution-detail>${flow?'工作流节点与审查':'任务与产物'}</button>${(execution.prepared||['ready','failed','blocked','interrupted',...(flow?[]:['cancelled'])].includes(execution.status))?'<button type="button" class="btn" data-pw-start>继续执行</button>':''}${['queued','running'].includes(execution.status)?'<button type="button" class="btn ghost" data-execution-stop>停止执行</button>':''}<button type="button" class="pw-text-button" data-execution-refresh>刷新进度</button></div><p class="pw-error" role="alert" data-execution-error></p></section>`;
     box.querySelector('[data-execution-detail]').onclick=()=>flow?ProjectWorkspace.openWorkflowRun(project,execution.workflow_run_id):ProjectWorkspace.openTask(execution.entity_id,project);
     box.querySelector('[data-execution-refresh]').onclick=refresh;
@@ -60,6 +62,7 @@ const ExecutionConversation=(()=>{
     const renderedUsers=new Set();
     const goalKey=messageKey(execution.goal||'');
     for(const message of data.messages||[]){
+      if(message.role!=='user')renderedUsers.clear();
       if(message.role==='user'){
         const inputKey=userInputKey(message.content);
         if(inputKey&&renderedUsers.has(inputKey))continue;
@@ -71,10 +74,10 @@ const ExecutionConversation=(()=>{
       }
       const section=document.createElement('section');section.className='execution-chat-turn';section.dataset.executionMessage=message.id;
       if(message.attempt)section.innerHTML=`<div class="execution-chat-turn-meta">${h(message.task_title)} · 第 ${message.attempt} 次执行 · ${h(labels[message.status]||message.status)}${message.team_name?' · '+h(message.team_name):''}${message.member_name?' · '+h(message.member_name):''}</div>`;
-      appendOne(section,{...message,type:message.role,content:message.content||labels[message.status]||'',replay:true,at:message.created_at});
-      section.querySelectorAll('details').forEach((node,index)=>{node.dataset.executionDetail=message.id+':'+index;node.open=opened.has(node.dataset.executionDetail);});box.append(section);
+      appendOne(section,{...message,type:message.role,content:message.content||(['running','queued'].includes(message.status)?'':labels[message.status]||''),replay:true,at:message.created_at});
+      section.querySelectorAll('details').forEach((node,index)=>{node.dataset.executionDetail=message.id+':'+index;if(opened.has(node.dataset.executionDetail))node.open=true;});box.append(section);
     }
-    box.scrollTop=atBottom?box.scrollHeight:oldScroll;
+    ChatPresentation.execution(box,data);
   }
   return {open,render};
 })();

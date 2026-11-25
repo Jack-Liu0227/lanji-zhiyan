@@ -40,19 +40,151 @@ const WorkflowNodeWorkbench=(()=>{
 
     function skeleton(){
       host.innerHTML=`<article class="wnw" aria-label="节点产物工作台">
-        <header class="wnw-heading"><div><span class="pw-eyebrow">工作流产物 · 预览与编辑</span><h3 data-wnw-title>正在读取节点产物…</h3><p class="hint" data-wnw-meta></p></div><div class="wnw-heading-actions"><button class="btn ghost" type="button" data-wnw-fullscreen title="全屏查看并编辑产物">全屏模式</button><button class="btn ghost" type="button" data-wnw-origin>返回发起对话</button><button class="btn ghost" type="button" data-wnw-locate>定位流程节点</button></div></header>
-        <p class="pw-error" data-wnw-error role="alert"></p><p class="wnw-notice" data-wnw-notice role="status"></p>
-        <div class="wnw-versionbar"><button class="btn btn-primary" type="button" data-wnw-collect hidden>固定已保存产物，进入编辑核查</button><button class="btn ghost" type="button" data-wnw-stop hidden>停止当前节点</button><button class="btn" type="button" data-wnw-start hidden>继续执行本节点</button><label>查看版本<select class="control" data-wnw-version aria-label="节点产物版本"></select></label><span class="wnw-status" data-wnw-status></span><button class="pw-text-button" type="button" data-wnw-latest hidden>有更新，查看最新版本</button></div>
+        <header class="wnw-heading">
+          <div class="wnw-heading-main">
+            <button class="wnw-crumb-btn" type="button" data-wnw-origin title="返回发起此任务的目标对话">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+              <span>返回对话</span>
+            </button>
+            <span class="wnw-crumb-sep">/</span>
+            <h3 data-wnw-title>正在读取节点产物…</h3>
+            <span class="wnw-status" data-wnw-status></span>
+            <p class="hint" data-wnw-meta></p>
+          </div>
+
+          <div class="wnw-versionbar">
+            <button class="btn btn-primary btn-sm" type="button" data-wnw-collect hidden>固定已保存产物</button>
+            <button class="btn ghost btn-sm" type="button" data-wnw-stop hidden>停止当前节点</button>
+            <button class="btn btn-sm" type="button" data-wnw-start hidden>继续执行</button>
+            <label class="wnw-version-label">
+              <span>版本</span>
+              <select class="control" data-wnw-version aria-label="节点产物版本"></select>
+            </label>
+            <button class="pw-text-button" type="button" data-wnw-latest hidden>查看最新</button>
+          </div>
+
+          <div class="wnw-heading-actions">
+            <button class="wnw-icon-btn" type="button" data-wnw-locate title="在 DAG 工作流中定位该节点">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M3 12h3m12 0h3M12 3v3m0 12v3"/></svg>
+            </button>
+            <button class="wnw-icon-btn" type="button" data-wnw-drawer-toggle title="展开/收起 节点规范与专家抽屉">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg>
+            </button>
+            <button class="wnw-icon-btn" type="button" data-wnw-fullscreen title="全屏模式 (Esc 退出)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+            </button>
+            ${options.toggleDock?`<button class="wnw-icon-btn" type="button" data-wnw-dock-toggle title="${options.isPeek?'切换至主工作区大屏':'收入右侧边栏'}">${options.isPeek?'⤢':'⤡'}</button>`:''}
+          </div>
+        </header>
+
+        <p class="pw-error" data-wnw-error role="alert"></p>
+        <p class="wnw-notice" data-wnw-notice role="status"></p>
+
         <div class="wnw-grid">
           <aside class="wnw-context" aria-label="工作流与阶段产物">
-            <section><h4>工作流阶段</h4><nav class="wnw-steps" data-wnw-steps aria-label="工作流阶段"></nav></section>
-            <section><h4>本阶段产物</h4><nav class="wnw-artifacts" data-wnw-files aria-label="节点产物列表"></nav></section>
-            <section class="wnw-requirements"><h4>节点要求</h4><p data-wnw-goal></p><div data-wnw-guide hidden></div><details><summary>输入与前置交付</summary><div data-wnw-inputs></div></details><details><summary>核查清单</summary><div data-wnw-checks></div></details><div data-wnw-next hidden></div></section>
+            <div class="wnw-context-head">
+              <h4>流程阶段</h4>
+              <button type="button" class="wnw-stepper-collapse" data-wnw-toggle-steps title="折叠/展开阶段列表">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+              </button>
+            </div>
+            <nav class="wnw-steps" data-wnw-steps aria-label="工作流阶段"></nav>
+            <div class="wnw-context-artifacts">
+              <h4>本阶段产物</h4>
+              <nav class="wnw-artifacts" data-wnw-files aria-label="节点产物列表"></nav>
+            </div>
           </aside>
-          <section class="wnw-document" aria-label="产物预览与编辑"><header class="wnw-document-heading"><div><strong data-wnw-file-title></strong><small data-wnw-file-meta></small></div><button type="button" class="btn" data-wnw-export-edit hidden>编辑源稿并重新生成</button><div class="wnw-modes" role="group" aria-label="产物查看方式"><button type="button" data-wnw-mode="preview" aria-pressed="true">预览</button><button type="button" data-wnw-mode="edit" aria-pressed="false">编辑</button><button type="button" data-wnw-mode="diff" aria-pressed="false">版本差异</button><button type="button" class="btn ghost" data-pw-output-edit data-wnw-file-edit hidden>人工修订</button></div></header><div data-wnw-content class="wnw-content"><p class="hint">正在读取产物…</p></div><label class="wnw-reason">修订说明<input class="control" data-wnw-reason placeholder="记录这次修改的依据"></label></section>
-          <aside class="wnw-agent"><h4>节点专家</h4><p data-wnw-executor></p><p class="hint">讨论保留当前核查对象；交专家修改会基于眼前版本重做本节点。</p><button class="pw-text-button" type="button" data-wnw-quote>引用当前选区</button><blockquote data-wnw-selection hidden></blockquote><label>讨论或修改要求<textarea class="control" data-wnw-instruction rows="6" placeholder="指出需要核对或修改的内容"></textarea></label><div class="wnw-agent-buttons"><button type="button" class="btn ghost" data-wnw-discuss>讨论当前内容</button><button type="button" class="btn" data-wnw-rework>交专家修改</button></div><details data-wnw-tool-fields hidden><summary>固定工具参数</summary><p class="hint">修改参数后重新执行，原工具输出保留。</p><textarea class="control wnw-code" data-wnw-tool-args rows="7" aria-label="固定工具参数"></textarea></details><details><summary>另建关联任务</summary><p class="hint">单独处理新要求，完成后再决定是否采用。</p><button type="button" class="btn ghost" data-wnw-duplicate>按要求另建任务</button></details><details><summary>原执行回复</summary><pre data-wnw-original></pre></details></aside>
+
+          <section class="wnw-document" aria-label="产物预览与编辑">
+            <header class="wnw-document-heading">
+              <div class="wnw-doc-meta">
+                <strong data-wnw-file-title></strong>
+                <small data-wnw-file-meta></small>
+              </div>
+              <div class="wnw-doc-actions">
+                <button type="button" class="btn btn-sm" data-wnw-export-edit hidden>编辑源稿</button>
+                <div class="wnw-modes" role="group" aria-label="产物查看方式">
+                  <button type="button" data-wnw-mode="preview" aria-pressed="true">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    <span>预览</span>
+                  </button>
+                  <button type="button" data-wnw-mode="edit" aria-pressed="false">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    <span>编辑</span>
+                  </button>
+                  <button type="button" data-wnw-mode="diff" aria-pressed="false">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                    <span>版本差异</span>
+                  </button>
+                  <button type="button" class="btn ghost btn-sm" data-pw-output-edit data-wnw-file-edit hidden>人工修订</button>
+                </div>
+              </div>
+            </header>
+            <div data-wnw-content class="wnw-content"><p class="hint">正在读取产物…</p></div>
+            <div class="wnw-reason">
+              <label>
+                <span class="wnw-reason-tag">✏️ 修订依据说明</span>
+                <input class="control" data-wnw-reason placeholder="记录这次修改的依据（保存修订时生效）">
+              </label>
+            </div>
+          </section>
+
+          <aside class="wnw-agent" aria-label="节点规范与专家抽屉">
+            <div class="wnw-drawer-header">
+              <h4>📋 节点规范与专家</h4>
+              <button type="button" class="wnw-icon-btn sm" data-wnw-close-drawer title="收起抽屉">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+            <div class="wnw-drawer-scroll">
+              <section class="wnw-expert-card">
+                <span class="wnw-sub-label">负责专家</span>
+                <p data-wnw-executor class="wnw-executor-name"></p>
+                <p class="hint">讨论保留当前核查对象；交专家修改会基于眼前版本重做本节点。</p>
+              </section>
+
+              <section class="wnw-requirements">
+                <span class="wnw-sub-label">节点要求与目标</span>
+                <p data-wnw-goal class="wnw-goal-text"></p>
+                <div data-wnw-guide hidden></div>
+                <details><summary>输入与前置交付</summary><div data-wnw-inputs></div></details>
+                <details open><summary>核查清单</summary><div data-wnw-checks></div></details>
+                <div data-wnw-next hidden></div>
+              </section>
+
+              <section class="wnw-discuss-sec">
+                <div class="pt-row"><button class="pw-text-button" type="button" data-wnw-quote>引用当前选区</button>${options.quoteToChat?'<button class="pw-text-button" type="button" data-wnw-to-chat title="将当前产物或选区引用到中间主对话">↗ 引用到主对话</button>':''}</div>
+                <blockquote data-wnw-selection hidden></blockquote>
+                <label>修改或讨论要求<textarea class="control" data-wnw-instruction rows="4" placeholder="指出需要核对或修改的内容"></textarea></label>
+                <div class="wnw-agent-buttons"><button type="button" class="btn ghost btn-sm" data-wnw-discuss>讨论当前内容</button><button type="button" class="btn btn-sm" data-wnw-rework>交专家修改</button></div>
+              </section>
+
+              <details data-wnw-tool-fields hidden><summary>固定工具参数</summary><p class="hint">修改参数后重新执行，原工具输出保留。</p><textarea class="control wnw-code" data-wnw-tool-args rows="5" aria-label="固定工具参数"></textarea></details>
+              <details><summary>另建关联任务</summary><p class="hint">单独处理新要求，完成后再决定是否采用。</p><button type="button" class="btn ghost btn-sm" data-wnw-duplicate>按要求另建任务</button></details>
+              <details><summary>原执行回复</summary><pre data-wnw-original></pre></details>
+            </div>
+          </aside>
         </div>
-        <footer class="wnw-footer"><label>人工核查意见<textarea class="control" data-wnw-feedback rows="2" placeholder="退回时填写修改要求"></textarea></label><div class="wnw-footer-actions"><span class="hint" data-wnw-draft-state></span><button type="button" class="btn ghost" data-wnw-draft>保存草稿</button><button type="button" class="btn" data-wnw-save>保存修订</button><button type="button" class="btn ghost" data-wnw-reject>退回修改</button><button type="button" class="btn btn-primary" data-wnw-approve>通过并交付</button></div></footer>
+
+        <footer class="wnw-footer">
+          <div class="wnw-footer-left">
+            <span class="wnw-draft-dot"></span>
+            <span class="hint" data-wnw-draft-state></span>
+          </div>
+
+          <div class="wnw-feedback-box">
+            <label><span>退回意见</span>
+              <input class="control" data-wnw-feedback placeholder="退回时填写修改要求...">
+            </label>
+          </div>
+
+          <div class="wnw-footer-actions">
+            <button type="button" class="btn ghost btn-sm" data-wnw-draft>保存草稿</button>
+            <button type="button" class="btn btn-sm" data-wnw-save>保存修订</button>
+            <button type="button" class="btn btn-reject btn-sm" data-wnw-reject>退回修改</button>
+            <button type="button" class="btn btn-primary" data-wnw-approve>通过并交付</button>
+          </div>
+        </footer>
       </article>`;
       const toggleFullscreen=()=>{
         const article=host.querySelector('.wnw')||host;
@@ -61,21 +193,29 @@ const WorkflowNodeWorkbench=(()=>{
           article.classList.remove('wnw-fullscreen');
           document.body.classList.remove('has-wnw-fullscreen');
           if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});
-          const btn=el('fullscreen');if(btn)btn.textContent='全屏模式';
+          const btn=el('fullscreen');if(btn)btn.setAttribute('title','全屏模式');
         }else{
           article.classList.add('wnw-fullscreen');
           document.body.classList.add('has-wnw-fullscreen');
           if(article.requestFullscreen)article.requestFullscreen().catch(()=>{});
-          const btn=el('fullscreen');if(btn)btn.textContent='退出全屏';
+          const btn=el('fullscreen');if(btn)btn.setAttribute('title','退出全屏');
         }
       };
       const fsBtn=el('fullscreen');if(fsBtn)fsBtn.onclick=toggleFullscreen;
+      const dockToggleBtn=el('dock-toggle');
+      if(dockToggleBtn&&options.toggleDock)dockToggleBtn.onclick=async()=>{if(await state.saveDraft())options.toggleDock(state.selection);};
+      const toChatBtn=el('to-chat');
+      if(toChatBtn&&options.quoteToChat)toChatBtn.onclick=()=>{
+        captureSelection();
+        const text=state.quote?.text||state.value?.slice(0,400)||'';
+        options.quoteToChat({artifact:state.artifact,selection:state.selection,quote:text,title:el('title')?.textContent||''});
+      };
       state.onFsChange=()=>{
         const article=host.querySelector('.wnw')||host;
         const btn=el('fullscreen');
         if(!document.fullscreenElement&&article&&!article.classList.contains('wnw-fullscreen')){
           document.body.classList.remove('has-wnw-fullscreen');
-          if(btn)btn.textContent='全屏模式';
+          if(btn)btn.setAttribute('title','全屏模式');
         }
       };
       document.addEventListener('fullscreenchange',state.onFsChange);
@@ -84,18 +224,56 @@ const WorkflowNodeWorkbench=(()=>{
       el('draft').onclick=()=>state.saveDraft();
       el('save').onclick=saveRevision;
       el('approve').onclick=()=>review(true);
-      el('reject').onclick=()=>review(false);
+      el('reject').onclick=()=>{
+        const fb = el('feedback');
+        if(!state.feedback.trim() && !fb.value.trim()){
+          fb.focus();
+          fb.parentElement?.classList.add('has-error');
+          message('退回前请在下方输入退回意见', true);
+          return;
+        }
+        review(false);
+      };
       el('rework').onclick=rework;
       el('discuss').onclick=discuss;
       el('duplicate').onclick=duplicate;
       el('latest').onclick=()=>options.select({task_id:state.result.identity.task_id,project_id:state.result.identity.project_id});
       el('reason').oninput=()=>{state.reason=el('reason').value;scheduleDraft();};
-      el('feedback').oninput=()=>{state.feedback=el('feedback').value;scheduleDraft();};
+      el('feedback').oninput=()=>{
+        state.feedback=el('feedback').value;
+        if(state.feedback.trim()) el('feedback').parentElement?.classList.remove('has-error');
+        scheduleDraft();
+      };
       el('instruction').oninput=scheduleDraft;
       el('quote').onclick=captureSelection;
       el('export-edit').onclick=async()=>{if(!await state.saveDraft())return;state.mode='edit';await selectArtifact(state.result.artifacts.find(item=>item.id==='export-source'));};
       el('file-edit').onclick=()=>{const artifact=state.artifact,index=artifact?.id?.startsWith('file:')?Number(artifact.id.slice(5)):-1;if(index>=0)ProjectOutputReview.open(state.result.identity.project_id,state.result.identity.task_id,index,async()=>{options.changed?.();await options.openTask(state.result.identity.task_id);});};
-      host.querySelectorAll('[data-wnw-mode]').forEach(button=>button.onclick=async()=>{state.mode=button.dataset.wnwMode;await drawContent();updateButtons();});
+
+      // Drawer toggle
+      const drawerToggleBtn = host.querySelector('[data-wnw-drawer-toggle]');
+      const drawerCloseBtn = host.querySelector('[data-wnw-close-drawer]');
+      const toggleDrawer = () => {
+        const article = host.querySelector('.wnw');
+        article?.classList.toggle('has-drawer-open');
+        drawerToggleBtn?.classList.toggle('active', article?.classList.contains('has-drawer-open'));
+      };
+      if(drawerToggleBtn) drawerToggleBtn.onclick = toggleDrawer;
+      if(drawerCloseBtn) drawerCloseBtn.onclick = toggleDrawer;
+
+      // Steps collapse toggle
+      const stepsToggleBtn = host.querySelector('[data-wnw-toggle-steps]');
+      if(stepsToggleBtn) {
+        stepsToggleBtn.onclick = () => {
+          host.querySelector('.wnw-context')?.classList.toggle('is-collapsed');
+        };
+      }
+
+      host.querySelectorAll('[data-wnw-mode]').forEach(button=>button.onclick=async()=>{
+        state.mode=button.dataset.wnwMode;
+        host.querySelector('.wnw')?.classList.toggle('is-edit-mode', state.mode==='edit');
+        await drawContent();
+        updateButtons();
+      });
       host.addEventListener('keydown',event=>{
         if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();event.stopPropagation();saveRevision();}
         if(event.key==='Escape'){const article=host.querySelector('.wnw')||host;if(article.classList.contains('wnw-fullscreen')||document.fullscreenElement){event.preventDefault();event.stopPropagation();toggleFullscreen();}}
@@ -119,6 +297,7 @@ const WorkflowNodeWorkbench=(()=>{
         button.setAttribute('aria-pressed', String(state.mode === mode));
         button.disabled = state.busy || (mode === 'edit' && !canEdit) || (mode === 'diff' && !canCompare);
       });
+      host.querySelector('.wnw')?.classList.toggle('is-edit-mode', state.mode==='edit');
     }
     function scheduleDraft(){
       if(!(state.result?.editable||state.result?.can_rework))return;
@@ -152,13 +331,56 @@ const WorkflowNodeWorkbench=(()=>{
       state.selection={...selection,...state.result.identity,task_id:state.result.identity.task_id};
       options.selected(state.selection);
       const result=state.result,task=result.task,node=result.node||{},identity=result.identity;
-      el('title').textContent=node.label||task.title||'节点产物';
+
+      // 拓扑分层序号计算
+      const stepNodes = (result.steps || []).map(s => ({
+        id: s.node_id || s.task_id,
+        label: s.title,
+        dependencies: s.dependencies || []
+      }));
+      const stepEdges = [];
+      const taskIdToNodeId = new Map((result.steps || []).map(s => [s.task_id, s.node_id || s.task_id]));
+      (result.steps || []).forEach(s => {
+        const targetId = s.node_id || s.task_id;
+        (s.dependencies || []).forEach(depTaskId => {
+          const sourceId = taskIdToNodeId.get(depTaskId);
+          if (sourceId) stepEdges.push({ source: sourceId, target: targetId });
+        });
+      });
+      const stepMap = (window.WorkflowLayout?.computeHierarchicalStepNumbers || window.WorkflowGraph?.computeHierarchicalStepNumbers)?.(stepNodes, stepEdges) || new Map();
+      const getStepInfo = (s, idx) => {
+        const nid = s.node_id || s.task_id;
+        const info = stepMap.get(nid);
+        if (info) return info;
+        const raw = String(s.title || '').replace(/^Step\s*\d+(\.\d+)?\s*[:：]\s*/i, '');
+        return {
+          id: nid,
+          majorNo: idx + 1,
+          minorNo: 1,
+          isParallel: false,
+          stepNum: String(idx + 1),
+          stepLabel: `Step ${idx + 1}`,
+          badgeLabel: `#${idx + 1}`,
+          cleanTitle: raw,
+          formattedTitle: `Step ${idx + 1}: ${raw}`,
+          waveIndex: idx,
+          waveTotal: 1,
+        };
+      };
+
+      const currentStepInfo = getStepInfo({ node_id: task.workflow_node_id || identity.workflow_node_id, task_id: task.id, title: node.label || task.title }, 0);
+      el('title').textContent = currentStepInfo.formattedTitle || node.label || task.title || '节点产物';
       el('meta').textContent='第 '+(result.run.attempt||1)+' 次执行 · 修订 v'+identity.output_revision+' · '+(task.workflow_node_id||identity.workflow_node_id)+(result.scheduling?' · '+result.scheduling:'');
       const decision=task.deliveries?.findLast(item=>item.task_run_id===identity.task_run_id);
       el('status').textContent=task.status==='blocked'&&decision?.decision==='rejected'
         ? '已退回修改'
         : statuses[task.status]||task.status;
-      el('steps').innerHTML=(result.steps||[]).map((step,index)=>`<button type="button" data-wnw-step="${h(step.task_id)}" aria-current="${step.task_id===task.id?'step':'false'}"><small>${index+1}</small><span>${h(step.title)}<em>${h(statuses[step.status]||step.status)}</em></span></button>`).join('');
+      el('steps').innerHTML=(result.steps||[]).map((step,index)=>{
+        const sInfo = getStepInfo(step, index);
+        const isCurrent = step.task_id===task.id;
+        const isBranch = sInfo.isParallel;
+        return `<button type="button" class="${isBranch?'is-branch':''}" data-wnw-step="${h(step.task_id)}" aria-current="${isCurrent?'step':'false'}" title="${h(sInfo.formattedTitle)}"><small class="${isBranch?'is-parallel':''}">${h(sInfo.stepNum)}</small><span>${h(sInfo.formattedTitle)}<em>${h(statuses[step.status]||step.status)}</em></span></button>`;
+      }).join('');
       el('steps').querySelectorAll('[data-wnw-step]').forEach(button=>button.onclick=async()=>{if(await state.saveDraft())options.select({project_id:task.project_id,task_id:button.dataset.wnwStep});});
       el('collect').hidden=!result.can_collect;
       el('stop').hidden=!['running','queued'].includes(task.status);
@@ -212,7 +434,10 @@ const WorkflowNodeWorkbench=(()=>{
       el('guide').innerHTML=result.guide?`<dl><dt>需要的输入</dt><dd>${h(result.guide.input)}</dd><dt>本步交付</dt><dd>${h(result.guide.output)}</dd></dl>`:'';
       const downstream=result.downstream||[];
       el('next').hidden=!downstream.length;
-      el('next').innerHTML=downstream.length?`<h4>交付给</h4><nav class="wnw-steps">${downstream.map(step=>`<button type="button" data-wnw-next-task="${h(step.task_id)}"><span>${h(step.title)}<em>${h(statuses[step.status]||step.status)}</em></span></button>`).join('')}</nav>`:'';
+      el('next').innerHTML=downstream.length?`<h4>交付给</h4><nav class="wnw-steps">${downstream.map(step=>{
+        const dInfo = getStepInfo(step, 0);
+        return `<button type="button" class="${dInfo.isParallel?'is-branch':''}" data-wnw-next-task="${h(step.task_id)}" title="${h(dInfo.formattedTitle)}"><small class="${dInfo.isParallel?'is-parallel':''}">${h(dInfo.stepNum)}</small><span>${h(dInfo.formattedTitle)}<em>${h(statuses[step.status]||step.status)}</em></span></button>`;
+      }).join('')}</nav>`:'';
       el('next').querySelectorAll('button').forEach(button=>button.onclick=async()=>{
         if(await state.saveDraft())options.select({project_id:task.project_id,task_id:button.dataset.wnwNextTask});
       });
@@ -367,11 +592,12 @@ const WorkflowNodeWorkbench=(()=>{
       if(type==='bilingual'&&rows.some(row=>Array.isArray(row.segments))){drawSegments(target,data,rows,edit);return;}
       const present=[...new Set(rows.flatMap(row=>typeof row==='object'&&row?Object.keys(row).filter(field=>!['embedding','raw','html'].includes(field)):['content']))];
       const preferred=type==='table'?['title','authors','doi','year','abstract','included','reason','annotation']:type==='checklist'?['title','detail','text','severity','resolved','comment']:['source','translation','target','annotation'];
-      const columns=[...new Set([...preferred.filter(field=>present.includes(field)||['included','reason','annotation','resolved','comment','translation'].includes(field)),...present])].slice(0,10);
+      const csvFile=state.artifact.id.startsWith('file:')&&/\.csv$/i.test(state.artifact.name||'');
+      const columns=csvFile?present:[...new Set([...preferred.filter(field=>present.includes(field)||['included','reason','annotation','resolved','comment','translation'].includes(field)),...present])].slice(0,10);
       const labels={title:'标题',authors:'作者',doi:'DOI',year:'年份',abstract:'摘要',annotation:'核查批注',source:type==='table'?'来源':'原文',source_text:'原文',target:'译文',translation:'译文',target_text:'译文',text:'内容',content:'内容',included:'纳入',reason:'理由',severity:'严重程度',resolved:'已处理',page:'页码',comment:'核查意见'};
       function cellMarkup(row,index,field){
         const value=typeof row==='object'&&row?row[field]:row;
-        const boolean=typeof value==='boolean'||['included','resolved'].includes(field),canEdit=edit&&!['id','source','created_at','task_id','sha256','files','source_path'].includes(field);
+        const boolean=typeof value==='boolean'||!csvFile&&['included','resolved'].includes(field),canEdit=edit&&!['id','source','created_at','task_id','sha256','files','source_path'].includes(field);
         if(!canEdit)return `<td>${h(boolean?(value===false?'否':'是'):typeof value==='object'?textOf(value):value??'')}</td>`;
         return `<td>${boolean?`<input type="checkbox" data-wnw-cell="${index}" data-field="${h(field)}" aria-label="第 ${index+1} 行 ${h(labels[field]||field)}" ${value!==false&&field==='included'||value===true?'checked':''}>`:`<textarea class="control" rows="${type==='bilingual'?5:2}" data-wnw-cell="${index}" data-field="${h(field)}" aria-label="第 ${index+1} 行 ${h(labels[field]||field)}">${h(typeof value==='object'?textOf(value):value??'')}</textarea>`}</td>`;
       }
@@ -478,6 +704,24 @@ const WorkflowNodeWorkbench=(()=>{
     const agentPane=grid?.querySelector('.wnw-agent');
     if(grid&&documentPane&&contextPane&&agentPane){
       grid.replaceChildren(contextPane,documentPane,agentPane);
+      if(typeof SplitResizer !== "undefined"){
+        SplitResizer.bind(grid, {
+          mode: "fixed-left",
+          storageKey: "wnw-context",
+          defaultSize: 220,
+          min: 170,
+          max: 360,
+          cssVar: "--wnw-context-w"
+        });
+        SplitResizer.bind(grid, {
+          mode: "fixed-right",
+          storageKey: "wnw-drawer",
+          defaultSize: 300,
+          min: 240,
+          max: 500,
+          cssVar: "--wnw-drawer-w"
+        });
+      }
     }
     try{await load(options.selection,false);}catch(error){if(state.alive()){el('content').innerHTML='<p class="hint">无法读取本节点产物，请刷新后重试。</p>';message(error.message,true);host.querySelectorAll('button,input,select,textarea').forEach(input=>input.disabled=true);el('origin').disabled=false;}}
     state.poll=setInterval(async()=>{
