@@ -215,7 +215,8 @@ def update_todo(db: Any, todo_id: str, **kwargs: Any) -> dict[str, Any]:
         if updates["status"] != expected:
             raise ValueError("执行型待办请在任务详情中运行、取消或验收，不能通过勾选修改执行状态")
     if 'status' in updates and conn.execute("SELECT 1 FROM sqlite_master WHERE name='plan_task_links'").fetchone():
-        states=[r[0] for r in conn.execute('SELECT t.status FROM project_tasks t JOIN plan_task_links l ON l.task_id=t.id WHERE l.plan_id=?',(todo_id,))]
+        import project_tasks
+        states=[r[0] for r in conn.execute('SELECT t.status FROM project_tasks t JOIN plan_task_links l ON l.task_id=t.id WHERE l.plan_id=? AND ' + project_tasks.active_task_clause(db,'t'),(todo_id,))]
         if states and updates['status']=='DONE' and any(state!='delivered' for state in states): raise ValueError('关联执行任务尚未全部交付，请先完成核查')
     if hasattr(db, "steps") and cur_dict.get("stage") and updates.get("status") == "DONE":
         import workflow_state

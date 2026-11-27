@@ -1,6 +1,6 @@
 """Node artifact workspaces with live previews and immutable reviewed versions."""
 from dataclasses import dataclass
-import csv
+import csv_text as csv
 import io
 import json
 from pathlib import Path
@@ -10,7 +10,6 @@ import re
 import project_tasks as tasks
 
 TEXT = {'.md', '.markdown', '.txt', '.json', '.yaml', '.yml', '.csv', '.tex', '.bib', '.py', '.js', '.css', '.html'}
-MAX_TEXT = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -161,7 +160,7 @@ def _file_preview(path, kind, editable):
     import workflow
 
     result = {'kind': kind, 'editable': editable, 'download_url': '/api/file?' + urlencode({'path': str(path)})}
-    text_file = path.suffix.lower() in TEXT and path.stat().st_size <= MAX_TEXT
+    text_file = path.suffix.lower() in TEXT
     if text_file and (kind != 'html' or editable):
         text = path.read_text(encoding='utf-8')
         result['text'] = text
@@ -302,7 +301,7 @@ def preview(db, selection, artifact_id, *, authority, task=None):
     result.update(name=item.get('name') or path.name, content_hash=tasks._hash(path))
     if 'text' in result and previous and index < len(previous['output_snapshot'].get('files', [])):
         old = Path(previous['output_snapshot']['files'][index]['path'])
-        if old.is_file() and old.suffix.lower() in TEXT and old.stat().st_size <= MAX_TEXT:
+        if old.is_file() and old.suffix.lower() in TEXT:
             result['previous_content'] = old.read_text(encoding='utf-8')
     return result
 
@@ -483,8 +482,8 @@ def save_draft(db, identity, body, *, authority):
     if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,120}', window_id):
         raise ValueError('草稿窗口标识无效')
     text, reason, feedback, instruction = body.get('text', ''), body.get('reason', ''), body.get('feedback', ''), body.get('instruction', '')
-    if not all(isinstance(value, str) for value in (text, reason, feedback, instruction)) or len(text.encode()) > MAX_TEXT or len(reason) > 4000 or len(feedback) > 20000 or len(instruction) > 20000:
-        raise ValueError('草稿内容过长或格式无效')
+    if not all(isinstance(value, str) for value in (text, reason, feedback, instruction)):
+        raise ValueError('草稿格式无效')
     key = (run['id'], identity['output_revision'], artifact_id, authority.actor_id, window_id)
     with tasks._lock, tasks._atomic(db):
         old = db.db.execute('SELECT * FROM workflow_node_drafts WHERE task_run_id=? AND revision=? AND artifact_id=? AND owner_id=? AND window_id=?', key).fetchone()
@@ -500,19 +499,17 @@ def _selection(run, value):
     if not value:
         return {}
     if isinstance(value, str):
-        if len(value) > 20000:
-            raise ValueError('引用选区过长')
         return {'text': value}
     if not isinstance(value, dict):
         raise ValueError('引用选区格式无效')
     artifact = str(value.get('artifact_id') or 'structured')
     index = _artifact(run, artifact)
     text = value.get('text', '')
-    if not isinstance(text, str) or len(text) > 20000:
-        raise ValueError('引用选区过长或格式无效')
+    if not isinstance(text, str):
+        raise ValueError('引用选区格式无效')
     if index is not None:
         path = Path(run['output_snapshot']['files'][index]['path'])
-        if path.suffix.lower() not in TEXT or path.stat().st_size > MAX_TEXT:
+        if path.suffix.lower() not in TEXT:
             if value.get('page') is None:
                 raise ValueError('二进制文件引用请提供来源页码')
         elif text and text not in path.read_text(encoding='utf-8'):
@@ -541,7 +538,7 @@ def command(db, task_id, body, *, authority):
         old = db.db.execute('SELECT * FROM project_task_deliveries WHERE task_id=? AND request_key=?', (task_id, request_key)).fetchone()
         if old:
             if (old['task_run_id'] != identity['task_run_id'] or old['decision'] != ('approved' if body.get('approved') else 'rejected') or
-                    old['feedback'] != str(body.get('feedback') or '').strip()[:20000] or
+                    old['feedback'] != str(body.get('feedback') or '').strip() or
                     tasks._digest(json.loads(old['output_versions'])) != identity['output_digest']):
                 raise ValueError('该请求标识已用于另一份核查决定')
             return {'task': tasks.get(db, task_id, project_id=authority.project_id)}
@@ -592,14 +589,11 @@ def command(db, task_id, body, *, authority):
         return {'task': created}
     if action == 'discuss':
         message = str(body.get('message') or '').strip()
-        if not message or len(message) > 20000 or not request_key:
+        if not message or not request_key:
             raise ValueError('请填写讨论内容')
         selection = _selection(run, body.get('selection'))
         context = {'identity': identity, 'requirements': task['goal'], 'outputs': run['output_snapshot'], 'selection': selection,
                    'dependencies': run['input_snapshot'].get('dependencies', [])}
-        encoded = tasks._json(context)
-        if len(encoded) > 120000:
-            context['outputs'] = {'files': run['output_snapshot']['files'], 'content': str(run['output_snapshot'].get('content', ''))[:40000]}
         prompt = '讨论以下固定节点结果，给出建议；本次讨论不修改节点文件或审核状态。\n' + tasks._json(context) + '\n用户问题：' + message
         import agent_jobs
         import project_task_execution

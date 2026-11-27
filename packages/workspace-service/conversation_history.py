@@ -28,6 +28,13 @@ def _busy(db,kind,row):
     if kind=='chat':
         import execution_conversations
         if execution_conversations.busy(db,row['id']):return True
+        if db.db.execute(
+            "SELECT 1 FROM project_tasks t JOIN project_executor_bindings b ON b.id=t.executor_binding_id "
+            "JOIN conversation_temporary_teams o ON o.team_id=b.target_id "
+            "WHERE o.chat_id=? AND b.kind='team' AND t.status IN ('queued','running') LIMIT 1",
+            (row['id'],),
+        ).fetchone():
+            return True
     if kind=='team':
         import team
         return bool(row['active'] and team.TEAM_RUNS.get(row['team_id']))
@@ -40,16 +47,21 @@ def _publish_change(db,kind,row,action):
     if kind=='chat' and row.get('task_id'):
         import execution_board
         binding=None
+        has_hidden=bool(db.db.execute("SELECT 1 FROM sqlite_master WHERE name='execution_board_hidden'").fetchone())
         if str(row.get('id','')).startswith('execution-'):
             import execution_conversations
             binding=execution_conversations.by_chat(db,row['id'])
-            if binding and db.db.execute("SELECT 1 FROM sqlite_master WHERE name='execution_board_hidden'").fetchone():
+            if binding and has_hidden:
                 item_kind='task' if binding['kind']=='task' else 'conversation'
                 item_id=binding['entity_id'] if item_kind=='task' else row['id']
                 if action in ('trash','archive'):
                     db.db.execute('INSERT OR IGNORE INTO execution_board_hidden(project_id,item_kind,item_id,deleted_at) VALUES (?,?,?,?)',(row['task_id'],item_kind,item_id,datetime.now(timezone.utc).isoformat()))
-                elif action in ('restore','unarchive'):
+                elif action in ('restore','unarchive','purge'):
                     db.db.execute('DELETE FROM execution_board_hidden WHERE project_id=? AND item_kind=? AND item_id=?',(row['task_id'],item_kind,item_id))
+            if binding and binding['kind']=='task' and action in ('trash','archive','restore','unarchive','purge'):
+                execution_board.refresh_plans(db,binding['entity_id'])
+        elif action=='purge' and has_hidden:
+            db.db.execute("DELETE FROM execution_board_hidden WHERE project_id=? AND item_kind='conversation' AND item_id=?",(row['task_id'],row['id']))
         execution_board.publish(db,row['task_id'],'conversation_'+action,task_id=row['id'],source='conversation',activity='会话记录已更新')
 
 
@@ -59,7 +71,15 @@ def command(db,kind,identifier,action,*,title='',project_id='',team_id=''):
     if kind=='chat' and project_id and row['task_id']!=project_id: raise ValueError('会话不属于当前项目')
     if kind=='team' and row['team_id']!=team_id: raise ValueError('会话不属于当前团队')
     if action in ('archive','trash','purge') and _busy(db,kind,row): raise ValueError('请先停止并等待当前会话运行结束，再归档或删除')
+    dissolved_projects = []
     if kind == 'chat' and (action == 'trash' or (action == 'purge' and row['deleted_at'])):
+        dissolved_projects = [
+            r['project_id'] for r in db.db.execute(
+                "SELECT DISTINCT t.project_id FROM teams t JOIN conversation_temporary_teams o ON o.team_id=t.id "
+                "WHERE t.kind='temp' AND o.chat_id=? AND t.status<>'dissolved' AND t.project_id<>''",
+                (identifier,),
+            ).fetchall()
+        ]
         import team
         team.dissolve_owned(db, identifier)
     if action=='export':
@@ -79,8 +99,21 @@ def command(db,kind,identifier,action,*,title='',project_id='',team_id=''):
         with db.db:
             if kind=='chat':
                 db.db.execute('DELETE FROM chat WHERE task_id=?',(identifier,))
+                if db.db.execute("SELECT 1 FROM sqlite_master WHERE name='chat_fts'").fetchone():
+                    db.db.execute('DELETE FROM chat_fts WHERE task_id=?',(identifier,))
+                run_ids=[r[0] for r in db.db.execute("SELECT id FROM tasks WHERE owner_id=? AND kind='agent_run'",(identifier,)).fetchall()]
+                if run_ids:
+                    marks=','.join('?' for _ in run_ids)
+                    db.db.execute(f'DELETE FROM task_attempts WHERE task_id IN ({marks})',run_ids)
+                    db.db.execute(f'DELETE FROM run_events WHERE run_id IN ({marks})',run_ids)
+                    db.db.execute(f'DELETE FROM background_jobs WHERE id IN ({marks})',run_ids)
+                    db.db.execute(f'DELETE FROM tasks WHERE id IN ({marks})',run_ids)
                 db.db.execute('DELETE FROM chats WHERE id=?',(identifier,))
                 _publish_change(db,kind,row,action)
+                for pid in dissolved_projects:
+                    if pid != row.get('task_id'):
+                        import execution_board
+                        execution_board.publish(db,pid,'conversation_purge',task_id=identifier,source='conversation',activity='发起对话已删除')
             else:
                 db.db.execute('DELETE FROM chat WHERE task_id=? AND scope=?',(team_id,'team:'+identifier))
                 db.db.execute('DELETE FROM team_sessions WHERE id=?',(identifier,))
@@ -98,6 +131,10 @@ def command(db,kind,identifier,action,*,title='',project_id='',team_id=''):
                 if action in ('trash','archive'):db.db.execute('UPDATE team_sessions SET active=0 WHERE id=?',(identifier,))
     with db.db:
         _publish_change(db,kind,row,action)
+        for pid in dissolved_projects:
+            if pid != row.get('task_id'):
+                import execution_board
+                execution_board.publish(db,pid,'conversation_'+action,task_id=row['id'],source='conversation',activity='发起对话已删除')
     return {'ok':True,'conversation':_flags(db,kind,identifier)}
 
 

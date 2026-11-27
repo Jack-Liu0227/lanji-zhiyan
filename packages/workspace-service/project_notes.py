@@ -36,7 +36,6 @@ def synchronized(operation):
 
 
 CATEGORIES = tuple((name, description) for _, name, description, _ in note_catalog.DEFAULTS)
-MAX_NOTE_BYTES = 5 * 1024 * 1024
 
 
 def project_root(db: Any, project_id: str, *, writable: bool = False) -> Path:
@@ -365,8 +364,6 @@ def dashboard(db: Any, project_id: str, query: str = "") -> dict:
         item = dict(node)
         try:
             path = note_path(db, project_id, node["path"])
-            if path.stat().st_size > MAX_NOTE_BYTES:
-                raise ValueError("笔记超过 5 MB")
             content = path.read_text(encoding="utf-8")
             item.update(note_catalog.attributes(content, node["path"], catalog))
             item["excerpt"] = note_catalog.split(content)[1][:400]
@@ -402,8 +399,6 @@ def read(db: Any, project_id: str, relative: str) -> dict:
     path = note_path(db, project_id, relative)
     if not path.is_file():
         raise FileNotFoundError(relative)
-    if path.stat().st_size > MAX_NOTE_BYTES:
-        raise ValueError("笔记超过 5 MB")
     _, row, _ = _record(db, project_id, path)
     restriction = _write_restriction(project_root(db, project_id))
     content = path.read_text(encoding="utf-8")
@@ -427,8 +422,6 @@ def write(db: Any, project_id: str, relative: str, content: str, *, title: str |
         category = note_catalog.category(catalog, cid)
         relative = (category["folder"] if category else "笔记") + "/" + uuid.uuid4().hex + ".md"
         create = True
-    if len(content.encode("utf-8")) > MAX_NOTE_BYTES:
-        raise ValueError("笔记超过 5 MB")
     path = note_path(db, project_id, relative, create=True)
     if create and path.exists():
         raise ValueError("新笔记的路径已存在，请使用不同的文件名")
@@ -441,8 +434,6 @@ def write(db: Any, project_id: str, relative: str, content: str, *, title: str |
     if note_catalog.is_template(content):
         import prompt_templates
         content = prompt_templates.prepare(db, project_id, relative, content, previous_content)
-    if len(content.encode("utf-8")) > MAX_NOTE_BYTES:
-        raise ValueError("笔记超过 5 MB")
     fileguard.before_write(path, "项目笔记保存")
     asset_service.atomic_write_text(path, content)
     import semantic

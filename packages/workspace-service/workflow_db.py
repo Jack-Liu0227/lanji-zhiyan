@@ -988,22 +988,40 @@ class WorkflowDB(ResearchDB):
             self.db.execute("INSERT OR REPLACE INTO schedule_workflows VALUES (?,?)", (sid, layout_id))
         else:
             self.db.execute("DELETE FROM schedule_workflows WHERE schedule_id=?", (sid,))
+        pid = str(data.get("project_id") or "")
+        if pid:
+            import execution_board
+            execution_board.publish(self, pid, "schedule_saved", task_id=sid, source="schedule", activity="自动化规则已更新")
         self.db.commit()
         return self.schedule(sid) or {}
 
     def schedule_set_enabled(self, sid: str, enabled: bool) -> None:
+        sid = str(sid or "")
+        row = self.db.execute("SELECT project_id FROM schedules WHERE id=?", (sid,)).fetchone()
         self.db.execute("UPDATE schedules SET enabled=?, updated_at=? WHERE id=?",
-                        (1 if enabled else 0, now(), str(sid or "")))
+                        (1 if enabled else 0, now(), sid))
+        if row and row["project_id"]:
+            import execution_board
+            execution_board.publish(self, row["project_id"], "schedule_toggled", task_id=sid, source="schedule",
+                                    activity="自动化规则已启用" if enabled else "自动化规则已暂停")
         self.db.commit()
 
     def schedule_delete(self, sid: str) -> None:
+        import execution_board
         import project_todos
         import schedule
+        sid = str(sid or "")
+        existing = self.schedule(sid)
         schedule.cancel_run(sid, self.path)
         project_todos.sync_execution(self, schedule_id=sid, status="cancelled")
-        self.db.execute("DELETE FROM schedule_runs WHERE schedule_id=?", (str(sid or ""),))
-        self.db.execute("DELETE FROM schedules WHERE id=?", (str(sid or ""),))
-        self.db.execute("DELETE FROM schedule_workflows WHERE schedule_id=?", (str(sid or ""),))
+        self.db.execute("DELETE FROM schedule_workflow_runs WHERE schedule_run_id IN (SELECT id FROM schedule_runs WHERE schedule_id=?)", (sid,))
+        self.db.execute("DELETE FROM schedule_trigger_queue WHERE schedule_id=?", (sid,))
+        self.db.execute("DELETE FROM schedule_runs WHERE schedule_id=?", (sid,))
+        self.db.execute("DELETE FROM schedules WHERE id=?", (sid,))
+        self.db.execute("DELETE FROM schedule_workflows WHERE schedule_id=?", (sid,))
+        self.db.execute("DELETE FROM task_links WHERE schedule_id=?", (sid,))
+        if existing and existing.get("project_id"):
+            execution_board.publish(self, existing["project_id"], "schedule_deleted", task_id=sid, source="schedule", activity="自动化规则已删除")
         self.db.commit()
 
     def schedule_seed(self, builtins: list[dict[str, Any]], project_id: str = "") -> int:
@@ -1027,9 +1045,18 @@ class WorkflowDB(ResearchDB):
         self.db.commit()
 
     def schedule_runs(self, limit: int = 80) -> list[dict[str, Any]]:
-        rows = self.db.execute("SELECT r.*, n.id AS note_id,n.task_id AS note_project_id,w.workflow_run_id FROM schedule_runs r LEFT JOIN md_notes n "
-                               "ON n.id='schedule-' || r.id LEFT JOIN schedule_workflow_runs w ON w.schedule_run_id=r.id ORDER BY r.started_at DESC LIMIT ?",
-                               (max(1, min(500, int(limit))),)).fetchall()
+        rows = self.db.execute(
+            "SELECT r.*, COALESCE(NULLIF(s.project_id,''), n.task_id, '') AS project_id, "
+            "n.id AS note_id, n.task_id AS note_project_id, w.workflow_run_id, "
+            "COALESCE(o.task_id, '') AS project_task_id "
+            "FROM schedule_runs r "
+            "LEFT JOIN schedules s ON s.id=r.schedule_id "
+            "LEFT JOIN md_notes n ON n.id='schedule-' || r.id "
+            "LEFT JOIN schedule_workflow_runs w ON w.schedule_run_id=r.id "
+            "LEFT JOIN project_task_origins o ON o.kind='schedule_run' AND o.legacy_id=r.id "
+            "ORDER BY r.started_at DESC LIMIT ?",
+            (max(1, min(500, int(limit))),),
+        ).fetchall()
         result = []
         for row in rows:
             item = dict(row)
@@ -1060,8 +1087,25 @@ class WorkflowDB(ResearchDB):
         active = self.db.execute(f"SELECT 1 FROM schedule_workflow_runs l JOIN workflow_runs w ON w.id=l.workflow_run_id WHERE l.schedule_run_id IN ({marks}) AND w.status NOT IN ('succeeded','failed','cancelled') LIMIT 1", tuple(ids)).fetchone()
         if active:
             raise ValueError('请先完成或停止关联工作流，再清理定时运行记录')
+        active_task = self.db.execute(
+            f"SELECT 1 FROM project_task_origins o JOIN project_tasks t ON t.id=o.task_id "
+            f"WHERE o.kind='schedule_run' AND o.legacy_id IN ({marks}) AND t.status IN ('queued','running','awaiting_review') LIMIT 1",
+            tuple(ids),
+        ).fetchone()
+        if active_task:
+            raise ValueError('请先完成或停止关联项目任务，再清理定时运行记录')
+        project_ids = [
+            r[0] for r in self.db.execute(
+                f"SELECT DISTINCT s.project_id FROM schedule_runs r JOIN schedules s ON s.id=r.schedule_id WHERE r.id IN ({marks}) AND s.project_id<>''",
+                tuple(ids),
+            ).fetchall()
+        ]
         self.db.execute(f'DELETE FROM schedule_workflow_runs WHERE schedule_run_id IN ({marks})', tuple(ids))
         cur = self.db.execute(f"DELETE FROM schedule_runs WHERE id IN ({marks})", tuple(ids))
+        if cur.rowcount and project_ids:
+            import execution_board
+            for pid in project_ids:
+                execution_board.publish(self, pid, "schedule_run_deleted", source="schedule", activity="定时运行记录已清理")
         self.db.commit()
         return int(cur.rowcount or 0)
 

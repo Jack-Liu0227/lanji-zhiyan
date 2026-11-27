@@ -91,6 +91,8 @@ class WorkflowStudioAndDeletionTest(unittest.TestCase):
         self.assertIsNone(workflow_layout.state(self.db, self.project_id)['layout'])
 
     def test_workflow_execution_delete(self):
+        import conversation_history
+        import execution_conversations
         import project_bindings
         layout = workflow_layout._layout(self.db, workflow_layout.DEFAULT_LAYOUT_ID)
         workflow_layout.select_layout(self.db, {"task_id": self.project_id, "layout_id": layout["id"]})
@@ -102,18 +104,37 @@ class WorkflowStudioAndDeletionTest(unittest.TestCase):
         run = workflow_tasks.prepare(self.db, self.project_id, "目标", "idemp_test")
         run_id = run["id"]
 
-        # Verify run exists
+        # Verify run exists and ensure execution chats exist
         self.assertIsNotNone(workflow_execution.detail(self.db, run_id))
+        execution_conversations.ensure_project(self.db, self.project_id)
+        node_task_ids = [
+            r[0]
+            for r in self.db.db.execute("SELECT id FROM project_tasks WHERE workflow_run_id=?", (run_id,)).fetchall()
+        ]
+        exec_chat_ids = [f"execution-{run_id}"] + [f"execution-{tid}" for tid in node_task_ids]
+        self.assertIsNotNone(self.db.chat(f"execution-{run_id}"))
 
         # Delete run
         res = workflow_execution.route("POST", "/api/workflow/execution/delete", {"id": run_id, "project_id": self.project_id}, {}, self.db)
         self.assertTrue(res.get("deleted"))
 
-        # Verify run deleted
+        # Verify run, execution chats, and hidden markers deleted
         with self.assertRaises(ValueError):
             workflow_execution.detail(self.db, run_id)
         task_count = self.db.db.execute("SELECT COUNT(*) FROM project_tasks WHERE workflow_run_id=?", (run_id,)).fetchone()[0]
         self.assertEqual(task_count, 0)
+        for cid in exec_chat_ids:
+            with self.assertRaises(KeyError):
+                self.db.chat(cid)
+        hist = conversation_history.route("GET", "/api/conversation-history", {}, {"project_id": [self.project_id]}, self.db)
+        self.assertFalse(any(c["id"] in exec_chat_ids for c in hist["conversations"]))
+
+        # Verify active running workflow cannot be deleted
+        run2 = workflow_tasks.prepare(self.db, self.project_id, "运行中目标", "idemp_running")
+        self.db.db.execute("UPDATE workflow_runs SET status='running' WHERE id=?", (run2["id"],))
+        self.db.db.commit()
+        with self.assertRaises(ValueError):
+            workflow_execution.route("POST", "/api/workflow/execution/delete", {"id": run2["id"], "project_id": self.project_id}, {}, self.db)
 
 
 if __name__ == '__main__':

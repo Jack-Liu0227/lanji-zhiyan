@@ -239,8 +239,10 @@ def start_installer(installer: Path, *, install_dir: Path | None = None,
     if not create_shortcut:
         args.append("--no-shortcut")
     try:
-        subprocess.Popen(args, cwd=str(installer.parent),
-                         close_fds=True, creationflags=creationflags,
-                         start_new_session=True)
+        with (installer.parent / "installer.log").open("ab") as log:
+            subprocess.Popen(args, cwd=str(installer.parent),
+                             stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                             close_fds=True, creationflags=creationflags,
+                             start_new_session=True)
     except OSError as exc:
         raise UpdateError("无法启动安装程序：%s" % exc) from exc

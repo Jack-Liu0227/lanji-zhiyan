@@ -54,7 +54,7 @@ def record(profile, messages, tools, duration_ms, usage, status, attempt, first_
     if not path or path==':memory:' or not Path(path).is_file():return
     exact=usage.get('exact',False)
     sizes = context_sizes(messages, tools)
-    for key in ('memory_chars', 'profile_chars'):
+    for key in ('memory_chars', 'profile_chars', 'context_budget'):
         if key in context:
             sizes[key] = context[key]
     if context.get('source'):

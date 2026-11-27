@@ -24,6 +24,9 @@ import workflow_layout
 import workflow_node_workbench
 import workflow_search
 import workflow_stages
+import workflow_file_preview
+import workflow_export_revision
+import node_output_editors
 from tests._pdf_fixture import write_text_pdf
 
 
@@ -168,6 +171,21 @@ class ProjectArtifactTest(unittest.TestCase):
             "reply": "Saved", "output_snapshot": output,
         })
         self.assertEqual(done["status"], "awaiting_review", done["latest_run"]["error"])
+
+    def test_evidence_lookup_returns_more_than_twelve_records_without_repeated_calls(self):
+        source = write_text_pdf(Path(self.db.base_dir(self.project)) / "source.pdf", [
+            "Cells were tested at 4.2 V after cycling."])
+        paper_id = self.db.ingest_pdf(self.project, source)["id"]
+        records = [self.db.add_evidence(paper_id, {
+            "page_no": 1, "field": "voltage-" + str(index), "value": "4.2 V",
+            "excerpt": "Cells were tested at 4.2 V after cycling."}) for index in range(15)]
+        ids = [item["id"] for item in records]
+        results = research_reading.evidence(self.db, self.project, ids + [ids[0]])
+        self.assertEqual([item["id"] for item in results], ids)
+        self.assertTrue(all(item["paper_id"] == paper_id and item["page_no"] == 1 for item in results))
+        other = self.db.create_task("Other project", base_dir=str(Path(self.tmp.name) / "other"))
+        with self.assertRaisesRegex(ValueError, "证据不属于"):
+            research_reading.evidence(self.db, other, ids)
 
     def test_registered_attempt_evidence_is_added_to_matching_csv_comparability_cell(self):
         source = write_text_pdf(Path(self.db.base_dir(self.project)) / "source.pdf", [
@@ -464,6 +482,64 @@ class ProjectArtifactTest(unittest.TestCase):
         synthesis = next(context for node, context in called if node == "j1_synthesis")
         self.assertIn("4.2 V", synthesis)
         self.assertIn("Grounded result", synthesis)
+
+    def test_large_markdown_review_output_is_readable_for_revision(self):
+        root = Path(self.db.base_dir(self.project))
+        path = root / "large-review.md"
+        content = "Review section. " * 180000 + "LARGE_REVIEW_TAIL"
+        path.write_text(content, encoding="utf-8")
+        project_bindings.set_workflow_review_mode(self.db, "human_review")
+        task, run = self.queue(review_required=True,
+            output_contract={"required_files": [path.name]})
+        digest = project_tasks._hash(path)
+        project_tasks.complete(self.db, run["id"], {"output_snapshot": {
+            "content": content, "files": [{"path": str(path), "relative": path.name,
+                "name": path.name, "content_hash": digest}]}})
+        current = project_task_review.read(self.db, task["id"], self.project, 0)
+        self.assertEqual(current["text"], content)
+        revised = content + "\nREVISED_TAIL_MUST_SURVIVE"
+        project_task_review.revise(self.db, task["id"], {
+            "reviewed_run_id": current["run_id"], "expected_version": current["task_version"],
+            "expected_hash": current["content_hash"], "output_index": 0, "text": revised,
+        }, authority=project_tasks.CommandContext.ui(self.project))
+        saved = project_task_review.read(self.db, task["id"], self.project, 0)
+        self.assertEqual(saved["text"], revised)
+        self.assertNotEqual(saved["content_hash"], digest)
+        self.assertEqual(path.read_text(encoding="utf-8"), content)
+
+    def test_large_markdown_and_csv_previews_preserve_content_and_row_pagination(self):
+        root = Path(self.db.base_dir(self.project))
+        markdown = "# Source\n" + "verified text\n" * 220000
+        markdown_path = root / "large-preview.md"
+        markdown_path.write_bytes(markdown.encode("utf-8"))
+        preview = workflow_file_preview._markdown(markdown_path.name,
+            workflow_file_preview._read_file(markdown_path), 0, 100, {"kind": "project"})
+        self.assertEqual(preview["text"], markdown)
+
+        csv_text = "id,value\n" + "x,0123456789abcdef\n" * 600000
+        csv_path = root / "large-preview.csv"
+        csv_path.write_bytes(csv_text.encode("utf-8"))
+        table = workflow_file_preview._csv(csv_path.name,
+            workflow_file_preview._read_file(csv_path), 1, 3, {"kind": "project"})
+        self.assertEqual(table["columns"], ["id", "value"])
+        self.assertEqual(table["offset"], 1)
+        self.assertEqual(table["limit"], 3)
+        self.assertEqual(table["total_rows"], 600000)
+        self.assertEqual(len(table["rows"]), 3)
+        self.assertTrue(table["truncated"])
+
+    def test_structured_review_editor_accepts_content_over_old_byte_limits(self):
+        text = "reviewed conclusion " * 500000
+        self.assertGreater(len(text.encode("utf-8")), 8 * 1024 * 1024)
+        self.assertEqual(node_output_editors.parse_content("review", text, "old"), text)
+
+    def test_export_revision_accepts_large_markdown_and_validates_format(self):
+        markdown = "# Review\n" + "source-grounded discussion\n" * 180000
+        self.assertGreater(len(markdown.encode("utf-8")), 2 * 1024 * 1024)
+        self.assertEqual(workflow_export_revision.editable_source({"markdown": markdown, "format": "md"}),
+                         {"markdown": markdown, "format": "md"})
+        with self.assertRaisesRegex(ValueError, "格式"):
+            workflow_export_revision.editable_source({"markdown": markdown, "format": "exe"})
 
     def test_html_link_and_http_forbidden_use_available_pdf_without_temp_leaks(self):
         folder = Path(self.tmp.name) / "downloads"

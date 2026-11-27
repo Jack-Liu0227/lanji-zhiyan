@@ -79,3 +79,78 @@ class ConversationHistoryTest(unittest.TestCase):
         self.assertNotEqual(self.db.team(retained['id'])['status'], 'dissolved')
         history.command(self.db, 'chat', self.cid, 'purge')
         self.assertEqual(self.db.team(temporary['id'])['status'], 'dissolved')
+
+    def test_purge_cleans_agent_runs_dissolve_hides_tasks_and_task_delete_syncs_chat(self):
+        import execution_board
+        import execution_conversations
+        import project_bindings
+        import project_tasks
+        import task_management
+
+        temp_chat = self.db.create_chat('Temp team owner')
+        self.db.bind_chat(temp_chat, self.pid)
+        temp_team = workflow._tool_impl(
+            'team_create',
+            self.db,
+            self.pid,
+            {'project': self.pid, 'name': 'Temp squad', 'assistant_ids': ['builtin-searcher']},
+            origin_chat_id=temp_chat,
+        )['team']
+        temp_binding = next(
+            item for item in project_bindings.list_bindings(self.db, self.pid)
+            if item['target_id'] == temp_team['id']
+        )
+        team_task = project_tasks.create(
+            self.db,
+            {
+                'project_id': self.pid,
+                'title': 'Team task to hide',
+                'goal': 'Complete team step',
+                'executor_binding_id': temp_binding['id'],
+            },
+            authority=project_tasks.CommandContext.system(self.pid),
+        )
+        team_chat_id = execution_conversations.ensure(self.db, 'task', team_task['id'])
+
+        history.command(self.db, 'chat', temp_chat, 'trash')
+        self.assertEqual(project_tasks.get(self.db, team_task['id'])['status'], 'cancelled')
+        self.assertTrue(self.db.chat(team_chat_id)['deleted_at'])
+        self.assertNotIn(team_task['id'], [t['id'] for t in project_tasks.list_tasks(self.db, self.pid)])
+        board = execution_board.snapshot(self.db, self.pid)
+        self.assertNotIn(team_task['id'], [item['id'] for item in board['items'] if item['kind'] == 'task'])
+
+        # Standalone chat agent_run / task_attempts / run_events / background_jobs cleanup on purge
+        solo_cid = self.db.create_chat('Solo purge target')
+        solo_run = RunManager.get_instance().create_run(solo_cid, 'solo-' + solo_cid, self.db)
+        solo_run.emit({'type': 'done', 'content': 'Solo finished'}, self.db)
+
+        history.command(self.db, 'chat', solo_cid, 'trash')
+        history.command(self.db, 'chat', solo_cid, 'purge')
+        self.assertEqual(self.db.db.execute("SELECT COUNT(*) FROM tasks WHERE id=?", (solo_run.run_id,)).fetchone()[0], 0)
+        self.assertEqual(self.db.db.execute("SELECT COUNT(*) FROM task_attempts WHERE task_id=?", (solo_run.run_id,)).fetchone()[0], 0)
+        self.assertEqual(self.db.db.execute("SELECT COUNT(*) FROM run_events WHERE run_id=?", (solo_run.run_id,)).fetchone()[0], 0)
+        self.assertEqual(self.db.db.execute("SELECT COUNT(*) FROM background_jobs WHERE id=?", (solo_run.run_id,)).fetchone()[0], 0)
+
+        # task_management delete/restore syncs execution-<task_id> chat deleted_at & hidden row
+        standalone_task = project_tasks.create(
+            self.db,
+            {
+                'project_id': self.pid,
+                'title': 'Standalone task delete sync',
+                'goal': 'Test sync',
+                'executor_binding_id': 'global:assistant:builtin-searcher',
+            },
+            authority=project_tasks.CommandContext.ui(self.pid),
+        )
+        standalone_chat_id = execution_conversations.ensure(self.db, 'task', standalone_task['id'])
+        task_management.command(self.db, self.pid, standalone_task['id'], 'delete', {})
+        self.assertTrue(self.db.chat(standalone_chat_id)['deleted_at'])
+        task_management.command(self.db, self.pid, standalone_task['id'], 'restore', {})
+        self.assertEqual(self.db.chat(standalone_chat_id)['deleted_at'], '')
+        self.assertEqual(
+            self.db.db.execute(
+                "SELECT COUNT(*) FROM execution_board_hidden WHERE project_id=? AND item_kind='task' AND item_id=?",
+                (self.pid, standalone_task['id']),
+            ).fetchone()[0],
+            0,
+        )

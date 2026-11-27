@@ -190,7 +190,7 @@ def _output(db, task, index):
     path = Path(item['path']).resolve()
     if not path.is_relative_to(tasks._root(db, task['project_id'])) or not path.is_file():
         raise ValueError('产物已不存在或超出项目范围')
-    if path.suffix.lower() not in TEXT or path.stat().st_size > 2 * 1024 * 1024:
+    if path.suffix.lower() not in TEXT:
         raise ValueError('此产物不支持文本修订，请使用对应研究工具编辑')
     if not can_edit_file(task, item):
         raise ValueError('此阶段包含结构化产物，请使用节点结构化编辑器')
@@ -215,8 +215,8 @@ def revise(db, task_id, body, *, authority):
         if body.get('expected_hash') != old_hash:
             raise ValueError('产物已被修改，请重新载入后再保存')
         text = body.get('text')
-        if not isinstance(text, str) or not text.strip() or len(text.encode('utf-8')) > 2 * 1024 * 1024:
-            raise ValueError('修订内容不能为空且不能超过2MB')
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError('修订内容不能为空')
         revision = int(run['checkpoint'].get('output_revision', 0)) + 1
         output = json.loads(tasks._json(run['output_snapshot']))
         checkpoint = dict(run['checkpoint'])
@@ -225,7 +225,7 @@ def revise(db, task_id, body, *, authority):
         for file_index, file in enumerate(output['files']):
             candidate = Path(file['path'])
             same = file.get('content_hash', file.get('sha256')) == old_hash
-            if not same and candidate.suffix.lower() in TEXT and candidate.is_file() and candidate.stat().st_size <= 2 * 1024 * 1024:
+            if not same and candidate.suffix.lower() in TEXT and candidate.is_file():
                 try:
                     same = candidate.read_text(encoding='utf-8') == old_text
                 except UnicodeError:

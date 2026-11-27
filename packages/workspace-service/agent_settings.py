@@ -448,8 +448,10 @@ def route(method, path, body, query, db):
     action = path.rsplit("/", 1)[-1]
     if method == "GET" and action == "state":
         import model_health
+        import model_context
         health_map = model_health.list_states(db)
-        models = [{**public(m), "health": health_map.get(m["id"], model_health.get(db, m["id"]))} for m in db.models()]
+        models = [{**public(m), "context": model_context.describe(db, m),
+                   "health": health_map.get(m["id"], model_health.get(db, m["id"]))} for m in db.models()]
         return {"providers": [public(p) for p in db.providers()], "models": models,
                 "health": health_map, "routing": model_health.routing_policy(db),
                 "catalog": [{"id": k, "name": c["name"], "base_url": c.get("base_url", ""), "api": c.get("wire", "openai-completions"), "supported": c.get("wire") in workflow.USABLE_WIRES,
@@ -496,6 +498,12 @@ def route(method, path, body, query, db):
         mid = str(b.get("id") or "")
         result = model_checks.generate(db.model(mid), str(b.get("capability") or "text"), db=db)
         return {**result, "health": model_health.get(db, mid)}
+    if action == "model-context" and method in ("GET", "POST"):
+        import model_context
+        profile = db.model(str(b.get("id") or q("id")))
+        context = (model_context.save_overrides(db, profile, b) if method == "POST"
+                   else model_context.describe(db, profile))
+        return {"context": context}
     if method == "POST" and action == "model-batch-test":
         import model_health
         ids = b.get("ids")

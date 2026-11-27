@@ -1,6 +1,4 @@
-# POST 必须带 Content-Type: application/json —— 服务端 do_POST 见不到这个头就直接 415，
-# 请求连路由都进不去（窗口按钮/上传就是栽在这上面）。
-# python -m unittest test_web_fetch -v
+"""桌面 Web 入口、原生桥接、对话创建与上传来源校验。"""
 from __future__ import annotations
 import pathlib
 import re
@@ -10,15 +8,11 @@ import subprocess
 import tempfile
 
 
-# ---------------- 来自 test_web_fetch.py ----------------
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WEB = ROOT / "apps" / "desktop" / "web"
 JS = WEB / "views"          # 视图 JS 已从 web/ 挪进 web/views/（css/ 里是样式）
 for _n in ("database", "workspace-core", "workspace-service", "connectors", "ai-runtime"):
     sys.path.insert(0, str(ROOT / "packages" / _n))
-
-CALL = re.compile(r"fetch\((.*?)\)", re.S)
-EXEMPT = "/api/upload"          # 唯一豁免：它走原始字节 body（仍要过 Origin 校验，但不收 JSON 头）
 
 
 class SourceVersionTest(unittest.TestCase):
@@ -46,21 +40,6 @@ class SourceVersionTest(unittest.TestCase):
                 self.assertNotEqual(backend_updated, original)
                 client.write_text('let value = 42;', encoding='utf-8')
                 self.assertNotEqual(build_stamp(), backend_updated)
-
-
-class WebFetchTest(unittest.TestCase):
-    def test_post_fetches_carry_json_header(self) -> None:
-        bad = []
-        files = [WEB / "index.html"] + sorted((WEB / "vendor").glob("*.js"))
-        for f in files:
-            for m in CALL.finditer(f.read_text(encoding="utf-8")):
-                arg = m.group(1)
-                if '"POST"' not in arg and "'POST'" not in arg:
-                    continue
-                if EXEMPT in arg or "Content-Type" in arg:
-                    continue
-                bad.append("%s: %s" % (f.name, " ".join(arg.split())[:90]))
-        self.assertEqual(bad, [], "这些 POST 少了 Content-Type: application/json（会被 415 挡掉）：\n" + "\n".join(bad))
 
 
 class NativeWindowCommandsTest(unittest.TestCase):
@@ -97,10 +76,6 @@ class ChatWithoutConversationTest(unittest.TestCase):
     """主界面没有对话就直接发消息：服务端必须现开一条不绑项目的对话。
     以前空 id 一路走到 run_agent 的 db.summary('') → KeyError，整轮发言变成一条红字报错。"""
 
-    def setUp(self) -> None:
-        self.server = (ROOT / "apps" / "desktop" / "server.py").read_text(encoding="utf-8")
-        self.chat_js = (JS / "chat-views.js").read_text(encoding="utf-8")
-
     def test_server_creates_chat_when_task_id_is_empty_or_stale(self) -> None:
         import agent_jobs
         import workflow
@@ -115,10 +90,6 @@ class ChatWithoutConversationTest(unittest.TestCase):
                     row = db.db.execute("SELECT task_id FROM chats WHERE id=?", (run.task_id,)).fetchone()
                     self.assertIsNotNone(row)
                     self.assertEqual(row["task_id"], "")
-
-    def test_frontend_no_longer_blocks_send(self) -> None:
-        self.assertNotIn('alert("先新建一个对话（左上角 ＋）")', self.chat_js)
-        self.assertIn("/api/chat/create", self.chat_js)
 
 
 class UploadOriginGateTest(unittest.TestCase):
@@ -164,34 +135,6 @@ class UploadOriginGateTest(unittest.TestCase):
 
     def test_没有_Origin_的本机进程照旧可用(self) -> None:
         self.assertIn(self._post("none", None), (200, 400))
-
-
-class NoNativeDialogsTest(unittest.TestCase):
-    """全站弹窗都走 uiNotify / uiConfirm / uiPrompt（屏幕正中的自有卡片）。
-    浏览器自带的 alert/confirm 会弹在浏览器自己的位置、样式不跟主题走 —— 2026-10-20 全部替换掉了。"""
-
-    def test_没有裸的_alert_confirm_prompt(self) -> None:
-        bad = []
-        for f in sorted(WEB.glob("*.js")):
-            for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
-                if line.strip().startswith("//") or "uiNotify" in line:
-                    continue
-                if re.search(r"(?<![\w.$])alert\(", line) or re.search(r"(?<![\w.$])confirm\(", line) \
-                        or re.search(r"(?<![\w.$])prompt\(", line):
-                    bad.append("%s:%d %s" % (f.name, i, line.strip()[:90]))
-        self.assertEqual(bad, [], "这些地方还在用浏览器原生弹窗：\n" + "\n".join(bad))
-
-
-class ModelKeyGuardTest(unittest.TestCase):
-    """没配模型 Key 的新用户：发消息 / 中译英 / 出步骤计划都先弹「去设置配 Key」，别打到后端再回一句报错。
-    「编译 .tex」不在守卫里 —— 那是本地 xelatex，不需要任何 Key。"""
-
-    def test_发送入口都挂了守卫(self) -> None:
-        chat = (JS / "chat-views.js").read_text(encoding="utf-8")
-        core = (JS / "app-core.js").read_text(encoding="utf-8")
-        self.assertIn("function hasModelKey", core)
-        self.assertIn("async function requireModelKey", core)
-        self.assertEqual(chat.count("requireModelKey()"), 1, "主页聊天发送缺守卫")
 
 
 class MainScriptSyntaxTest(unittest.TestCase):

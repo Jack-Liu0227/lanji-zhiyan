@@ -222,11 +222,60 @@ def public_view(task):
             'children': [public_view(child) for child in task.get('children', [])]}
 
 
+def _has_execution_tables(db):
+    conn = db.db if hasattr(db, "db") else db
+    return conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('execution_conversations','execution_board_events')"
+    ).fetchone()[0] == 2
+
+
+def active_task_clause(db, alias="project_tasks"):
+    """SQL predicate excluding soft-deleted tasks and tasks whose execution chat is trashed, archived, or purged."""
+    deleted = f"COALESCE(json_extract({alias}.metadata,'$.deleted_at'),'')=''"
+    if not _has_execution_tables(db):
+        return deleted
+    return (
+        f"{deleted} AND NOT ("
+        f"COALESCE({alias}.workflow_run_id,'')='' AND EXISTS ("
+        f"SELECT 1 FROM execution_conversations x "
+        f"LEFT JOIN chats c ON c.id=x.chat_id "
+        f"WHERE x.kind='task' AND x.entity_id={alias}.id "
+        f"AND ((c.id IS NOT NULL AND (c.deleted_at<>'' OR c.archived_at<>'')) "
+        f"OR (c.id IS NULL AND EXISTS ("
+        f"SELECT 1 FROM execution_board_events ev "
+        f"WHERE ev.project_id={alias}.project_id AND ev.task_id=x.chat_id AND ev.kind='conversation_purge'"
+        f")))))"
+    )
+
+
+def ensure_chat_active(db, task):
+    if task.get("metadata", {}).get("deleted_at"):
+        raise ValueError("任务已删除，请先恢复任务记录")
+    if task.get("workflow_run_id") or not _has_execution_tables(db):
+        return
+    row = db.db.execute(
+        "SELECT x.chat_id, c.id AS existing_chat, c.deleted_at, c.archived_at "
+        "FROM execution_conversations x LEFT JOIN chats c ON c.id=x.chat_id "
+        "WHERE x.kind='task' AND x.entity_id=?",
+        (task["id"],),
+    ).fetchone()
+    if not row:
+        return
+    if row["existing_chat"]:
+        if row["deleted_at"] or row["archived_at"]:
+            raise ValueError("关联任务对话已归档或删除，请先恢复后再执行")
+    elif db.db.execute(
+        "SELECT 1 FROM execution_board_events WHERE project_id=? AND task_id=? AND kind='conversation_purge' LIMIT 1",
+        (task["project_id"], row["chat_id"]),
+    ).fetchone():
+        raise ValueError("关联任务对话已永久删除，无法继续执行")
+
+
 def list_tasks(db, project_id, *, workflow_run_id="", parent_task_id="", state=""):
     _project(db, project_id)
     sql, args = "SELECT id FROM project_tasks WHERE project_id=?", [project_id]
     if not workflow_run_id:
-        sql += " AND COALESCE(json_extract(metadata,'$.deleted_at'),'')=''"
+        sql += " AND " + active_task_clause(db, "project_tasks")
     for field, value in (("workflow_run_id", workflow_run_id), ("parent_task_id", parent_task_id), ("status", state)):
         if value:
             sql += " AND " + field + "=?"
@@ -816,8 +865,7 @@ def switch_model(db, task_id, model_id="", *, authority, reasoning="", model_pol
 def start(db, task_id, *, authority, request_key="", autonomy_mode=None, restart=False, manual_submission=False, allow_model_switch=False, model_id=""):
     import project_bindings
     task = _task(db, task_id)
-    if task['metadata'].get('deleted_at'):
-        raise ValueError('任务已删除，请先恢复任务记录')
+    ensure_chat_active(db, task)
     _authority(authority, task["project_id"])
     model_id = str(model_id or "").strip()
     if model_id:
@@ -1107,6 +1155,9 @@ def _validate_versions(db, task, run, *, outputs=True):
 
 
 def _decision(db, task, run, *, approved, source, actor_id, feedback, request_key):
+    if approved:
+        import project_task_execution
+        project_task_execution.validate_candidate_contract(db, task, run)
     decision_id = _id("ptd-")
     policy = _effective_policy(task, run)
     db.db.execute("INSERT INTO project_task_deliveries VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (
@@ -1146,7 +1197,8 @@ def complete(db, run_id, result):
         _event(db, task["id"], "waiting_children" if waiting else "output_ready", {}, run_id)
         evidence_hold = checkpoint.get("claim_audit", {}).get("requires_review", False)
         manual_exec = bool(task.get("scope", {}).get("manual_execution") or task.get("metadata", {}).get("node_config", {}).get("manual_execution"))
-        auto_review = policy.get("workflow_review_mode") == "auto" and not manual_exec
+        auto_review = (policy.get("workflow_review_mode") == "auto" and not manual_exec
+                       and not manual_review_required(task, candidate))
         if not waiting and (auto_review or (not evidence_hold and not manual_review_required(task, candidate) and (not task["review_required"] or policy["autonomy_mode"] == "full_access"))):
             feedback = "自动审查模式：存在证据核查提醒，已自动通过" if (auto_review and evidence_hold) else ""
             _decision(db, task, candidate, approved=True, source="policy", actor_id="", feedback=feedback, request_key="policy:" + run_id)
@@ -1161,7 +1213,7 @@ def review(db, task_id, *, approved, feedback="", authority, request_key="", rev
     _authority(authority, task["project_id"], human=True)
     if not isinstance(approved, bool):
         raise ValueError("请明确选择通过或退回")
-    feedback = str(feedback).strip()[:20000]
+    feedback = str(feedback).strip()
     if not approved and not feedback:
         raise ValueError("退回时请填写修改意见")
     run = get_run(db, task["latest_run_id"]) if task["latest_run_id"] else None
@@ -1359,7 +1411,8 @@ def set_review_mode(db, task_id, review_mode, *, authority):
         _event(db, task_id, "policy_changed", {"workflow_review_mode": review_mode, "actor_id": authority.actor_id}, task["latest_run_id"])
     task = _task(db, task_id)
     manual_exec = bool(task.get("scope", {}).get("manual_execution") or task.get("metadata", {}).get("node_config", {}).get("manual_execution"))
-    if task["status"] == "awaiting_review" and review_mode == "auto" and not manual_exec and task["latest_run_id"]:
+    if (task["status"] == "awaiting_review" and review_mode == "auto" and not manual_exec
+            and task["latest_run_id"] and not manual_review_required(task, get_run(db, task["latest_run_id"]))):
         run = get_run(db, task["latest_run_id"])
         _validate_versions(db, task, run)
         evidence_hold = (run.get("checkpoint") or {}).get("claim_audit", {}).get("requires_review", False)

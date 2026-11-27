@@ -33,13 +33,16 @@ class AssistantTest(unittest.TestCase):
     def test_01_builtin_seeded_and_idempotent(self):
         a = self.db.assistants()
         N = len(workflow.BUILTIN_ASSISTANTS)
-        self.assertGreaterEqual(N, 20)                                # 装了就有 ≥20 个可用专家
+        self.assertEqual(N, 16)
         self.assertEqual(len(a), N)
         self.assertTrue(all(x["source"] == "builtin" for x in a))
+        ids = {x["id"] for x in a}
         names = [x["name"] for x in a]
         self.assertIn("文献检索员", names)
-        self.assertIn("Pony 模式", names)
-        self.assertTrue([x for x in a if x["name"] == "Pony 模式"][0]["rules"])   # pony 规则非空
+        for core_id in ("builtin-steward", "builtin-scheduler", "builtin-figure", "builtin-stats", "builtin-reviewer"):
+            self.assertIn(core_id, ids)
+        for retired_id in ("builtin-pony", "builtin-minutes", "builtin-tutor", "builtin-grant"):
+            self.assertNotIn(retired_id, ids)
         for b in workflow.BUILTIN_ASSISTANTS:                         # 名册自检：别漏键/漏规则
             self.assertTrue(b.get("rules", "").strip(), b["id"])
             self.assertTrue(b.get("description", "").strip(), b["id"])
@@ -48,6 +51,40 @@ class AssistantTest(unittest.TestCase):
         self.db.assistant_seed(workflow.BUILTIN_ASSISTANTS)          # 再播一次
         self.assertEqual(len(self.db.assistants()), N)                # 不重复
         self.assertTrue(all(json.loads(x["prompts"] or "[]") for x in a))   # 每个都有推荐问题
+
+    def test_01b_migration_prunes_unreferenced_retired_builtins_only(self):
+        import migrations
+        now = workflow.now()
+        for aid, name in (("builtin-pony", "Pony 模式"), ("builtin-minutes", "会议纪要")):
+            self.db.db.execute(
+                "INSERT INTO assistants (id,source,name,avatar,description,rules,prompts,model_id,enabled,sort_order,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (aid, "builtin", name, "", "desc", "rules", "[]", "", 1, 0, now, now),
+            )
+        cid = self.db.create_chat("Keep referenced builtin")
+        self.db.db.execute("UPDATE chats SET assistant_id='builtin-minutes' WHERE id=?", (cid,))
+        self.db.db.execute("DELETE FROM schema_patch_runs WHERE name='prune_legacy_builtin_assistants'")
+        self.db.db.commit()
+
+        applied = migrations.run_migrations(self.db.db)
+        self.assertEqual(applied, ["prune_legacy_builtin_assistants"])
+        self.assertIsNone(self.db.assistant("builtin-pony"))
+        self.assertIsNotNone(self.db.assistant("builtin-minutes"))
+
+    def test_retired_builtin_with_user_edits_survives_named_upgrade(self):
+        import migrations
+        now = workflow.now()
+        self.db.db.execute(
+            "INSERT INTO assistants (id,source,name,avatar,description,rules,prompts,model_id,enabled,sort_order,created_at,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("builtin-pony", "builtin", "Pony", "", "desc", "rules", "[]", "", 1, 0, now, now),
+        )
+        self.db.db.commit()
+        self.db.assistant_save("builtin-pony", rules="Preserve my research instructions")
+        self.db.db.execute("DELETE FROM schema_patch_runs WHERE name='prune_legacy_builtin_assistants'")
+        self.db.db.commit()
+        self.assertEqual(migrations.run_migrations(self.db.db), ["prune_legacy_builtin_assistants"])
+        self.assertEqual(self.db.assistant("builtin-pony")["rules"], "Preserve my research instructions")
 
     def test_02_builtin_editable_but_undeletable(self):
         with self.assertRaises(ValueError):

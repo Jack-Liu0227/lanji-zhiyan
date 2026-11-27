@@ -10,11 +10,15 @@ import socket
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Callable
 import urllib.request
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packages" / "database"))
+
+import migrations
 from installer import APP, verify_payload
 
 
@@ -29,6 +33,9 @@ def isolated_env(home: Path) -> dict[str, str]:
 
 def smoke_app(directory: Path, home: Path, on_ready: Callable[[], None] | None = None) -> dict:
     verify_payload(directory)
+    entries = migrations.load_migrations(directory / "migrations", directory / "archive/migrations")
+    assert all(path.name == "migrations" for path in (directory / "archive").iterdir()), \
+        "Package includes local archives"
     home.mkdir(parents=True, exist_ok=True)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -67,14 +74,22 @@ def smoke_app(directory: Path, home: Path, on_ready: Callable[[], None] | None =
                     f"Server is serving a different application: {url}"
         with closing(sqlite3.connect(home / "data/research.sqlite3")) as db:
             versions = [r[0] for r in db.execute("SELECT version FROM schema_migrations ORDER BY version")]
-            expected = sorted(p.stem for p in (directory / "migrations").glob("*.sql"))
+            expected = sorted(entry.version for entry in entries if not entry.is_named)
             assert versions == expected, (versions, expected)
+            patches = []
+            for entry in entries:
+                if not entry.is_named:
+                    continue
+                row = db.execute("SELECT effective_signature FROM schema_patch_runs "
+                                 "WHERE name=? ORDER BY id DESC LIMIT 1", (entry.version,)).fetchone()
+                assert row and row[0] == entry.effective_signature, (entry.version, row)
+                patches.append(entry.version)
             for table in ("assets", "task_links", "team_tasks"):
                 db.execute(f"SELECT 1 FROM {table} LIMIT 1")
             assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         if on_ready is not None:
             on_ready()
-        return {"migrations": versions, "project_id": state["tasks"][0]["id"],
+        return {"migrations": versions, "patches": patches, "project_id": state["tasks"][0]["id"],
                 "http": "ok", "python_on_path": False}
     except Exception as exc:
         log = home / "data/cache/server-error.log"

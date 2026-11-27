@@ -212,7 +212,6 @@ async function mdImport(files){
     const targetFolder = (mdProj && mdProj.folder) || mdDashSelectedFolder || "笔记/文献精读笔记";
     let n = 0;
     for(const f of list.slice(0, 50)){
-      if(f.size > 5*1024*1024) continue;
       try{
         const content = (await f.text()).replace(/^\uFEFF/,"");
         const title = f.name.replace(/\.(?:md|markdown)$/i,"") || "导入笔记";
@@ -231,7 +230,6 @@ async function mdImport(files){
   }
   let n=0;
   for(const f of list.slice(0,50)){
-    if(f.size > 5*1024*1024) continue;
     try{
       const content=(await f.text()).replace(/^\uFEFF/,"");
       await mdNew(f.name.replace(/\.(?:md|markdown)$/i,"")||"导入笔记", content, true); n++;
@@ -1983,11 +1981,11 @@ function setPanel(){
         ${revOpt("auto", "无需人工干预审查", "节点产物校验通过后自动验收并推进后续节点，不再逐节点暂停（明确指定需人工上传的节点除外）。")}
       </div></div>
     <div class="card" style="margin-top:12px"><h3>上下文预算</h3>
-      <div class="hint">历史消息的字数上限。智研管家和项目对话优先保留近期消息，并按当前问题选取相关旧片段。实际 token 以「用量」页为准。</div>
+      <div class="hint">默认按当前模型的 Token 预算管理历史。可填写正整数设置个人偏好，0 表示自动；完整历史仍然保存。</div>
       <div class="ag-row" style="margin-top:8px">
-        <input class="control" id="ctxchars" type="number" min="2000" max="400000" step="1000"
-               value="${Number((S.sec||{}).history_chars) || 40000}" style="max-width:160px">
-        <span class="hint">字（2000–400000）</span>
+        <input class="control" id="ctxchars" type="number" min="0" step="1000"
+               value="${Number((S.sec||{}).history_chars) || 0}" style="max-width:160px">
+        <span class="hint">字，0 为自动</span>
         <button class="btn btn-primary" id="ctxsave">保存</button>
       </div></div>`;
   }
@@ -1997,13 +1995,14 @@ function setPanel(){
     const u = setUpdate || {};
     const status = u.loading ? "正在检查官方版本…" : (u.error || u.message || "点击“检查更新”获取最新版本");
     const available = !!u.available && !!u.supported && !u.installing;
-    const updateLabel = u.installing ? "正在启动安装…" : (u.available ? "下载并安装更新" : (u.error ? "暂不可用" : "已是最新版本"));
+    const updateLabel = u.installing ? "正在下载并准备安装…" : (u.available ? "下载并安装更新" : (u.error ? "暂不可用" : "已是最新版本"));
     const notes = u.notes ? `<div class="hint" style="white-space:pre-wrap;line-height:1.7;margin-top:12px">${esc(u.notes)}</div>` : "";
     return `<div class="card"><div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap">
       <div><p class="inst-label">APPLICATION</p><h3>版本与更新</h3><p class="hint">应用会从官方发布源检查并下载更新，无需打开 GitHub。</p></div>
       <button class="btn ghost" id="app-update-check" ${u.loading ? "disabled" : ""}>检查更新</button></div>
       <div class="ag-row" style="margin-top:16px;align-items:center;flex-wrap:wrap"><span>当前版本</span><strong>v${esc(u.current_version || "读取中")}</strong>${u.latest_version ? `<span class="hint">最新版本 v${esc(u.latest_version)}</span>` : ""}</div>
       <p class="hint" role="status" aria-live="polite" style="margin-top:10px">${esc(status)}</p>
+      ${u.installer_log ? `<p class="hint">若安装未完成，请查看更新日志：<code>${esc(u.installer_log)}</code></p>` : ""}
       ${u.published_at ? `<p class="hint">发布时间：${esc(fmtDate(u.published_at))}${u.asset_size ? ` · 安装包 ${esc(formatUpdateSize(u.asset_size))}` : ""}</p>` : ""}
       ${notes}
       <div style="display:flex;gap:8px;align-items:center;margin-top:16px;flex-wrap:wrap"><button class="btn btn-primary" id="app-update-install" ${available ? "" : "disabled"}>${updateLabel}</button>${!u.supported && u.current_version ? `<span class="hint">源码运行模式只能查看版本，不能自动安装。</span>` : ""}</div>
@@ -2055,8 +2054,8 @@ function renderSettings(m){
     });
     const cs = $("ctxsave");
     if(cs) cs.onclick = async () => {
-      const n = parseInt($("ctxchars").value, 10);
-      if(!(n >= 2000 && n <= 400000)) return uiNotify("范围是 2000–400000 字");
+      const n = Number($("ctxchars").value);
+      if(!Number.isSafeInteger(n) || n < 0) return uiNotify("请输入非负整数，0 表示自动");
       try {
         S.sec = await api("/api/security", { history_chars: n });
         uiNotify("上下文预算已保存：" + n + " 字");
@@ -2086,7 +2085,7 @@ function renderSettings(m){
       setUpdate = {...setUpdate, installing:true}; render();
       try {
         const result = await api("/api/app/update/install", {});
-        setUpdate = {...setUpdate, ...result, installing:false, message:result.message || "安装程序已启动，应用将自动重启"};
+        setUpdate = {...setUpdate, ...result, installing:false, message:result.message || "安装程序已启动，完成后应用将自动重启"};
         render();
       } catch(e) {
         setUpdate = {...setUpdate, installing:false, error:e.message}; render();

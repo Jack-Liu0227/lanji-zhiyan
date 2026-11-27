@@ -1,33 +1,65 @@
 @echo off
+setlocal
 chcp 65001 >nul
-cd /d "%~dp0.."
-rem 览籍智研 一条命令自检：Python 自检（含「主脚本必须过 node --check」）+ 前端主题配色 + 悬空 id + 工作流图 / 文件预览 / 分栏
-set PY=%LOCALAPPDATA%\Programs\Python\Python310\python.exe
-if not exist "%PY%" set PY=python
-if exist ".venv\Scripts\python.exe" set PY=.venv\Scripts\python.exe
-echo === 1/6 Python 自检（tests/）===
+cd /d "%~dp0.." || exit /b 1
+
+set "NO_PAUSE="
+if /i "%~1"=="--no-pause" set "NO_PAUSE=1"
+set "PY="
+if exist ".venv\Scripts\python.exe" call :select_python "%CD%\.venv\Scripts\python.exe"
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python310\python.exe" call :select_python "%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
+if not defined PY (
+  for /f "delims=" %%P in ('py -3 -c "import sys; print(sys.executable)" 2^>nul') do call :select_python "%%P"
+)
+if not defined PY (
+  for /f "delims=" %%P in ('where python 2^>nul') do if not defined PY call :select_python "%%P"
+)
+if not defined PY (
+  echo [ERROR] Python 3.10 or newer was not found.
+  goto :failed
+)
+
+echo === 1/7 Python checks ===
 "%PY%" -m unittest discover -s tests -t .
-if errorlevel 1 (echo. & echo [X] Python 自检没过 & pause & exit /b 1)
+if errorlevel 1 goto :failed
 echo.
-echo === 2/6 前端主题配色自检 ===
-node "apps\desktop\web\theme.test.mjs"
-if errorlevel 1 (echo. & echo [X] 主题自检没过 & pause & exit /b 1)
+echo === 2/7 Frontend theme checks ===
+node "tests\frontend\theme.test.mjs"
+if errorlevel 1 goto :failed
 echo.
-echo === 3/6 悬空 id 体检（顶层 $("x") 撞上不存在的 id 会让整页空壳）===
-node "apps\desktop\web\ids.test.mjs"
-if errorlevel 1 (echo. & echo [X] 有悬空 id 引用 & pause & exit /b 1)
+echo === 3/7 DOM id checks ===
+node "tests\frontend\ids.test.mjs"
+if errorlevel 1 goto :failed
 echo.
-echo === 4/6 工作流图自检 ===
-node "apps\desktop\web\workflow-graph.test.mjs"
-if errorlevel 1 (echo. & echo [X] 工作流图自检没过 & pause & exit /b 1)
+echo === 4/7 Workflow graph checks ===
+node "tests\frontend\workflow-graph.test.mjs"
+if errorlevel 1 goto :failed
 echo.
-echo === 5/6 工作流文件预览自检（只读、越界路径与大小上限）===
-node "apps\desktop\web\workflow-file-preview.test.mjs"
-if errorlevel 1 (echo. & echo [X] 文件预览自检没过 & pause & exit /b 1)
+echo === 5/7 Workflow file preview checks ===
+node "tests\frontend\workflow-file-preview.test.mjs"
+if errorlevel 1 goto :failed
 echo.
-echo === 6/6 分栏拖拽与宽度记忆自检 ===
-node "apps\desktop\web\split-resizer.test.mjs"
-if errorlevel 1 (echo. & echo [X] 分栏自检没过 & pause & exit /b 1)
+echo === 6/7 Split resizer checks ===
+node "tests\frontend\split-resizer.test.mjs"
+if errorlevel 1 goto :failed
 echo.
-echo [OK] 全绿。
-pause
+echo === 7/7 Markdown import checks ===
+node "tests\frontend\markdown-import.test.mjs"
+if errorlevel 1 goto :failed
+echo.
+echo [OK] All checks passed.
+set "CHECK_EXIT=0"
+goto :finish
+
+:select_python
+"%~1" -c "import sys; raise SystemExit(sys.version_info < (3, 10))" >nul 2>&1
+if not errorlevel 1 set "PY=%~1"
+exit /b 0
+
+:failed
+echo [ERROR] Checks failed. Review the output above.
+set "CHECK_EXIT=1"
+
+:finish
+if not defined NO_PAUSE pause
+exit /b %CHECK_EXIT%

@@ -1,8 +1,8 @@
 """Project-owned DAG revisions. Shared templates and running snapshots stay independent."""
 import hashlib
 import json
-from pathlib import Path
 
+import migrations
 import project_bindings
 import workflow_layout
 from workflow import now
@@ -12,7 +12,7 @@ def ensure(db):
     if getattr(db,'_project_workflows_initialized',False):return
     tables={row[0] for row in db.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('project_workflow_definitions','project_task_output_revisions')")}
     if len(tables)!=2:
-        db.db.executescript((Path(__file__).resolve().parents[2]/'migrations/020_project_workflow_nodes.sql').read_text(encoding='utf-8'))
+        db.db.executescript(migrations.read_migration_sql('020_project_workflow_nodes'))
     db._project_workflows_initialized=True
 
 

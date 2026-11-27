@@ -18,20 +18,20 @@ class MigrationCompatTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.all = sorted(migrations.DEFAULT_MIGRATIONS_DIR.glob("*.sql"), key=lambda p: p.name)
+        self.all = migrations.load_migrations()
 
     def stage(self, name, files):
         target = self.tmp / name
         target.mkdir()
         for f in files:
-            shutil.copy2(f, target / f.name)
+            (target / f.filename).write_bytes(f.raw_bytes)
         return target
 
     def seeded(self, tag):
         """跑到 023，然后装成「1.0 早期已经手工补过 channel 列」的老库。"""
         conn = sqlite3.connect(":memory:")
         self.addCleanup(conn.close)
-        early = [f for f in self.all if f.name < "024"]
+        early = [f for f in self.all if not f.is_named and f.filename < "024"]
         migrations.run_migrations(conn, self.stage(tag + "-early", early))
         conn.execute("ALTER TABLE chats ADD COLUMN channel TEXT NOT NULL DEFAULT 'conversation'")
         conn.commit()
@@ -40,7 +40,7 @@ class MigrationCompatTest(unittest.TestCase):
     def test_legacy_channel_column_does_not_stop_the_chain(self):
         conn = self.seeded("ok")
         applied = migrations.run_migrations(conn, self.stage("ok-full", self.all))
-        self.assertEqual(applied, [file.stem for file in self.all if file.name >= "024"])
+        self.assertEqual(applied, [file.version for file in self.all if file.is_named or file.filename >= "024"])
 
     def test_without_the_guard_the_chain_would_break(self):
         """反证：把守卫换成恒等函数，同一场景必须炸 —— 否则上面那条测试什么也没保住。"""

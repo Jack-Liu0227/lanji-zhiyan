@@ -10,11 +10,17 @@ output/
 *.db
 *.sqlite3
 
+# 所有归档统一放在根目录 archive/；只追踪运行必需的历史迁移包
+/archive/*
+!/archive/migrations/
+/archive/migrations/*
+!/archive/migrations/001-046.zip
+!/archive/migrations/manifest.json
+
 # 构建产物
 dist/
-build/*
-!build/icon.ico
-!build/extract_pe_icon.py
+/build/
+# 应用图标源文件在 tools/build/icon.ico，继续跟踪
 
 # 本地备份与缓存
 *.bak-*
@@ -50,3 +56,21 @@ htmlcov/
 Thumbs.db
 desktop.ini
 *.tmp
+
+# 本地扩展测试、诊断产物与个人工具
+/tests/local/
+/.artifacts/
+/tests/.artifacts/
+/tools/local/
+/tools/maintain-workflow-templates.py
+/tools/verify-workflow-monitoring.py
+*.sqlite
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal

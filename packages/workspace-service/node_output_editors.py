@@ -5,9 +5,6 @@ import json
 
 import project_tasks as tasks
 
-MAX_STRUCTURED_BYTES = 8 * 1024 * 1024
-
-
 def describe(snapshot, node):
     if node.get('node_kind') == 'tool':
         return 'tool'
@@ -23,8 +20,8 @@ def kind(node, content):
     return describe({'content': content}, node)
 
 
-def _text(value, label, *, required=True, limit=2 * 1024 * 1024):
-    if not isinstance(value, str) or len(value.encode('utf-8')) > limit or (required and not value.strip()):
+def _text(value, label, *, required=True):
+    if not isinstance(value, str) or (required and not value.strip()):
         raise ValueError(label + '必须是有效且非空的文本')
     return value
 
@@ -124,8 +121,6 @@ def parse_content(stage, content, baseline, *, keep_excluded=False):
         encoded = json.dumps(content, ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError) as exc:
         raise ValueError('产物必须是有效的 JSON 内容') from exc
-    if len(encoded.encode('utf-8')) > MAX_STRUCTURED_BYTES:
-        raise ValueError('结构化修订不能超过 8MB')
     content = json.loads(encoded)
     if stage == 'idea':
         if not isinstance(content, dict) or not isinstance(content.get('report'), dict):

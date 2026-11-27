@@ -179,6 +179,22 @@ class WorkflowExecutionTest(unittest.TestCase):
                 "goal": "Extract full-text evidence", "request_key": "missing-evidence-registration"})
         self.assertIsNone(engine.latest(self.db, self.pid))
 
+    def test_evidence_node_can_reuse_registered_evidence_within_its_allowlist(self):
+        names = ["paper_focus", "paper_excerpt", "paper_evidence_record", "paper_evidence_get", "workflow_context_read"]
+        task = {"project_id": self.pid, "workflow_run_id": "flow", "metadata": {},
+                "scope": {"tools": names}, "output_contract": {"requires_evidence": True}}
+        run = {"executor_snapshot": {"assistant_id": self.default_executor, "tools": None}}
+        specs, _ = project_task_execution._tools(self.db, task, run, {"tools": names})
+        visible = {item["function"]["name"] for item in specs}
+        self.assertIn("paper_evidence_get", visible)
+        self.assertIn("paper_excerpt", visible)
+        self.assertIn("paper_evidence_record", visible)
+        task["scope"]["tools"] = [name for name in names if name not in {"paper_evidence_get", "paper_excerpt"}]
+        restricted, _ = project_task_execution._tools(self.db, task, run, {"tools": names})
+        restricted_names = {item["function"]["name"] for item in restricted}
+        self.assertNotIn("paper_evidence_get", restricted_names)
+        self.assertNotIn("paper_excerpt", restricted_names)
+
     def test_execution_prepare_route_accepts_managed_artifact_setting(self):
         self.layout([{"step": "search", "review_required": False,
                       "output_contract": {"required_files": ["candidate_papers.csv"]}},
@@ -308,7 +324,7 @@ class WorkflowExecutionTest(unittest.TestCase):
             return workflow._tool_impl("format_convert", db, pid, {"format": "md", "name": "accepted"}, scope=stage)
 
         with patch.object(workflow, "run_agent", side_effect=execute), \
-             patch.object(workflow, "chat_json", return_value={"verdict": "小修", "scores": {}, "issues": []}) as review, \
+             patch.object(workflow, "chat_raw", return_value={"content": json.dumps({"verdict": "小修", "scores": {}, "issues": [], "missing_evidence": []})}) as review, \
              patch.object(workflow_converters, "en_translate", return_value={"text": english, "chunks": 1, "ms": 1}) as translate:
             run = engine.create(self.db, self.pid)
             run = engine.advance(self.db, run["id"])

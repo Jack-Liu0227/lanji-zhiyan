@@ -131,7 +131,7 @@ def index(db, project_id):
             if path.suffix.lower() not in TEXT | {'.pdf', '.docx', '.xlsx', '.png', '.jpg'}: continue
             existing = db.db.execute('SELECT * FROM assets WHERE canonical_uri=?', (str(path.resolve()),)).fetchone()
             metadata = json.loads(existing['metadata'] or '{}') if existing else {}
-            body = path.read_text(encoding='utf-8', errors='replace') if path.suffix.lower() in TEXT and path.stat().st_size <= project_notes.MAX_NOTE_BYTES else ''
+            body = path.read_text(encoding='utf-8', errors='replace') if path.suffix.lower() in TEXT else ''
             rel_parts = path.relative_to(root).parts
             inferred_kind = ('note' if '笔记' in rel_parts else 'manuscript' if '论文正文' in rel_parts else 'output' if any(p in ('最终产物', '阶段产物') for p in rel_parts) else 'document')
             file_kind = existing['kind'] if existing else inferred_kind
@@ -150,7 +150,6 @@ def read(db, project_id, asset_id):
     path = Path(asset['canonical_uri'])
     if asset['storage'] != 'file' or path.is_symlink() or not path.resolve().is_relative_to(root): raise PermissionError('请先将资料作为项目副本导入')
     if path.suffix.lower() not in TEXT: raise ValueError('该类型请使用 PDF 阅读或文件预览工具')
-    if path.stat().st_size > project_notes.MAX_NOTE_BYTES: raise ValueError('文本超过 5 MB')
     return {'asset_id': asset_id, 'path': path.relative_to(root).as_posix(), 'title': asset['title'],
             'content': path.read_text(encoding='utf-8'), 'content_hash': asset_service.sha256_file(path)}
 
@@ -160,7 +159,6 @@ def write(db, project_id, args):
     kind = str(args.get('kind') or 'note')
     if kind not in ('note', 'experiment', 'manuscript'): raise ValueError('可写类型为笔记、实验记录或论文稿件')
     content = str(args.get('content') or '')
-    if len(content.encode('utf-8')) > project_notes.MAX_NOTE_BYTES: raise ValueError('内容超过 5 MB')
     root = project_notes.project_root(db, project_id, writable=True)
     asset_id = str(args.get('asset_id') or '')
     asset = asset_service.get(db, asset_id) if asset_id else None

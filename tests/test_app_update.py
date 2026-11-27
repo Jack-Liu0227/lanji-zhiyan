@@ -117,6 +117,22 @@ class AppUpdateTest(unittest.TestCase):
             self.assertIn(str(Path(tmp) / "portable"), args)
             self.assertIn("--no-shortcut", args)
 
+    def test_installer_output_is_saved_in_an_appended_log(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            installer = Path(tmp) / "setup.exe"
+            installer.write_bytes(b"stub")
+            log = Path(tmp) / "installer.log"
+            log.write_bytes(b"previous attempt\n")
+
+            def launch(*_args, **kwargs):
+                self.assertEqual(kwargs["stdin"], app_update.subprocess.DEVNULL)
+                self.assertEqual(kwargs["stderr"], app_update.subprocess.STDOUT)
+                kwargs["stdout"].write(b"installation failed: file in use\n")
+
+            with patch.object(app_update.subprocess, "Popen", side_effect=launch):
+                app_update.start_installer(installer)
+            self.assertEqual(log.read_bytes(), b"previous attempt\ninstallation failed: file in use\n")
+
 
 if __name__ == "__main__":
     unittest.main()

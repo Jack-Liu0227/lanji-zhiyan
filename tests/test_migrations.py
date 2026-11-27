@@ -30,9 +30,13 @@ class MigrationsTest(unittest.TestCase):
 
         rows = self.conn.execute("SELECT version, checksum FROM schema_migrations ORDER BY version").fetchall()
         versions = [r[0] for r in rows]
-        expected = sorted(p.stem for p in migrations.DEFAULT_MIGRATIONS_DIR.glob("*.sql"))
+        entries = migrations.load_migrations()
+        expected = [entry.version for entry in entries if not entry.is_named]
         self.assertEqual(versions, expected)
-        self.assertEqual(applied, expected)
+        self.assertEqual(applied, [entry.version for entry in entries])
+        self.assertEqual(len(versions), 46)
+        self.assertEqual(self.conn.execute("SELECT name FROM schema_patch_runs").fetchall(),
+                         [("prune_legacy_builtin_assistants",)])
 
         tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         self.assertIn("research_tasks", tables)

@@ -30,7 +30,8 @@ def install_current_release():
                                    create_shortcut=app_dir == standard_dir.resolve())
         return {"current_version": info["current_version"], "latest_version": info["latest_version"],
                 "asset_name": info["asset_name"], "sha256": digest, "started": True,
-                "message": "安装程序已启动，应用将自动重启"}
+                "message": "安装程序已启动，完成后应用将自动重启",
+                "installer_log": str(installer.parent / "installer.log")}
     finally:
         _install_lock.release()
 

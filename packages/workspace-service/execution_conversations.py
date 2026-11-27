@@ -147,7 +147,12 @@ def ensure_project(db, project_id):
         SELECT e.kind, e.entity_id FROM executions e
         LEFT JOIN execution_conversations x ON x.kind=e.kind AND x.entity_id=e.entity_id
         LEFT JOIN chats c ON c.id=x.chat_id WHERE c.id IS NULL
-    """, (project_id, project_id)).fetchall()
+          AND NOT EXISTS (
+              SELECT 1 FROM execution_board_events ev
+              WHERE ev.project_id=? AND ev.task_id=COALESCE(x.chat_id, 'execution-' || e.entity_id)
+                AND ev.kind='conversation_purge'
+          )
+    """, (project_id, project_id, project_id)).fetchall()
     for row in missing:
         ensure(db, row['kind'], row['entity_id'])
 

@@ -157,8 +157,8 @@ def focus(db, project_id, question, paper_ids, keywords, limit=6):
 
 def evidence(db, project_id, ids):
     _project(db, project_id)
-    if not isinstance(ids, list) or not 1 <= len(ids) <= 12:
-        raise ValueError("请指定 1–12 个已登记的证据 ID")
+    if not isinstance(ids, list) or not ids or any(not isinstance(item, (str, int)) for item in ids):
+        raise ValueError("请提供一个或多个已登记的证据 ID")
     index = asset_service.eligibility_index(db, project_id)
     records = {row["id"]: dict(row) for row in db.evidence(project_id)}
     result = []

@@ -1807,9 +1807,9 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                         try:
                             chars = int(data.get("history_chars") or 0)
                         except (TypeError, ValueError):
-                            chars = 0
-                        if not 2000 <= chars <= 400_000:
-                            return self._json({"error": "上下文预算要在 2000–400000 字之间"}, 400)
+                            return self._json({"error": "历史预算必须是非负整数，0 表示自动"}, 400)
+                        if chars < 0:
+                            return self._json({"error": "历史预算必须是非负整数，0 表示自动"}, 400)
                         sec["history_chars"] = chars
                     kv_store.write(db, "security", sec)
                     sec["workflow_review_mode"] = "auto" if str(sec.get("workflow_review_mode") or "") == "auto" else "human_review"
@@ -1824,8 +1824,16 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                     b = data or {}
                     with WorkflowDB(DB_PATH) as db:
                         try:
-                            return self._json({"chat": db.bind_chat(b.get("id", ""), b.get("task_id", ""))})
-                        except ValueError as exc:
+                            cid = b.get("id", "")
+                            old_project = (db.chat(cid) or {}).get("task_id", "")
+                            chat = db.bind_chat(cid, b.get("task_id", ""))
+                            import execution_board
+                            with db.db:
+                                for pid in {old_project, chat.get("task_id", "")}:
+                                    if pid:
+                                        execution_board.publish(db, pid, "conversation_rebound", task_id=cid, source="conversation", activity="会话项目绑定已更新")
+                            return self._json({"chat": chat})
+                        except (ValueError, KeyError) as exc:
                             return self._json({"error": str(exc)}, 400)
                 if path == "/api/chat/rename":               # 对话改名（点标题原地改）
                     b = data or {}
@@ -2259,7 +2267,8 @@ def _build_stamp() -> str:
         return str((WEB / "index.html").stat().st_mtime_ns)
 
     source_files = [Path(__file__).resolve()]
-    for directory in (WEB, HERE / "handlers", ROOT / "packages", ROOT / "migrations"):
+    for directory in (WEB, HERE / "handlers", ROOT / "packages", ROOT / "migrations",
+                      ROOT / "archive" / "migrations"):
         source_files.extend(
             path for path in directory.rglob("*")
             if path.suffix != ".pyc" and path.is_file()

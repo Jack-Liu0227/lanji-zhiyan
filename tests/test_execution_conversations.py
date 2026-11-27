@@ -266,3 +266,72 @@ class ExecutionConversationsTest(unittest.TestCase):
         self.assertEqual(healed_task['title'], 'Step 2.1: P1 并行A')
         self.assertEqual(healed_task['metadata']['workflow_node']['step_no'], '2.1')
         self.assertTrue(healed_task['metadata']['workflow_node']['is_parallel'])
+
+    def test_execution_chat_lifecycle_syncs_task_queries_plans_and_hidden_rows(self):
+        import project_task_routes
+        import project_todos
+        import research_plans
+
+        plan = project_todos.add_todo(self.db, self.pid, 'Plan synced with task chat')
+        task = self.create(title='Synced task', goal='Draft synced evidence')
+        self.db.db.execute(
+            'INSERT INTO plan_task_links(plan_id,task_id,created_at) VALUES (?,?,datetime("now"))',
+            (plan['id'], task['id']),
+        )
+        self.db.db.commit()
+
+        chat_id = conversations.ensure(self.db, 'task', task['id'])
+        self.assertIn(task['id'], [t['id'] for t in tasks.list_tasks(self.db, self.pid)])
+        all_res = project_task_routes.route('GET', '/api/project-tasks/all', {}, {}, self.db)
+        self.assertIn(task['id'], [t['id'] for t in all_res['tasks']])
+        self.assertIn(task['id'], [t['id'] for t in research_plans.linked(self.db, plan['id'])])
+
+        conversation_history.command(self.db, 'chat', chat_id, 'trash')
+        self.assertNotIn(task['id'], [t['id'] for t in tasks.list_tasks(self.db, self.pid)])
+        all_after_trash = project_task_routes.route('GET', '/api/project-tasks/all', {}, {}, self.db)
+        self.assertNotIn(task['id'], [t['id'] for t in all_after_trash['tasks']])
+        self.assertEqual(research_plans.linked(self.db, plan['id']), [])
+        with self.assertRaises(ValueError):
+            tasks.start(self.db, task['id'], authority=tasks.CommandContext.ui(self.pid))
+
+        conversation_history.command(self.db, 'chat', chat_id, 'restore')
+        self.assertIn(task['id'], [t['id'] for t in tasks.list_tasks(self.db, self.pid)])
+
+        conversation_history.command(self.db, 'chat', chat_id, 'archive')
+        self.assertNotIn(task['id'], [t['id'] for t in tasks.list_tasks(self.db, self.pid)])
+        with self.assertRaises(ValueError):
+            tasks.start(self.db, task['id'], authority=tasks.CommandContext.ui(self.pid))
+
+        conversation_history.command(self.db, 'chat', chat_id, 'restore')
+        conversation_history.command(self.db, 'chat', chat_id, 'trash')
+        conversation_history.command(self.db, 'chat', chat_id, 'purge')
+        self.assertEqual(
+            self.db.db.execute(
+                'SELECT COUNT(*) FROM execution_board_hidden WHERE project_id=? AND item_kind=? AND item_id=?',
+                (self.pid, 'task', task['id']),
+            ).fetchone()[0],
+            0,
+        )
+        self.assertNotIn(task['id'], [t['id'] for t in tasks.list_tasks(self.db, self.pid)])
+        with self.assertRaises(ValueError):
+            tasks.start(self.db, task['id'], authority=tasks.CommandContext.ui(self.pid))
+
+    def test_bind_chat_rejects_execution_toolbox_and_active_runs(self):
+        task = self.create(title='Bound execution chat', goal='Should stay bound')
+        exec_chat_id = conversations.ensure(self.db, 'task', task['id'])
+        other_pid = self.db.create_task('Other project')
+        with self.assertRaises(ValueError):
+            self.db.bind_chat(exec_chat_id, other_pid)
+
+        toolbox_cid = self.db.create_chat('Toolbox session')
+        self.db.db.execute("UPDATE chats SET channel='toolbox' WHERE id=?", (toolbox_cid,))
+        self.db.db.commit()
+        with self.assertRaises(ValueError):
+            self.db.bind_chat(toolbox_cid, other_pid)
+
+        active_cid = self.db.create_chat('Running dialogue')
+        run = RunManager.get_instance().create_run(active_cid, 'bind-' + active_cid, self.db)
+        with self.assertRaises(ValueError):
+            self.db.bind_chat(active_cid, other_pid)
+        run.emit({'type': 'done', 'content': 'Finished'}, self.db)
+        self.assertEqual(self.db.bind_chat(active_cid, other_pid)['task_id'], other_pid)

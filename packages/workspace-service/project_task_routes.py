@@ -18,7 +18,7 @@ def route(method, path, body, query, db):
             raw=query.get(name,[default]);return raw[0] if isinstance(raw,list) else raw
         project=str(value('project_id'));status=str(value('status'));search=str(value('q')).strip()[:200]
         if project:workflow_layout._project(db,project)
-        where=['1=1'];params=[]
+        where=[tasks.active_task_clause(db,'t')];params=[]
         for field,item in [('t.project_id',project),('t.status',status)]:
             if item:where.append(field+'=?');params.append(item)
         if search:where.append('(t.title LIKE ? OR t.goal LIKE ?)');params.extend(['%'+search+'%']*2)

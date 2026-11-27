@@ -29,7 +29,7 @@ def _permit(db, actor_id, name):
         raise PermissionError('管家当前未启用工具：' + name)
 
 
-def _literature_contract(node):
+def _literature_contract(node, *, candidate_match=False):
     """Apply executable minimum checks to the conventional review artifacts."""
     contract = dict(node.get('output_contract') or {})
     files = [item.get('relative') or item.get('path') if isinstance(item, dict) else str(item)
@@ -54,6 +54,8 @@ def _literature_contract(node):
         path = names.get(basename)
         if path and rule:
             rules[path] = {**rules.get(path, {}), **rule}
+    if candidate_match and node.get('step') == 'review' and names.get('references.bib'):
+        rules[names['references.bib']].setdefault('require_candidate_match', True)
     if node.get('step') == 'search' and names.get('candidate_papers.csv'):
         contract.pop('requires_evidence', None)
     contract['file_rules'] = rules
@@ -229,7 +231,7 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
                 nodes = definition['nodes'] if definition else template['nodes']
                 configured = []
                 for node in nodes:
-                    node = _literature_contract(dict(node))
+                    node = _literature_contract(dict(node), candidate_match=graph_type == 'literature_study')
                     expert = next(expert for expert in result['experts'] if expert['role_id'] == node['executor_role_id'])
                     # Built-in templates carry an executor hint; custom LangGraph
                     # nodes can override it with execution_mode: assistant|team.

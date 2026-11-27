@@ -194,6 +194,23 @@ class ScheduleProjectTaskTest(unittest.TestCase):
             project_tasks.review(self.db, task["id"], approved=True, authority=project_tasks.CommandContext.ui(self.pid))
         self.assertEqual(self.db.md_notes(), [])
 
+    def test_schedule_runs_include_project_link_and_block_deleting_active_runs(self):
+        with patch.object(workflow, "run_agent", return_value={"reply": "Needs human check"}):
+            attempt = schedule.run_once({**self.sched, "review_required": True})
+        task = project_tasks.find_origin(self.db, "schedule_run", attempt["id"])
+        self.assertEqual(task["status"], "awaiting_review")
+
+        runs = [r for r in self.db.schedule_runs() if r["schedule_id"] == self.sched["id"]]
+        self.assertEqual(len(runs), 1)
+        self.assertEqual(runs[0]["project_id"], self.pid)
+        self.assertEqual(runs[0]["project_task_id"], task["id"])
+
+        with self.assertRaises(ValueError):
+            self.db.schedule_run_delete([attempt["id"]])
+
+        project_tasks.review(self.db, task["id"], approved=False, feedback="Reject to allow run deletion", authority=project_tasks.CommandContext.ui(self.pid))
+        self.assertEqual(self.db.schedule_run_delete([attempt["id"]]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

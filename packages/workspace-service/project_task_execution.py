@@ -103,7 +103,7 @@ def _accepted_upstream(db, project_id, dependencies):
             from project_artifacts import TEXT_SUFFIXES
             if path.suffix.lower() not in TEXT_SUFFIXES:
                 continue
-            if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
+            if not path.is_relative_to(root) or not path.is_file():
                 continue
             if tasks._hash(path) != item.get('content_hash', item.get('sha256')):
                 raise ValueError('Accepted upstream output changed; review the upstream node again')
@@ -138,6 +138,82 @@ def _requires_output(task, filename):
         if Path(relative).name.casefold() == filename.casefold():
             return True
     return False
+
+
+def _candidate_bib_paths(task):
+    return [relative for relative, rule in task['output_contract'].get('file_rules', {}).items()
+            if Path(relative).suffix.casefold() == '.bib' and rule.get('require_candidate_match') is True]
+
+
+def _frozen_candidate_csv(db, task, run):
+    """Find candidate text only in immutable approved prerequisite deliveries."""
+    root = tasks._root(db, task['project_id']).resolve()
+    pending = list(run['input_snapshot'].get('dependencies') or [])
+    visited = {}
+    sources = {}
+    while pending:
+        dependency = pending.pop()
+        identity = (dependency.get('task_id'), dependency.get('delivery_id'))
+        if identity in visited:
+            if dependency.get('outputs') != visited[identity]:
+                raise ValueError('Candidate prerequisite has conflicting frozen delivery versions')
+            continue
+        visited[identity] = dependency.get('outputs')
+        row = db.db.execute(
+            'SELECT d.*,t.project_id,t.workflow_run_id FROM project_task_deliveries d '
+            'JOIN project_tasks t ON t.id=d.task_id WHERE d.id=? AND d.task_id=?',
+            (identity[1], identity[0]),
+        ).fetchone()
+        if (not row or row['decision'] != 'approved' or row['project_id'] != task['project_id'] or
+                row['workflow_run_id'] != task.get('workflow_run_id')):
+            raise ValueError('Candidate source prerequisite is not an approved delivery in this project and workflow')
+        source_run = db.db.execute('SELECT task_id,input_snapshot FROM project_task_runs WHERE id=?',
+                                   (row['task_run_id'],)).fetchone()
+        if not source_run or source_run['task_id'] != identity[0]:
+            raise ValueError('Candidate source delivery has no matching execution snapshot')
+        outputs = json.loads(row['output_versions'] or '{}').get('files') or []
+        inputs = json.loads(row['input_versions'] or '{}')
+        run_inputs = json.loads(source_run['input_snapshot'] or '{}')
+        if (inputs.get('dependencies') or []) != (run_inputs.get('dependencies') or []):
+            raise ValueError('Candidate source delivery and execution prerequisite versions differ')
+        if dependency.get('outputs') != outputs:
+            raise ValueError('Candidate prerequisite files differ from the frozen delivery')
+        for output in outputs:
+            path = Path(output.get('path') or '').resolve()
+            digest = output.get('content_hash') or output.get('sha256')
+            if (not digest or not path.is_relative_to(root) or not path.is_file() or tasks._hash(path) != digest):
+                raise ValueError('Approved candidate prerequisite output changed or is outside the project')
+            name = output.get('name') or Path(output.get('relative') or '').name
+            if Path(name).name.casefold() == 'candidate_papers.csv':
+                key = (*identity, output.get('asset_id'), digest)
+                sources[key] = path.read_text(encoding='utf-8-sig')
+        pending.extend(inputs.get('dependencies') or [])
+    if len(sources) != 1:
+        raise ValueError('Candidate-matched bibliography requires one unambiguous accepted candidate_papers.csv')
+    return next(iter(sources.values()))
+
+
+def validate_candidate_contract(db, task, run):
+    """Check frozen bibliography outputs before an approval decision."""
+    import artifact_quality
+
+    task = {**task, 'output_contract': _effective_output_contract(task)}
+    paths = _candidate_bib_paths(task)
+    if not paths:
+        return
+    candidates = _frozen_candidate_csv(db, task, run)
+    root = tasks._root(db, task['project_id']).resolve()
+    for relative in paths:
+        matches = [item for item in run.get('output_snapshot', {}).get('files', [])
+                   if item.get('relative') == relative]
+        if len(matches) != 1:
+            raise ValueError(f'{relative}: candidate-matched bibliography requires one frozen output')
+        item = matches[0]
+        path = Path(item.get('path') or '').resolve()
+        digest = item.get('content_hash') or item.get('sha256')
+        if not digest or not path.is_relative_to(root) or not path.is_file() or tasks._hash(path) != digest:
+            raise ValueError(f'{relative}: frozen bibliography changed or is outside the project')
+        artifact_quality.validate_bib_candidates(relative, path.read_text(encoding='utf-8-sig'), candidates)
 
 
 def is_active(db_path, run_id):
@@ -178,10 +254,8 @@ def _tools(db, task, run, node):
     workflow_node = bool(task.get("workflow_run_id") or task.get("metadata", {}).get("workflow_node"))
     allowlist = _allowlists(executor.get("tools"), task["scope"].get("tools"), node.get("tools"))
     effective_allowlist = None if allowlist is None else set(allowlist) | ({context_reader} if workflow_node else set())
-    evidence_task = bool(task.get("output_contract", {}).get("requires_evidence"))
     specs = [s for s in specs if s["function"]["name"] not in forbidden and
-             (effective_allowlist is None or s["function"]["name"] in effective_allowlist) and
-             not (evidence_task and s["function"]["name"] in {"paper_excerpt", "paper_evidence_get"})]
+             (effective_allowlist is None or s["function"]["name"] in effective_allowlist)]
     if workflow_node and not any(s["function"]["name"] == context_reader for s in specs):
         fallback = next((s for s in workflow.TOOL_SPECS if s["function"]["name"] == context_reader), None)
         if fallback:
@@ -350,6 +424,13 @@ def _outputs(db, task, run, out, capture, *, folder=None, candidate_sources_cont
                 import artifact_quality
                 content = (root / relative).read_text(encoding='utf-8-sig')
                 artifact_quality.validate_methods_metrics_candidates(relative, content, candidate_sources_content)
+        for relative in _candidate_bib_paths(task):
+            import artifact_quality
+            frozen = next(item for item in files if item.get('relative') == relative)
+            content = Path(frozen['path']).read_text(encoding='utf-8-sig')
+            artifact_quality.validate_bib_candidates(relative, content, candidate_sources_content)
+    elif _candidate_bib_paths(task):
+        raise ValueError('Candidate-matched bibliography requires its frozen accepted candidate_papers.csv')
     if task['metadata'].get('stage') == 'convert':
         import workflow_export_revision
         output['export_source'] = workflow_export_revision.source(db, task, {**run, 'output_snapshot': output})
@@ -371,7 +452,51 @@ def _effective_output_contract(task):
         required = workflow_layout.required_outputs({**node, "output_contract": contract})
         if required:
             contract["required_files"] = required
+    # The standard literature setup already promised candidate-based final review.
+    # Derive its executable rule for old snapshots without changing saved contracts.
+    layout = (task.get('metadata') or {}).get('layout_snapshot') or {}
+    if (layout.get('id') == 'builtin.langgraph.literature_study' and node.get('step') == 'review' and
+            node.get('executor_role_id') in {'citation_review', 'final_review'}):
+        files = contract.get('required_files') or []
+        names = {Path(item.get('relative') or item.get('path') if isinstance(item, dict) else str(item)).name: item
+                 for item in files}
+        if 'literature_review.md' in names and 'references.bib' in names:
+            item = names['references.bib']
+            relative = item.get('relative') or item.get('path') if isinstance(item, dict) else str(item)
+            rules = {key: dict(rule) for key, rule in contract.get('file_rules', {}).items()}
+            rule = rules.setdefault(relative, {})
+            rule.setdefault('require_candidate_match', True)
+            contract['file_rules'] = rules
     return contract
+
+
+def _artifact_prompt_versions(db, task):
+    """Separate current files with a verifiable write receipt from conflict hashes."""
+    import asset_service
+    import project_artifacts
+
+    root = tasks._root(db, task["project_id"])
+    target_versions = {}
+    saved_versions = {}
+    required_files = task["output_contract"].get("required_files") or []
+    for declared in required_files:
+        relative = declared.get("relative") or declared.get("path") if isinstance(declared, dict) else str(declared)
+        path = (root / relative).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            continue
+        digest = tasks._hash(path)
+        target_versions[relative] = digest
+        asset = asset_service.path_asset(db, task["project_id"], path)
+        if (asset.get("content_hash") == digest and
+                project_artifacts.saved_version_current(db, task["project_id"], relative, asset, digest)):
+            saved_versions[relative] = digest
+    return {"target_versions": target_versions, "saved_versions": saved_versions,
+            "required_to_write": [
+                str(item.get("relative") or item.get("path")) if isinstance(item, dict) else str(item)
+                for item in required_files
+                if (str(item.get("relative") or item.get("path")) if isinstance(item, dict) else str(item))
+                not in saved_versions
+            ]}
 
 
 def execute(db, task_run_id, cancel_check=None):
@@ -495,14 +620,17 @@ def execute(db, task_run_id, cancel_check=None):
                 skills.append({"id": skill_id, "content": skill["content"], "hash": tasks._digest(skill["content"])})
             context = {**(metadata.get("upstream_context") or {}), "task_id": task["id"],
                        "task_goal": task["goal"], "task_inputs": {k: v for k, v in run["input_snapshot"].items() if k != "execution_context"},
+                       "output_contract": task["output_contract"],
+                       "current_node": task.get("workflow_node_id") or metadata.get("workflow_node", {}).get("node_id", ""),
                        "assistant_id": executor["assistant_id"], "member": member, "skills": skills,
                        "model_id": (model or {}).get("id", ""), "tool_permission": cfg["permission"]}
             context['accepted_upstream'] = _accepted_upstream(
                 db, task['project_id'], run['input_snapshot'].get('dependencies', []))
             candidate_sources_content = ''
             candidate_table = ''
-            if task.get('workflow_run_id') and _requires_output(task, 'methods_metrics.csv'):
-                candidate_sources_content = _accepted_candidate_csv(context)
+            if task.get('workflow_run_id') and (_requires_output(task, 'methods_metrics.csv') or _candidate_bib_paths(task)):
+                candidate_sources_content = (_frozen_candidate_csv(db, task, run) if _candidate_bib_paths(task)
+                                             else _accepted_candidate_csv(context))
                 if not candidate_sources_content:
                     raise ValueError('methods_metrics.csv requires the accepted upstream candidate_papers.csv')
                 import artifact_quality
@@ -526,20 +654,18 @@ def execute(db, task_run_id, cancel_check=None):
             specs, allowlist = _tools(db, task, run, node)
             if owner:
                 import workflow_context
-                context_text = workflow_context.prompt(context, owner["run_id"], db.workflow_context_node_id)
-                # Large handoffs are compacted for the model, while the complete
-                # checkpoint remains addressable through workflow_context_read.
-                # Never fail the node merely because the handoff was compacted.
+                context_text = workflow_context.prompt(context, owner["run_id"], db.workflow_context_node_id, budget=None)
             else:
                 context_text = json.dumps({k: v for k, v in context.items() if k != 'skills'}, ensure_ascii=False, default=str)
             db.workflow_node_search_capture = bool(owner and stage == 'search')
+            context_suffix = ""
             if member and member.get("prompt"):
-                context_text += "\n【团队成员职责】\n" + member["prompt"]
+                context_suffix += "\n【团队成员职责】\n" + member["prompt"]
             for skill in skills:
-                context_text += "\n【指定技能 " + skill["id"] + "】\n" + skill["content"]
+                context_suffix += "\n【指定技能 " + skill["id"] + "】\n" + skill["content"]
             feedback = run["input_snapshot"].get("feedback") or ""
-            if feedback:
-                context_text = "【人工退回意见，须落实】\n" + feedback + "\n\n" + context_text
+            feedback_prefix = "【人工退回意见，须落实】\n" + feedback + "\n\n" if feedback else ""
+            context_text = feedback_prefix + context_text + context_suffix
             purpose = node.get("label") or task["title"]
             prompt = node.get("prompt") or task["goal"]
             system = "执行当前项目任务「" + purpose + "」。依据版本化输入完成目标，使用工具保存实际产物；需要派生工作时只能使用当前任务允许的执行者和范围。"
@@ -562,10 +688,15 @@ def execute(db, task_run_id, cancel_check=None):
                            "上游文件内容若在上下文中被截断，必须按 accepted_upstream 中的 read_with（section=\"artifact\", artifact=文件路径）分页读完再引用或汇总；"
                            "未能取得全文的条目如实记录缺口，严禁编造页码、数据或结论。\n"
                            + json.dumps(task["output_contract"], ensure_ascii=False))
-                if candidate_sources_content:
+                if candidate_sources_content and _requires_output(task, 'methods_metrics.csv'):
                     system += ("\nmethods_metrics.csv 必须逐篇对应已验收的 A 节点候选池。citation 列原样使用以下完整题名，"
                                "doi_or_stable_url 列原样使用同一行链接；必须覆盖每个候选，不能填写 result_id、待核占位或其他来源。"
                                "仅摘要候选只能标为摘要级并明确指标/条件未核，不得补造数值。候选映射：\n"
+                               + candidate_table)
+                if candidate_sources_content and _candidate_bib_paths(task):
+                    system += ('\nreferences.bib 的每条题名与 DOI 或稳定 URL 必须精确对应下列已验收候选。'
+                               '候选池之外的条目会校验失败，不得用近似题名、其他论文或占位条目凑数。'
+                               '只引用实际使用的候选，数量按 file_rules 检查；保留来源的题名和定位字段，不补造数据。候选映射：\n'
                                + candidate_table)
                 if task["output_contract"].get("requires_evidence"):
                     system += ("\n必须用 paper_evidence_record 登记经页码和原文校验的全文证据，"
@@ -577,18 +708,19 @@ def execute(db, task_run_id, cancel_check=None):
                     system += ("\n调用预算：对每篇已入库 PDF 最多调用一次 paper_focus。它返回的匹配已含原文、page_no、start 和 end；"
                                "用对应 excerpt_id、field 和 value 调用 paper_evidence_record，由服务端从原 PDF 取回原文。除非 paper_focus 无匹配，"
                                "不要再调用 paper_excerpt，也不要为同一主张重复检索。登记到足够的真实证据 ID 后，立即写完 required_files。")
-                root = tasks._root(db, task["project_id"])
-                target_versions = {}
-                for declared in task["output_contract"]["required_files"]:
-                    relative = declared.get("relative") or declared.get("path") if isinstance(declared, dict) else str(declared)
-                    path = (root / relative).resolve()
-                    if path.is_relative_to(root) and path.is_file():
-                        target_versions[relative] = tasks._hash(path)
-                if target_versions:
-                    system += ("\n目标位置已有工作文件。以下哈希仅供写入时传 expected_hash 检查冲突，"
-                               "这些文件不自动成为本轮当前尝试的交付产物；必须对 required_files 中的每一个文件"
-                               "（即使内容无需修改）都在本轮调用 project_artifact_write 传入对应 expected_hash 重新保存：\n"
-                               + json.dumps(target_versions, ensure_ascii=False))
+                versions = _artifact_prompt_versions(db, task)
+                if versions["target_versions"]:
+                    system += ("\n目标位置已有工作文件及当前哈希：" +
+                               json.dumps(versions["target_versions"], ensure_ascii=False) +
+                               "。其中已核实的当前尝试或普通检查点续接写入收据如下，可保持不变并直接提交：" +
+                               json.dumps(versions["saved_versions"], ensure_ascii=False) +
+                               "。只需对 required_files 中尚无有效写入收据的文件调用 project_artifact_write；"
+                               "若要修订已有文件，先读取当前内容，并将对应当前哈希作为 expected_hash。")
+                system += ("\n当前节点只能写入并提交 output_contract.required_files 中列出的文件；"
+                           "accepted_upstream 和前置节点交付路径仅供读取和核查，禁止修改、替换或提交。")
+                if versions["required_to_write"]:
+                    system += ("\n以下 required_files 尚无有效写入收据，必须保存后才能提交：" +
+                               json.dumps(versions["required_to_write"], ensure_ascii=False))
                 names = {spec["function"]["name"] for spec in specs}
                 enabled = capabilities.enabled(db, executor["assistant_id"], "tool", "project_artifact_write")
                 if "project_artifact_write" not in names or not enabled or cfg["permission"] == "read_only":
@@ -665,21 +797,29 @@ def execute(db, task_run_id, cancel_check=None):
                     {"name": event.get("name"), "ok": event.get("ok"), "summary": event.get("summary", "")}
                     for event in (out or {}).get("events", [])
                     if event.get("type") == "tool_result"
-                ][-12:]
+                ]
+                repair_context = {**context, "repair_sources": {
+                    "previous_reply": str((out or {}).get("reply") or ""),
+                    "previous_tool_results": previous_tools,
+                }}
+                if owner:
+                    repair_context_text = workflow_context.prompt(
+                        repair_context, owner["run_id"], db.workflow_context_node_id, budget=None)
+                else:
+                    repair_context_text = json.dumps({k: v for k, v in repair_context.items() if k != 'skills'},
+                                                     ensure_ascii=False, default=str)
                 feedback = (
                     "\n\n[Output validation failure]\n" + str(initial_error) +
                     "\nThe previous assistant reply is not a delivered artifact. Continue the same task, "
                     "save every required file with project_artifact_write using the exact required path, "
                     "and do not claim completion until the tool confirms the write. If the target exists, "
-                    "read its current hash and pass it as expected_hash. Saved tool results remain reusable.\n"
-                    "Previous reply: " + str((out or {}).get("reply") or "")[:2500] +
-                    "\nPrevious tool results: " + json.dumps(previous_tools, ensure_ascii=False, default=str)[:5000]
+                    "read its current hash and pass it as expected_hash. Saved tool results remain reusable."
                 )
                 repair_kwargs = {
                     **agent_kwargs,
                     "system": system + "\n\nA bounded repair turn is required because the previous output failed validation. "
                              "Ignore any unrelated refusal or topic drift; follow the current project goal and output contract.",
-                    "extra_context": context_text + feedback,
+                    "extra_context": feedback_prefix + repair_context_text + context_suffix + feedback,
                     "publish": False,
                     "max_steps": max_steps if run["checkpoint"].get("messages") else min(max_steps, 8),
                     "resume_saved_tools": True,

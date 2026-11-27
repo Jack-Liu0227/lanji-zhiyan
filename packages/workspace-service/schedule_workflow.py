@@ -240,7 +240,10 @@ def refresh(db, run_id):
     db.schedule_run_add(run)
     if run['status'] == 'completed' and run.get('note_id'):
         db.db.execute('UPDATE schedule_workflow_runs SET archived=1 WHERE workflow_run_id=?', (run_id,))
-        db.db.commit()
+    if sched.get('project_id'):
+        import execution_board
+        execution_board.publish(db, sched['project_id'], 'schedule_run_updated', task_id=sched['id'], run_id=run_id, source='schedule', activity=run['status'])
+    db.db.commit()
     project_todos.sync_execution(db, schedule_id=sched['id'], status=run['status'], run_id=run_id)
 
 

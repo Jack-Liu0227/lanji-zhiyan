@@ -12,6 +12,7 @@ import fileguard
 import paths
 import pdfio
 from research_core import now
+from workflow_context import source_system
 from workflow_prompts import OUTLINE_TEMPLATE, _schema, DELEGATE_TOOL, READING_TOOLS, TOOL_SPECS, skill_text
 
 if TYPE_CHECKING:
@@ -108,7 +109,7 @@ def _note_brief(db: "WorkflowDB", task_id: str, ref: str) -> str:
             lines.append(re.sub(r"^[-*+]\s*", "", t))
             if len(lines) == 2:
                 break
-        return ("；".join(lines))[:200]
+        return "；".join(lines)
     return ""
 
 
@@ -179,8 +180,8 @@ def map_write(db: "WorkflowDB", task_id: str, data: Any, keep_positions: bool = 
         seen.add(nid)
         t = str(n.get("type") or "note")
         node = {"id": nid, "type": t if t in MAP_TYPES else "note",
-                "label": str(n["label"])[:120], "detail": str(n.get("detail") or "")[:600],
-                "ref": str(n.get("ref") or "")[:300]}
+                "label": str(n["label"]), "detail": str(n.get("detail") or ""),
+                "ref": str(n.get("ref") or "")}
         if n.get("mine"):                            # 他自己用 ＋ 加的节点：来源标记，重新整理时不许动它
             node["mine"] = True
         for k in ("x", "y"):                       # 手动拖过的位置
@@ -193,7 +194,7 @@ def map_write(db: "WorkflowDB", task_id: str, data: Any, keep_positions: bool = 
             if keep:
                 node.update(keep)
         nodes.append(node)
-    edges = [{"from": str(e["from"]), "to": str(e["to"]), "label": str(e.get("label") or "")[:40]}
+    edges = [{"from": str(e["from"]), "to": str(e["to"]), "label": str(e.get("label") or "")}
              for e in (data.get("edges") or [])
              if isinstance(e, dict) and str(e.get("from")) in seen and str(e.get("to")) in seen]
     structure(nodes, edges)
@@ -424,7 +425,7 @@ def map_sources(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
             for f in sorted(d.rglob("*")):
                 if f.is_file() and any(f.match(x) for x in pats):
                     out.append(f.relative_to(d).as_posix())
-        return out[:120]
+        return out
     titles = {n["id"]: (n["title"] or "") for n in db.notes(task_id)}
     note_files = ls(base / "笔记") if base else ls(NOTES, ("*.md",))
     import note_catalog
@@ -440,8 +441,8 @@ def map_sources(db: "WorkflowDB", task_id: str) -> dict[str, Any]:
     evidence = [{"id": row["id"], "title": f"{row['field']} · {row['filename']} p.{row['page_no']}"}
                 for row in db.evidence(task_id)
                 if asset_service.legacy_context_available(db, task_id, "evidence", row["id"], index=index)]
-    return {"sections": [x.strip() for x in secs][:60], "notes": notes, "papers": papers[:60], "evidence": evidence,
-            "data": list(dict.fromkeys(data))[:60], "map_path": str(map_path(db, task_id))}
+    return {"sections": [x.strip() for x in secs], "notes": notes, "papers": papers, "evidence": evidence,
+            "data": list(dict.fromkeys(data)), "map_path": str(map_path(db, task_id))}
 
 
 @_guarded_document_write
@@ -469,7 +470,7 @@ def doc_write(db: "WorkflowDB", task_id: str, kind: str, markdown: str, mode: st
     import verify                                     # 落盘前机械核一遍：素材（证据+笔记）里找不到的带单位数值，标出来
     import note_catalog
     corpus = "\n".join([str(r["excerpt"] or "") for r in db.evidence(task_id)]
-                       + [n["markdown"][:20000] or "" for n in db.notes(task_id)[:80]
+                       + [n["markdown"] or "" for n in db.notes(task_id)
                           if not note_catalog.is_template(n["markdown"] or "")])
     content = body if lineage else verify.stamp(body, verify.audit(seg, corpus=corpus, label=kind))
     content = content.rstrip() + "\n"
@@ -525,19 +526,27 @@ def doc_seed(db: "WorkflowDB", task_id: str, kind: str = "outline") -> dict[str,
     return cur
 
 
-READ_MAX = 48000                                   # 附件一次最多读多少字：整份正文（3 万字量级）要能一次读完，否则翻译/审查得靠猜
-
-
-def read_attachment(path: str, chars: int = 20000) -> dict[str, Any]:
+def read_attachment(path: str, chars: int = 20000, offset: int = 0, *,
+                    limit: int | None = None) -> dict[str, Any]:
     """读用户上传/项目里的文件：PDF 用 pdfio 抓正文，其余按文本读。
     白名单不在这里再写一遍 —— 统一走 paths.resolve_allowed()（data/ + 用户建过的项目目录）。"""
     p = paths.resolve_allowed(path, must_be_file=True, what="附件")
-    cap = max(500, min(int(chars or 20000), READ_MAX))
+    size = int(limit if limit is not None else chars if chars is not None else 20000)
+    if size <= 0:
+        raise ValueError("Attachment page size must be positive.")
+    offset = max(0, int(offset))
     if p.suffix.lower() == ".pdf":
         text = pdfio.text(p)
     else:
         text = p.read_text(encoding="utf-8", errors="replace")
-    return {"path": str(p), "chars": len(text), "text": text[:cap], "truncated": len(text) > cap}
+    from hashlib import sha256
+    offset = min(offset, len(text))
+    content = text[offset:offset + size]
+    end_offset = offset + len(content)
+    return {"path": str(p), "chars": len(text), "text": content, "content": content,
+            "offset": offset, "end_offset": end_offset, "total": len(text),
+            "next_offset": end_offset if end_offset < len(text) else None,
+            "content_hash": sha256(p.read_bytes()).hexdigest(), "truncated": end_offset < len(text)}
 
 
 
@@ -574,7 +583,9 @@ def doc_tools(kind: str) -> list[dict[str, Any]]:
                 {}, []),
         _schema("read_attachment", "读用户上传或项目里的文件：PDF 抓正文、文本直接读。用户在消息里给了文件路径时用它。",
                 {"path": {"type": "string", "description": "文件绝对路径（附件行里给出的那种）"},
-                 "chars": {"type": "integer", "description": "最多读多少字，默认 8000"}}, ["path"]),
+                 "chars": {"type": "integer", "minimum": 1, "description": "兼容的页长度；未指定时默认 20000，可增大"},
+                 "offset": {"type": "integer", "minimum": 0, "description": "从该字符位置连续读取，默认 0"},
+                 "limit": {"type": "integer", "minimum": 1, "description": "本页字符数，优先于 chars；按 next_offset 继续读取"}}, ["path"]),
         _schema("library_overview", "看项目现状：文献数、证据候选、检索结果、已入库 PDF、笔记。", {}, []),
         _schema("knowledge_query", "在项目知识库（笔记 + 证据）里检索关键词。",
                 {"query": {"type": "string", "description": "关键词"}}, ["query"]),
@@ -612,8 +623,7 @@ def outline_system(db: "WorkflowDB", task_id: str) -> str:
     """框架 agent 的 system：只做框架 + 固定格式 + 项目记忆 + 当前框架全文。"""
     task = db.summary(task_id)["task"]
     cur = doc_read(db, task_id, "outline")
-    body = cur["markdown"][:6000] or "（还没有，等你给第一版）"
-    return f"""你是「览籍智研」里「拟定框架」这一步的论文框架专家，用中文工作，站在合作者（懂科研、但听用户拍板）的位置。
+    instructions = f"""你是「览籍智研」里「拟定框架」这一步的论文框架专家，用中文工作，站在合作者（懂科研、但听用户拍板）的位置。
 
 硬规则：
 1. 当前项目《{task['title']}》。先用 paper_abstracts 初筛，拟定各节的论点与证据缺口。用 knowledge_query 查创新点审查笔记与既有证据，按证据 ID 复用。缺证据时用 paper_focus 定向核查原文并登记新证据。将证据 ID 与页码写到对应章节，未解决的问题标为待核。
@@ -627,11 +637,11 @@ def outline_system(db: "WorkflowDB", task_id: str) -> str:
 6. 用户上传的文件会以「[附件] … 路径」出现在消息里，需要内容就调 read_attachment（PDF 会自动抓正文）。
 7. 框架文件只有这一份：`{cur['path']}`（{'已存在' if cur['exists'] else '还没有'}）。
 
-【当前框架】
-{body}
-
 【项目记忆】
 %%MEMORY%%"""
+    return source_system(instructions, {"outline": cur}, read_with={
+        "outline": {"tool": "doc_read"},
+    })
 
 
 MAP_FALLBACK = ("把「框架每个小标题」和「项目里的精读笔记 / 实验数据」连成一张证据链谱系图：每一节挂上支撑它的论文结论"
@@ -643,8 +653,8 @@ def map_system(db: "WorkflowDB", task_id: str) -> str:
     out = doc_read(db, task_id, "outline")
     cur = map_read(db, task_id)
     src = map_sources(db, task_id)
-    skills = skill_text("research", "paper-reading-reports", "SKILL.md", cap=2500, db=db, task_id=task_id) or MAP_FALLBACK
-    return f"""你是「览籍智研」里「证据链谱系」这一步的**证据链专家**，用中文工作。
+    skills = skill_text("research", "paper-reading-reports", "SKILL.md", cap=None, db=db, task_id=task_id) or MAP_FALLBACK
+    instructions = f"""你是「览籍智研」里「证据链谱系」这一步的**证据链专家**，用中文工作。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：**维护一张证据链谱系图**（思维导图），把框架的每个小标题和「支撑它的精读结论 / 实验数据」连起来构建严密证据链。不做检索、下载、翻译、写作。
@@ -662,20 +672,12 @@ def map_system(db: "WorkflowDB", task_id: str) -> str:
 【本机精读规范（节点的 detail 按这个写）】
 {skills}
 
-【大纲（谱系图的骨架来源）】
-{out['markdown'][:5000] or '（还没有大纲 —— 提醒用户先去「确认大纲」）'}
-
-【可以挂上来的东西】
-- 大纲小标题：{'; '.join(src['sections']) or '（无）'}
-- 精读笔记：{'; '.join(f"{x['title']}（{x['name']}）" for x in src['notes'][:20]) or '（无）'}
-- 文献库 PDF：{'; '.join(src['papers'][:20]) or '（无）'}
-- 实验数据：{'; '.join(src['data'][:20]) or '（无）'}
-
-【当前谱系图】
-{json.dumps({'nodes': cur['nodes'], 'edges': cur['edges']}, ensure_ascii=False)[:6000] or '（还没有）'}
-
 【项目记忆】
 %%MEMORY%%"""
+    return source_system(instructions, {"outline": out, "map": cur, "available_sources": src}, read_with={
+        "outline": {"tool": "read_attachment", "path": out["path"]},
+        "map": {"tool": "map_read"}, "available_sources": {"tool": "map_sources"},
+    })
 
 
 # ---- 论文撰写：按「上一步敲定的框架」+ 本机写作工作流（paper-spine / paper-writer）写正文 ----
@@ -693,21 +695,18 @@ def write_system(db: "WorkflowDB", task_id: str, draft: bool = False) -> str:
     cur = doc_read(db, task_id, "write")
     cite = cite_sync(db, task_id)                    # 每次进这一步都按当前正文重算台账状态
     figs = fig_list(db, task_id)["files"]        # 「图」文件夹：正文的图位只能从此处挑
-    fig_txt = "\n".join(f"- {f['name']}（{f['ext'].upper()}，{max(1, f['size'] // 1024)} KB）" for f in figs[:40]) \
-        or "（图文件夹还是空的 —— 让他先把成图放进项目的「图」文件夹；没有的就写「待补图」）"
-
     skills = "\n\n".join(x for x in (
-        skill_text("academic-writing", "paper-spine", "SKILL.md", cap=4000, db=db, task_id=task_id),
-        skill_text("paper-writer", "SKILL.md", cap=3500, db=db, task_id=task_id),
+        skill_text("academic-writing", "paper-spine", "SKILL.md", cap=None, db=db, task_id=task_id),
+        skill_text("paper-writer", "SKILL.md", cap=None, db=db, task_id=task_id),
     ) if x) or WRITE_FALLBACK
-    return f"""你是「览籍智研」里「论文撰写」这一步的写作 agent，用中文工作（用户要英文稿就写英文），站在一作+导师之间的位置。
+    instructions = f"""你是「览籍智研」里「论文撰写」这一步的写作 agent，用中文工作（用户要英文稿就写英文），站在一作+导师之间的位置。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：**按已确认的框架把正文写出来/改好**。不做检索、下载、精读、格式转换。
 2. **必须以上一步敲定的框架为骨架**（标题层级、每节要写什么，照它来；要动结构先说清为什么，用户同意再动框架文件）。
 3. {('缺数据、缺文献的地方**做定性论述、用限定语**（在本文条件下 / 就现有报道看），正文里**不出现「待补」这类占位**；数字与文献一律不编造' if draft else '缺数据、缺文献、缺结论的地方，写「待补：<还差什么>」，**绝不编造**')}。数字只能来自用户给的材料或项目库。
 4. **一段一段写、写一段落一段**：写新正文时，每写完一节（或一大段）就调 doc_write（mode="append"）把它接进正文文件，左侧展示区立刻多出这一段 —— 不要憋整篇等最后一次调用（又慢又会被输出上限截断成半截）。只有整篇重写/大改结构时才用 mode="replace"；文件永远是同一个，不要新建。
-5. **能写就直接写**：用户让你写某一节、或说「按框架写」，就直接把那一节写出来（300-800 字量级，学术书面语），{('缺的东西做定性论述、写满写实' if draft else '缺的东西写「待补：<还差什么>」')}——**不要先反问一串再等**；确实缺到没法动笔（比如完全不知道研究对象）才问 1 个问题。写完落盘并说清改了哪一节。
+5. **能写就直接写**：用户让你写某一节、或说「按框架写」，就按论证需要完整写出那一节，使用学术书面语，{('缺的东西做定性论述、写满写实' if draft else '缺的东西写「待补：<还差什么>」')}——**不要先反问一串再等**；确实缺到没法动笔（比如完全不知道研究对象）才问 1 个问题。写完落盘并说清改了哪一节。
 6. 用户上传的文件会以「[附件] … 路径」出现，需要内容就调 read_attachment（PDF 自动抓正文）。
 7. 正文文件：`{cur['path']}`（{'已有正文' if cur['exists'] else '还没有正文'}）。
 7.1 **左栏就是这份正文，写多少显示多少**：每调一次 doc_write（append）左边就往下长一段，用户是盯着左边在读的；所以按「一节一次调用」的节奏写，写完说一句「已写入 <节名>，接着写 <下一节>」。不要在聊天里贴全文当交付。工具调用要带完整 `markdown` 参数，空参数会被服务端拒写。
@@ -717,20 +716,13 @@ def write_system(db: "WorkflowDB", task_id: str, draft: bool = False) -> str:
 【本机写作工作流（按它的规范写）】
 {skills}
 
-【框架（上一步敲定的，必须遵守）】
-{out['markdown'][:6000] or '（还没有框架 —— 提醒用户先去「确认大纲」敲定框架）'}
-
-【图文件夹（项目里的「图」；图位只能引用这里的文件名）】
-{fig_txt[:1500]}
-
-【引用台账（后台文档，已有 {cite['count']} 条；正文里不写标号，引用都记这里）】
-{(cite['markdown'][:2500] + ('…' if len(cite['markdown']) > 2500 else '')) if cite['count'] else '（还没有引用记录 —— 需要引用文献时用 cite_add 登记）'}
-
-【当前正文】
-{cur['markdown'][:6000] or '（还没有，等你第一版）'}
-
 【项目记忆】
 %%MEMORY%%"""
+    return source_system(instructions, {"outline": out, "manuscript": cur, "figures": figs, "citations": cite}, read_with={
+        "outline": {"tool": "read_attachment", "path": out["path"]},
+        "manuscript": {"tool": "doc_read"},
+        "citations": {"tool": "read_attachment", "path": cite["path"]},
+    })
 
 
 # ---- 文章撰写：后台多 agent 流水线（素材官 → 写手 → 审查 → 写手定稿）----
@@ -749,7 +741,9 @@ EVIDENCE_TOOLS = [
             {"query": {"type": "string", "description": "关键词，例如「掺杂 循环保持率」"}}, ["query"]),
     _schema("read_attachment", "读项目里或用户给的文件：PDF 抓正文、文本直接读。需要原文细节时用它。",
             {"path": {"type": "string", "description": "文件绝对路径"},
-             "chars": {"type": "integer", "description": "最多读多少字，默认 8000"}}, ["path"]),
+             "chars": {"type": "integer", "minimum": 1, "description": "兼容的页长度；未指定时默认 20000，可增大"},
+             "offset": {"type": "integer", "minimum": 0, "description": "从该字符位置连续读取，默认 0"},
+             "limit": {"type": "integer", "minimum": 1, "description": "本页字符数，优先于 chars；按 next_offset 继续读取"}}, ["path"]),
 ]
 
 CRITIC_TOOLS = [
@@ -769,7 +763,7 @@ for _lst in (EVIDENCE_TOOLS, CRITIC_TOOLS):
 def evidence_system(db: "WorkflowDB", task_id: str) -> str:
     """素材官（后台 agent）：只出素材简报，不写正文、不落盘、不登记台账。"""
     out = doc_read(db, task_id, "outline")
-    return f"""你是「览籍智研」里「文章撰写」这一步的**素材官**（后台 agent，用户看不到你的对话，只看到进度）。你在为一篇论文的正文准备**可用素材**。
+    instructions = f"""你是「览籍智研」里「文章撰写」这一步的**素材官**（后台 agent，用户看不到你的对话，只看到进度）。你在为一篇论文的正文准备**可用素材**。
 
 硬规则：
 1. 你只管素材：不写正文、不调用 doc_write、不登记引用台账 —— 你的产出是一份简报，交给后面的写手。
@@ -778,13 +772,13 @@ def evidence_system(db: "WorkflowDB", task_id: str) -> str:
    `- [节标题] 一句能写进正文的论断或数据 —— 出处：文件名 p.页码`
    出处必须来自工具返回的内容；确实找不到出处的，写 `—— 出处：无（待核）`，不要编。
 4. 最后单列一段「缺口」：哪些节几乎没素材、哪些数字/对比拿不到、哪些结论还没证据。照实写，不许用「需要进一步研究」这类话术凑数。
-5. 全文 ≤4000 字，宁少勿虚。只输出简报本身（Markdown），不要客套、不要解释你在做什么。
-
-【框架（上一步敲定，正文必须按它的章节结构走）】
-{out['markdown'][:6000] or '（还没有框架 —— 简报里直接写「缺框架，无法按节整理」）'}
+5. 按框架完整整理可核验素材，不设固定字数。只输出简报本身（Markdown），不要客套、不要解释你在做什么。
 
 【项目记忆】
 %%MEMORY%%"""
+    return source_system(instructions, {"outline": out}, read_with={
+        "outline": {"tool": "read_attachment", "path": out["path"]},
+    })
 
 
 def critic_system(db: "WorkflowDB", task_id: str, brief: str) -> str:
@@ -794,30 +788,23 @@ def critic_system(db: "WorkflowDB", task_id: str, brief: str) -> str:
     cur = doc_read(db, task_id, "write")
     cite = cite_sync(db, task_id)
 
-    return f"""你是「览籍智研」里「文章撰写」这一步的**审查 agent**（后台 agent，用户看不到你的对话）。写手刚写完一版正文，你只挑**能在正文里直接改掉的硬伤**。
+    instructions = f"""你是「览籍智研」里「文章撰写」这一步的**审查 agent**（后台 agent，用户看不到你的对话）。写手刚写完一版正文，你只挑**能在正文里直接改掉的硬伤**。
 
 硬规则：
 1. 逐节核对四件事：① 每个论断有没有素材/引用台账支撑；② 有没有**没出处的数字、文献、结论**（编造，最严重）；③ 框架里定的一节是否被漏写或写跑题；④ 术语、符号、单位、材料体系命名是否前后一致。
-2. 输出 ≤5 条，按严重度从高到低排，每条格式固定：
+2. 列出核查到的硬伤，按严重度从高到低排，每条格式固定：
    `- [节标题] 问题一句话 → 怎么改（具体到该删什么、该补什么、该把哪句改成什么）`
 3. **不要**给「创新性不足」「建议加强讨论」「需要更多实验」这类空话；**不要**输出改好的正文（落盘由写手做，避免两个 agent 抢同一个文件）。
 4. 一条硬伤都没有就只输出 `无硬伤`。
 5. 需要核对材料是否存在时调 library_overview / knowledge_query；你的判断以项目里真实存在的材料为准。
 
-【框架】
-{out['markdown'][:3000] or '（没有框架）'}
-
-【素材官给的素材简报（写手就是拿它写的）】
-{brief[:3000] or '（简报为空）'}
-
-【当前正文（要审的就是这一份）】
-{cur['markdown'][:8000] or '（正文为空）'}
-
-【引用台账（后台文档，共 {cite['count']} 条；正文里不写标号，引用都记这里）】
-{(cite['markdown'][:1500] + '…') if cite['count'] else '（还没有引用记录）'}
-
 【项目记忆】
 %%MEMORY%%"""
+    return source_system(instructions, {"outline": out, "brief": brief, "manuscript": cur, "citations": cite}, read_with={
+        "outline": {"tool": "read_attachment", "path": out["path"]},
+        "manuscript": {"tool": "read_attachment", "path": cur["path"]},
+        "citations": {"tool": "read_attachment", "path": cite["path"]},
+    })
 
 
 
@@ -833,12 +820,12 @@ def review_system(db: "WorkflowDB", task_id: str) -> str:
     cur = doc_read(db, task_id, "write")
     rep = doc_read(db, task_id, "review")
     skills = "\n\n".join(x for x in (
-        skill_text("research", "research-topic-selection", "SKILL.md", cap=1800, db=db, task_id=task_id),
-        skill_text("idea-evaluator", "SKILL.md", cap=3500, db=db, task_id=task_id),
-        skill_text("manuscript-writing", "SKILL.md", cap=3000, db=db, task_id=task_id),
-        skill_text("pre-submission-reviewer", "SKILL.md", cap=2500, db=db, task_id=task_id),
+        skill_text("research", "research-topic-selection", "SKILL.md", cap=None, db=db, task_id=task_id),
+        skill_text("idea-evaluator", "SKILL.md", cap=None, db=db, task_id=task_id),
+        skill_text("manuscript-writing", "SKILL.md", cap=None, db=db, task_id=task_id),
+        skill_text("pre-submission-reviewer", "SKILL.md", cap=None, db=db, task_id=task_id),
     ) if x) or REVIEW_FALLBACK
-    return f"""你是「览籍智研」里「AI预审查」这一步的预审 agent，用中文工作，站在**博导/同行审稿人**的位置：既严格，也给建设性意见。
+    instructions = f"""你是「览籍智研」里「AI预审查」这一步的预审 agent，用中文工作，站在**博导/同行审稿人**的位置：既严格，也给建设性意见。
 
 硬规则：
 1. 这个对话 100% 绑定项目《{task['title']}》，你只做一件事：审这篇文章的正文并帮用户改。
@@ -857,9 +844,9 @@ def review_system(db: "WorkflowDB", task_id: str) -> str:
 【审查框架（取自本机 skill）】
 {skills}
 
-【当前正文（上一步的产出）】
-{cur['markdown'][:8000] or '（还没有正文）'}
-
 【项目记忆】
 %%MEMORY%%"""
+    return source_system(instructions, {"manuscript": cur}, read_with={
+        "manuscript": {"tool": "read_attachment", "path": cur["path"]},
+    })
 

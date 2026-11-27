@@ -10,6 +10,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from copy import deepcopy
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from threading import BoundedSemaphore, Lock
@@ -67,6 +68,13 @@ class ContextOverflowError(AIRuntimeError):
     def __init__(self, message: str = "", *, status_code: int | None = None, error_code: str = ""):
         super().__init__(message, error_kind="context_overflow", status_code=status_code,
                          error_code=error_code, retryable_on_fallback=True)
+
+
+class InvalidEncryptedContentError(AIRuntimeError):
+    """Raised when Responses rejects provider-owned encrypted continuation state."""
+    def __init__(self, message: str = "", *, status_code: int | None = None, error_code: str = ""):
+        super().__init__(message, error_kind="invalid_encrypted_content", status_code=status_code,
+                         error_code=error_code)
 
 
 class BudgetExceededError(AIRuntimeError):
@@ -339,6 +347,7 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
         raise CancelledError("Operation cancelled before execution")
 
     if guards is not None and hasattr(guards, "scrub"):
+        messages = deepcopy(messages)
         guards.scrub(messages, note=f"→ {profile.get('model') or '?'}")
 
     policy = retry_policy or RetryPolicy()
@@ -418,6 +427,12 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
             if status is None and codes & {'429', 'rate_limit_exceeded', 'rate_limit_error', 'resource_exhausted'}:
                 status = 429
             quota = bool(codes & {'insufficient_quota', 'billing_hard_limit_reached', 'quota_exceeded', 'insufficient_user_quota'})
+            invalid_encrypted = bool(
+                api == "openai-responses" and status == 400
+                and ('invalid_encrypted_content' in codes
+                     or ('encrypted content' in lower_detail and any(phrase in lower_detail for phrase in (
+                         'could not be verified', 'could not be decrypted or parsed'))))
+            )
             context_overflow = bool(
                 codes & {'context_length_exceeded', 'string_above_max_length'}
                 or (status == 400 and any(tok in lower_detail for tok in (
@@ -444,6 +459,9 @@ def call(profile: dict[str, Any], messages: list[dict[str, Any]],
                 else:
                     message = f"模型鉴权或权限失败（HTTP {status}）：{detail[:300]}"
                 error_cls = QuotaOrAuthError
+            elif invalid_encrypted:
+                message = f"Responses encrypted continuation state was rejected (HTTP 400): {detail[:300]}"
+                error_cls = InvalidEncryptedContentError
             elif context_overflow:
                 message = f"上下文长度超出模型限制：{detail[:300]}"
                 error_cls = ContextOverflowError

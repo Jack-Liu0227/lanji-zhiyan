@@ -89,7 +89,7 @@ class WorkflowContinuityTest(unittest.TestCase):
         cp = run['nodes'][-1]['checkpoint']
         cp['input']['history'] = [{'reply': 'A' * 100000 + 'UNIQUE_TAIL_EVIDENCE'}]
         engine._checkpoint(self.db, run['current_node'], cp)
-        compact = workflow_context.prompt(cp['input'], run['id'], run['current_node'])
+        compact = workflow_context.prompt(cp['input'], run['id'], run['current_node'], budget=24000)
         self.assertLess(len(compact), 24000)
         self.assertIn('workflow_context_read', compact)
         page = workflow_context.read(self.db, self.pid, {'run_id': run['id'], 'section': 'history', 'offset': 99950})
@@ -99,10 +99,17 @@ class WorkflowContinuityTest(unittest.TestCase):
         messages = [{'role': 'system', 'content': 'A'*100000}, {'role': 'assistant', 'tool_calls': [
             {'id': 'x', 'function': {'name': 'read', 'arguments': json.dumps({'body': 'B'*90000})}}]},
             {'role': 'tool', 'tool_call_id': 'x', 'content': 'C'*100000}]
+        with self.assertRaisesRegex(ValueError, 'Required system instructions'):
+            workflow_context.bounded_messages(messages)
+        messages = [{'role': 'system', 'content': 'Preserve the source and its version.'},
+                    {'role': 'assistant', 'tool_calls': [{'id': 'x', 'function': {
+                        'name': 'read', 'arguments': json.dumps({'source': 'verified-paper'})}}]},
+                    {'role': 'tool', 'tool_call_id': 'x', 'content': 'C' * 100000}]
         bounded = workflow_context.bounded_messages(messages)
-        self.assertLess(len(json.dumps(bounded)), 60000)
+        self.assertLessEqual(len(json.dumps(bounded, ensure_ascii=False)), 60000)
         self.assertEqual(bounded[2]['tool_calls'][0]['id'], bounded[3]['tool_call_id'])
-        self.assertEqual(len(messages[0]['content']), 100000)
+        self.assertEqual(len(messages[2]['content']), 100000)
+        self.assertEqual(json.loads(bounded[2]['tool_calls'][0]['function']['arguments']), {'source': 'verified-paper'})
 
     def test_long_history_keeps_recent_source_excerpt_readable_for_the_model(self):
         messages = [{'role': 'system', 'content': 'Use verified evidence.'},

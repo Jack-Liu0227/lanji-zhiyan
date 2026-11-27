@@ -221,7 +221,17 @@ class ResearchDB:
 
     def bind_chat(self, cid: str, task_id: str | None = None) -> dict[str, Any]:
         """把这个对话绑到一个项目上（传空 = 解绑成随意对话）。历史留在对话自己身上，视野与产出跟项目走。"""
-        self.chat(cid)
+        cur = self.chat(cid)
+        if str(cid).startswith("execution-") or cur.get("channel") == "toolbox" or (
+            self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='execution_conversations'").fetchone()
+            and self.db.execute("SELECT 1 FROM execution_conversations WHERE chat_id=?", (cid,)).fetchone()
+        ):
+            raise ValueError("执行对话和工具记录与所属项目绑定，不能解绑或转移")
+        if self.db.execute(
+            "SELECT 1 FROM tasks WHERE owner_id=? AND kind='agent_run' AND status IN ('pending','running','suspended')",
+            (cid,),
+        ).fetchone():
+            raise ValueError("请先停止当前对话中的运行，再修改项目绑定")
         tid = (task_id or "").strip()
         if tid and not self.db.execute("SELECT 1 FROM research_tasks WHERE id=?", (tid,)).fetchone():
             raise ValueError("没有这个项目")

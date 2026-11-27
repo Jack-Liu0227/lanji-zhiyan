@@ -97,10 +97,7 @@ def _separate_inputs(inputs):
         if not isinstance(item, dict) or not (item.get("asset_id") or item.get("relative")):
             raise ValueError("输入须引用项目资产或相对文件；文本要求请放在工作流目标中")
         references.append(item)
-    combined = "\n\n".join(guidance)
-    if len(combined) > 20000:
-        raise ValueError("工作流文本要求不能超过 20000 字符")
-    return references, combined
+    return references, "\n\n".join(guidance)
 
 
 def _repair_prepared_guidance(db, run):
@@ -370,7 +367,7 @@ def prepare(db, project_id, goal="", idempotency_key="", template_id="", *, inpu
         db.idea_input_save(project_id, str(goal).strip() or project.get("question") or project["title"])
     run = run_service.start(db, project_id, "research-sequence", idempotency_key=idempotency_key or "workflow:" + uuid.uuid4().hex)
     effective_review = review_mode or bindings.workflow_review_mode(db)
-    settings = {"goal": str(goal)[:20000], "policy": bindings.settings(db, project_id), "review_mode": effective_review,
+    settings = {"goal": str(goal), "policy": bindings.settings(db, project_id), "review_mode": effective_review,
                 "prepared": True, "task_inputs": inputs, "task_guidance": task_guidance, "preflight": preflight}
     if managed_artifacts:
         settings["managed_artifacts"] = {"version": 1, "run_segment": run["id"]}
@@ -402,7 +399,7 @@ def prepare_node(db, body):
     node, actor = file_handoff._target(db, body)
     goal = str(body.get("goal") or "").strip()
     inputs = body.get("inputs") or []
-    if not goal or len(goal) > 100000 or not isinstance(inputs, list):
+    if not goal or not isinstance(inputs, list):
         raise ValueError("请填写有效目标和项目材料")
     # Pin saved input versions before creating any workflow records.
     import asset_service
@@ -566,8 +563,8 @@ def submit_manual(db, run, body):
         raise ValueError('节点已提交或尚未就绪')
     text = str(body.get('text') or '').strip()
     paths = body.get('paths') or []
-    if not isinstance(paths, list) or len(paths) > 20 or len(text) > 200000:
-        raise ValueError('最多提交 20 个项目文件，正文不得超过 20 万字')
+    if not isinstance(paths, list) or len(paths) > 20:
+        raise ValueError('最多提交 20 个项目文件')
     root = tasks._root(db, run['project_id'])
     files = []
     for value in paths:
@@ -819,7 +816,7 @@ def return_for_rework(db, task, attempt, target_node, feedback, request_key, req
 
     project_id, run_id = task["project_id"], task["workflow_run_id"]
     tasks._authority(authority, project_id, human=True)
-    feedback = str(feedback or "").strip()[:19000]
+    feedback = str(feedback or "").strip()
     if not feedback or not request_key or len(request_key) > 200:
         raise ValueError("请选择返工节点并填写核查意见")
     with tasks._lock, tasks._atomic(db):

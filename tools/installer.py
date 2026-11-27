@@ -35,7 +35,8 @@ def write_manifest(directory: Path) -> None:
 
 def verify_payload(directory: Path) -> int:
     required = (APP + ".exe", "VERSION", "web/index.html", "build/icon.ico",
-                "packages/contracts/providers_catalog.json", "migrations/005_asset_graph_upgrade.sql")
+                "packages/contracts/providers_catalog.json", "archive/migrations/001-046.zip",
+                "archive/migrations/manifest.json")
     for name in required:
         if not (directory / name).is_file():
             raise RuntimeError("安装包缺少文件：" + name)
@@ -76,15 +77,31 @@ def _powershell(script: str, **env: str) -> subprocess.CompletedProcess:
 
 
 def _stop_installed_app(exe: Path) -> None:
-    # 不用 Get-CimInstance：它遍历全部进程时，遇到受保护进程会让
-    # $ErrorActionPreference='Stop' 直接抛，整个安装中止。Get-Process 取 Path 够用。
+    result = _powershell(
+        "[Console]::OutputEncoding=[Text.UTF8Encoding]::new();"
+        "$name=[IO.Path]::GetFileNameWithoutExtension($env:LANJI_INSTALL_EXE);"
+        "$apps=@(Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {"
+        "try{if($_.Path){[pscustomobject]@{id=$_.Id;path=$_.Path}}}catch{}});"
+        "ConvertTo-Json -InputObject $apps -Compress",
+        LANJI_INSTALL_EXE=str(exe))
+    target = exe.resolve()
+    apps = []
+    for app in json.loads(result.stdout):
+        try:
+            if Path(app["path"]).resolve() == target:
+                apps.append(app)
+        except OSError:
+            continue
+    if not apps:
+        return
     _powershell(
-        "$target=$env:LANJI_INSTALL_EXE;"
-        "$apps=@(Get-Process -ErrorAction SilentlyContinue | Where-Object {"
-        "try{$_.Path -eq $target}catch{$false}});"
+        "$targets=ConvertFrom-Json $env:LANJI_INSTALL_PROCESSES;"
+        "$apps=@(foreach($t in $targets){"
+        "$p=Get-Process -Id $t.id -ErrorAction SilentlyContinue;"
+        "try{if($p -and $p.Path -eq $t.path){$p}}catch{}});"
         "foreach($p in $apps){try{[void]$p.CloseMainWindow()}catch{}};"
         "foreach($p in $apps){try{if(!$p.WaitForExit(5000)){Stop-Process -Id $p.Id -Force}}catch{}}",
-        LANJI_INSTALL_EXE=str(exe))
+        LANJI_INSTALL_PROCESSES=json.dumps(apps))
 
 
 def install_payload(src: Path, app_dir: Path) -> int:
@@ -140,8 +157,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-shortcut", action="store_true")
     parser.add_argument("--silent", action="store_true", help="完成后不等待按键")
     args = parser.parse_args(argv)
-    if sys.stdout is not None:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None:
+            stream.reconfigure(encoding="utf-8", errors="replace")
     local = Path(os.environ["LOCALAPPDATA"])
     root = local / APP
     app_dir = args.install_dir or local / "LanjiZhiyan" / "app"

@@ -34,8 +34,9 @@ def task_event(db, task_id, kind, data=None, run_id=''):
 def refresh_plans(db, task_id):
     if not db.db.execute("SELECT 1 FROM sqlite_master WHERE name='plan_task_links'").fetchone(): return
     plan_ids = [r['plan_id'] for r in db.db.execute('SELECT plan_id FROM plan_task_links WHERE task_id=?', (task_id,))]
+    active_sql = project_tasks.active_task_clause(db, 't')
     for pid in plan_ids:
-        states = [r[0] for r in db.db.execute('SELECT t.status FROM project_tasks t JOIN plan_task_links l ON l.task_id=t.id WHERE l.plan_id=?', (pid,))]
+        states = [r[0] for r in db.db.execute('SELECT t.status FROM project_tasks t JOIN plan_task_links l ON l.task_id=t.id WHERE l.plan_id=? AND ' + active_sql, (pid,))]
         status = 'DONE' if states and all(state == 'delivered' for state in states) else 'REVIEW' if 'awaiting_review' in states else 'IN_PROGRESS' if any(state in ('queued','running','delivered') for state in states) else 'TODO'
         db.db.execute('UPDATE project_todos SET status=?,updated_at=? WHERE id=?', (status, datetime.now(timezone.utc).isoformat(), pid))
 
@@ -60,7 +61,7 @@ def snapshot(db, project_id, *, include_deleted=False):
     cursor=db.db.execute('SELECT COALESCE(MAX(id),0) FROM execution_board_events WHERE project_id=?',(project_id,)).fetchone()[0]
     rows=[]
     hidden={(row['item_kind'],row['item_id']):row['deleted_at'] for row in db.db.execute('SELECT * FROM execution_board_hidden WHERE project_id=?',(project_id,))}
-    hidden_task_filter = '' if include_deleted else " AND NOT EXISTS (SELECT 1 FROM execution_board_hidden h WHERE h.project_id=t.project_id AND h.item_kind='task' AND h.item_id=t.id)"
+    hidden_task_filter = '' if include_deleted else " AND COALESCE(json_extract(t.metadata,'$.deleted_at'),'')='' AND NOT EXISTS (SELECT 1 FROM execution_board_hidden h WHERE h.project_id=t.project_id AND h.item_kind='task' AND h.item_id=t.id)"
     # Board history can restore hidden cards. Conversation history owns archived and deleted chats.
     active_chat_filter = " AND c.deleted_at='' AND c.archived_at=''"
     for row in db.db.execute("SELECT t.*,c.id AS chat_id,c.title AS conversation_title FROM project_tasks t JOIN execution_conversations x ON x.kind='task' AND x.entity_id=t.id JOIN chats c ON c.id=x.chat_id" + active_chat_filter + " WHERE t.project_id=? AND t.workflow_run_id=''" + hidden_task_filter + " ORDER BY t.updated_at DESC LIMIT 300", (project_id,)):

@@ -4,7 +4,8 @@
 
 - Lanji Zhiyan is a local-first Windows research workspace. The desktop entry point is apps/desktop/server.py; the browser UI is in apps/desktop/web/; Python services are grouped under packages/.
 - User data includes the SQLite database, project files, notes, PDFs, attachments, and credentials. Never remove or reset data under data/, %LOCALAPPDATA%/览籍智研, output/, or data.old-* as part of code or documentation cleanup. Treat existing uncommitted changes as user work and preserve them.
-- Add database schema changes as forward-only numbered migrations under migrations/. Keep existing databases upgradeable.
+- Keep historical migration IDs and applied records stable. Add new database upgrades under migrations/ using descriptive SQL filenames without numeric prefixes. Before replacing a named script, archive its previous contents under archive/. The replacement must be a cumulative, idempotent forward upgrade; the runner must detect content changes and preserve execution history. Keep existing databases upgradeable.
+- Store all archived files under the repository-root archive/ directory. Ignore local archives, and explicitly track and package archives required at runtime.
 - Before removing code or assets, search imports, route registration, UI references, packaging configuration, and tests.
 
 ## Documentation

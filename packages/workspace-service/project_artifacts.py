@@ -1,7 +1,7 @@
 """Write task-owned text artifacts inside a project directory."""
 from __future__ import annotations
 
-import csv
+import csv_text as csv
 import io
 import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -14,7 +14,6 @@ import project_notes
 TEXT_SUFFIXES = frozenset({
     ".md", ".markdown", ".txt", ".csv", ".json", ".tex", ".bib", ".yaml", ".yml",
 })
-MAX_BYTES = 5 * 1024 * 1024
 
 
 def validate_text(relative: str, content: str) -> None:
@@ -139,8 +138,6 @@ def current(db, project_id: str) -> list[dict]:
         if (asset.get("project_id") != project_id or metadata.get("project_task_id") != task_id or
                 asset.get("source") != "workflow_artifact" or not prior_run or prior_run["task_id"] != task_id):
             raise PermissionError("只能读取当前任务先前尝试生成的工作产物")
-        if target.stat().st_size > MAX_BYTES:
-            raise ValueError("产物超过 5 MB")
         raw = target.read_bytes()
         digest = asset_service.sha256_bytes(raw)
         files.append({"path": relative, "exists": True, "content": raw.decode("utf-8-sig"),
@@ -172,6 +169,76 @@ def _path(db, project_id: str, raw: str) -> tuple[Path, Path]:
     if target.suffix.lower() not in TEXT_SUFFIXES:
         raise ValueError("产物只支持 Markdown、CSV、JSON、TeX 等文本文件")
     return root, target
+
+
+def bind_write_version(db, project_id: str, args: dict, receipts: list[dict]) -> dict:
+    """Reuse a successful write's version only while the file is unchanged."""
+    if args.get('expected_hash') not in (None, ''):
+        return args
+    _, target = _path(db, project_id, args.get('path'))
+    receipt = next((item for item in reversed(receipts) if item.get('path') == args.get('path')), None)
+    if not receipt or not target.is_file() or asset_service.sha256_file(target) != receipt.get('content_hash'):
+        return args
+    asset = asset_service.path_asset(db, project_id, target)
+    metadata = asset.get('metadata') or {}
+    metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
+    context = getattr(db, 'project_task_context', None)
+    if metadata.get('project_task_id') != getattr(context, 'parent_task_id', ''):
+        return args
+    return {**args, 'expected_hash': receipt['content_hash']}
+
+
+def cached_write_current(db, project_id: str, args: dict, result: dict) -> bool:
+    if not isinstance(result, dict) or not result.get('content_hash'):
+        return False
+    _, target = _path(db, project_id, args.get('path'))
+    if not target.is_file() or asset_service.sha256_file(target) != result['content_hash']:
+        return False
+    asset = asset_service.path_asset(db, project_id, target)
+    return (asset.get('id') == result.get('asset_id')
+            and saved_version_current(db, project_id, args['path'], asset, result['content_hash']))
+
+
+def saved_version_current(db, project_id: str, relative: str, asset: dict, content_hash: str) -> bool:
+    """Accept an active write or an unchanged receipt inherited by normal resume."""
+    metadata = asset.get('metadata') or {}
+    metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
+    context = getattr(db, 'project_task_context', None)
+    task_id = getattr(context, 'parent_task_id', '')
+    run = db.db.execute('SELECT r.id,r.checkpoint FROM project_tasks t '
+                        'JOIN project_task_runs r ON r.id=t.latest_run_id '
+                        'WHERE t.id=? AND t.project_id=? AND t.status=\'running\'',
+                        (task_id, project_id)).fetchone()
+    if (not run or asset.get('project_id') != project_id or asset.get('source') != 'workflow_artifact'
+            or metadata.get('project_task_id') != task_id or asset.get('content_hash') != content_hash):
+        return False
+    if metadata.get('task_run_id') == run['id']:
+        return True
+    prior = db.db.execute('SELECT task_id FROM project_task_runs WHERE id=?',
+                         (metadata.get('task_run_id'),)).fetchone()
+    checkpoint = json.loads(run['checkpoint'] or '{}')
+    if not prior or prior['task_id'] != task_id or not checkpoint.get('resumed_from'):
+        return False
+    receipts = [result for signature, result in (checkpoint.get('done_tools') or {}).items()
+                if str(signature).split('\0', 1)[0] == 'project_artifact_write']
+    receipts.extend((checkpoint.get('context_state') or {}).get('progress', {}).get('writes') or [])
+    return any(isinstance(receipt, dict) and not receipt.get('error') and receipt.get('ok') is not False
+               and receipt.get('path') == relative and receipt.get('asset_id') == asset.get('id')
+               and receipt.get('content_hash') == content_hash for receipt in receipts)
+
+
+def submission(db, project_id: str) -> dict:
+    """Check saved files before handing them to the normal worker validation."""
+    files = current(db, project_id)
+    if not files or any(not item['exists'] for item in files):
+        raise ValueError('Save every required file before submitting outputs.')
+    for item in files:
+        _, target = _path(db, project_id, item['path'])
+        asset = asset_service.path_asset(db, project_id, target)
+        if not saved_version_current(db, project_id, item['path'], asset, item['content_hash']):
+            raise ValueError('Save each required file at its current version in this attempt, or resume its verified saved write receipt before submitting.')
+    return {'ok': True, 'submitted': True, 'approved': False,
+            'files': [{key: item[key] for key in ('path', 'content_hash')} for item in files]}
 
 
 def write(db, project_id: str, args: dict) -> dict:
@@ -206,8 +273,6 @@ def write(db, project_id: str, args: dict) -> dict:
         raise PermissionError("产物路径必须与当前任务声明的 required_files 一致；可写路径：" + '、'.join(sorted(required_paths)))
     if contract.get("requires_evidence"):
         content = _attach_task_evidence(db, task_id, project_id, relative, content)
-    if len(content.encode("utf-8")) > MAX_BYTES:
-        raise ValueError("产物超过 5 MB")
     validate_text(relative, content)
     import artifact_quality
     artifact_quality.validate_rules(contract)

@@ -1283,10 +1283,13 @@ def create_temporary(db, project_id, name, purpose, assistants, *, owner_chat_id
 
 def dissolve_owned(db, chat_id):
     import project_tasks as tasks
+    from datetime import datetime, timezone
     owned = db.db.execute(
         """SELECT t.id,t.project_id FROM teams t JOIN conversation_temporary_teams o ON o.team_id=t.id
            WHERE t.kind='temp' AND o.chat_id=? AND t.status<>'dissolved'""", (chat_id,)
     ).fetchall()
+    stamp = datetime.now(timezone.utc).isoformat()
+    has_hidden = bool(db.db.execute("SELECT 1 FROM sqlite_master WHERE name='execution_board_hidden'").fetchone())
     for room in owned:
         tid, project_id = room["id"], room["project_id"]
         # Revoke the runtime target before stopping tasks so new ones cannot
@@ -1295,10 +1298,22 @@ def dissolve_owned(db, chat_id):
         _set(tid, stop=True, phase="发起对话已删除")
         task_ids = db.db.execute("""
             SELECT t.id FROM project_tasks t JOIN project_executor_bindings b ON b.id=t.executor_binding_id
-            WHERE t.project_id=? AND b.kind='team' AND b.target_id=? AND t.status NOT IN ('delivered','cancelled')
+            WHERE t.project_id=? AND b.kind='team' AND b.target_id=?
         """, (project_id, tid)).fetchall()
         for row in task_ids:
-            tasks.cancel(db, row["id"], authority=tasks.CommandContext.system(project_id))
+            current = tasks.get(db, row["id"], project_id=project_id)
+            if current["status"] not in ("delivered", "cancelled"):
+                tasks.cancel(db, row["id"], authority=tasks.CommandContext.system(project_id))
+            with db.db:
+                if has_hidden:
+                    db.db.execute(
+                        "INSERT OR IGNORE INTO execution_board_hidden(project_id,item_kind,item_id,deleted_at) VALUES (?,'task',?,?)",
+                        (project_id, row["id"], stamp),
+                    )
+                db.db.execute(
+                    "UPDATE chats SET deleted_at=? WHERE id IN (SELECT chat_id FROM execution_conversations WHERE kind='task' AND entity_id=?) AND deleted_at=''",
+                    (stamp, row["id"]),
+                )
         for row in db.db.execute("SELECT id FROM team_tasks WHERE task_id=? AND status NOT IN ('done','failed','canceled')", (tid,)).fetchall():
             signal = _cancel_signals.get(row["id"])
             if signal:

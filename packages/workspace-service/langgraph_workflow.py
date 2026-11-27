@@ -167,7 +167,7 @@ def create_literature_study_graph() -> GraphTemplate:
         prompt="逐文件分页读取 A-D 已接受的全部相关产物，直到 next_offset=null；检查 DOI/题录匹配、正文引用、BibTeX 和候选清单逐条一致。核验不通过的来源移除或标待核，不能称其题录不存在而不读取全文。用 paper_search 对疑点 DOI/title 复核。输出 literature_review.md（至少 2500 字）、references.bib（至少八条各含 title 和 DOI 或稳定 URL 的有效记录）、citation_check.md（每条逐项核验状态/证据级别/页码/问题）。全文不可得要准确标记摘要级/未核。机器结构检查和人工学术核查分开，最后进入人工核查，不自行批准。",
         output_contract={"required_files": ["literature_review.md", "references.bib", "citation_check.md"], "file_rules": {
             "literature_review.md": {"min_chars": 2500},
-            "references.bib": {"min_entries": 8, "require_title_and_locator": True},
+            "references.bib": {"min_entries": 8, "require_title_and_locator": True, "require_candidate_match": True},
             "citation_check.md": {"min_chars": 1000}},
             "acceptance": ["正文引用键与 BibTeX 一致", "至少八条题名和 DOI/稳定链接可核记录", "证据层级、页码和待核事项完整", "等待人工核查"]})
     g.add_edge("literature_retrieval", "mechanism_evidence")

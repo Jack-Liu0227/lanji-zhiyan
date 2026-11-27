@@ -57,6 +57,37 @@
     return `<span class="pill" style="border-color:${color};color:${color}"${title}>${h(text + extra)}</span>`;
   };
   const modelOptions = current => `<option value="">跟随当前模型</option>${(S.models || []).map(m => `<option value="${h(m.id)}" ${m.id === current ? "selected" : ""}>${h(m.name)}${m.name.includes(m.model) ? "" : " · " + h(m.model)}</option>`).join("")}`;
+  const capacityLabel = context => context?.estimated_window ? "容量未知，使用保守估算"
+    : context?.source?.startsWith("overrides.context_window") ? "自定义容量"
+    : context?.source?.startsWith("profile.context_window") ? "模型声明的容量" : "模型容量目录";
+  async function capacityEditor(model) {
+    try {
+      const {context} = await request("model-context?id=" + encodeURIComponent(model.id));
+      const overrides = context.overrides || {};
+      const d = modal("模型上下文 · " + model.name, `<p class="hint">${h(capacityLabel(context))}：${h(context.context_window.toLocaleString())} Token。压缩时机、摘要与近期保留预算自动计算。</p>
+        ${context.capacity_source ? `<p class="hint"><a href="${h(context.capacity_source)}" target="_blank" rel="noopener noreferrer">查看容量来源</a></p>` : ""}
+        ${context.stale ? '<p class="hint">接口或模型已变化，原容量覆盖已失效。请按当前服务规格填写。</p>' : ""}
+        <div class="ag-form"><label>上下文窗口（Token，可选）<input class="control" type="number" min="1" step="1" data-ag-context-window value="${h(overrides.context_window ?? "")}" placeholder="自动选择"></label>
+        <label>最大输出（Token，可选）<input class="control" type="number" min="1" step="1" data-ag-context-output value="${h(overrides.max_output ?? overrides.max_output_tokens ?? "")}" placeholder="按模型能力限制"></label></div>
+        <p class="hint">仅在服务规格与自动值不同，或自定义接口容量未知时覆盖。填写窗口不会增加服务端容量。留空恢复自动选择。</p>
+        <div class="ag-row"><button class="btn btn-primary" data-ag-context-save>保存</button><button class="btn ghost" data-ag-context-reset>恢复自动</button></div>`);
+      const status = d.querySelector(".ag-status");
+      const save = async reset => {
+        const buttons = [...d.querySelectorAll("[data-ag-context-save],[data-ag-context-reset]")];
+        buttons.forEach(button => { button.disabled = true; });
+        try {
+          const number = selector => { const value = d.querySelector(selector).value.trim(); return value ? Number(value) : null; };
+          await request("model-context", {id:model.id,
+            context_window:reset ? null : number("[data-ag-context-window]"),
+            max_output:reset ? null : number("[data-ag-context-output]"),
+            tokenizer:reset ? null : overrides.tokenizer ?? null});
+          await saved(); d.close(); render();
+        } catch(e) { error(status,e); } finally { buttons.forEach(button => { button.disabled = false; }); }
+      };
+      d.querySelector("[data-ag-context-save]").onclick = () => save(false);
+      d.querySelector("[data-ag-context-reset]").onclick = () => save(true);
+    } catch(e) { uiNotify(e.message); }
+  }
   function policyFields(a, prefix) {
     const selectedFallbacks = new Set(parseFallbacks(a.fallback_model_ids));
     return `<label><span>模型</span><select class="control" id="${prefix}-model">${modelOptions(a.model_id)}</select></label>
@@ -213,6 +244,18 @@
       }
       container.querySelectorAll("[data-ag-provider-del]").forEach(b => b.onclick = async () => { if (!await uiConfirm("移除此 Provider 和已采用模型？专家中原来的模型绑定将需要重新选择。")) return; try { await request("provider-delete",{id:b.dataset.agProviderDel}); await saved(); render(); } catch(e) { uiNotify(e.message); } });
       container.querySelectorAll("[data-ag-active]").forEach(b => b.onclick = async () => { try { await api("/api/models/active",{id:b.dataset.agActive}); await saved(); render(); } catch(e) { uiNotify(e.message); } });
+      container.querySelectorAll("[data-ag-active]").forEach(button => {
+        const model = registry.models.find(item => item.id === button.dataset.agActive);
+        const context = model?.context;
+        if (!context) return;
+        const summary = document.createElement("p"); summary.className = "ag-meta";
+        summary.dataset.agContextSummary = model.id;
+        summary.textContent = `${capacityLabel(context)} · ${context.context_window.toLocaleString()} Token；输入约 ${context.trigger_tokens.toLocaleString()} Token 时自动整理`;
+        button.parentElement.before(summary);
+        const edit = document.createElement("button"); edit.className = "btn ghost";
+        edit.dataset.agContext = model.id; edit.textContent = "上下文设置";
+        edit.onclick = () => capacityEditor(model); button.parentElement.append(edit);
+      });
       const batchBtn = container.querySelector("[data-ag-batch-test]");
       if (batchBtn) batchBtn.onclick = async () => {
         batchBtn.disabled = true;

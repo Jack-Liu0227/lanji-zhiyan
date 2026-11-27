@@ -1,7 +1,7 @@
 """Read-only Markdown and CSV previews scoped to a project and conversation."""
 from __future__ import annotations
 
-import csv
+import csv_text as csv
 import hashlib
 import io
 import json
@@ -12,8 +12,6 @@ import stat
 
 import project_notes
 
-MAX_FILE_BYTES = 8 * 1024 * 1024
-MAX_MARKDOWN_BYTES = 2 * 1024 * 1024
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 500
 MAX_OFFSET = 2**31 - 1
@@ -60,31 +58,25 @@ def _file_limit(path):
     suffix = path.suffix.lower()
     if suffix not in MARKDOWN | {'.csv'}:
         raise ValueError('仅支持 Markdown（.md/.markdown）和 CSV 文件')
-    maximum = MAX_MARKDOWN_BYTES if suffix in MARKDOWN else MAX_FILE_BYTES
     try:
         info = path.stat()
     except FileNotFoundError:
         raise ValueError('预览文件不存在') from None
     if not stat.S_ISREG(info.st_mode):
         raise ValueError('只能预览普通文件')
-    if info.st_size > maximum:
-        raise ValueError(f'文件过大，预览上限为 {maximum // (1024 * 1024)} MB')
-    return maximum
 
 
 def _read_file(path, *, expected_hash=''):
-    maximum = _file_limit(path)
+    _file_limit(path)
     try:
         with path.open('rb') as stream:
             if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
                 raise ValueError('只能预览普通文件')
-            content = stream.read(maximum + 1)
+            content = stream.read()
     except FileNotFoundError:
         raise ValueError('预览文件不存在') from None
     except PermissionError:
         raise ValueError('没有权限读取预览文件') from None
-    if len(content) > maximum:
-        raise ValueError(f'文件过大，预览上限为 {maximum // (1024 * 1024)} MB')
     if expected_hash and hashlib.sha256(content).hexdigest() != expected_hash:
         raise ValueError('节点的固定产物已变化，请重新核对版本')
     try:
@@ -124,8 +116,6 @@ def _csv(name, text, offset, limit, source):
 
 
 def _markdown(name, text, offset, limit, source):
-    if len(text.encode('utf-8')) > MAX_MARKDOWN_BYTES:
-        raise ValueError('Markdown 内容过大，预览上限为 2 MB')
     if offset:
         raise ValueError('Markdown 预览不支持非零 offset')
     return {'kind': 'markdown', 'name': name, 'text': text.lstrip('\ufeff'), 'offset': 0,

@@ -37,10 +37,12 @@ def _excerpt(content: str, limit: int, match_at: int | None = None) -> str:
     return (_GAP.lstrip() if start else "") + content[start:end] + (_GAP.rstrip() if end < len(content) else "")
 
 
-def select(messages: list[dict[str, Any]], query: str, budget: int) -> list[dict[str, str]]:
+def select(messages: list[dict[str, Any]], query: str, budget: int | None) -> list[dict[str, str]]:
     """Keep recent turns and at most three relevant excerpts from the same conversation."""
     history = [(m["role"], m["content"]) for m in messages
                if m.get("role") in {"user", "assistant"} and m.get("content")]
+    if budget is None or sum(len(text) for _, text in history) <= budget:
+        return [{"role": role, "content": text} for role, text in history]
     recent = history[-8:]
     per_message = max(500, min(6_000, budget // 4))
     needs_selection = len(history) > len(recent) or sum(min(per_message, len(text)) for _, text in recent) > budget

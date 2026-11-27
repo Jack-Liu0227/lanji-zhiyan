@@ -7,7 +7,11 @@ import project_todos
 
 
 def linked(db, plan_id):
-    return [dict(row) for row in db.db.execute('SELECT t.id,t.title,t.status,t.latest_run_id FROM project_tasks t JOIN plan_task_links l ON l.task_id=t.id WHERE l.plan_id=? ORDER BY l.created_at',(plan_id,))]
+    return [dict(row) for row in db.db.execute(
+        'SELECT t.id,t.title,t.status,t.latest_run_id FROM project_tasks t JOIN plan_task_links l ON l.task_id=t.id '
+        'WHERE l.plan_id=? AND ' + project_tasks.active_task_clause(db, 't') + ' ORDER BY l.created_at',
+        (plan_id,),
+    )]
 
 
 def check_dependencies(db, task_id):
@@ -40,7 +44,10 @@ def route(method,path,body,query,db):
     old=db.db.execute('SELECT * FROM project_todos WHERE id=? AND task_id=?',(identifier,pid)).fetchone() if identifier else None
     if identifier and not old: raise ValueError('计划不属于当前项目')
     if path.endswith('/delete'):
-        return project_todos.delete_todo(db,identifier)
+        deleted=project_todos.delete_todo(db,identifier)
+        with db.db:
+            execution_board.publish(db,pid,'plan_deleted',source='plan',task_id=identifier,activity=old['title'])
+        return deleted
     title=str(body.get('title') or (old['title'] if old else '')).strip()
     if not title or len(title)>500: raise ValueError('计划标题须为 1 至 500 字')
     acceptance=str(body.get('acceptance',old['acceptance'] if old else ''))

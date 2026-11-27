@@ -52,6 +52,15 @@ def command(db, project_id, task_id, action, body):
         db.db.execute('UPDATE project_tasks SET title=?,metadata=?,updated_at=? WHERE id=?',
             (title, json.dumps(meta, ensure_ascii=False), workflow.now(), task_id))
         project_tasks._event(db, task_id, action)
+        if action == 'delete':
+            db.db.execute("UPDATE chats SET deleted_at=? WHERE id IN (SELECT chat_id FROM execution_conversations WHERE kind='task' AND entity_id=?) AND deleted_at=''",
+                          (meta['deleted_at'], task_id))
+        elif action == 'restore':
+            db.db.execute("UPDATE chats SET deleted_at='' WHERE id IN (SELECT chat_id FROM execution_conversations WHERE kind='task' AND entity_id=?)",
+                          (task_id,))
+            if db.db.execute("SELECT 1 FROM sqlite_master WHERE name='execution_board_hidden'").fetchone():
+                db.db.execute("DELETE FROM execution_board_hidden WHERE project_id=? AND item_kind='task' AND item_id=?",
+                              (project_id, task_id))
         if action=='organize' and 'title' in body:
             db.db.execute("UPDATE chats SET title=? WHERE id IN (SELECT chat_id FROM execution_conversations WHERE kind='task' AND entity_id=?)",(title,task_id))
     return {'task': project_tasks.get(db, task_id, project_id=project_id)}

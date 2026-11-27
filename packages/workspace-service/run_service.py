@@ -23,7 +23,7 @@ def agent_scope(function):
         if checkpoint.get("signature") == signature:
             db.agent_resume = dict(checkpoint)
         elif kwargs.get("resume_saved_tools") is True:
-            db.agent_resume = {key: checkpoint[key] for key in ("done_tools", "output_assets", "template_snapshot")
+            db.agent_resume = {key: checkpoint[key] for key in ("done_tools", "output_assets", "template_snapshot", "context_state")
                                if key in checkpoint}
         else:
             db.agent_resume = {}
@@ -34,7 +34,10 @@ def agent_scope(function):
                 result = function(db, *args, **kwargs)
                 execution.check()
                 completed[signature] = result
-                save(completed_calls=completed, phase="ready", messages=[])
+                if getattr(db, 'workflow_end_to_end', False):
+                    save(completed_calls=completed, phase="ready")
+                else:
+                    save(completed_calls=completed, phase="ready", messages=[])
                 return result
         except Exception as exc:
             current = getattr(db, "asset_run", None)

@@ -26,6 +26,14 @@ def http_error(status, code, headers=None):
 
 
 class AIRuntimeTest(unittest.TestCase):
+    def test_outbound_scrubbing_does_not_mutate_checkpoint_messages(self):
+        profile = {'base_url': 'https://example.invalid/v1', 'model': 'fixture'}
+        messages = [{'role': 'user', 'content': 'Return this private contact: a@b.co'}]
+        with patch('runtime._call_wire_openai_completions', return_value={'content': 'ok'}) as wire:
+            call(profile, messages)
+        self.assertEqual(messages[0]['content'], 'Return this private contact: a@b.co')
+        self.assertNotIn('a@b.co', wire.call_args.args[1][0]['content'])
+
     def test_unavailable_gateway_channel_has_actionable_error_without_blind_retries(self):
         raw = json.dumps({'error': {'code': 'get_channel_failed', 'message': 'no channel'}}).encode()
         error = urllib.error.HTTPError('https://example.test/v1/chat/completions', 500, 'failure', {}, io.BytesIO(raw))

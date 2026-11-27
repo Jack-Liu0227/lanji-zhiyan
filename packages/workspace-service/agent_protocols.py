@@ -40,6 +40,8 @@ def _anthropic_stream(url, payload, headers, timeout, on_delta, cancel_check, on
     payload["stream"] = True
     blocks: dict[int, dict] = {}
     usage = {}
+    stop_reason = None
+    completed = False
     for event in _stream_events(url, payload, headers, timeout, cancel_check):
         kind = event.get("type")
         if kind == "error":
@@ -68,68 +70,98 @@ def _anthropic_stream(url, payload, headers, timeout, on_delta, cancel_check, on
                 block["signature"] = block.get("signature", "") + (delta.get("signature") or "")
         elif kind == "message_delta":
             usage.update(event.get("usage") or {})
+            stop_reason = (event.get("delta") or {}).get("stop_reason") or stop_reason
+        elif kind == "message_stop":
+            completed = True
     content = []
     for index in sorted(blocks):
         block = blocks[index]
         if "_json" in block:
-            block["input"] = json.loads(block.pop("_json"))
+            arguments = block.pop("_json")
+            try:
+                block["input"] = json.loads(arguments)
+            except ValueError:
+                block["_partial_json"] = arguments
+                completed = False
+                stop_reason = "incomplete"
         content.append(block)
-    return {"content": content, "usage": usage}
+    return {"content": content, "usage": usage, "stop_reason": stop_reason,
+            "_stream_complete": completed or bool(stop_reason and stop_reason != "incomplete")}
 
 
 def _responses_stream(url, payload, headers, timeout, on_delta, cancel_check, on_reasoning=None):
     payload["stream"] = True
     completed = None
-    collected_text = []
-    collected_reasoning = []
-    collected_calls = []
-    output_items = []
+    collected_text = {}
+    output_items = {}
     usage = {}
     for event in _stream_events(url, payload, headers, timeout, cancel_check):
         kind = event.get("type")
         if kind in {"response.output_text.delta", "response.refusal.delta"}:
             piece = event.get("delta") or ""
             if piece:
-                collected_text.append(piece)
+                position = (int(event.get("output_index") or 0),
+                            int(event.get("content_index") or 0),
+                            "refusal" if kind == "response.refusal.delta" else "output_text")
+                collected_text[position] = collected_text.get(position, "") + piece
                 on_delta(piece)
         elif kind == "response.reasoning_summary_text.delta":
             piece = event.get("delta") or ""
             if piece and on_reasoning:
-                collected_reasoning.append(piece)
                 on_reasoning(piece)
-        elif kind in {"response.completed", "response.done"}:
-            completed = event.get("response") or event
-        elif kind == "response.output_item.done":
+        elif kind in {"response.completed", "response.done", "response.incomplete"}:
+            completed = dict(event.get("response") or event)
+            completed.setdefault("status", "incomplete" if kind == "response.incomplete" else "completed")
+        elif kind in {"response.output_item.added", "response.output_item.done"}:
             item = event.get("item")
             if item:
-                output_items.append(item)
+                output_items[int(event.get("output_index") or 0)] = dict(item)
+        elif kind in {"response.function_call_arguments.delta", "response.function_call_arguments.done"}:
+            item = output_items.setdefault(int(event.get("output_index") or 0), {
+                "type": "function_call", "call_id": event.get("call_id") or event.get("item_id") or "",
+                "name": event.get("name") or "", "arguments": ""})
+            if kind.endswith(".delta"):
+                item["arguments"] = item.get("arguments", "") + (event.get("delta") or "")
+            else:
+                item["arguments"] = event.get("arguments", item.get("arguments", ""))
         elif kind in {"response.failed", "error"}:
             from runtime import ProviderStreamError
             raise ProviderStreamError((event.get("response") or {}).get("error") or event.get("error") or event)
         if event.get("usage"):
             usage.update(event["usage"])
     if completed is None:
-        if output_items or collected_text or collected_calls:
-            out = list(output_items)
-            if not out and collected_text:
-                out.append({"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "".join(collected_text)}]})
-            if collected_calls:
-                out.extend(collected_calls)
-            completed = {"output": out, "usage": usage}
+        if output_items or collected_text:
+            completed = {"usage": usage, "status": "incomplete",
+                         "incomplete_details": {"reason": "stream_terminated"}}
         else:
             from runtime import ProviderStreamError
             raise ProviderStreamError("Responses 流未返回完成事件")
+    output_items.update({index: dict(item) for index, item in enumerate(completed.get("output") or [])})
+    for (output_index, content_index, kind), text in collected_text.items():
+        item = output_items.setdefault(output_index, {"type": "message", "role": "assistant", "content": []})
+        content = item.setdefault("content", [])
+        while len(content) <= content_index:
+            content.append({})
+        field = "refusal" if kind == "refusal" else "text"
+        if not content[content_index].get(field):
+            content[content_index] = {"type": kind, field: text}
+    completed["output"] = [output_items[index] for index in sorted(output_items)]
+    if not completed.get("usage") and usage:
+        completed["usage"] = usage
     return completed
 
 
 def _gemini_stream(url, payload, headers, timeout, on_delta, cancel_check, on_reasoning=None):
     parts = []
     usage = {}
+    finish_reason = None
     for chunk in _stream_events(url, payload, headers, timeout, cancel_check):
         if chunk.get("error"):
             from runtime import ProviderStreamError
             raise ProviderStreamError(chunk["error"])
         candidates = chunk.get("candidates") or []
+        if candidates and candidates[0].get("finishReason"):
+            finish_reason = candidates[0]["finishReason"]
         for part in ((candidates[0].get("content") or {}).get("parts") or []) if candidates else []:
             parts.append(part)
             piece = part.get("text") or ""
@@ -138,7 +170,8 @@ def _gemini_stream(url, payload, headers, timeout, on_delta, cancel_check, on_re
             elif piece and on_reasoning:
                 on_reasoning(piece)
         usage = chunk.get("usageMetadata") or usage
-    return {"candidates": [{"content": {"parts": parts}}], "usageMetadata": usage}
+    return {"candidates": [{"content": {"parts": parts}, "finishReason": finish_reason}],
+            "usageMetadata": usage, "_stream_complete": finish_reason is not None}
 
 
 def discover(profile, timeout=25):
@@ -191,6 +224,7 @@ def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_to
     base, key, model = profile["base_url"].rstrip("/"), profile.get("api_key", ""), profile["model"]
     effort = profile.get("reasoning", "auto")
     reasoning = []
+    finish_reason, stream_complete, completion_metadata = None, True, {}
     if api == "openai-responses":
         inputs = []
         for m in messages:
@@ -215,14 +249,25 @@ def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_to
         url, headers = base + "/responses", {"Authorization": "Bearer " + key} if key else {}
         raw = (_responses_stream(url, payload, headers, timeout, on_delta, cancel_check, on_reasoning) if on_delta
                else _request(url, payload, headers, timeout))
+        if raw.get("status") == "failed" or raw.get("error"):
+            from runtime import ProviderStreamError
+            raise ProviderStreamError(raw.get("error") or raw)
+        incomplete = raw.get("status") not in (None, "completed") or bool(raw.get("incomplete_details"))
+        provider_reason = (raw.get("incomplete_details") or {}).get("reason")
+        finish_reason = "length" if provider_reason in {"max_output_tokens", "max_tokens"} else (
+            "incomplete" if incomplete else raw.get("finish_reason") or "stop")
+        stream_complete = not incomplete
+        completion_metadata = {key: raw[key] for key in ("status", "incomplete_details") if key in raw}
         text, calls = [], []
         for o in raw.get("output", []):
             if o.get("type") == "reasoning":
                 reasoning.extend(p.get("text", "") for p in o.get("summary", []) if p.get("type") == "summary_text")
             if o.get("type") == "message":
-                text.extend(p.get("text", "") for p in o.get("content", []) if p.get("type") == "output_text")
+                text.extend(p.get("text", p.get("refusal", "")) for p in o.get("content", [])
+                            if p.get("type") in {"output_text", "refusal"})
             elif o.get("type") == "function_call":
-                calls.append({"id": o["call_id"], "type": "function", "function": {"name": o["name"], "arguments": o["arguments"]}})
+                calls.append({"id": o.get("call_id") or o.get("id") or "", "type": "function", "function": {
+                    "name": o.get("name") or "", "arguments": o.get("arguments") or ""}})
         usage = raw.get("usage", {})
         protocol = {"api": api, "output": raw.get("output", [])}
     elif api == "anthropic-messages":
@@ -247,7 +292,9 @@ def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_to
         payload = {"model": model, "system": "\n\n".join(m["content"] for m in messages if m["role"] == "system"), "messages": hist, "max_tokens": max_tokens}
         if effort not in ("auto", "none"):
             budget = {"minimal": 1024, "low": 1024, "medium": 2048, "high": 8192, "xhigh": 16384}[effort]
-            payload.update(thinking={"type": "enabled", "budget_tokens": budget}, max_tokens=max(max_tokens, budget + 2048))
+            budget = min(budget, max_tokens - 1)
+            payload["thinking"] = ({"type": "enabled", "budget_tokens": budget} if budget >= 1024
+                                   else {"type": "disabled"})
         elif effort == "none":
             payload["thinking"] = {"type": "disabled"}
         if tools:
@@ -255,9 +302,15 @@ def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_to
         url, headers = base + "/messages", {"x-api-key": key, "anthropic-version": "2023-06-01"}
         raw = (_anthropic_stream(url, payload, headers, timeout, on_delta, cancel_check, on_reasoning) if on_delta
                else _request(url, payload, headers, timeout))
+        provider_reason = raw.get("stop_reason")
+        finish_reason = provider_reason or ("stop" if raw.get("_stream_complete", True) else "incomplete")
+        stream_complete = raw.get("_stream_complete", True) and provider_reason not in {
+            "max_tokens", "pause_turn", "incomplete", "model_context_window_exceeded"}
         text = [c["text"] for c in raw.get("content", []) if c["type"] == "text"]
         reasoning = [c["thinking"] for c in raw.get("content", []) if c.get("type") == "thinking" and c.get("thinking")]
-        calls = [{"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": json.dumps(c["input"])}} for c in raw.get("content", []) if c["type"] == "tool_use"]
+        calls = [{"id": c["id"], "type": "function", "function": {"name": c["name"],
+                  "arguments": c["_partial_json"] if "_partial_json" in c else json.dumps(c.get("input", {}))}}
+                 for c in raw.get("content", []) if c["type"] == "tool_use"]
         usage = raw.get("usage", {})
         protocol = {"api": api, "content": raw.get("content", [])}
     elif api == "google-generative-ai":
@@ -291,6 +344,10 @@ def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_to
         headers = {"x-goog-api-key": key}
         raw = (_gemini_stream(url + ":streamGenerateContent?alt=sse", payload, headers, timeout, on_delta, cancel_check, on_reasoning)
                if on_delta else _request(url + ":generateContent", payload, headers, timeout))
+        provider_reason = (raw.get("candidates") or [{}])[0].get("finishReason")
+        finish_reason = "length" if provider_reason == "MAX_TOKENS" else provider_reason or (
+            "stop" if raw.get("_stream_complete", True) else "incomplete")
+        stream_complete = raw.get("_stream_complete", True) and provider_reason in (None, "STOP")
         parts = raw.get("candidates", [{}])[0].get("content", {}).get("parts", [])
         reasoning = [p["text"] for p in parts if p.get("text") and p.get("thought")]
         protocol = {"api": api, "parts": parts}
@@ -305,4 +362,5 @@ def complete(profile, messages, tools=None, temperature=0.2, timeout=180, max_to
     # Signed thinking blocks must survive tool-result turns without reconstruction.
     return {"role": "assistant", "content": "".join(text) if api == "google-generative-ai" else "\n".join(text),
             "tool_calls": calls, "_protocol": protocol, "reasoning": "\n".join(reasoning),
+            "finish_reason": finish_reason, "stream_complete": stream_complete, **completion_metadata,
             "usage": usage_stats.normalize(usage,api)}

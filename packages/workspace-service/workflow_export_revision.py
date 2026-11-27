@@ -8,6 +8,14 @@ import project_tasks as tasks
 FORMATS = ('docx', 'pdf', 'html', 'md')
 
 
+def editable_source(value):
+    if not isinstance(value, dict) or not isinstance(value.get('markdown'), str) or not value['markdown'].strip():
+        raise ValueError('请填写排版源稿')
+    if value.get('format') not in FORMATS:
+        raise ValueError('排版源稿或导出格式无效')
+    return value
+
+
 def source(db, task, run):
     output = run.get('output_snapshot') or {}
     if output.get('export_source'):
@@ -97,11 +105,7 @@ def revise(db, task_id, body, *, authority):
         task, run = review._current(db, task_id, body, authority)
         if task['metadata'].get('stage') != 'convert':
             raise ValueError('只有最终导出节点支持重新排版')
-        value = body.get('content')
-        if not isinstance(value, dict) or not isinstance(value.get('markdown'), str) or not value['markdown'].strip():
-            raise ValueError('请填写排版源稿')
-        if len(value['markdown'].encode('utf-8')) > 2 * 1024 * 1024 or value.get('format') not in FORMATS:
-            raise ValueError('排版源稿或导出格式无效')
+        value = editable_source(body.get('content'))
         revision = int(run['checkpoint'].get('output_revision', 0)) + 1
         folder = review._folder(db, task, run)
         target = folder / ('paper.' + value['format'])

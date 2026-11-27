@@ -352,7 +352,7 @@ const ProjectWorkspace = (() => {
       if(requested)await showResource(requested.section,state);else if(state.surface==='flow'&&state.section==='workflow')await showResource('workflow',state);return;
     }
     generation++;mounted=state;state.epoch=++generation;
-    const pool=(S.chats||[]).filter(c=>c.task_id===state.id&&!String(c.id||'').startsWith('execution-'));if(!pool.some(c=>c.id===state.chatId)&&!String(state.chatId||'').startsWith('execution-'))state.chatId=pool[0]?.id||"";
+    const pool=(S.chats||[]).filter(c=>c.task_id===state.id&&!String(c.id||'').startsWith('execution-'));if(!state.chatId||!(S.chats||[]).some(c=>c.id===state.chatId&&c.task_id===state.id))state.chatId=pool[0]?.id||"";
     container.innerHTML=shell(state);bind(state);layoutPanels(state);paintSessions(state);paintDraft(state);paintChat(state);
     if(requested)await showResource(requested.section,state,{initial:true});
     else if(state.surface!=='chat'||state.peek)await showResource(resources[state.section]?state.section:state.sections[state.surface],state,{initial:true,peek:state.peek,surface:state.surface});
@@ -508,7 +508,7 @@ const ProjectWorkspace = (() => {
     if(id&&!belongsToProject()){
       try{await refreshState(false);}catch(err){return error(err.message,state);}
       if(!live(state))return;
-      if(!belongsToProject())return error('对话不属于当前项目。',state);
+      if(!belongsToProject())return error('对话已删除、归档或不属于当前项目。',state);
     }
     await changeConversation(state,id);paintSessions(state);paintDraft(state);paintChat(state);error("",state);
   }
@@ -753,6 +753,12 @@ const ProjectWorkspace = (() => {
       if(result[2].status==='fulfilled')state.targets=result[2].value;
       if(result[3].status==='fulfilled'&&!state.modeTouched){state.mode=result[3].value.policy.autonomy_mode||'supervised';if(live(state))document.getElementById('pwMode').value=state.mode;}
       if(live(state)){
+        if(state.chatId&&state.chatId.startsWith('execution-')&&!(state.tasks||[]).some(t=>t.chat_id===state.chatId)&&!(state.executionRows||[]).some(r=>!r.deleted_at&&r.chat_id===state.chatId)){
+          await refreshState(false);
+          if(live(state)&&state.chatId&&!(S.chats||[]).some(chat=>chat.id===state.chatId&&chat.task_id===state.id)){
+            await changeConversation(state,'');paintDraft(state);await paintChat(state);
+          }
+        }
         if(state.chatId===chatId)await conversationContext(state,{force:true}).catch(()=>null);
         if(state.surface==='chat'&&!state.peek)paintSessions(state);paintTargets(state);paintTasks(state);paintBackground();if(!state.optionSaving&&!document.activeElement?.closest('#pwRuntime'))paintChatOptions(state);if(result[0].status==='rejected')error('任务读取失败：'+result[0].reason.message,state);
         const updated=state.tasks.find(t=>t.id===state.review?.id);

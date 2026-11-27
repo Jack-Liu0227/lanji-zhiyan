@@ -10,7 +10,7 @@ claims, and URL persistence cannot be established without external evidence.
 """
 from __future__ import annotations
 
-import csv
+import csv_text as csv
 import io
 import re
 import unicodedata
@@ -31,22 +31,25 @@ def validate_rules(contract: dict) -> None:
         raise ValueError('file_rules must be an object keyed by required file path')
     declared = {item.get('relative') or item.get('path') if isinstance(item, dict) else item
                 for item in contract.get('required_files', [])}
-    allowed = {'min_chars', 'min_rows', 'required_columns', 'min_entries', 'require_title_and_locator'}
+    allowed = {'min_chars', 'min_rows', 'required_columns', 'min_entries', 'require_title_and_locator',
+               'require_candidate_match'}
     for relative, rule in rules.items():
         if relative not in declared or not isinstance(rule, dict) or set(rule) - allowed:
             raise ValueError(f'{relative}: invalid file_rules or undeclared target')
         for key in ('min_chars', 'min_rows', 'min_entries'):
             if key in rule and (type(rule[key]) is not int or rule[key] < 0):
                 raise ValueError(f'{relative}: {key} must be a nonnegative integer')
-        if 'require_title_and_locator' in rule and type(rule['require_title_and_locator']) is not bool:
-            raise ValueError(f'{relative}: require_title_and_locator must be boolean')
+        for key in ('require_title_and_locator', 'require_candidate_match'):
+            if key in rule and type(rule[key]) is not bool:
+                raise ValueError(f'{relative}: {key} must be boolean')
         columns = rule.get('required_columns', [])
         if not isinstance(columns, list) or any(not isinstance(x, str) or not x.strip() for x in columns):
             raise ValueError(f'{relative}: required_columns must contain nonempty column names')
         suffix = PurePosixPath(relative).suffix.lower()
         if suffix != '.csv' and any(key in rule for key in ('min_rows', 'required_columns')):
             raise ValueError(f'{relative}: CSV rules require a .csv target')
-        if suffix != '.bib' and any(key in rule for key in ('min_entries', 'require_title_and_locator')):
+        if suffix != '.bib' and any(key in rule for key in ('min_entries', 'require_title_and_locator',
+                                                         'require_candidate_match')):
             raise ValueError(f'{relative}: bibliography rules require a .bib target')
 
 
@@ -219,13 +222,16 @@ def candidate_sources(content: str) -> list[dict[str, str]]:
     """Read the title and stable locator used to identify an accepted candidate."""
     try:
         reader = csv.DictReader(io.StringIO(content.lstrip("\ufeff"), newline=""), strict=True)
-        if not reader.fieldnames or not {"title", "doi_or_stable_url"}.issubset(reader.fieldnames):
-            raise ValueError("candidate_papers.csv requires title and doi_or_stable_url columns")
+        if (not reader.fieldnames or 'title' not in reader.fieldnames or
+                not {'doi_or_stable_url', 'doi', 'url'}.intersection(reader.fieldnames)):
+            raise ValueError("candidate_papers.csv requires title and a doi_or_stable_url, doi or url column")
         sources = []
         seen = set()
         for number, row in enumerate(reader, start=2):
             title = (row.get("title") or "").strip()
-            locator = (row.get("doi_or_stable_url") or "").strip()
+            locator = next((value for value in ((row.get(key) or '').strip()
+                                                for key in ('doi_or_stable_url', 'doi', 'url'))
+                            if value and _doi_or_url(value)), '')
             if not title or not _doi_or_url(locator):
                 raise ValueError(f"candidate_papers.csv row {number} requires title and DOI or stable URL")
             key = (_title_key(title), _locator_key(locator))
@@ -279,6 +285,49 @@ def validate_methods_metrics_candidates(relative: str, content: str, candidates_
             raise ValueError(f"{relative}: CSV is missing accepted A candidates: {'; '.join(missing)}")
     except csv.Error as exc:
         raise ValueError(f"{relative}: invalid CSV: {exc}") from exc
+
+
+def _bib_title_key(value: str) -> str:
+    # BibTeX braces preserve capitalization without changing the printed title.
+    value = value.replace(r'\&', '&').replace('{', '').replace('}', '')
+    return _title_key(value)
+
+
+def validate_bib_candidates(relative: str, content: str, candidates_content: str) -> None:
+    """Match each reference to an accepted title and locator without fuzzy guesses."""
+    sources = candidate_sources(candidates_content)
+    if not sources:
+        raise ValueError(f"{relative}: accepted candidate pool is empty")
+    accepted = {}
+    for source in sources:
+        title = _bib_title_key(source['title'])
+        locator = _locator_key(source['doi_or_stable_url'])
+        accepted.setdefault(title, set()).add(locator)
+    seen = set()
+    for key, fields in _BibTeX(relative, content).entries().items():
+        title = _bib_title_key(fields.get('title', ''))
+        locators = accepted.get(title)
+        if not locators:
+            raise ValueError(f"{relative}: BibTeX entry {key!r} title is not in the accepted candidate pool")
+        doi = _locator_key(fields.get('doi', '')) if _nonempty(fields.get('doi', '')) else ''
+        url = _locator_key(fields.get('url', '')) if _http_url(fields.get('url', '')) else ''
+        if _nonempty(fields.get('doi', '')) and not doi.startswith('doi:'):
+            raise ValueError(f"{relative}: BibTeX entry {key!r} has an invalid DOI")
+        matches = {locator for locator in (doi, url) if locator in locators}
+        doi_sources = {locator for locator in locators if locator.startswith('doi:')}
+        if doi and not doi_sources:
+            raise ValueError(f"{relative}: BibTeX entry {key!r} DOI cannot be verified against the accepted candidate URL")
+        if doi_sources and doi and doi not in doi_sources:
+            raise ValueError(f"{relative}: BibTeX entry {key!r} DOI differs from its accepted candidate")
+        if doi_sources and url.startswith('doi:') and url not in doi_sources:
+            raise ValueError(f"{relative}: BibTeX entry {key!r} DOI URL differs from its accepted candidate")
+        if len(matches) != 1:
+            reason = 'ambiguous title and locator' if len(matches) > 1 else 'title and DOI or stable URL do not match'
+            raise ValueError(f"{relative}: BibTeX entry {key!r} {reason} in the accepted candidate pool")
+        identity = (title, next(iter(matches)))
+        if identity in seen:
+            raise ValueError(f"{relative}: BibTeX entry {key!r} duplicates an accepted candidate reference")
+        seen.add(identity)
 
 
 def validate(relative: str, content: str, rule: dict) -> None:

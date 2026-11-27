@@ -1,0 +1,64 @@
+// 静态体检：页面里「引用了、但页面里没有的 id」。
+// 前端已拆成多个 JS 文件，因此把 web/ 下的 .html/.js 当同一份源码扫描。
+// 用法：node tests/frontend/ids.test.mjs
+import { readdirSync, readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
+
+const root = new URL("../../apps/desktop/web/", import.meta.url);
+// 视图 JS 在 views/ 里：递归收，别只扫根目录（只扫根 = 一条也扫不到，还照样打印 OK）
+const sources = [];
+(function walk(dir, prefix) {
+  for (const ent of readdirSync(dir, { withFileTypes: true })) {
+    if (ent.isDirectory()) {
+      if (ent.name !== "vendor" && !ent.name.startsWith(".")) walk(new URL(ent.name + "/", dir), prefix + ent.name + "/");
+      continue;
+    }
+    if (!ent.name.endsWith(".html") && !ent.name.endsWith(".js")) continue;
+    sources.push({ name: prefix + ent.name, text: readFileSync(new URL(ent.name, dir), "utf8") });
+  }
+})(root, "");
+
+const defined = new Set();
+const refs = new Map();
+// Render the pure shared controls with the prefixes used by their callers.
+const runtimeSource = sources.find(source => source.name === "views/agent-runtime.js");
+if (runtimeSource) {
+  const runtime = runInNewContext(runtimeSource.text + "\nAgentRuntime;", { S: { models: [] }, esc: String });
+  for (const source of sources) {
+    for (const call of source.text.matchAll(/AgentRuntime\.markup\(['"]\w+['"][^\n]*?\)/g)) {
+      const values = [...call[0].matchAll(/['"]([A-Za-z0-9_-]+)['"]/g)].map(match => match[1]);
+      const html = runtime.markup(values[0], {}, values[1]);
+      for (const match of html.matchAll(/\bid="([A-Za-z0-9_-]+)"/g)) defined.add(match[1]);
+    }
+  }
+}
+
+for (const { name, text } of sources) {
+  for (const match of text.matchAll(/(?<![-\w])id\s*=\s*["']([A-Za-z0-9_-]+)["']/g)) {
+    defined.add(match[1]);
+  }
+  for (const re of [
+    /\$\(\s*["']([A-Za-z0-9_-]+)["']\s*\)/g,
+    /getElementById\(\s*["']([A-Za-z0-9_-]+)["']\s*\)/g,
+  ]) {
+    for (const match of text.matchAll(re)) {
+      const line = text.slice(0, match.index).split("\n").length;
+      const list = refs.get(match[1]) || [];
+      list.push(`${name}:${line}`);
+      refs.set(match[1], list);
+    }
+  }
+}
+
+// 这些控件按需创建，或在代码里有 ?. / if(!x) return 兜底；缺了不会让整页初始化中断。
+const OPTIONAL = new Set(["mailNotifStack", "prLangTo", "prTranslateSource", "tofClose", "cvOpenExt"]);
+const missing = [...refs.keys()].filter((id) => !defined.has(id) && !OPTIONAL.has(id));
+
+console.log(`ids.test: 页面定义 ${defined.size} 个 id，代码引用 ${refs.size} 个`);
+if (missing.length) {
+  console.error("[X] 引用了但页面里没有的 id：");
+  for (const id of missing) console.error(`    ${id}   引用自 ${refs.get(id).join(", ")}`);
+  console.error("    顶层取到 null 会抛错，把后面所有初始化一起带没（整页空壳）——要么补 id，要么删掉那句引用。");
+  process.exit(1);
+}
+console.log("[OK] 没有悬空 id 引用");

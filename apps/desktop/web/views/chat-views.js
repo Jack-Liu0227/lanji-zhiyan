@@ -537,7 +537,7 @@ function renderHistory(){
       </button>
     </aside>`;
   }
-  const all = (S.chats||[]).slice();
+  const all = (S.chats||[]).filter(c=>!String(c.id||'').startsWith('execution-'));
   const groups = historyGroups(all);
   const byBorn = [...all].sort((a, b)=> String(a.created_at || "").localeCompare(String(b.created_at || "")));
   const av = (t)=>{                                          // 绑了专家 → 专家头像；没绑 → 管家姿势按创建顺序轮流
@@ -563,7 +563,7 @@ function renderHistory(){
         <button class="ah-collapse" id="ah-collapse" title="折叠对话列表">◀</button>
       </div></div>
     <div class="ah-list">
-      <div class="ah-bar"><label><input type="checkbox" id="ah-all" ${ahSel.size&&ahSel.size===(S.chats||[]).length?"checked":""}>全选 ${all.length} 个对话</label>
+      <div class="ah-bar"><label><input type="checkbox" id="ah-all" ${ahSel.size&&ahSel.size===all.length?"checked":""}>全选 ${all.length} 个对话</label>
         <button class="ah-del-sel" id="ah-del-sel" ${ahSel.size?"":"disabled"}>删除选中 ${ahSel.size}</button></div>
       ${list || `<p class="hint" style="margin:14px 5px">还没有对话，点右上角 ＋ 新建。</p>`}</div>
     <div class="ah-foot">🕒 一个对话一份记忆 · 输出目录各自独立</div></aside>`;
@@ -722,7 +722,7 @@ function renderAgent(m){
   m.querySelectorAll("[data-sel]").forEach(b=>b.onchange=()=>{ b.checked?ahSel.add(b.dataset.sel):ahSel.delete(b.dataset.sel); render(); });
   m.querySelectorAll("[data-del]").forEach(b=>b.onclick=async(e)=>{
     e.stopPropagation(); const t=(S.chats||[]).find(x=>x.id===b.dataset.del);
-    if(!await uiConfirm(`删除对话「${t?t.title:""}」？这段对话的记忆（消息）会一起删掉，不可撤销。`)) return;
+    if(!await uiConfirm(`将对话「${t?t.title:""}」移入最近删除？可在最近删除中恢复。`)) return;
     try{ await api("/api/chat/delete",{id:b.dataset.del}); }catch(err){ return uiNotify("删除失败："+err.message); }
     ahSel.delete(b.dataset.del);
     if(curChat===b.dataset.del){ curChat=null; localStorage.removeItem("rw-chat"); }
@@ -750,10 +750,10 @@ function renderAgent(m){
     finally{if(button.isConnected)button.disabled=false;if(panel.isConnected)panel.querySelectorAll('select,textarea,button').forEach(control=>control.disabled=false);}
   };
   const allBox = $("ah-all");
-  if(allBox) allBox.onchange = ()=>{ ahSel.clear(); if(allBox.checked) (S.chats||[]).forEach(t=>ahSel.add(t.id)); render(); };
+  if(allBox) allBox.onchange = ()=>{ ahSel.clear(); if(allBox.checked) (S.chats||[]).filter(c=>!String(c.id||'').startsWith('execution-')).forEach(t=>ahSel.add(t.id)); render(); };
   const delSel = $("ah-del-sel");
   if(delSel) delSel.onclick = async ()=>{
-    if(!await uiConfirm(`删除选中的 ${ahSel.size} 个对话？它们的对话记忆会一起删，不可撤销。`)) return;
+    if(!await uiConfirm(`将选中的 ${ahSel.size} 个对话移入最近删除？可在最近删除中恢复。`)) return;
     for(const id of [...ahSel]){ try{ await api("/api/chat/delete",{id}); }catch(e){} if(curChat===id){ curChat=null; localStorage.removeItem("rw-chat"); } }
     ahSel.clear(); await refreshState(false); render();
   };

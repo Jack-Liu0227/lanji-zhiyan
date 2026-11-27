@@ -388,12 +388,23 @@ def route(method, path, body, query, db):
                     signal.set()
                 run = workflow_tasks.cancel(db, run_id)
             elif action == "delete":
-                if run["status"] == "running":
+                if (str(Path(db.path).resolve()), run_id) in _workers or run["status"] == "running" or (
+                        run["status"] == "queued" and not run["settings"].get("prepared")):
                     raise ValueError("无法删除正在运行中的工作流，请先停止运行")
                 with db.db:
-                    db.db.execute("DELETE FROM workflow_runs WHERE id=?", (run_id,))
-                    db.db.execute("DELETE FROM workflow_executions WHERE run_id=?", (run_id,))
                     task_ids = [r[0] for r in db.db.execute("SELECT id FROM project_tasks WHERE workflow_run_id=?", (run_id,)).fetchall()]
+                    entity_ids = [run_id, *task_ids]
+                    entity_marks = ",".join("?" for _ in entity_ids)
+                    chat_ids = list({
+                        "execution-" + run_id,
+                        *("execution-" + tid for tid in task_ids),
+                        *(r[0] for r in db.db.execute(f"SELECT chat_id FROM execution_conversations WHERE entity_id IN ({entity_marks})", entity_ids).fetchall()),
+                    })
+                    db.db.execute("DELETE FROM review_reminders WHERE node_id IN (SELECT id FROM workflow_nodes WHERE run_id=?)", (run_id,))
+                    db.db.execute("DELETE FROM workflow_nodes WHERE run_id=?", (run_id,))
+                    db.db.execute("DELETE FROM schedule_workflow_runs WHERE workflow_run_id=?", (run_id,))
+                    db.db.execute("DELETE FROM workflow_executions WHERE run_id=?", (run_id,))
+                    db.db.execute("DELETE FROM workflow_runs WHERE id=?", (run_id,))
                     for tid in task_ids:
                         db.db.execute("DELETE FROM project_task_runs WHERE task_id=?", (tid,))
                         db.db.execute("DELETE FROM project_task_deliveries WHERE task_id=?", (tid,))
@@ -401,6 +412,26 @@ def route(method, path, body, query, db):
                         db.db.execute("DELETE FROM execution_conversations WHERE entity_id=?", (tid,))
                     db.db.execute("DELETE FROM project_tasks WHERE workflow_run_id=?", (run_id,))
                     db.db.execute("DELETE FROM execution_conversations WHERE entity_id=?", (run_id,))
+                    if chat_ids:
+                        chat_marks = ",".join("?" for _ in chat_ids)
+                        agent_runs = [r[0] for r in db.db.execute(f"SELECT id FROM tasks WHERE owner_id IN ({chat_marks}) AND kind='agent_run'", chat_ids).fetchall()]
+                        if agent_runs:
+                            run_marks = ",".join("?" for _ in agent_runs)
+                            db.db.execute(f"DELETE FROM task_attempts WHERE task_id IN ({run_marks})", agent_runs)
+                            db.db.execute(f"DELETE FROM run_events WHERE run_id IN ({run_marks})", agent_runs)
+                            db.db.execute(f"DELETE FROM background_jobs WHERE id IN ({run_marks})", agent_runs)
+                            db.db.execute(f"DELETE FROM tasks WHERE id IN ({run_marks})", agent_runs)
+                        db.db.execute(f"DELETE FROM chat WHERE task_id IN ({chat_marks})", chat_ids)
+                        if db.db.execute("SELECT 1 FROM sqlite_master WHERE name='chat_fts'").fetchone():
+                            db.db.execute(f"DELETE FROM chat_fts WHERE task_id IN ({chat_marks})", chat_ids)
+                        db.db.execute(f"DELETE FROM chats WHERE id IN ({chat_marks})", chat_ids)
+                        if db.db.execute("SELECT 1 FROM sqlite_master WHERE name='execution_board_hidden'").fetchone():
+                            db.db.execute(f"DELETE FROM execution_board_hidden WHERE project_id=? AND item_kind='conversation' AND item_id IN ({chat_marks})", [run["project_id"], *chat_ids])
+                    if task_ids and db.db.execute("SELECT 1 FROM sqlite_master WHERE name='execution_board_hidden'").fetchone():
+                        tid_marks = ",".join("?" for _ in task_ids)
+                        db.db.execute(f"DELETE FROM execution_board_hidden WHERE project_id=? AND item_kind='task' AND item_id IN ({tid_marks})", [run["project_id"], *task_ids])
+                    import execution_board
+                    execution_board.publish(db, run["project_id"], "workflow_deleted", run_id=run_id, source="workflow", activity="工作流运行已删除")
                 return {"deleted": True, "id": run_id}
             else:
                 raise ValueError("不支持的工作流操作")

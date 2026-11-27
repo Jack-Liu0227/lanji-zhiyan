@@ -1,0 +1,283 @@
+{
+  "format": 1,
+  "archive": "001-046.zip",
+  "sha256": "ee2a61fee38f8baf3a0e1b583cf5be5816b78937511f3818ebaa3afd64b8d787",
+  "migrations": [
+    {
+      "version": "001_core_schema",
+      "filename": "001_core_schema.sql",
+      "size": 2655,
+      "checksum": "fe1164ea3a66258d43871203cd36eedb14d07e70acc554eb073d48fa9b41099e"
+    },
+    {
+      "version": "002_workflow_schema",
+      "filename": "002_workflow_schema.sql",
+      "size": 5711,
+      "checksum": "cea33c3823f44396a6fb4a5641a3b970e6e7c6e7531bc5fa26a5733583238be1"
+    },
+    {
+      "version": "003_reliability_tables",
+      "filename": "003_reliability_tables.sql",
+      "size": 1868,
+      "checksum": "0b1c7e4f1b51b8b43103119c45758ec41f0d33b6a2e17a42036a4aac51705b0e"
+    },
+    {
+      "version": "004_v130_features",
+      "filename": "004_v130_features.sql",
+      "size": 1028,
+      "checksum": "1a8db24d18f951171964ff269f41988a0e6270a243986240a902896922ba74e1"
+    },
+    {
+      "version": "005_asset_graph_upgrade",
+      "filename": "005_asset_graph_upgrade.sql",
+      "size": 3706,
+      "checksum": "5a60bfb6e03f8fa540bdb1ded5263972f9261cb10d757568111597397973e91e"
+    },
+    {
+      "version": "006_team_task_dag",
+      "filename": "006_team_task_dag.sql",
+      "size": 606,
+      "checksum": "fd10dfca067924ab5d5776628171fa812c2ee44e7deec80c9db47f4885f3490a"
+    },
+    {
+      "version": "007_search_rank",
+      "filename": "007_search_rank.sql",
+      "size": 290,
+      "checksum": "6a93905b512277769fcc8973fbb93160b37bfd284423859cb4b34967b7eb0c3f"
+    },
+    {
+      "version": "008_semantic",
+      "filename": "008_semantic.sql",
+      "size": 1892,
+      "checksum": "23854eb44c32fb54a381e2bb2292993c4bed1615704e447fcdcb87cf337ccefa"
+    },
+    {
+      "version": "009_step_delivery",
+      "filename": "009_step_delivery.sql",
+      "size": 458,
+      "checksum": "564a3c479804c41362c141660a44aef8814c6e5253e7a5c2b0dff4552cb01209"
+    },
+    {
+      "version": "010_workflow_coordination",
+      "filename": "010_workflow_coordination.sql",
+      "size": 833,
+      "checksum": "662f505a485b4ab9a09d2027b0d85086e1e5ee17a2b2b6788485d9df85b9c664"
+    },
+    {
+      "version": "011_prompt_templates",
+      "filename": "011_prompt_templates.sql",
+      "size": 502,
+      "checksum": "8a4df42fc25d871f4719e615911f711a6404e086f952efe687313338de5bfccb"
+    },
+    {
+      "version": "012_connected_research",
+      "filename": "012_connected_research.sql",
+      "size": 595,
+      "checksum": "8004090f3bdbc89ad842bf76112ff5f3016bc786ad385adeb49d751a2b4ffa47"
+    },
+    {
+      "version": "013_collaboration_completion",
+      "filename": "013_collaboration_completion.sql",
+      "size": 1499,
+      "checksum": "772dee426c0e2bd7bb63d63d767407a9b8c280c4c4b96a73fd1c060da8d0b17f"
+    },
+    {
+      "version": "014_file_handoffs",
+      "filename": "014_file_handoffs.sql",
+      "size": 522,
+      "checksum": "23dc0e0ddf7b7c5a88c8c25e5a94aed59e13f2c07b5e8c832558e0074a137ff7"
+    },
+    {
+      "version": "015_skill_installations",
+      "filename": "015_skill_installations.sql",
+      "size": 305,
+      "checksum": "e89d375e2a2ecde67c93290552e855391a737e2205142988169b47fbe587deb2"
+    },
+    {
+      "version": "016_skill_sources",
+      "filename": "016_skill_sources.sql",
+      "size": 419,
+      "checksum": "11ebd9c9e1ac30f4daa3d98963277bf61fe6f481e343d1d88fb48b67e9d7d3bc"
+    },
+    {
+      "version": "017_zotero_project_sources",
+      "filename": "017_zotero_project_sources.sql",
+      "size": 739,
+      "checksum": "3a791328799df5f01aed73c44562dd665407621c5ff9522009ecf3ff6f8ff0a8"
+    },
+    {
+      "version": "018_project_bindings",
+      "filename": "018_project_bindings.sql",
+      "size": 1989,
+      "checksum": "2b2725d5ed86de6fff754ecce324732b67834e99ce9d81a23b83c366de59a545"
+    },
+    {
+      "version": "019_project_tasks",
+      "filename": "019_project_tasks.sql",
+      "size": 3811,
+      "checksum": "062f52264455d7158f83836fd158626564e8053d217d22b15720acdcb6f9f707"
+    },
+    {
+      "version": "020_project_workflow_nodes",
+      "filename": "020_project_workflow_nodes.sql",
+      "size": 1733,
+      "checksum": "d8de6dd6fab2d1c13d5b261f46f9cbccb3e697b39c14623af7b5f9925dbc70c6"
+    },
+    {
+      "version": "021_langgraph_workflows",
+      "filename": "021_langgraph_workflows.sql",
+      "size": 1247,
+      "checksum": "bab95a0c16c59ce5cf5a8821a86e16192d3ebfbe195bb8a54a38dddc10b90b6f"
+    },
+    {
+      "version": "022_langgraph_task_integration",
+      "filename": "022_langgraph_task_integration.sql",
+      "size": 1121,
+      "checksum": "a909a380a98afed120e9277edadd2866c1c2cf1d530552a95cf7852684126232"
+    },
+    {
+      "version": "023_research_setups",
+      "filename": "023_research_setups.sql",
+      "size": 421,
+      "checksum": "2dcfafb840ce3e5209b4e19522ccbbbeea3df67efe4af3fa4f50732269e75d5b"
+    },
+    {
+      "version": "024_execution_workspace",
+      "filename": "024_execution_workspace.sql",
+      "size": 1515,
+      "checksum": "361bee7a37dcc0ede97c91b3f5a60ac36b8afd3d3b8083c5362ae13054b1f137"
+    },
+    {
+      "version": "025_shared_execution_profiles",
+      "filename": "025_shared_execution_profiles.sql",
+      "size": 423,
+      "checksum": "802cd51a9e2a6ecc654ad4da53e23372e60373142c89f7accb508e1da08b915f"
+    },
+    {
+      "version": "026_rss_project_imports",
+      "filename": "026_rss_project_imports.sql",
+      "size": 438,
+      "checksum": "4167aac071a71e023c62a5cfd594a2d572aa51ca03107891beec1df3cbd5b0e9"
+    },
+    {
+      "version": "027_workflow_checkpoints",
+      "filename": "027_workflow_checkpoints.sql",
+      "size": 746,
+      "checksum": "05317f61dee4d632a6d40a2d1d000f77f09301c0b8e058e85adb07fd0b1151b4"
+    },
+    {
+      "version": "028_model_requests",
+      "filename": "028_model_requests.sql",
+      "size": 769,
+      "checksum": "07116d59b97c7dc822903aa53379265eee4aebbe0f969be18b59d0aad1bb73c1"
+    },
+    {
+      "version": "029_execution_board_visibility",
+      "filename": "029_execution_board_visibility.sql",
+      "size": 312,
+      "checksum": "bd9ee852d54dd22aa0da8a0ae601b0176484644258ef77e68b377fd2443b5eeb"
+    },
+    {
+      "version": "030_execution_conversations",
+      "filename": "030_execution_conversations.sql",
+      "size": 2257,
+      "checksum": "dc08ecd12b29c0336e095e0a2e03118fd4153898f58ec7d52d8fcd237ec0fdf5"
+    },
+    {
+      "version": "031_workflow_node_results",
+      "filename": "031_workflow_node_results.sql",
+      "size": 2579,
+      "checksum": "3463b45e0ea56f2edbd935639b50c2da42686c868c03691393fb0771c239367f"
+    },
+    {
+      "version": "032_workflow_node_result_cleanup",
+      "filename": "032_workflow_node_result_cleanup.sql",
+      "size": 786,
+      "checksum": "a5c90efc8c6972c58b1dbc62ef790edb9de015f4bb788751a515eed3e5e6d60c"
+    },
+    {
+      "version": "033_agent_handoffs",
+      "filename": "033_agent_handoffs.sql",
+      "size": 647,
+      "checksum": "24c0a08e691342ef8e3e218e5a51461a79a0dd373f915e7a0b1f8fc0ac295696"
+    },
+    {
+      "version": "034_staged_zotero_import",
+      "filename": "034_staged_zotero_import.sql",
+      "size": 694,
+      "checksum": "0611299366b6288c09b90092124dee7a80a72cc2c4c53ecd78e06fca148b8794"
+    },
+    {
+      "version": "035_zotero_staging_compat",
+      "filename": "035_zotero_staging_compat.sql",
+      "size": 1166,
+      "checksum": "127e387a4bb28ab7a797ce075a631c4150d53a33617c5c3da464f8456eff1113"
+    },
+    {
+      "version": "036_conversation_temporary_teams",
+      "filename": "036_conversation_temporary_teams.sql",
+      "size": 229,
+      "checksum": "1755a33d65d24bbed1021c0ef3338acf6bebb24cc7850a1af6a58552566ef495"
+    },
+    {
+      "version": "037_project_data_locations",
+      "filename": "037_project_data_locations.sql",
+      "size": 159,
+      "checksum": "2ba57967845e22a738576aa9a4458aa4cd9d8be2ad6634d43b77a0564296c1ae"
+    },
+    {
+      "version": "038_execution_conversation_guarantees",
+      "filename": "038_execution_conversation_guarantees.sql",
+      "size": 1954,
+      "checksum": "633004f73fcb77a2787db17293175dfa54c25c504532c53fbc3d3a04a51edc25"
+    },
+    {
+      "version": "039_zotero_paper_references",
+      "filename": "039_zotero_paper_references.sql",
+      "size": 1192,
+      "checksum": "3ca6fdcd10e4a8484d7c1e294ebaaa54e6d87a9724f4708a055c98d07840c081"
+    },
+    {
+      "version": "040_model_profile_lifecycle",
+      "filename": "040_model_profile_lifecycle.sql",
+      "size": 514,
+      "checksum": "17c8adb1ef92f2ce6e7b22d0fc7b395f73de3cd9a75cb49961100d0ab1a75283"
+    },
+    {
+      "version": "041_embedding_identity",
+      "filename": "041_embedding_identity.sql",
+      "size": 213,
+      "checksum": "644103e76f426623c0d5f3b63e312965aa1bb90586098bc45f6a9badd6472d8f"
+    },
+    {
+      "version": "042_schedule_trigger_queue",
+      "filename": "042_schedule_trigger_queue.sql",
+      "size": 341,
+      "checksum": "3dded1ec2c2ed633ebaf08b7b16e8edc984c1c3edfbefad954bf056a9c3b1d41"
+    },
+    {
+      "version": "043_model_budget_counters",
+      "filename": "043_model_budget_counters.sql",
+      "size": 312,
+      "checksum": "28c591cc4da3eaeeafe9712887c904fed7f9a416264322b2ec5a9a4f83b01810"
+    },
+    {
+      "version": "044_model_budget_cost",
+      "filename": "044_model_budget_cost.sql",
+      "size": 168,
+      "checksum": "434a90c03bc08ccb456bea3464c23beabddca9d68b2a5191c4d7ac7961ca25ea"
+    },
+    {
+      "version": "045_workflow_template_archive",
+      "filename": "045_workflow_template_archive.sql",
+      "size": 313,
+      "checksum": "f536bf0f8381a764f630ae833250cf649645b961aecf196511ed42ee9ec68a9a"
+    },
+    {
+      "version": "046_node_model_governance",
+      "filename": "046_node_model_governance.sql",
+      "size": 635,
+      "checksum": "ab67ecf97a5fe9c5414764a3d359fa454caaf2cffb948faa5bda9730e4bd61fb"
+    }
+  ]
+}
