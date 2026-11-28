@@ -27,9 +27,9 @@ function calEventsByDate(){
 function calendarEntryHTML(e){
   const project=(S.tasks || []).find(t=>t.id===e.task_id);
   const status={TODO:"待办",IN_PROGRESS:"执行中",REVIEW:"待验收",DONE:"已完成",scheduled:"已排期",running:"执行中",completed:"已完成",failed:"失败",blocked:"已阻断",canceled:"已取消",cancelled:"已停止",awaiting_review:"待人工审查",delivered:"已审查",rejected:"已退回",succeeded:"已完成"}[e.status] || e.status || "";
-  return `<div class="check-item ${e.done?"done":""}"><input type="checkbox" data-chk="${esc(e.id)}" ${e.done?"checked":""} ${e.linked && !e.can_toggle?'disabled title="请打开来源处理执行或审查"':""}>${e.time?`<span class="check-time">${esc(e.time)}</span>`:""}
+  return `<div class="check-item ${e.done?"done":""}" data-cal-entry="${esc(e.id)}"><input type="checkbox" data-chk="${esc(e.id)}" ${e.done?"checked":""} ${e.linked && !e.can_toggle?'disabled title="请打开来源处理执行或审查"':""}>${e.time?`<span class="check-time">${esc(e.time)}</span>`:""}
     <span class="check-title">${esc(e.title)}${e.linked?`<small style="display:block;color:var(--muted)">${esc(project?.title || "")} · ${esc(e.source_label)} · ${esc(status)}</small>`:""}</span>
-    ${e.linked?`<button class="btn ghost" data-cal-open="${esc(e.id)}">${e.target_type==="note"?"打开笔记":e.source_type==="workflow_review" && e.is_pending?"审查节点":"打开来源"}</button>`:`<button class="check-del" data-del="${esc(e.id)}" title="删除">✕</button>`}</div>`;
+    ${e.linked?`<button class="btn ghost" data-cal-open="${esc(e.id)}">${e.target_type==="note"?"打开笔记":e.source_type==="workflow_review" && e.is_pending?"审查节点":e.target_type==="todo"?"打开计划":e.target_type==="schedule"?"打开定时":"打开来源"}</button>`:`<button class="check-del" data-del="${esc(e.id)}" title="删除">✕</button>`}</div>`;
 }
 let calendarSearch='';
 function renderCalendar(m){
@@ -85,14 +85,13 @@ function renderCalendar(m){
           </div>
         </div>
         <div class="cal-week"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span class="cal-we">六</span><span class="cal-we">日</span></div>
-        <p class="hint" style="padding:0 14px">项目截止日期、下次定时运行、产出笔记和工作流人工审查会自动关联到日历。</p>
         <div class="cal-grid">${grid}</div>
         <div class="cal-day-events"><div class="cal-day-head">📆 ${calSel===t0?"今天 · ":""}${calSel}<span class="side-count">${selEvs.length} 项</span></div></div>
       </div>
       </div>
 
       <div class="card">
-        <div class="card-head"><b>☀ 当日工作计划</b><span class="side-count">${calSel}</span></div>
+        <div class="card-head"><b>☀ 当日工作计划</b><span class="side-count">${calSel} · ${dayItems.length} 项</span></div>
         <div class="check-list">${dayItems.length ? dayItems.map(calendarEntryHTML).join("")
           : `<div class="hint">这一天还没有安排 🎉🎉🎉</div>`}</div>
         <div class="quick-add"><input id="todayInput" class="tb-input" placeholder="＋ 添加任务，回车确认…"><input id="todayTime" class="tb-input quick-time" type="time" title="可选：这条安排的具体时间"><button class="btn" id="btnTodayAdd">添加</button></div>
@@ -101,15 +100,15 @@ function renderCalendar(m){
 
     <div class="cal-bottom">
       <div class="card">
-        <div class="card-head"><b>📡 任务完成情况</b><span class="side-count">自动生成</span></div>
-        <div class="feed-list">${doneEvs.length ? doneEvs.map(e=>`<div class="feed-item"><span class="feed-ico">✅</span><span class="feed-text">完成任务 [${esc(e.title)}]</span>${e.linked?`<button class="btn ghost" data-cal-open="${esc(e.id)}">${e.target_type==="note"?"打开笔记":"打开来源"}</button>`:""}<span class="feed-time">${hhmm(e.created_at)}</span></div>`).join("")
+        <div class="card-head"><b>📡 任务完成情况</b><span class="side-count">${doneEvs.length} 条</span></div>
+        <div class="feed-list">${doneEvs.length ? doneEvs.map(e=>`<div class="feed-item"><span class="feed-ico">✅</span><span class="feed-text" title="${esc(e.title)}">${esc(e.title)}</span>${e.linked?`<button class="btn ghost" data-cal-open="${esc(e.id)}">${e.target_type==="note"?"打开笔记":"查看"}</button>`:""}<span class="feed-time">${hhmm(e.created_at)}</span></div>`).join("")
           : `<div class="hint">还没有完成的任务</div>`}</div>
       </div>
       <div class="card">
         <div class="card-head"><b>⏳ 倒计时</b><span class="side-count">${soon.length} 项未完成</span></div>
         <div class="countdown-list">${soon.length ? soon.map(e=>{
             const d = Math.round((new Date(e.date+"T00:00:00").getTime()-base)/DAY);
-            return `<div class="countdown-item"><span class="countdown-days ${d<=3?"urgent":""}">${d===0?"今天":d+"天"}</span><span class="countdown-label">${esc(e.title)}</span><span class="side-count">${e.date.slice(5)}</span></div>`;
+            return `<div class="countdown-item" data-cal-focus="${esc(e.id)}"><span class="countdown-days ${d<=3?"urgent":""}">${d===0?"今天":d+"天"}</span><span class="countdown-label" title="${esc(e.title)}">${esc(e.title)}</span>${e.linked?`<button class="btn ghost" data-cal-open="${esc(e.id)}">查看</button>`:""}<span class="side-count">${e.date.slice(5)}</span></div>`;
           }).join("") : `<div class="hint">没有未完成的重要节点</div>`}</div>
       </div>
     </div>
@@ -121,8 +120,14 @@ function renderCalendar(m){
     if(!query){results.replaceChildren();return;}
     const matches=S.events.filter(event=>[event.title,event.date,event.project_title,event.kind].join(' ').toLowerCase().includes(query)).slice(0,100);
     results.innerHTML=matches.length?matches.map(event=>`<button type="button" class="cal-search-result" data-cal-result="${esc(event.id)}"><strong>${esc(event.title)}</strong><span>${esc(event.date)} ${esc(event.time||'')}</span></button>`).join(''):'<p class="hint">没有匹配的日程</p>';
-    results.querySelectorAll('[data-cal-result]').forEach(button=>button.onclick=()=>{const event=S.events.find(item=>item.id===button.dataset.calResult);if(!event)return;calSel=event.date;const d=new Date(event.date+'T00:00:00');calY=d.getFullYear();calM=d.getMonth();calendarSearch='';render();});
+    results.querySelectorAll('[data-cal-result]').forEach(button=>button.onclick=()=>{const event=S.events.find(item=>item.id===button.dataset.calResult);if(!event)return;if(event.linked){window.ConnectedResearch?.openCalendarSource?.(event.id,button);return;}calSel=event.date;const d=new Date(event.date+'T00:00:00');calY=d.getFullYear();calM=d.getMonth();calendarSearch='';render();const entry=document.querySelector(`[data-cal-entry="${CSS.escape(event.id)}"]`);entry?.scrollIntoView({block:'center',behavior:'smooth'});});
   };
+  m.querySelectorAll('[data-cal-focus]').forEach(row=>row.onclick=ev=>{
+    if(ev.target.closest('button'))return;
+    const event=S.events.find(item=>item.id===row.dataset.calFocus);if(!event)return;
+    calSel=event.date;const d=new Date(event.date+'T00:00:00');calY=d.getFullYear();calM=d.getMonth();render();
+    document.querySelector(`[data-cal-entry="${CSS.escape(event.id)}"]`)?.scrollIntoView({block:'center',behavior:'smooth'});
+  });
   search.oninput=searchEvents;searchEvents();
   $("calY").onchange = e=>{ calY = +e.target.value; render(); };
   $("calM").onchange = e=>{ calM = +e.target.value; render(); };

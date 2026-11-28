@@ -99,8 +99,8 @@ def command(db,kind,identifier,action,*,title='',project_id='',team_id=''):
         with db.db:
             if kind=='chat':
                 db.db.execute('DELETE FROM chat WHERE task_id=?',(identifier,))
-                if db.db.execute("SELECT 1 FROM sqlite_master WHERE name='chat_fts'").fetchone():
-                    db.db.execute('DELETE FROM chat_fts WHERE task_id=?',(identifier,))
+                import memory_store
+                memory_store.safe_delete_fts(db.db, 'chat_fts', 'task_id=?', (identifier,))
                 run_ids=[r[0] for r in db.db.execute("SELECT id FROM tasks WHERE owner_id=? AND kind='agent_run'",(identifier,)).fetchall()]
                 if run_ids:
                     marks=','.join('?' for _ in run_ids)

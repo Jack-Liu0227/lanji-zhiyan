@@ -40,7 +40,7 @@ def migrate(db):
     import model_health
     for table, fields in {
         "assistants": {"reasoning": "TEXT NOT NULL DEFAULT 'auto'", "permission": "TEXT NOT NULL DEFAULT 'auto'",
-                       "fallback_model_ids": "TEXT NOT NULL DEFAULT '[]'"},
+                       "fallback_model_ids": "TEXT NOT NULL DEFAULT '[]'", "deleted_at": "TEXT NOT NULL DEFAULT ''"},
         "team_members": {"model_id": "TEXT NOT NULL DEFAULT ''", "reasoning": "TEXT NOT NULL DEFAULT 'auto'",
                          "permission": "TEXT NOT NULL DEFAULT 'auto'", "fallback_model_ids": "TEXT NOT NULL DEFAULT '[]'"},
         "model_profiles": {"api": "TEXT NOT NULL DEFAULT 'openai-completions'", "provider_id": "TEXT NOT NULL DEFAULT ''"},
@@ -582,6 +582,10 @@ def route(method, path, body, query, db):
     if method == "POST" and action == "assistant-save":
         aid = b.get("id") or "a-" + uuid.uuid4().hex
         return {"assistant": db.assistant_save(aid, **{k: v for k, v in b.items() if k != "id"})}
+    if method == "GET" and action == "assistant-prompt-upgrade-preview":
+        return db.assistant_prompt_upgrade_preview()
+    if method == "POST" and action == "assistant-prompt-upgrade":
+        return db.assistant_prompt_upgrade(b.get("ids"))
     if method == "POST" and action == "runtime-save":
         db.chat(b["id"])
         fields = {k: b[k] for k in ("model_id", "reasoning", "permission") if k in b}
@@ -614,16 +618,10 @@ def route(method, path, body, query, db):
         db.db.commit()
         team.ensure_leader(t["id"], db)
         return {"team": db.team(t["id"])}
+    if method == "POST" and action == "assistant-restore-defaults":
+        return db.assistant_restore_defaults(mode=str(b.get("mode") or "missing"))
     if method == "POST" and action == "team-delete":
-        tid = b["id"]
-        if tid in team.TEAM_RUNS:
-            raise ValueError("请先停止团队运行")
-        t = db.team(tid)
-        if not t or t["kind"] != "custom":
-            raise ValueError("仅自定义持久团队可删除；预设团队可以编辑")
-        # Preserve its title and transcript as an archived team, keeping sessions selectable.
-        db.team_update(tid, status="archived")
-        return {"ok": True}
+        return team.delete_team(str(b.get("id") or ""))
     if method == "POST" and action in ("member-save", "leader", "team-session", "team-say"):
         tid = b.get("team_id") or b.get("id")
         if not db.team(tid):

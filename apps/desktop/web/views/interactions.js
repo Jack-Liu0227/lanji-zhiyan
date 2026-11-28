@@ -85,12 +85,31 @@ const AppInteractions = (() => {
 
   let contextMenu=null, menuOwner=null, menuOrigin=null, menuAnchor=null;
   const rowSelector='[data-schedule-id], [data-ec-task], [data-history-id], [data-plan-id], [data-ec-column], [data-tree-path], [data-pn-file]:not(button), .nb-note-row, [data-card-folder], .proj-row, .zot-row-card, [data-tab-id], .fl-tree-row[data-rel], .cv-f[data-p], [data-global-todo-id]';
+  const workbenchMenuSelector='.wnw-file, .wnw-document, .wfp, .pw-directory-row, .pr-item-row, [data-pw-preview-art], [data-pw-open-art]';
+  function workbenchFileMeta(row){
+    if(!row) return null;
+    if(row.matches('.wfp')){
+      try{ return JSON.parse(row.getAttribute('data-wfp-meta')||'{}'); }catch{ return null; }
+    }
+    return {
+      project_id: row.dataset.projectId || row.dataset.pwArtProject || curTask,
+      relative: row.dataset.rel || row.dataset.pwArtRel || '',
+      path: row.dataset.path || row.dataset.pwArtPath || row.dataset.pwOpenArt || '',
+      name: row.dataset.wnwArtName || row.querySelector('strong, span')?.textContent?.trim() || '',
+      dir: row.dataset.dir === '1',
+      art_id: row.dataset.wnwArtId || ''
+    };
+  }
   function fileReference(row){
     if(!row) return null;
     if(row.matches('.proj-row')) return {project_id:row.querySelector('[data-go]')?.dataset.go,relative:''};
     if(row.matches('.zot-row-card')) return {zotero_key:row.dataset.zotKey};
     if(row.matches('.fl-tree-row')) return {project_id:row.dataset.projectId || curTask,relative:row.dataset.rel};
     if(row.matches('.cv-f')) return {path:row.dataset.p};
+    if(row.matches(workbenchMenuSelector)){
+      const m=workbenchFileMeta(row);
+      return m?(m.relative?{project_id:m.project_id||curTask,relative:m.relative}:m.path?{project_id:m.project_id||curTask,path:m.path}:null):null;
+    }
     const relative=row.dataset.treePath || row.dataset.pnFile || row.dataset.cardFolder || row.querySelector('[data-pn-file]')?.dataset.pnFile;
     return relative ? {project_id:mdDashProject,relative} : null;
   }
@@ -122,6 +141,62 @@ const AppInteractions = (() => {
       run:()=>{ if(button.isConnected && !button.disabled) button.click(); }};
   }
   function contextActions(row){
+    if(row.matches(workbenchMenuSelector)){
+      const meta=workbenchFileMeta(row)||{};
+      const pid=meta.project_id||curTask;
+      const hasFile=!!(meta.relative||meta.path);
+      const isItem=!row.matches('.wnw-document, .wfp');
+      const resolveMeta=async()=>{
+        if(meta.relative&&meta.path)return meta;
+        const loc=await api('/api/file/location',{project_id:pid,...(meta.relative?{relative:meta.relative}:{path:meta.path}),open:false});
+        return {...meta,path:loc?.path||meta.path,relative:loc?.relative||meta.relative};
+      };
+      return [
+        ...(isItem?[{text:meta.dir?'打开目录':'打开 / 预览文件',run:()=>row.click()}]:[]),
+        ...(!meta.dir?[
+          {text:'交给当前工作流…',shortcut:'Alt+Shift+H',disabled:!hasFile,run:async()=>{
+            const resolved=await resolveMeta();
+            if(!resolved.relative)return uiNotify('该产物尚未保存为项目内相对路径文件，请先固定或导出后再交给工作流');
+            return FileHandoff.open({project_id:pid,relative:resolved.relative});
+          }},
+          {text:'交给专家/助手处理…',disabled:!hasFile,run:async()=>{
+            const resolved=await resolveMeta();
+            const input=resolved.relative?{relative:resolved.relative,allow_draft:true}:{path:resolved.path,allow_draft:true};
+            return ProjectTasks.compose(pid,{title:meta.name||(resolved.relative||resolved.path).split(/[\\/]/).pop(),goal:'',inputs:[input],metadata:{source:'file_handoff'},quick:true});
+          }},
+          {text:'交接记录与回执',disabled:!hasFile,run:async()=>{
+            const resolved=await resolveMeta();
+            if(resolved.relative)return FileHandoff.history({project_id:pid,relative:resolved.relative});
+            return uiNotify('暂无交接记录');
+          }},
+          {text:'引用到目标对话',disabled:!hasFile,run:async()=>{
+            const resolved=await resolveMeta();
+            if(!resolved.relative)return uiNotify('暂不支持直接引用此路径');
+            return ProjectWorkspace.referenceResource({relative:resolved.relative,title:meta.name,read_only:true},pid);
+          }},
+          {separator:true}
+        ]:[]),
+        {text:'复制路径',shortcut:'Alt+Shift+C',disabled:!hasFile,run:async()=>{
+          const resolved=await resolveMeta();
+          if(resolved.path)await copyText(resolved.path);else uiNotify('未找到本地路径');
+        }},
+        {text:'复制相对路径',shortcut:'Ctrl+Alt+Shift+C',disabled:!hasFile,run:async()=>{
+          const resolved=await resolveMeta();
+          if(resolved.relative||resolved.path){await copyText(resolved.relative||resolved.path);uiNotify('相对路径已复制');}
+        }},
+        {text:'复制终端切换目录命令',disabled:!hasFile,run:async()=>{
+          const resolved=await resolveMeta();
+          const abs=resolved.path||resolved.relative;if(!abs)return;
+          const dir=meta.dir?abs:abs.replace(/[\\/][^\\/]+$/,'');
+          await copyText(`cd "${dir}"`);uiNotify(`已复制终端命令: cd "${dir}"`);
+        }},
+        {text:'在文件资源管理器中显示',disabled:!hasFile,run:async()=>{
+          const resolved=await resolveMeta();
+          await api('/api/file/location',{project_id:pid,...(resolved.relative?{relative:resolved.relative}:{path:resolved.path}),open:true}).catch(()=>api('/api/conv/open',{path:resolved.path}));
+          uiNotify('已打开所在文件夹');
+        }}
+      ];
+    }
     if(row.matches('[data-schedule-id]'))return [...row.querySelectorAll('[data-sch-run],[data-sch-toggle],[data-sch-edit],[data-sch-del]')].map(button=>({...buttonAction(button),danger:button.hasAttribute('data-sch-del')}));
     if(row.matches('[data-history-id]'))return ConversationHistory.actions(row);
     if(row.matches('[data-global-todo-id]')) return GlobalTodos.contextActions(row);
@@ -168,6 +243,7 @@ const AppInteractions = (() => {
       return [
         ...(isDir && isFileTree ? [{text:'打开目录',run:()=>row.click()},{separator:true}] : []),
         ...(!isDir ? [{text:"打开文件",run:()=>row.click()}, {text:"交给当前工作流…",shortcut:"Alt+Shift+H",run:()=>FileHandoff.open(fileReference(row))},
+          {text:"交给专家/助手处理…",run:()=>{const r=fileReference(row);if(r?.relative)ProjectTasks.compose(r.project_id,{title:targetName,goal:'',inputs:[{relative:r.relative,allow_draft:true}],metadata:{source:'file_handoff'},quick:true});}},
           {text:"交接记录与回执",run:()=>FileHandoff.history(fileReference(row))}, {separator:true}] : []),
         {
           icon: "📄",
@@ -525,7 +601,8 @@ const AppInteractions = (() => {
   },true);
   document.addEventListener('contextmenu', event=>{
     if(editable(event.target)) return;
-    const row=event.target.closest(rowSelector); if(!row) return;
+    if(window.getSelection()?.toString()?.trim()) return;
+    const row=event.target.closest(rowSelector + ', ' + workbenchMenuSelector); if(!row) return;
     event.preventDefault(); openMenu(row,event.clientX,event.clientY,row.querySelector('[data-t]') || row);
   });
   document.addEventListener('pointerdown',event=>{ if(contextMenu && !contextMenu.contains(event.target)) closeMenu(false); },true);

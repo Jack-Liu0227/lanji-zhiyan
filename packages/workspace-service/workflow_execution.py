@@ -422,8 +422,8 @@ def route(method, path, body, query, db):
                             db.db.execute(f"DELETE FROM background_jobs WHERE id IN ({run_marks})", agent_runs)
                             db.db.execute(f"DELETE FROM tasks WHERE id IN ({run_marks})", agent_runs)
                         db.db.execute(f"DELETE FROM chat WHERE task_id IN ({chat_marks})", chat_ids)
-                        if db.db.execute("SELECT 1 FROM sqlite_master WHERE name='chat_fts'").fetchone():
-                            db.db.execute(f"DELETE FROM chat_fts WHERE task_id IN ({chat_marks})", chat_ids)
+                        import memory_store
+                        memory_store.safe_delete_fts(db.db, "chat_fts", f"task_id IN ({chat_marks})", chat_ids)
                         db.db.execute(f"DELETE FROM chats WHERE id IN ({chat_marks})", chat_ids)
                         if db.db.execute("SELECT 1 FROM sqlite_master WHERE name='execution_board_hidden'").fetchone():
                             db.db.execute(f"DELETE FROM execution_board_hidden WHERE project_id=? AND item_kind='conversation' AND item_id IN ({chat_marks})", [run["project_id"], *chat_ids])

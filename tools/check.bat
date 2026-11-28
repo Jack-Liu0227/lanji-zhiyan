@@ -43,8 +43,12 @@ echo === 6/7 Split resizer checks ===
 node "tests\frontend\split-resizer.test.mjs"
 if errorlevel 1 goto :failed
 echo.
-echo === 7/7 Markdown import checks ===
+echo === 7/8 Markdown import checks ===
 node "tests\frontend\markdown-import.test.mjs"
+if errorlevel 1 goto :failed
+echo.
+echo === 8/8 Chat event compatibility checks ===
+node "tests\frontend\chat-events.test.mjs"
 if errorlevel 1 goto :failed
 echo.
 echo [OK] All checks passed.

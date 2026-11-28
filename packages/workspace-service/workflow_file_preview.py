@@ -54,9 +54,9 @@ def _project_path(root, reference):
     return path
 
 
-def _file_limit(path):
+def _file_limit(path, *, allow_any: bool = False):
     suffix = path.suffix.lower()
-    if suffix not in MARKDOWN | {'.csv'}:
+    if not allow_any and suffix not in MARKDOWN | {'.csv'}:
         raise ValueError('仅支持 Markdown（.md/.markdown）和 CSV 文件')
     try:
         info = path.stat()
@@ -64,6 +64,31 @@ def _file_limit(path):
         raise ValueError('预览文件不存在') from None
     if not stat.S_ISREG(info.st_mode):
         raise ValueError('只能预览普通文件')
+
+
+def _rich_preview(path, name, source, offset, limit, *, expected_hash=''):
+    import workflow_node_workbench as nodes
+    suffix = path.suffix.lower()
+    if suffix in MARKDOWN:
+        return _markdown(name, _read_file(path, expected_hash=expected_hash), offset, limit, source)
+    if suffix == '.csv':
+        return _csv(name, _read_file(path, expected_hash=expected_hash), offset, limit, source)
+    _file_limit(path, allow_any=True)
+    if expected_hash:
+        content_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        if content_hash != expected_hash:
+            raise ValueError('节点的固定产物已变化，请重新核对版本')
+    kind = nodes._file_kind({'path': str(path)})
+    res = nodes._file_preview(path, kind, False)
+    return {
+        **res,
+        'name': name,
+        'offset': 0,
+        'limit': limit,
+        'total_rows': 0,
+        'truncated': False,
+        'source': source,
+    }
 
 
 def _read_file(path, *, expected_hash=''):
@@ -149,14 +174,28 @@ def _node_preview(db, root, project_id, chat_id, task_id, task_run_id, revision,
     import workflow_node_workbench as nodes
 
     task = workflow_conversation_context.require_task(db, project_id, chat_id, task_id)
-    if not task_run_id or revision is None:
-        raise ValueError('节点预览必须指定 task_run_id 和 output_revision 固定版本')
-    run = tasks.get_run(db, task_run_id)
-    if run['task_id'] != task_id or run['status'] != 'succeeded':
+    requested = _project_path(root, reference) if reference else None
+    run = None
+    if task_run_id and revision is not None:
+        try:
+            candidate_run = tasks.get_run(db, task_run_id)
+            if candidate_run and candidate_run['task_id'] == task_id and candidate_run['status'] == 'succeeded':
+                run = candidate_run
+        except Exception:
+            run = None
+
+    if not run:
+        if requested is not None and requested.is_file():
+            rel = requested.relative_to(root).as_posix()
+            source = {'kind': 'project', 'project_id': project_id, 'chat_id': chat_id,
+                      'task_id': task_id, 'relative': rel, 'base_relative': rel, 'path': str(requested)}
+            return _rich_preview(requested, requested.name, source, offset, limit)
+        if not task_run_id or revision is None:
+            raise ValueError('节点预览必须指定 task_run_id 和 output_revision 固定版本')
         raise ValueError('请选择此节点已成功完成的固定运行版本')
+
     version = task_output_versions.read(db, task, run, revision)
     files = version['output_snapshot'].get('files') or []
-    requested = _project_path(root, reference) if reference else None
 
     def matches(item):
         return any(_project_path(root, item[key]) == requested
@@ -166,9 +205,15 @@ def _node_preview(db, root, project_id, chat_id, task_id, task_run_id, revision,
         if requested is None:
             raise ValueError('请指定节点文件的 path 或 artifact_id')
         indices = [index for index, item in enumerate(files) if matches(item)]
-        if len(indices) != 1:
+        if len(indices) == 1:
+            artifact_id = f'file:{indices[0]}'
+        elif requested.is_file():
+            rel = requested.relative_to(root).as_posix()
+            source = {'kind': 'project', 'project_id': project_id, 'chat_id': chat_id,
+                      'task_id': task_id, 'relative': rel, 'base_relative': rel, 'path': str(requested)}
+            return _rich_preview(requested, requested.name, source, offset, limit)
+        else:
             raise ValueError('path 无法唯一匹配该节点版本的文件，请指定准确的 artifact_id')
-        artifact_id = f'file:{indices[0]}'
     item = None
     if artifact_id != 'structured':
         if not re.fullmatch(r'file:[0-9]{1,10}', artifact_id):
@@ -180,7 +225,7 @@ def _node_preview(db, root, project_id, chat_id, task_id, task_run_id, revision,
         if requested is not None and not matches(item):
             raise ValueError('path 与指定的 artifact_id 不匹配')
         path = _project_path(root, item['path'])
-        _file_limit(path)
+        _file_limit(path, allow_any=True)
     elif requested is not None:
         raise ValueError('文件 path 不能指向结构化产物')
 
@@ -190,12 +235,13 @@ def _node_preview(db, root, project_id, chat_id, task_id, task_run_id, revision,
               'task_run_id': task_run_id, 'output_revision': revision, 'artifact_id': artifact_id}
     if item is not None:
         source['relative'] = path.relative_to(root).as_posix()
+        source['path'] = str(path)
         # Relative links belong to the original document directory, including for revised copies.
         original = item.get('original_path') or item.get('relative') or item['path']
         source['base_relative'] = _project_path(root, original).relative_to(root).as_posix()
-        text = _read_file(path, expected_hash=result.get('content_hash') or item.get('content_hash') or item.get('sha256'))
         name = item.get('name') or path.name
-        return (_csv if path.suffix.lower() == '.csv' else _markdown)(name, text, offset, limit, source)
+        expected_hash = result.get('content_hash') or item.get('content_hash') or item.get('sha256') or ''
+        return _rich_preview(path, name, source, offset, limit, expected_hash=expected_hash)
     name = result.get('name') or task['title']
     if result['kind'] == 'table':
         return _table(name, result.get('data'), offset, limit, source)
@@ -220,8 +266,10 @@ def preview(db, project_id, chat_id, *, relative='', path='', task_id='', task_r
     if not chat or chat['task_id'] != project_id:
         raise ValueError('此对话不属于当前项目')
     root = project_notes.project_root(db, project_id)
-    if relative and path and _project_path(root, relative) != _project_path(root, path):
-        raise ValueError('relative 与 path 指向不同文件')
+    if relative and path:
+        p_rel, p_path = _project_path(root, relative), _project_path(root, path)
+        if p_rel != p_path and not (task_id and p_path.is_relative_to(root / '.tasks')):
+            raise ValueError('relative 与 path 指向不同文件')
     reference = path or relative
     if task_id:
         return _node_preview(db, root, project_id, chat_id, task_id, task_run_id, revision, artifact_id, reference, offset, limit)
@@ -230,10 +278,10 @@ def preview(db, project_id, chat_id, *, relative='', path='', task_id='', task_r
     if not reference:
         raise ValueError('请选择项目内的文件')
     resolved = _project_path(root, reference)
+    rel = resolved.relative_to(root).as_posix()
     source = {'kind': 'project', 'project_id': project_id, 'chat_id': chat_id,
-              'relative': resolved.relative_to(root).as_posix()}
-    text = _read_file(resolved)
-    return (_csv if resolved.suffix.lower() == '.csv' else _markdown)(resolved.name, text, offset, limit, source)
+              'relative': rel, 'path': str(resolved)}
+    return _rich_preview(resolved, resolved.name, source, offset, limit)
 
 
 def route(method, path, body, query, db):

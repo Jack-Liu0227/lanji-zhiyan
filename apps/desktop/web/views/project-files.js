@@ -111,6 +111,20 @@ async function flInitTree(){
   flTreeCache = Object.create(null);
   await flLoadNode("");
   if(generation!==flTreeGeneration || project!==curTask || !list.isConnected) return;
+  if(flSel && flSel.startsWith(".tasks/") && !(flTreeCache[""] || []).some(r => r.rel === ".tasks")){
+    const rootRows = flTreeCache[""] || (flTreeCache[""] = []);
+    rootRows.push({
+      name: ".tasks (节点快照)",
+      rel: ".tasks",
+      path: flTreeRoot ? (flTreeRoot.replace(/[\\/]+$/, "") + "/.tasks") : ".tasks",
+      dir: true,
+      ext: "",
+      size: 0,
+      count: 0,
+      at: "",
+      project_id: project
+    });
+  }
   const tag = $("flRoot");
   if(tag && flTreeRoot){
     const parts = flTreeRoot.split(/[\\/]/).filter(Boolean);
@@ -123,6 +137,9 @@ async function flInitTree(){
     const pending=flLoadNode(rel);flRenderTree();await pending;
     if(generation!==flTreeGeneration || project!==curTask || !list.isConnected)return;
     flRenderTree();
+  }
+  if(flSel){
+    list.querySelector(`[data-rel="${CSS.escape(flSel)}"]`)?.scrollIntoView({block:'nearest',inline:'nearest'});
   }
 }
 
@@ -260,7 +277,8 @@ async function flShow(row){
     el.classList.toggle('on',selected);el.setAttribute('aria-current',String(selected));
   });
   if($("flName")) $("flName").textContent = row.name;
-  flMsg([flFmtSize(row.size), row.at, row.rel.split("/").slice(0,-1).join("/")].filter(Boolean).join(" · "));
+  flMsg([flFmtSize(row.size), row.at, row.path || row.rel].filter(Boolean).join(" · "));
+  if($("flMeta")) $("flMeta").title = row.path || row.rel || "";
   const stage = $("flStage"); if(!stage) return;
   const modeTabs = $("flModeTabs");
   const saveBtn = $("flSaveBtn");

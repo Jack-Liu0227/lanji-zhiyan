@@ -948,6 +948,13 @@ def tree_list(db: "WorkflowDB", task_id: str, rel: str = "") -> dict[str, Any]:
     """项目文件夹的一层清单（rel 相对项目根，'' = 根）。
     两道闸：_safe_path 先保证在白名单里，再判 is_relative_to(root) —— 只加前者的话，
     rel='../别的项目' 也能过（同级项目都在白名单里）。"""
+    clean_rel = str(rel or "").replace("\\", "/").strip("/")
+    if clean_rel in ("", "笔记", "笔记/提示词模板"):
+        try:
+            import prompt_templates
+            prompt_templates.ensure_defaults(db, task_id)
+        except Exception:
+            pass
     base = db.base_dir(task_id)
     if not base or not base.is_dir():
         return {"root": str(base or ""), "rel": "", "rows": [], "missing": True}
@@ -957,10 +964,11 @@ def tree_list(db: "WorkflowDB", task_id: str, rel: str = "") -> dict[str, Any]:
         raise ValueError("只能看这个项目文件夹里的东西")
     if not target.is_dir():
         raise ValueError("不是文件夹：" + rel)
+    allow_hidden = clean_rel == ".tasks" or clean_rel.startswith(".tasks/")
     dirs: list[dict[str, Any]] = []
     files: list[tuple[float, dict[str, Any]]] = []
     for p in target.iterdir():
-        if p.name.startswith((".", "~$")) or p.name in SKIP_NAMES:
+        if p.name in SKIP_NAMES or p.name.startswith("~$") or (p.name.startswith(".") and not allow_hidden):
             continue
         try:
             st = p.stat()

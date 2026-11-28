@@ -630,6 +630,10 @@ def _snapshot_inputs(db, task, run_id):
             if Path(relative).is_absolute() or PureWindowsPath(relative).drive:
                 raise ValueError("输入文件须为项目相对路径")
             source = (root / relative).resolve()
+        elif item.get("path"):
+            source = Path(str(item["path"])).resolve()
+            if not source.is_relative_to(root):
+                raise ValueError("输入文件不存在或超出项目范围")
         elif asset and asset.get("storage") == "file":
             source = Path(asset["canonical_uri"]).resolve()
         elif asset:

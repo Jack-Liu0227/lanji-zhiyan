@@ -568,6 +568,8 @@ details[open]>summary>.disclosure-arrow{transform:rotate(90deg)}
 .prof-photo-prev.on{display:block}
 .cal-page .card.cal-hello b{font-size:20px;font-weight:700}
 .cal-bottom{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;min-height:160px}
+.cal-bottom>.card{max-height:310px}
+.cal-mid>.card{max-height:500px}
 .cal-page .card{margin-bottom:0;padding:14px 16px;min-height:0;min-width:0;display:flex;flex-direction:column}
 .cal-page .card-head{display:flex;align-items:center;gap:10px;margin-bottom:10px;position:relative;flex:none}
 .cal-page .card-head b{font-size:15px;white-space:nowrap;flex:none}
@@ -600,7 +602,7 @@ details[open]>summary>.disclosure-arrow{transform:rotate(90deg)}
 .cal-pop label{display:flex;align-items:center;gap:7px;padding:5px 0;font-size:12.5px}
 .cal-pop p{margin:7px 0 0;padding-top:7px;border-top:1px solid var(--line);color:var(--muted);font-size:11px;line-height:1.5}
 
-.check-list{display:flex;flex-direction:column;gap:6px;flex:1;min-height:0;overflow-y:auto}
+.check-list{display:flex;flex-direction:column;gap:6px;flex:1;min-height:0;max-height:360px;overflow-y:auto;scrollbar-gutter:stable;padding-right:4px}
 .check-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px}
 .check-item input{accent-color:var(--accent);cursor:pointer}
 .check-item.done .check-title{text-decoration:line-through;color:var(--muted)}
@@ -616,14 +618,14 @@ details[open]>summary>.disclosure-arrow{transform:rotate(90deg)}
 @media(max-width:1180px){.cal-mid,.cal-bottom{grid-template-columns:minmax(0,1fr)}.cal-mid>.card{min-height:240px}}
 @media(max-width:700px){.cal-page .card-head{flex-wrap:wrap}.cal-nav{margin-left:0;flex-wrap:wrap}.cal-page .quick-add{flex-wrap:wrap}.cal-page .quick-add #todayInput{flex-basis:100%}}
 
-.feed-list{display:flex;flex-direction:column;gap:0;flex:1;min-height:0;overflow-y:auto}
-.feed-item{display:flex;gap:10px;padding:7px 0;font-size:13px;border-bottom:1px dashed var(--line)}
+.feed-list{display:flex;flex-direction:column;gap:0;flex:1;min-height:0;max-height:240px;overflow-y:auto;scrollbar-gutter:stable;padding-right:4px}
+.feed-item{display:flex;gap:10px;padding:7px 0;font-size:13px;border-bottom:1px dashed var(--line);align-items:center}
 .feed-item:last-child{border-bottom:none}
 .feed-ico{flex-shrink:0}
 .feed-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .feed-time{font-size:11px;color:var(--muted);flex-shrink:0}
 
-.countdown-list{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0;overflow-y:auto}
+.countdown-list{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0;max-height:240px;overflow-y:auto;scrollbar-gutter:stable;padding-right:4px}
 .countdown-item{display:flex;align-items:center;gap:10px;font-size:13px}
 .countdown-days{min-width:46px;text-align:center;padding:4px 6px;border-radius:8px;background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent);font-weight:700;font-size:12px}
 .countdown-days.urgent{background:color-mix(in srgb,var(--err) 14%,transparent);color:var(--err)}
@@ -1115,8 +1117,27 @@ body.md-narrow .wctl button:hover { background: #eee; }
 .md-render code { font-family: Consolas, monospace; font-size: .92em; }
 .md-render :not(pre) > code { padding: 2px 5px; border-radius: 4px; background: var(--panel2); color: var(--accent); }
 .md-render table { width: 100%; border-collapse: collapse; margin: 12px 0; display: block; overflow-x: auto; }
-.md-render th, .md-render td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; white-space: normal; }
-.md-render th { background: var(--panel2); font-weight: 700; }
+.md-render th, .md-render td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; max-width: 320px; }
+.md-render th { background: var(--panel2); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.md-table-cell {
+  max-width: 300px;
+  max-height: 4.8em;
+  line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition: max-height 0.15s ease;
+}
+.md-table-cell.is-expanded {
+  max-height: none;
+  -webkit-line-clamp: unset;
+  display: block;
+}
 .md-render img { max-width: 100%; }
 .md-render mark { background: #ffe58f; padding: 0 2px; }
 
@@ -1439,6 +1460,9 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .tof-row{display:grid;gap:16px;min-height:0}
 .tof-row.top{grid-template-columns:1fr 1fr;flex:1.06}
 .tof-row.bottom{grid-template-columns:repeat(3,1fr);flex:1}
+.tof-grid{flex:1;min-height:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));grid-auto-rows:clamp(260px,40vh,360px);gap:16px;overflow:auto;align-content:start}
+.tof-grid[data-count="1"]{grid-template-columns:minmax(380px,580px)}
+.tof-grid .tof-room{min-height:260px}
 
 /* 房间：微立体纸板 */
 .tof-room{position:relative;min-height:0;display:flex;flex-direction:column;overflow:hidden;cursor:pointer;
@@ -1455,7 +1479,7 @@ body.dw-pen-on .ol-body ::selection{background:color-mix(in srgb,var(--accent) 4
 .tof-room.vacant b{font-weight:600}
 .tof-room.vacant small{font-size:10.5px;opacity:.8}
 
-.tof-room .nm{position:absolute;left:14px;top:12px;font-size:13.5px;font-weight:650;letter-spacing:.01em}
+.tof-room .nm{position:absolute;left:14px;right:72px;top:12px;font-size:13.5px;font-weight:650;letter-spacing:.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tof-room .kind{position:absolute;left:14px;top:34px;font-size:10px;letter-spacing:.06em;color:var(--muted);
   border:1px solid var(--line);border-radius:5px;padding:1px 6px;background:var(--panel2)}
 .tof-room .kind.t{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent);
@@ -2829,6 +2853,7 @@ select:focus {
   #main .ag-team{grid-template-columns:minmax(0,1fr)}
   #main .ag-team-nav{flex-direction:row;overflow-x:auto}
   #main .ag-team-nav button{flex-shrink:0;max-width:100%;white-space:normal}
+  #main .ag-team-nav .ag-team-item{width:auto;min-width:160px;max-width:260px}
   .tc-page{flex-direction:column;height:auto;min-height:100%}
   .tc-side-hist{width:100%;max-height:170px;min-height:100px}
   .tc-stage{height:auto;min-height:480px}

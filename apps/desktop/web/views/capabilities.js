@@ -145,7 +145,12 @@
     const binding = meta.bindings.find(item => item.assistant_id === aid && item.kind === kind && item.item_id === itemId);
     if (binding) return Boolean(binding.enabled);
     const global = meta.bindings.find(item => item.assistant_id === "*" && item.kind === kind && item.item_id === itemId);
-    return global ? Boolean(global.enabled) : meta.default_enabled !== false;
+    if (global) return Boolean(global.enabled);
+    if (kind === "skill" && aid !== "*") {
+      const skill = meta.skills.find(item => item.id === itemId);
+      if (skill?.scope === "builtin") return (meta.default_skill_assignments?.[itemId] || []).includes(aid);
+    }
+    return meta.default_enabled !== false;
   }
   let currentCategory = "all";
   let selectedId = null;
@@ -213,7 +218,7 @@
     const assistants = [{id: "*", name: "默认 / 未绑定专家"}, ...meta.assistants];
     return `
       <div class="cap-matrix-header">
-        <p class="hint" style="margin:0">勾选立即保存；支持横向/纵向/全局一键全开全关。滚轮可横纵平滑滑动，表头与能力列常驻固定。</p>
+        <p class="hint" style="margin:0">${setSec === "skills" ? "内置 Skill 按职责默认分配；显式勾选会覆盖默认。" : ""}勾选立即保存；支持横向/纵向/全局一键全开全关。滚轮可横纵平滑滑动，表头与能力列常驻固定。</p>
         <div class="cap-cats">
           ${CATEGORIES.map(c => `<button class="cap-cat-pill ${currentCategory === c.id ? "on" : ""}" data-cap-cat="${c.id}">${c.icon} ${c.label}</button>`).join("")}
         </div>

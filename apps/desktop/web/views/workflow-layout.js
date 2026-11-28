@@ -231,28 +231,6 @@
   }
   window.WorkflowLayout={computeHierarchicalStepNumbers};
   window.WorkflowGraph={render:graph,computeHierarchicalStepNumbers};
-  if(!SET_SECS.some(section=>section[0]==="workflows")) SET_SECS.push(["workflows","🔀","工作流"]);
-  const originalSettings = renderSettings;
-  renderSettings = function(m){
-    originalSettings(m);
-    if(setSec !== "workflows" || !S.loaded) return;
-    const body = byId("set-body"); if(!body) return;
-    if(settingsData) drawEditor(body);
-    else body.innerHTML = '<div class="card"><h3>工作流设置</h3><p class="hint">正在读取工作流定义…</p></div>';
-    const requestId=++settingsRequest;
-    api("/api/workflow/layouts").then(result=>{
-      if(requestId!==settingsRequest) return;
-      const active=route()==="settings" && setSec==="workflows" && body.isConnected;
-      if(active && body.querySelector("[data-wfl-name]")) captureEditor(body);
-      const previous=settingsData?.layouts.find(layout=>layout.id===draft?.id);
-      const dirty=draft && (!previous || ["name","description","nodes","edges","order"].some(key=>JSON.stringify(draft[key])!==JSON.stringify(previous[key])));
-      settingsData=result;
-      if(!active) return;
-      if(!dirty) draft=clone(result.layouts.find(layout=>layout.id===draft?.id) || result.layouts[0] || freshDraft());
-      else if(draft.id && !result.layouts.some(layout=>layout.id===draft.id)) draft.id="";
-      drawEditor(body);
-    }).catch(error=>{ if(body.isConnected) body.innerHTML=`<p class="wfl-error">${esc(error.message)}</p>`; });
-  };
 
   function freshDraft(){
     return {id:"",name:"新工作流",description:"",nodes:[{id:"idea",step:"idea",label:stageLabel("idea")}],edges:[],order:["idea"]};

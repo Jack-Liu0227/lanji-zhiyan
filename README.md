@@ -20,7 +20,7 @@
 
 ## 安装
 
-当前版本为 **1.0.1**，从 [GitHub Release](https://github.com/Jack-Liu0227/lanji-zhiyan/releases/tag/v1.0.1) 下载 [Windows 安装包](https://github.com/Jack-Liu0227/lanji-zhiyan/releases/download/v1.0.1/LanjiZhiyan-1.0.1-Setup.exe)，双击即可安装。也可以下载[免安装版](https://github.com/Jack-Liu0227/lanji-zhiyan/releases/download/v1.0.1/LanjiZhiyan-1.0.1-Portable.zip)，解压后启动其中的 览籍智研.exe。桌面版需要 Windows WebView2 运行时。
+当前版本为 **1.1.0**，从 [GitHub Release](https://github.com/Jack-Liu0227/lanji-zhiyan/releases/tag/v1.1.0) 下载 [Windows 安装包](https://github.com/Jack-Liu0227/lanji-zhiyan/releases/download/v1.1.0/LanjiZhiyan-1.1.0-Setup.exe)，双击即可安装。也可以下载[免安装版](https://github.com/Jack-Liu0227/lanji-zhiyan/releases/download/v1.1.0/LanjiZhiyan-1.1.0-Portable.zip)，解压后启动其中的 览籍智研.exe。桌面版需要 Windows WebView2 运行时。
 
 Windows 安装版和便携版都可在“设置 → 版本与更新”查看当前版本、检查官方发布并直接下载更新；确认后应用会自动完成替换和重启，无需手动打开 GitHub。源码运行模式可以查看版本，但不提供自动安装。
 

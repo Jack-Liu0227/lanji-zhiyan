@@ -23,6 +23,7 @@ import time
 from typing import Any
 import urllib.parse
 import urllib.request
+from workflow_prompts import BUILTIN_SKILL_DEFAULTS
 
 MASK = "********"
 MAX_SKILL_BYTES = 1024 * 1024
@@ -204,7 +205,7 @@ def list_tools(db) -> list[dict]:
     return sorted(items, key=lambda item: item["name"])
 
 
-def enabled(db, assistant_id: str, kind: str, item_id: str) -> bool:
+def enabled(db, assistant_id: str, kind: str, item_id: str, *, item_scope: str = "") -> bool:
     conn = _ensure(db)
     # Global defaults can be narrowed or overridden for an individual assistant.
     for aid in (assistant_id, "*") if assistant_id and assistant_id != "*" else ("*",):
@@ -212,6 +213,8 @@ def enabled(db, assistant_id: str, kind: str, item_id: str) -> bool:
                            (aid, kind, item_id)).fetchone()
         if row is not None:
             return bool(row[0])
+    if kind == "skill" and assistant_id != "*" and item_scope == "builtin":
+        return assistant_id in BUILTIN_SKILL_DEFAULTS.get(item_id, ())
     return True
 
 
@@ -236,7 +239,8 @@ def filter_tools(db, assistant_id: str, tools: list[dict], project_dir: str = ""
 
 
 def skill_context(db, assistant_id: str, project_dir: str = "") -> str:
-    items = [item for item in list_skills(project_dir) if enabled(db, assistant_id, "skill", item["id"])]
+    items = [item for item in list_skills(project_dir)
+             if enabled(db, assistant_id, "skill", item["id"], item_scope=item.get("scope", ""))]
     if not items:
         return ""
     return ("\n\n[Enabled skills]\nUse skill_read with the exact skill_id before applying a skill. "
@@ -282,9 +286,8 @@ def steward_context(db, assistant_id: str, project_dir: str = "") -> str:
     """Load the steward entrypoint for ordinary steward turns, honoring overrides."""
     if assistant_id != "builtin-steward" or not enabled(db, assistant_id, "tool", "skill_read"):
         return ""
-    if not enabled(db, assistant_id, "skill", "research-steward"):
-        return ""
-    if not any(item["id"] == "research-steward" for item in list_skills(project_dir)):
+    skill = next((item for item in list_skills(project_dir) if item["id"] == "research-steward"), None)
+    if not skill or not enabled(db, assistant_id, "skill", "research-steward", item_scope=skill.get("scope", "")):
         return ""
     item = invoke_tool(db, assistant_id, "skill_read", {"skill_id": "research-steward"}, project_dir)
     return "\n\n[Active skill: research-steward]\n" + item["content"]
@@ -317,13 +320,11 @@ def _unprotect(value: str) -> dict:
 
 
 def default_mcp_config() -> dict:
-    import sys
-    zotero_script = str(Path(__file__).resolve().parents[1] / "connectors" / "zotero_mcp.py")
+    zotero_server = _zotero_mcp_config()
     return {
         "mcpServers": {
             "zotero": {
-                "command": sys.executable or "python",
-                "args": [zotero_script],
+                **zotero_server,
                 "cwd": ".",
                 "transport": "stdio",
                 "enabled": True,
@@ -336,11 +337,8 @@ def default_mcp_config() -> dict:
 def ensure_zotero_mcp(db) -> dict:
     cfg = _config(db)
     servers = cfg.setdefault("mcpServers", {})
-    import sys
-    zotero_script = str(Path(__file__).resolve().parents[1] / "connectors" / "zotero_mcp.py")
     servers["zotero"] = {
-        "command": sys.executable or "python",
-        "args": [zotero_script],
+        **_zotero_mcp_config(),
         "cwd": ".",
         "transport": "stdio",
         "enabled": True,
@@ -350,10 +348,63 @@ def ensure_zotero_mcp(db) -> dict:
     return {"ok": True, "server": servers["zotero"]}
 
 
+def _zotero_mcp_config() -> dict[str, Any]:
+    import sys
+    if getattr(sys, "frozen", False):
+        executable = paths.APP / "tools" / "zotero-mcp" / "zotero-mcp.exe"
+        if not executable.is_file():
+            raise FileNotFoundError("The bundled Zotero MCP executable is missing; reinstall the application")
+        return {"command": str(executable), "args": []}
+    command = Path(sys.executable or "python")
+    if os.name == "nt" and command.name.casefold() == "pythonw.exe":
+        console_python = command.with_name("python.exe")
+        if console_python.is_file():
+            command = console_python
+    script = Path(__file__).resolve().parents[1] / "connectors" / "zotero_mcp.py"
+    return {"command": str(command), "args": [str(script)]}
+
+
+def _refresh_builtin_zotero_server(cfg: dict) -> bool:
+    """Keep the built-in zotero stdio server path valid across portable moves or upgrades."""
+    servers = cfg.setdefault("mcpServers", {})
+    existing = servers.get("zotero")
+    if not existing:
+        try:
+            servers["zotero"] = default_mcp_config()["mcpServers"]["zotero"]
+            return True
+        except FileNotFoundError:
+            return False
+    cmd = str(existing.get("command") or "")
+    args = [str(a) for a in (existing.get("args") or [])]
+    is_builtin = Path(cmd).name.casefold() == "zotero-mcp.exe" or any(Path(a).name == "zotero_mcp.py" for a in args)
+    if not is_builtin:
+        return False
+    stale = (not cmd or not Path(cmd).is_file()) or any(Path(a).name == "zotero_mcp.py" and not Path(a).is_file() for a in args)
+    import sys
+    mode_mismatch = (getattr(sys, "frozen", False) and Path(cmd).name.casefold() != "zotero-mcp.exe") or (
+        not getattr(sys, "frozen", False) and Path(cmd).name.casefold() == "zotero-mcp.exe"
+    )
+    if not stale and not mode_mismatch:
+        return False
+    try:
+        fresh = _zotero_mcp_config()
+    except FileNotFoundError:
+        return False
+    if existing.get("command") == fresh["command"] and list(existing.get("args") or []) == fresh["args"]:
+        return False
+    servers["zotero"] = {**existing, **fresh}
+    return True
+
+
 def _config(db) -> dict:
     row = _ensure(db).execute("SELECT protected FROM capability_mcp_config WHERE id=1").fetchone()
     if row:
-        return _unprotect(row[0])
+        cfg = _unprotect(row[0])
+        if _refresh_builtin_zotero_server(cfg):
+            conn = _conn(db)
+            conn.execute("INSERT OR REPLACE INTO capability_mcp_config(id,protected) VALUES(1,?)", (_protect(cfg),))
+            conn.commit()
+        return cfg
     initial = default_mcp_config()
     conn = _conn(db)
     conn.execute("INSERT OR REPLACE INTO capability_mcp_config(id,protected) VALUES(1,?)", (_protect(initial),))
@@ -653,12 +704,13 @@ class _MCPConnection:
         self.close()
 
 
-def discover_mcp(db, server: str) -> dict:
+def discover_mcp(db, server: str, *, probe_tool: str = "", probe_arguments: dict | None = None) -> dict:
     conn = _ensure(db)
     config = _config(db)["mcpServers"].get(server)
     if not config or not config.get("enabled", True):
         raise ValueError("MCP server is missing or disabled")
     tools = []
+    probe = None
     with _MCPConnection(config) as client:
         cursor = None
         cursors = set()
@@ -675,13 +727,20 @@ def discover_mcp(db, server: str) -> dict:
             cursors.add(cursor)
         else:
             raise ValueError("MCP tools/list exceeded 100 pages")
+        if probe_tool:
+            if not any(tool.get("name") == probe_tool for tool in tools if isinstance(tool, dict)):
+                raise ValueError("MCP status probe tool is unavailable")
+            probe = client.call("tools/call", {"name": probe_tool, "arguments": probe_arguments or {}})
     for tool in tools:
         if not isinstance(tool, dict) or not isinstance(tool.get("name"), str) or not isinstance(tool.get("inputSchema", {}), dict):
             raise ValueError("MCP returned an invalid tool schema")
     conn.execute("INSERT OR REPLACE INTO capability_mcp_tools VALUES(?,?,?)",
                  (server, _fingerprint(config), json.dumps(tools)))
     conn.commit()
-    return {"ok": True, "server": server, "tools": tools}
+    result = {"ok": True, "server": server, "tools": tools}
+    if probe is not None:
+        result["probe"] = probe
+    return result
 
 
 def _mcp_name(server: str, name: str) -> str:
@@ -718,7 +777,8 @@ def mcp_tool_specs(db, assistant_id: str, project_dir: str = "") -> list[dict]:
 
 def capability_tool_specs(db, assistant_id: str, project_dir: str = "") -> list[dict]:
     specs = mcp_tool_specs(db, assistant_id, project_dir)
-    if any(enabled(db, assistant_id, "skill", item["id"]) for item in list_skills(project_dir)):
+    if any(enabled(db, assistant_id, "skill", item["id"], item_scope=item.get("scope", ""))
+           for item in list_skills(project_dir)):
         specs.append({"type": "function", "function": {"name": "skill_read",
                       "description": "Read an enabled skill or one of its relative text resources.",
                       "parameters": {"type": "object", "properties": {"skill_id": {"type": "string"},
@@ -763,9 +823,11 @@ def invoke_tool(db, assistant_id: str, name: str, args: dict, project_dir: str =
                            project_dir, str(args.get("mode") or "replace"))
     if name == "skill_read":
         item_id = str(args.get("skill_id", ""))
-        if not enabled(db, assistant_id, "tool", name) or not enabled(db, assistant_id, "skill", item_id):
+        if not enabled(db, assistant_id, "tool", name):
             raise PermissionError("This skill is disabled for the assistant")
         item = _skill(item_id, project_dir)
+        if not enabled(db, assistant_id, "skill", item_id, item_scope=item.get("scope", "")):
+            raise PermissionError("This skill is disabled for the assistant")
         relative = str(args.get("resource") or "SKILL.md").replace("\\", "/")
         if relative.startswith("/") or ":" in relative or any(p in ("", ".", "..") for p in relative.split("/")):
             raise ValueError("Skill resource must be a relative path inside the skill")
@@ -801,7 +863,8 @@ def settings_meta(db, project_dir: str = "") -> dict:
             "skill_roots": [{"scope": scope, "path": str(path), "exists": path.is_dir()} for scope, path in skill_roots(project_dir)],
             "mcp": mcp, "mcp_config": config, "storage_security": storage_security(),
             "assistants": _assistants(db), "bindings": [dict(row) for row in conn.execute("SELECT * FROM capability_bindings")],
-            "default_enabled": True, "project_dir": project_dir}
+            "default_enabled": True, "default_skill_assignments": {key: list(value) for key, value in BUILTIN_SKILL_DEFAULTS.items()},
+            "project_dir": project_dir}
 
 
 def route(method: str, path: str, body: dict, query: dict, db) -> dict | None:

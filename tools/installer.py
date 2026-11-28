@@ -36,7 +36,7 @@ def write_manifest(directory: Path) -> None:
 def verify_payload(directory: Path) -> int:
     required = (APP + ".exe", "VERSION", "web/index.html", "build/icon.ico",
                 "packages/contracts/providers_catalog.json", "archive/migrations/001-046.zip",
-                "archive/migrations/manifest.json")
+                "archive/migrations/manifest.json", "tools/zotero-mcp/zotero-mcp.exe")
     for name in required:
         if not (directory / name).is_file():
             raise RuntimeError("安装包缺少文件：" + name)

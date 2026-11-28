@@ -10,6 +10,7 @@ let officeSel = "";
 let officeRAF = 0;
 let officeWalkers = [];
 let officeRenderSequence = 0;
+let officeRO = null;
 
 const offEsc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const offAgo = (iso) => {
@@ -32,7 +33,10 @@ class OfficeWalker {
     this.hot = this.status === "running" || this.status === "queued";
     this.desk = el._desk || null;
     this.speed = (this.hot ? 20 : 15) + Math.random() * 8;
-    this.x = home.x; this.y = home.y;
+    this.fw = el.offsetWidth || 23;
+    const tag = el.querySelector(".tag");
+    this.tagHalf = Math.max(26, ((tag && tag.offsetWidth) || 72) * 0.5 + 8);
+    this.x = this.clampX(home.x); this.y = home.y;
     this.tx = this.x; this.ty = this.y;
     this.dir = Math.random() < .5 ? 1 : -1;
     this.moving = false; this.seated = true; this.atHome = true;
@@ -41,14 +45,19 @@ class OfficeWalker {
     this.sit();
     this.paint();
   }
+  clampX(x) {
+    const minX = Math.max(8, this.tagHalf - this.fw / 2);
+    const maxX = Math.max(minX, this.host.clientWidth - this.tagHalf - this.fw / 2);
+    return Math.min(maxX, Math.max(minX, x));
+  }
   paint() {
     this.el.style.transform = `translate(${this.x}px,${this.y}px)`;
     this.in.style.transform = `scaleX(${this.dir})`;
   }
   spots() {
     const w = Math.max(0, this.host.clientWidth - 13), h = Math.max(0, this.host.clientHeight - 21);
-    return [[.10, .78], [.34, .90], [.60, .90], [.84, .78], [.50, .46], [.12, .50], [.74, .52]]
-      .map(([a, b]) => ({ x: Math.round(a * w), y: Math.round(b * h) }));
+    return [[.16, .74], [.36, .82], [.58, .82], [.78, .74], [.50, .48], [.18, .50], [.72, .50]]
+      .map(([a, b]) => ({ x: this.clampX(Math.round(a * w)), y: Math.round(b * h) }));
   }
   pick() {
     const sp = this.spots();
@@ -71,8 +80,9 @@ class OfficeWalker {
   }
   walk(pt) {
     this.stand();
-    this.tx = pt.x; this.ty = pt.y;
-    this.atHome = Math.abs(pt.x - this.home.x) < 2 && Math.abs(pt.y - this.home.y) < 2;
+    const clampedHomeX = this.clampX(this.home.x);
+    this.tx = this.clampX(pt.x); this.ty = pt.y;
+    this.atHome = Math.abs(this.tx - clampedHomeX) < 2 && Math.abs(pt.y - this.home.y) < 2;
     this.moving = true;
     this.el.classList.add("walking");
   }
@@ -132,13 +142,16 @@ function officeSit() {
     const em = parseFloat(getComputedStyle(floor).fontSize) || 8.0;
     const DW = 10 * em, DH = 4.78 * em, FW = 2.83 * em, FH = 4.57 * em;
     // 2×2 格点：每间房 4 个工位，桌子中心落在格子中心，按人数从左上往右填
-    const PAD_T = 54, PAD_B = 26;                 // 房间标题 / 底部流水条占掉的高度
-    const gw = W / 2, gh = Math.max(1, (H - PAD_T - PAD_B) / 2);
+    const PAD_X = Math.max(20, Math.round(W * .07));
+    const PAD_T = 62, PAD_B = 34;                 // 房间标题 / 底部流水条占掉的高度
+    const cols = n === 1 ? 1 : 2;
+    const rows = n <= 2 ? 1 : 2;
+    const gw = Math.max(1, (W - PAD_X * 2) / cols), gh = Math.max(1, (H - PAD_T - PAD_B) / rows);
     desks.forEach((d, i) => {
-      const col = i % 2, row = Math.floor(i / 2);
-      const cx = gw * (col + .5), cy = PAD_T + gh * (row + .5);
-      d.style.left = Math.max(2, Math.round(cx - DW / 2)) + "px";
-      d.style.top = Math.max(2, Math.round(cy - DH / 2)) + "px";
+      const col = i % cols, row = Math.floor(i / cols);
+      const cx = PAD_X + gw * (col + .5), cy = PAD_T + gh * (row + .5);
+      d.style.left = Math.min(Math.max(12, W - DW - 12), Math.max(12, Math.round(cx - DW / 2))) + "px";
+      d.style.top = Math.min(Math.max(PAD_T, H - DH - PAD_B), Math.max(PAD_T, Math.round(cy - DH / 2))) + "px";
     });
     figs.forEach((el, i) => {
       const d = desks[i] || desks[desks.length - 1];
@@ -169,8 +182,9 @@ function officeSit() {
 
 /* ---------- 渲染 ---------- */
 function officeRoom(p, colorOf) {
-  const members = [p.leader, ...(p.members || [])].filter(Boolean).slice(0, 4);   // 2×2 格点 = 4 个工位
-  const running = [p.leader,...(p.members || [])].filter(Boolean).some((m) => m.status === "running" || m.status === "queued");
+  const allMembers = [p.leader, ...(p.members || [])].filter(Boolean);
+  const members = allMembers.slice(0, 4);   // 2×2 格点 = 4 个工位
+  const running = allMembers.some((m) => m.status === "running" || m.status === "queued");
   const figs = members.map((m) => `<div class="tof-fig ${m.status === "running" || m.status === "queued" ? "sel act-run" : ""}" data-status="${offEsc(m.status || "idle")}"
       data-hair="${offHair(m)}" style="--c:${colorOf(m)};--skin:${offSkin(m)}" title="${offEsc(m.name)} · ${OFFICE_CN[m.status] || m.status}">
       <span class="tag"><i class="tag-dot" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:${m.status==='running'?'var(--accent,#4ade80)':m.status==='queued'?'#eab308':'var(--muted)'};margin-right:3px;vertical-align:middle"></i>${offEsc(m.name)}</span>
@@ -188,9 +202,9 @@ function officeRoom(p, colorOf) {
   } else if (ev) {
     actHtml = offEsc(offAgo(ev.at)) + " · " + offEsc(ev.text || "");
   }
-  return `<div class="tof-room ${p.kind === "temp" ? "temp " : ""}${p.id === officeSel ? "sel" : ""}" data-office="${offEsc(p.id)}">
+  return `<div class="tof-room ${p.id === officeSel ? "sel" : ""}" data-office="${offEsc(p.id)}">
     <div class="nm">${offEsc(p.name)}</div>
-    <div class="kind ${p.kind === "temp" ? "t" : ""}">${p.kind === "temp" ? "加急" : "常驻"} · ${members.length} 人</div>
+    <div class="kind">团队 · ${allMembers.length} 人</div>
     <div class="st ${running ? "run" : ""}"><span class="dot"></span>${running ? "在跑" : "待命"}</div>
     <div class="tof-floor">${desks}${figs}</div>
     <div class="act"><span>${actHtml}</span></div>
@@ -198,7 +212,7 @@ function officeRoom(p, colorOf) {
 }
 
 function officePanel(p, colorOf) {
-  if (!p) return `<div class="tof-pd"><p class="hint">这层还没有选中的办公室。</p></div>`;
+  if (!p) return `<div class="tof-pd"><p class="hint">还没有选中的团队。</p></div>`;
   const lead = p.leader, ms = p.members || [];
   const row = (m, isLead) => {
     const c = colorOf(m);
@@ -215,11 +229,9 @@ function officePanel(p, colorOf) {
     </div>`;
   };
   return `<div class="tof-pd">
-    <div class="k"><span>人员结构</span><span>${ms.length} / ${Math.max(ms.length, 4)} 在编</span></div>
+    <div class="k"><span>人员结构</span><span>${ms.length} 位成员${lead ? " + 1 位负责人" : ""}</span></div>
     <h2>${offEsc(p.name)}</h2>
-    <div class="sub">${p.kind === "temp"
-      ? "加急 · 为「" + offEsc(p.purpose || "某项工作") + "」组建，按需灵活协同"
-      : "常驻 · 负责人拆解任务，专家并行研究并交付"}</div>
+    <div class="sub">${p.purpose ? offEsc(p.purpose) : "负责人拆解任务，专家并行研究并交付"}</div>
     <div class="gh"><span>统 筹</span><span>状态</span></div>
     ${lead ? row(lead, true) : `<p class="hint" style="padding:8px 0">这间还没有指定 Leader（可在「修改编制」中指定任意成员为 Leader）。</p>`}
     <div class="gh"><span>成 员</span><span>颜色即身份</span></div>
@@ -233,6 +245,7 @@ function officePanel(p, colorOf) {
     </div>
     <div class="to"><span>→</span><span>研讨室＝科研台里这个项目正在跑的任务与对话</span></div>
     <div class="ft">
+      <button class="btn ghost" id="tofDelete" style="color:var(--err)">删除</button>
       <button class="btn" id="tofEdit">修改编制</button>
       <button class="btn btn-primary" id="tofEnter">进入研讨室</button>
     </div>
@@ -272,34 +285,25 @@ async function renderTeamOffice(m) {
   }));
   const colorOf = (x) => OFFICE_COLORS[Math.max(0, order.indexOf(x.assistant_id || x.name)) % OFFICE_COLORS.length];
 
-  const fixed = teams.filter((t) => t.kind !== "temp");
-  const temp = teams.filter((t) => t.kind === "temp");
   const project = (S.tasks || []).find((t) => t.id === pid) || {};
   const sel = teams.find((t) => t.id === officeSel) || teams[0];
-  const vacancies = Math.max(0, 3 - temp.length);
 
   m.innerHTML = `<div class="tof">
     <header class="tof-head">
-      <div><h2>团队</h2><p>${offEsc(project.title || "")} · 常驻 ${fixed.length} 间 / 加急 ${temp.length} 间</p></div>
+      <div><h2>团队</h2><p>${offEsc(project.title || "")} · ${teams.length} 个团队</p></div>
       <div class="tof-hd-r">
         <label class="tof-sel"><span>项目</span>
           <select id="tofProj">${(S.tasks || []).map((t) =>
             `<option value="${offEsc(t.id)}" ${t.id === pid ? "selected" : ""}>${offEsc(t.title)}</option>`).join("")}</select>
         </label>
-        <button class="btn btn-primary" id="tofNew" ${vacancies?'':'disabled title="加急团队已满，请先在修改编制中解散不再使用的加急团队"'}>＋ 组队</button>
+        <button class="btn btn-primary" id="tofNew">＋ 新建团队</button>
       </div>
     </header>
     <div class="tof-body">
       <div class="tof-stage"><div class="tof-sheet" id="tofSheet">
-        <div class="tof-row top" style="grid-template-columns:repeat(${Math.max(1, fixed.length)},1fr)">${fixed.map((p) => officeRoom(p, colorOf)).join("")}</div>
-        <div class="tof-corr">
-          <span>走 廊</span><i class="cl"></i>
-          <div class="tof-fig butler" data-status="idle" data-hair="0" style="--c:var(--accent);--skin:${OFFICE_SKINS[0]}">
-            <span class="in"><i class="h"></i><i class="b"></i><i class="a1"></i><i class="a2"></i><i class="l1"></i><i class="l2"></i></span></div>
-        </div>
-        <div class="tof-row bottom">${temp.map((p) => officeRoom(p, colorOf)).join("")}
-          ${Array.from({ length: vacancies }).map(() => `<div class="tof-room vacant"><span>空 位</span></div>`).join("")}
-        </div>
+        ${teams.length
+          ? `<div class="tof-grid" data-count="${teams.length}">${teams.map((p) => officeRoom(p, colorOf)).join("")}</div>`
+          : `<div class="tof-empty"><b>当前项目还没有团队</b><p>点击右上角「＋ 新建团队」，从专家中挑人组建团队。</p></div>`}
       </div></div>
       <aside class="tof-panel" id="tofPanel">${officePanel(sel, colorOf)}</aside>
     </div>
@@ -315,10 +319,20 @@ async function renderTeamOffice(m) {
     };
   });
   const bindPanel = () => {
-    const ed = $("tofEdit"), en = $("tofEnter"), cl = $("tofClose");
+    const ed = $("tofEdit"), en = $("tofEnter"), cl = $("tofClose"), del = $("tofDelete");
     if (ed) ed.onclick = () => { teamScope=officeSel;teamSession='';teamList=null;localStorage.setItem('rw-team-chat',teamScope);window.__teamMode = "manage"; render(); };
     if (en) en.onclick = () => officeEnter(pid,officeSel);
     if (cl) cl.onclick = () => { window.__teamMode = ""; render(); };
+    if (del) del.onclick = async () => {
+      const target = teams.find((t) => t.id === officeSel);
+      if (!target) return;
+      if (!await uiConfirm(`删除团队「${target.name}」？历史会话仍保留，团队将不再可用。`)) return;
+      try {
+        await api("/api/teams/delete", { id: target.id });
+        if (teamScope === target.id) { teamScope = ""; localStorage.removeItem("rw-team-chat"); }
+        officeSel = ""; teamList = null; render();
+      } catch (e) { uiNotify(e.message); }
+    };
   };
   bindPanel();
   const pj = $("tofProj");
@@ -330,6 +344,19 @@ async function renderTeamOffice(m) {
   const nw = $("tofNew");
   if (nw) nw.onclick = () => officeForm(pid);
   officeSit();
+  if (officeRO) { officeRO.disconnect(); officeRO = null; }
+  const sheet = $("tofSheet");
+  if (sheet && typeof ResizeObserver === "function") {
+    let lastW = sheet.clientWidth, lastH = sheet.clientHeight;
+    officeRO = new ResizeObserver(() => {
+      if (!sheet.isConnected) { officeRO?.disconnect(); officeRO = null; return; }
+      if (Math.abs(sheet.clientWidth - lastW) > 6 || Math.abs(sheet.clientHeight - lastH) > 6) {
+        lastW = sheet.clientWidth; lastH = sheet.clientHeight;
+        officeSit();
+      }
+    });
+    officeRO.observe(sheet);
+  }
 }
 
 function officeEnter(pid,teamId=officeSel) {
@@ -340,33 +367,35 @@ function officeEnter(pid,teamId=officeSel) {
   return openTab('team');
 }
 
-/* 手动组队（管家也能用 team_form 工具自己组） */
+/* 新建团队（所有团队统一级别，可随时编辑或删除） */
 function officeForm(pid) {
-  const pool = (S.assistants || []).filter((a) => a.enabled !== 0);
+  const pool = (S.assistants || []).filter((a) => a.enabled !== 0 && a.id !== "builtin-steward");
   const box = document.createElement("div");
   box.className = "tof-mask";
   box.innerHTML = `<div class="tof-modal">
-    <h3>组一支加急队</h3>
-    <p class="hint">说清为什么组、要交什么；人从专家里挑。用完在「修改编制」里解散，位子还回来。</p>
-    <label class="fld"><span>为什么组</span><input class="control" id="tofPurpose" placeholder="例如：第 3 章配图，交三张对比图"></label>
-    <div class="fld"><span>拉谁进来</span>
+    <h3>新建团队</h3>
+    <p class="hint">填写团队名称与分工目标，并从专家中挑选成员。所有团队平级管理，支持随时修改或删除。</p>
+    <label class="fld"><span>团队名称（可选）</span><input class="control" id="tofName" placeholder="例如：文献精读组 / 论文撰写组"></label>
+    <label class="fld"><span>目标 / 职责</span><input class="control" id="tofPurpose" placeholder="例如：第 3 章配图与结果对比"></label>
+    <div class="fld"><span>选择成员</span>
       <div class="tof-pool">${pool.map((a) => `<label class="pick"><input type="checkbox" value="${offEsc(a.id)}">
         <b>${offEsc(a.name)}</b><small>${offEsc(a.description || "").slice(0, 26)}</small></label>`).join("")}</div></div>
-    <div class="row"><button class="btn" id="tofCancel">取消</button><button class="btn btn-primary" id="tofOk">组队</button></div>
+    <div class="row"><button class="btn" id="tofCancel">取消</button><button class="btn btn-primary" id="tofOk">创建团队</button></div>
   </div>`;
   document.body.appendChild(box);
   const close = () => box.remove();
   box.querySelector("#tofCancel").onclick = close;
   box.onclick = (e) => { if (e.target === box) close(); };
   box.querySelector("#tofOk").onclick = async () => {
+    const name = box.querySelector("#tofName").value.trim();
     const purpose = box.querySelector("#tofPurpose").value.trim();
     const ids = [...box.querySelectorAll(".pick input:checked")].map((x) => x.value);
-    if (!purpose) return uiNotify("先说清为什么组");
-    if (!ids.length) return uiNotify("一个人都没挑");
+    if (!name && !purpose) return uiNotify("请填写团队名称或目标");
     try {
-      const r = await api("/api/teams/new", { kind: "temp", name: purpose.slice(0, 24), purpose, project: pid });
+      const r = await api("/api/teams/new", { kind: "team", name: name || purpose.slice(0, 24), purpose, project: pid });
       for (const id of ids) await api("/api/team/chat/member", { scope: r.team.id, assistant_id: id });
       officeSel = r.team.id;
+      teamList = null;
       close(); render();
     } catch (e) { uiNotify(e.message); }
   };

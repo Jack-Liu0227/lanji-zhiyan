@@ -33,7 +33,7 @@ def skill_catalog(db, assistant_id, project_dir=''):
     items = [{'skill_id': item['id'], 'description': item['description'],
               'read_with': {'tool': 'skill_read', 'skill_id': item['id']}}
              for item in capabilities.list_skills(project_dir)
-             if capabilities.enabled(db, assistant_id, 'skill', item['id'])]
+             if capabilities.enabled(db, assistant_id, 'skill', item['id'], item_scope=item.get('scope', ''))]
     if not items:
         return ''
     return (SKILL_CATALOG_PREFIX + json.dumps({'enabled_skills': items}, ensure_ascii=False) +

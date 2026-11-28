@@ -55,6 +55,7 @@ def visible_messages(messages, *, canonical='', hidden_inputs=()):
     hidden_keys=[_message_key(value) for value in hidden_inputs or () if _message_key(value)]
     for message in messages or []:
         item=dict(message)
+        item['events'] = [_normalize_event(event) for event in item.get('events', [])]
         if item.get('role') == 'user':
             content = str(item.get('content') or '')
             if '\n用户问题：' in content:
@@ -73,12 +74,12 @@ def visible_messages(messages, *, canonical='', hidden_inputs=()):
             if item.get('events') and not item.get('tool_calls'):
                 reasoning, tool_calls, outputs = [], [], []
                 for ev in item['events']:
-                    ev_type = ev.get('type') or ev.get('kind') or ''
-                    if ev_type in ('reasoning_done', 'reasoning_chunk') and (ev.get('text') or ev.get('content')):
+                    ev_type = ev.get('type') or ''
+                    if ev_type in ('reasoning_done', 'reasoning_chunk', 'reasoning_delta') and (ev.get('text') or ev.get('content')):
                         reasoning.append(ev.get('text') or ev['content'])
-                    elif ev_type in ('tool_call', 'tool'):
+                    elif ev_type == 'tool_call':
                         tool_calls.append({'name': ev.get('name') or ev.get('tool') or '', 'args': ev.get('args') or {}, 'summary': ev.get('summary') or ''})
-                    elif ev_type in ('tool_result', 'tool_output') and tool_calls:
+                    elif ev_type == 'tool_result' and tool_calls:
                         last = tool_calls[-1]
                         if not last.get('result_summary'):
                             last['result_summary'] = ev.get('summary') or str(ev.get('result', ''))[:200]
@@ -93,6 +94,16 @@ def visible_messages(messages, *, canonical='', hidden_inputs=()):
                 if outputs and not item.get('outputs'): item['outputs'] = outputs
             result.append(item)
     return result
+
+
+def _normalize_event(event):
+    if not isinstance(event, dict):
+        return {'type': 'unknown'}
+    event_type = event.get('type') or event.get('kind')
+    aliases = {'tool': 'tool_call', 'tool_output': 'tool_result', 'reasoning_chunk': 'reasoning_delta'}
+    if isinstance(event_type, str):
+        event_type = aliases.get(event_type, event_type)
+    return {**event, 'type': event_type if isinstance(event_type, str) and event_type else 'unknown'}
 
 
 def link(db, kind, entity_id):

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import threading
 import re
@@ -99,7 +100,8 @@ def encrypt_legacy_secrets(db: "WorkflowDB") -> dict[str, int]:
     return {"encrypted": fixed}
 
 from workflow_prompts import (
-    WORKFLOW_SCHEMA, IDEA_FALLBACK, AGENT_SYSTEM, _DELEGATE_SYSTEM, BUILTIN_ASSISTANTS
+    WORKFLOW_SCHEMA, IDEA_FALLBACK, AGENT_SYSTEM, _DELEGATE_SYSTEM, BUILTIN_ASSISTANTS,
+    BUILTIN_ASSISTANT_PROMPT_REVISION, LEGACY_BUILTIN_PROMPT_HASHES
 )
 
 # 内置 Provider 目录：从内嵌 pi-ai SDK 导出（40 家），字段见同目录 providers_catalog.json
@@ -339,8 +341,12 @@ class WorkflowDB(ResearchDB):
               avatar TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
               rules TEXT NOT NULL DEFAULT '', prompts TEXT NOT NULL DEFAULT '[]',
               model_id TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1,
-              sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+              sort_order INTEGER NOT NULL DEFAULT 0, deleted_at TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             )""")
+                    cols_asst = {r["name"] for r in self.db.execute("PRAGMA table_info(assistants)")}
+                    if "deleted_at" not in cols_asst:
+                        self.db.execute("ALTER TABLE assistants ADD COLUMN deleted_at TEXT NOT NULL DEFAULT ''")
                     self.db.execute("""CREATE TABLE IF NOT EXISTS team_members (
                           id TEXT PRIMARY KEY, task_id TEXT NOT NULL, name TEXT NOT NULL,
                           role TEXT NOT NULL DEFAULT 'member', step TEXT NOT NULL DEFAULT '',
@@ -1227,7 +1233,7 @@ class WorkflowDB(ResearchDB):
 
     # ---------- 团队表（一个团队 = 一条记录；成员/记录都挂在它的 id 上） ----------
     def teams(self) -> list[dict[str, Any]]:
-        return [dict(r) for r in self.db.execute("SELECT * FROM teams WHERE status<>'dissolved' AND id NOT IN (SELECT instance_team_id FROM team_execution_instances) ORDER BY created_at")]
+        return [dict(r) for r in self.db.execute("SELECT * FROM teams WHERE status NOT IN ('dissolved','archived') AND id NOT IN (SELECT instance_team_id FROM team_execution_instances) ORDER BY created_at")]
 
     def team(self, tid: str) -> dict[str, Any] | None:
         row = self.db.execute("SELECT * FROM teams WHERE id=?", (tid,)).fetchone()
@@ -1279,7 +1285,7 @@ class WorkflowDB(ResearchDB):
 
     # ---------- 专家（我的 / 公开；点进去设提示词） ----------
     def assistants(self) -> list[dict[str, Any]]:
-        rows = self.db.execute("SELECT * FROM assistants ORDER BY source='builtin', sort_order, created_at").fetchall()
+        rows = self.db.execute("SELECT * FROM assistants WHERE COALESCE(deleted_at,'')='' ORDER BY source='builtin', sort_order, created_at").fetchall()
         return [dict(r) for r in rows]
 
     def selectable_assistants(self) -> list[dict[str, Any]]:
@@ -1293,8 +1299,9 @@ class WorkflowDB(ResearchDB):
             raise ValueError("这个公开专家尚未启用，请先在专家设置中启用")
         return a
 
-    def assistant(self, aid: str) -> dict[str, Any] | None:
-        row = self.db.execute("SELECT * FROM assistants WHERE id=?", (aid,)).fetchone()
+    def assistant(self, aid: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
+        sql = "SELECT * FROM assistants WHERE id=?" if include_deleted else "SELECT * FROM assistants WHERE id=? AND COALESCE(deleted_at,'')=''"
+        row = self.db.execute(sql, (aid,)).fetchone()
         return dict(row) if row else None
 
     def assistant_save(self, aid: str, **f: Any) -> dict[str, Any]:
@@ -1319,6 +1326,15 @@ class WorkflowDB(ResearchDB):
             extra = {k: allow[k] for k in ("enabled", "reasoning", "permission", "fallback_model_ids") if k in allow}
             if extra:
                 self.db.execute("UPDATE assistants SET %s WHERE id=?" % ", ".join("%s=?" % k for k in extra), (*extra.values(), aid))
+        if cur and cur.get("source") == "builtin":
+            defaults = next((item for item in BUILTIN_ASSISTANTS if item["id"] == aid), None)
+            if defaults:
+                for field in ("rules", "prompts"):
+                    if field in allow:
+                        target = defaults.get(field, [] if field == "prompts" else "")
+                        custom = (self._assistant_prompt_hash(field, allow[field]) !=
+                                  self._assistant_prompt_hash(field, target))
+                        self._set_builtin_prompt_state(aid, field, allow[field], custom=custom)
         self.db.commit()
         return dict(self.db.execute("SELECT * FROM assistants WHERE id=?", (aid,)).fetchone())
 
@@ -1335,11 +1351,140 @@ class WorkflowDB(ResearchDB):
         return self.db.total_changes
 
     def assistant_delete(self, aid: str) -> None:
+        aid = (aid or "").strip()
         cur = self.assistant(aid)
-        if cur and cur["source"] == "builtin":
-            raise ValueError("公开专家不能删除 —— 可以「复制为我的」再改。")
-        self.db.execute("DELETE FROM assistants WHERE id=?", (aid,))
+        if not cur:
+            raise ValueError("专家不存在")
+        if aid == "builtin-steward":
+            raise ValueError("智研管家为系统核心管家，不可删除；可编辑配置或恢复默认。")
+        active_agent = self.db.execute(
+            """SELECT 1 FROM tasks t LEFT JOIN chats c ON c.id=json_extract(t.checkpoint,'$.request.chat_id')
+               WHERE t.kind='agent_run' AND t.status IN ('pending','running','suspended')
+                 AND (json_extract(t.checkpoint,'$.request._runtime_snapshot.assistant_id')=? OR COALESCE(c.assistant_id,'')=?)
+               LIMIT 1""",
+            (aid, aid),
+        ).fetchone()
+        active_team_task = self.db.execute(
+            """SELECT 1 FROM team_tasks tt JOIN team_members tm ON tm.id=tt.member_id
+               WHERE tm.assistant_id=? AND tt.status IN ('queued','running','blocked') LIMIT 1""",
+            (aid,),
+        ).fetchone()
+        active_project_task = self.db.execute(
+            """SELECT 1 FROM project_tasks t JOIN project_task_runs r ON r.id=t.latest_run_id
+               WHERE t.status IN ('queued','running','awaiting_review','blocked')
+                 AND json_extract(r.executor_snapshot,'$.assistant_id')=? LIMIT 1""",
+            (aid,),
+        ).fetchone()
+        if active_agent or active_team_task or active_project_task:
+            raise ValueError("该专家有正在运行或排队中的任务，请先停止后再删除")
+        leader_row = self.db.execute(
+            """SELECT t.name FROM team_members m JOIN teams t ON t.id=m.task_id
+               WHERE m.assistant_id=? AND m.role='leader'
+                 AND t.status NOT IN ('dissolved','archived')
+                 AND t.id NOT IN (SELECT instance_team_id FROM team_execution_instances)
+               LIMIT 1""",
+            (aid,),
+        ).fetchone()
+        if leader_row:
+            raise ValueError(f"该专家正在担任团队「{leader_row['name']}」的负责人，请先更换负责人或删除该团队")
+        sched_row = self.db.execute(
+            "SELECT name FROM schedules WHERE assistant_id=? AND enabled=1 LIMIT 1",
+            (aid,),
+        ).fetchone()
+        if sched_row:
+            raise ValueError(f"定时任务「{sched_row['name']}」正在使用该专家，请先修改或停用该定时任务")
+        stamp = now()
+        self.db.execute("DELETE FROM team_members WHERE assistant_id=? AND role<>'leader'", (aid,))
+        self.db.execute("UPDATE project_executor_bindings SET enabled=0, updated_at=? WHERE kind='assistant' AND target_id=?", (stamp, aid))
+        if cur["source"] == "builtin":
+            self.db.execute("UPDATE assistants SET deleted_at=?, updated_at=? WHERE id=?", (stamp, stamp, aid))
+        else:
+            self.db.execute("DELETE FROM assistants WHERE id=?", (aid,))
         self.db.commit()
+
+    @staticmethod
+    def _assistant_prompt_hash(field: str, value: Any) -> str:
+        if field == "prompts":
+            try:
+                value = json.loads(value) if isinstance(value, str) else value
+            except (TypeError, ValueError):
+                pass
+            value = json.dumps(value, ensure_ascii=False)
+        return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+    def _set_builtin_prompt_state(self, assistant_id: str, field: str, value: Any,
+                                  *, custom: bool = False) -> None:
+        stamp = now()
+        self.db.execute(
+            "INSERT OR REPLACE INTO assistant_prompt_state (assistant_id,field,revision,source_hash,custom,updated_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (assistant_id, field, BUILTIN_ASSISTANT_PROMPT_REVISION,
+             self._assistant_prompt_hash(field, value), int(custom), stamp),
+        )
+
+    def assistant_prompt_upgrade_preview(self) -> dict[str, Any]:
+        catalog = {item["id"]: item for item in BUILTIN_ASSISTANTS}
+        assistants = []
+        for assistant_id, defaults in catalog.items():
+            current = self.assistant(assistant_id)
+            if not current:
+                continue
+            fields = {}
+            for field in ("rules", "prompts"):
+                value = current.get(field, "[]" if field == "prompts" else "")
+                target = defaults.get(field, [] if field == "prompts" else "")
+                target_value = json.dumps(target, ensure_ascii=False) if field == "prompts" else target
+                current_hash = self._assistant_prompt_hash(field, value)
+                target_hash = self._assistant_prompt_hash(field, target_value)
+                state = self.db.execute(
+                    "SELECT revision,source_hash,custom FROM assistant_prompt_state WHERE assistant_id=? AND field=?",
+                    (assistant_id, field),
+                ).fetchone()
+                if current_hash == target_hash:
+                    status = "current"
+                elif state and (state["custom"] or state["source_hash"] != current_hash):
+                    status = "custom"
+                elif state:
+                    status = "update" if state["revision"] != BUILTIN_ASSISTANT_PROMPT_REVISION else "current"
+                elif current_hash == LEGACY_BUILTIN_PROMPT_HASHES.get(assistant_id, {}).get(field):
+                    status = "update"
+                else:
+                    status = "custom"
+                fields[field] = {"status": status, "current": value, "default": target_value}
+            assistants.append({"id": assistant_id, "name": current["name"], "fields": fields})
+        return {"revision": BUILTIN_ASSISTANT_PROMPT_REVISION, "assistants": assistants}
+
+    def assistant_prompt_upgrade(self, assistant_ids: list[str]) -> dict[str, Any]:
+        if not isinstance(assistant_ids, list):
+            raise ValueError("请提供要更新的内置专家 ID 列表")
+        selected = set(str(item) for item in assistant_ids)
+        builtins = {item["id"] for item in BUILTIN_ASSISTANTS}
+        if selected - builtins:
+            raise ValueError("提示词更新只支持当前内置专家")
+        preview = self.assistant_prompt_upgrade_preview()
+        changed = []
+        stamp = now()
+        for assistant in preview["assistants"]:
+            aid = assistant["id"]
+            if aid not in selected:
+                continue
+            for field, state in assistant["fields"].items():
+                value = state["current"]
+                current_hash = self._assistant_prompt_hash(field, value)
+                if state["status"] == "update":
+                    target = state["default"]
+                    cursor = self.db.execute(
+                        f"UPDATE assistants SET {field}=?,updated_at=? WHERE id=? AND {field}=?",
+                        (target, stamp, aid, value),
+                    )
+                    if not cursor.rowcount:
+                        continue
+                    value = target
+                    changed.append({"assistant_id": aid, "field": field})
+                custom = state["status"] == "custom"
+                self._set_builtin_prompt_state(aid, field, value, custom=custom)
+        self.db.commit()
+        return {"ok": True, "updated": changed, "preview": self.assistant_prompt_upgrade_preview()}
 
     def assistant_of_chat(self, chat_id: str) -> str:
         """这个对话绑的是哪个专家（空串=没绑）。"""
@@ -1347,17 +1492,64 @@ class WorkflowDB(ResearchDB):
         return ((row["assistant_id"] if row else "") or "")
 
     def assistant_seed(self, builtins: list[dict[str, Any]]) -> int:
-        """内置（公开）专家：只补缺，不覆盖用户改过的。"""
+        """内置（公开）专家：只补缺，不覆盖用户改过或主动删过的。"""
         n = 0
         for b in builtins:
-            if not self.assistant(b["id"]):
+            if not self.assistant(b["id"], include_deleted=True):
                 self.db.execute("INSERT INTO assistants (id,source,name,avatar,description,rules,prompts,model_id,enabled,sort_order,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                                 (b["id"], "builtin", b["name"], b.get("avatar", ""), b.get("description", ""),
                                  b.get("rules", ""), json.dumps(b.get("prompts", []), ensure_ascii=False),
                                  "", 1, b.get("sort_order", 0), now(), now()))
+                self._set_builtin_prompt_state(b["id"], "rules", b.get("rules", ""))
+                self._set_builtin_prompt_state(b["id"], "prompts", b.get("prompts", []))
                 n += 1
         self.db.commit()
         return n
+
+    def assistant_restore_defaults(self, builtins: list[dict[str, Any]] | None = None, *, mode: str = "missing") -> dict[str, Any]:
+        """恢复内置专家：missing 仅补回已删除的内置专家；reset 还将全部内置专家还原为出厂配置。"""
+        mode = (mode or "missing").strip().lower()
+        if mode not in ("missing", "reset"):
+            raise ValueError("恢复模式必须是 missing 或 reset")
+        catalog = BUILTIN_ASSISTANTS if builtins is None else builtins
+        stamp = now()
+        restored = 0
+        for b in catalog:
+            prompts_json = json.dumps(b.get("prompts", []), ensure_ascii=False)
+            cur = self.assistant(b["id"], include_deleted=True)
+            if not cur:
+                self.db.execute(
+                    "INSERT INTO assistants (id,source,name,avatar,description,rules,prompts,model_id,enabled,sort_order,deleted_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (b["id"], "builtin", b["name"], b.get("avatar", ""), b.get("description", ""),
+                     b.get("rules", ""), prompts_json, "", 1, b.get("sort_order", 0), "", stamp, stamp),
+                )
+                self._set_builtin_prompt_state(b["id"], "rules", b.get("rules", ""))
+                self._set_builtin_prompt_state(b["id"], "prompts", b.get("prompts", []))
+                restored += 1
+            elif cur.get("deleted_at"):
+                if mode == "reset":
+                    self.db.execute(
+                        "UPDATE assistants SET source='builtin',name=?,avatar=?,description=?,rules=?,prompts=?,model_id='',fallback_model_ids='[]',reasoning='auto',permission='auto',enabled=1,sort_order=?,deleted_at='',updated_at=? WHERE id=?",
+                        (b["name"], b.get("avatar", ""), b.get("description", ""), b.get("rules", ""), prompts_json, b.get("sort_order", 0), stamp, b["id"]),
+                    )
+                    self._set_builtin_prompt_state(b["id"], "rules", b.get("rules", ""))
+                    self._set_builtin_prompt_state(b["id"], "prompts", b.get("prompts", []))
+                else:
+                    self.db.execute(
+                        "UPDATE assistants SET deleted_at='',enabled=1,updated_at=? WHERE id=?",
+                        (stamp, b["id"]),
+                    )
+                restored += 1
+            elif mode == "reset":
+                self.db.execute(
+                    "UPDATE assistants SET source='builtin',name=?,avatar=?,description=?,rules=?,prompts=?,model_id='',fallback_model_ids='[]',reasoning='auto',permission='auto',enabled=1,sort_order=?,deleted_at='',updated_at=? WHERE id=?",
+                    (b["name"], b.get("avatar", ""), b.get("description", ""), b.get("rules", ""), prompts_json, b.get("sort_order", 0), stamp, b["id"]),
+                )
+                self._set_builtin_prompt_state(b["id"], "rules", b.get("rules", ""))
+                self._set_builtin_prompt_state(b["id"], "prompts", b.get("prompts", []))
+                restored += 1
+        self.db.commit()
+        return {"ok": True, "mode": mode, "restored": restored, "assistants": self.assistants()}
 
     def set_chat_assistant(self, cid: str, aid: str) -> None:
         if aid:
@@ -1972,6 +2164,30 @@ class WorkflowDB(ResearchDB):
                 d["events"] = []
             out.append(d)
         return out
+
+    def message_page(self, task_id: str, *, limit: int = 60, before: int | None = None) -> dict[str, Any]:
+        limit = max(1, min(int(limit), 200))
+        boundary = int(before) if before is not None else None
+        if boundary is not None and boundary < 1:
+            raise ValueError("before must be a positive message cursor")
+        where = "task_id=?" + (" AND rowid<?" if boundary is not None else "")
+        args = (task_id, boundary, limit + 1) if boundary is not None else (task_id, limit + 1)
+        rows = self.db.execute(
+            f"SELECT rowid AS _cursor,* FROM chat WHERE {where} ORDER BY rowid DESC LIMIT ?", args
+        ).fetchall()
+        has_more = len(rows) > limit
+        page = list(reversed(rows[:limit]))
+        messages = []
+        for row in page:
+            item = dict(row)
+            item.pop("_cursor", None)
+            try:
+                item["events"] = json.loads(item["events"])
+            except (TypeError, ValueError):
+                item["events"] = []
+            messages.append(item)
+        return {"messages": messages, "has_more": has_more,
+                "next_before": int(page[0]["_cursor"]) if has_more else None}
 
     def clear_messages(self, task_id: str) -> int:
         n = self.db.execute("SELECT COUNT(*) n FROM chat WHERE task_id=?", (task_id,)).fetchone()["n"]

@@ -345,7 +345,7 @@ def resolve_node(db: Any, project_id: str, layout_id: str, node: dict, *, materi
     if layout_id not in LEGACY_TEAM_WORKFLOWS:
         return node
     matches = []
-    for row in db.db.execute("SELECT * FROM teams WHERE project_id=? AND kind='fixed'", (project_id,)):
+    for row in db.db.execute("SELECT * FROM teams WHERE project_id=? AND kind='fixed' AND status NOT IN ('dissolved','archived','disabled')", (project_id,)):
         roster = db.team_members(row["id"])
         leaders = [m for m in roster if m["role"] == "leader"]
         if not any(node["step"] in LEGACY_TEAM_STAGES.get(m["assistant_id"], ()) for m in leaders):
@@ -363,7 +363,7 @@ def resolve_node(db: Any, project_id: str, layout_id: str, node: dict, *, materi
         matches.append({**node, "team_id": row["id"], "execution_mode": "team",
                         "eligible_member_ids": eligible, "binding_source": "project_team"})
     if len(matches) > 1:
-        raise ValueError("多个常驻团队匹配此节点，请在工作流中明确指定执行团队")
+        raise ValueError("多个团队匹配此节点，请在工作流中明确指定执行团队")
     return matches[0] if matches else node
 
 

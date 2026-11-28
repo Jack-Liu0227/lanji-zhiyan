@@ -26,6 +26,37 @@ class ExecutionConversationsTest(unittest.TestCase):
         self.assertEqual([row['id'] for row in conversations.visible_messages(messages)],
                          ['first','answer','followup'])
 
+    def test_legacy_and_malformed_events_are_safe_to_replay(self):
+        messages = [{'id': 'answer', 'role': 'assistant', 'content': 'Done', 'events': [
+            {'kind': 'tool', 'name': 'read_file', 'args': {'path': 'notes.md'}},
+            {'kind': 'tool_output', 'name': 'read_file', 'result': 'text'},
+            {'kind': 'reasoning_chunk', 'text': 'Checking'},
+            None,
+            {'content': 'Legacy event without a type'},
+        ]}]
+
+        result, = conversations.visible_messages(messages)
+
+        self.assertEqual([event['type'] for event in result['events']], [
+            'tool_call', 'tool_result', 'reasoning_delta', 'unknown', 'unknown'])
+
+    def test_message_pages_return_newest_first_page_and_older_cursor(self):
+        chat_id = self.db.create_chat('Paged history', task_id=self.pid)
+        for index in range(70):
+            self.db.add_message(chat_id, 'user', f'message-{index}')
+
+        latest = self.db.message_page(chat_id, limit=20)
+        older = self.db.message_page(chat_id, limit=20, before=latest['next_before'])
+
+        self.assertEqual([row['content'] for row in latest['messages']],
+                         [f'message-{index}' for index in range(50, 70)])
+        self.assertTrue(latest['has_more'])
+        self.assertEqual([row['content'] for row in older['messages']],
+                         [f'message-{index}' for index in range(30, 50)])
+        self.assertTrue(older['has_more'])
+        self.assertEqual(self.db.message_page(chat_id, limit=200, before=older['next_before'])['messages'][0]['content'],
+                         'message-0')
+
     def test_desktop_http_route_opens_the_bound_execution_conversation(self):
         from pathlib import Path
         import sys
@@ -45,6 +76,40 @@ class ExecutionConversationsTest(unittest.TestCase):
                     result = json.load(response)
                 self.assertEqual(result['execution']['entity_id'], task['id'])
                 self.assertEqual(result['execution']['status'], 'ready')
+            finally:
+                http.shutdown()
+                worker.join(3)
+                http.server_close()
+
+    def test_chat_http_route_paginates_saved_messages(self):
+        from pathlib import Path
+        import sys
+        import threading
+        import urllib.parse
+        import urllib.request
+        from unittest.mock import patch
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'apps/desktop'))
+        import server
+        chat_id = self.db.create_chat('Paged chat', task_id=self.pid)
+        for index in range(65):
+            self.db.add_message(chat_id, 'user', f'message-{index}')
+        with patch.object(server, 'DB_PATH', self.db.path):
+            http = server.Server(('127.0.0.1', 0), server.Handler)
+            worker = threading.Thread(target=http.serve_forever, daemon=True)
+            worker.start()
+            try:
+                base = f'http://127.0.0.1:{http.server_port}/api/chat?id={chat_id}'
+                with urllib.request.urlopen(base) as response:
+                    latest = json.load(response)
+                self.assertEqual(len(latest['messages']), 60)
+                self.assertEqual(latest['messages'][0]['content'], 'message-5')
+                self.assertTrue(latest['has_more'])
+                before = urllib.parse.urlencode({'id': chat_id, 'before': latest['next_before']})
+                with urllib.request.urlopen(f'http://127.0.0.1:{http.server_port}/api/chat?{before}') as response:
+                    earlier = json.load(response)
+                self.assertEqual([item['content'] for item in earlier['messages']],
+                                 [f'message-{index}' for index in range(5)])
+                self.assertFalse(earlier['has_more'])
             finally:
                 http.shutdown()
                 worker.join(3)

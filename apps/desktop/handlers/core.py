@@ -108,20 +108,28 @@ class CoreRoutes:
                 execution = read(db, chat_id)
                 if execution is not None:
                     return self._json(execution)
-                messages = visible_messages(db.messages(chat_id))
+                try:
+                    before = int(q.get("before", [""])[0]) if q.get("before", [""])[0] else None
+                except (TypeError, ValueError):
+                    return self._json({"error": "无效的历史消息游标"}, 400)
+                page = db.message_page(chat_id, limit=60, before=before)
+                messages = visible_messages(page["messages"])
                 row = db.db.execute(
                     "SELECT id, status, checkpoint, updated_at FROM tasks "
                     "WHERE owner_id=? AND kind='agent_run' ORDER BY rowid DESC LIMIT 1",
                     (chat_id,)).fetchone()
-                if row and row["status"] in ("failed", "interrupted") and not any(
+                if before is None and row and row["status"] in ("failed", "interrupted") and not any(
                     message.get("run_id") == row["id"] for message in messages
                 ):
                     checkpoint = json.loads(row["checkpoint"] or "{}")
-                    raw_events = [item["payload"] for item in db.get_run_events(row["id"])
+                    raw_events = [item["payload"] for item in db.get_run_events(row["id"], limit=100)
                                   if isinstance(item["payload"], dict)]
-                    errors = [item.get("message") or item.get("error") or item.get("summary")
-                              for item in raw_events if item.get("type") == "error"]
-                    reason = next((value for value in reversed(errors) if value and value != "error"), None)
+                    error_event = db.get_latest_run_event(row["id"], "error")
+                    error_payload = error_event.get("payload") if error_event else {}
+                    if not isinstance(error_payload, dict):
+                        error_payload = {}
+                    reason = next((error_payload.get(key) for key in ("message", "error", "summary")
+                                   if error_payload.get(key) and error_payload.get(key) != "error"), None)
                     reason = reason or checkpoint.get("error") or "请展开执行轨迹查看已记录的模型与工具事件。"
                     if reason == "error":
                         reason = "请展开执行轨迹查看已记录的模型与工具事件。"
@@ -130,9 +138,9 @@ class CoreRoutes:
                                      "content": heading + str(safe_result(reason)),
                                      "created_at": row["updated_at"], "status": row["status"],
                                      "run_id": row["id"],
-                                     "events": [safe_result(event) for event in raw_events[-100:]
+                                     "events": [safe_result(event) for event in raw_events
                                                 if event.get("type") not in ("user", "assistant_delta", "reasoning_delta")]})
-                return self._json({"messages": messages})
+                return self._json({**page, "messages": messages})
         if path == "/api/security":                   # 权限模式：all=不再逐次问，ask=编译/写文件每次问
             with WorkflowDB(DB_PATH) as db:
                 sec = kv_store.read(db, "security")

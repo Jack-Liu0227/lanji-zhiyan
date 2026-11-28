@@ -165,18 +165,18 @@ async function renderTeam(m){
   if(ticket!==teamChatRenderSequence || route()!=='team' || !m.isConnected)return;
   const TL = (teamList.teams||[]);
   const curT = TL.find(t=>t.id===teamScope) || null;
-  if(!curT){                                            // scope 不合法（老数据/被解散）→ 落到第一个固定团队
-    const first = TL.find(t=>t.kind==="fixed") || TL[0] || null;
+  if(!curT){                                            // scope 不合法（老数据/已删除）→ 落到第一个团队
+    const first = TL[0] || null;
     teamScope = first ? first.id : "";
     if(teamScope) localStorage.setItem("rw-team-chat", teamScope); else localStorage.removeItem("rw-team-chat");
   }
   if(!teamScope){
     m.innerHTML = `<div class="page-head"><div><p class="inst-label">TEAM</p><h3>团队</h3>
-      <p class="hint">正在开一个团队群…</p></div></div>`;
-    try{ const r = await api("/api/chat/create", {title:"团队"}); teamScope = r.id || (r.chat&&r.chat.id) || "";
-         localStorage.setItem("rw-team-chat", teamScope); await refreshState(false); }
-    catch(e){ m.innerHTML = `<div class="page-head"><div><p class="inst-label">TEAM</p><h3>团队</h3>
-      <p class="hint">开团队群失败：${esc(e.message)}</p></div></div>`; return; }
+      <p class="hint">当前还没有可用的团队，请先在团队平面新建一个团队。</p></div>
+      <div class="ph-acts"><button class="btn btn-primary" id="tcBackOffice">返回团队列表</button></div></div>`;
+    const back = $("tcBackOffice");
+    if(back) back.onclick = ()=>{ window.__teamMode = ""; render(); };
+    return;
   }
   const scope=teamScope;
   try{ teamData = await api("/api/team/chat?scope=" + encodeURIComponent(scope)); }
@@ -236,7 +236,7 @@ async function renderTeam(m){
         <label class="at-sel" title="选择协同团队">
           <span class="tc-sel-lbl">👥 团队</span>
           <select class="control" id="tcTeamSelect">
-            ${TL.map(x=>`<option value="${x.id}" ${x.id===teamScope?"selected":""}>${x.kind==="fixed"?"📌 ":"⏳ "}${esc(x.name)} (${x.picks||0}人)</option>`).join("")}
+            ${TL.map(x=>`<option value="${x.id}" ${x.id===teamScope?"selected":""}>${esc(x.name)} (${x.picks||0}人)</option>`).join("")}
           </select>
         </label>
         <label class="at-sel" title="选择关联项目文件夹工作区（资料、产出与项目上下文对齐）">
@@ -477,7 +477,7 @@ async function duplicateAssistant(a){
 }
 async function deleteAssistant(id, name){
   const a = (S.assistants||[]).find(x=>x.id===id);
-  if(a && a.source === "builtin") return uiNotify("公开专家不能删除 —— 可以「复制为我的」再改。");
+  if(a && a.id === "builtin-steward") return uiNotify("智研管家为系统核心管家，不可删除。");
   if(!await uiConfirm(`删除专家「${name}」？（已经用它的对话不受影响）`)) return;
   try{ await api("/api/assistant/delete", {id}); }catch(e){ return uiNotify("删除失败：" + e.message); }
   await refreshState(false); asView = "mine"; render();
@@ -586,7 +586,7 @@ function asEmpty(){                       // 空状态：没绑专家 = 智研�
           <span style="font-size:20px;">⚡</span>
           <div>
             <strong style="font-size:13px;color:var(--fg);">全局智研中枢 · 自然语言意图立项与多模块调控</strong>
-            <p style="font-size:11px;color:var(--muted);margin:2px 0 0;">顶层无项目绑定，直接说出研究构想，管家将自动完成项目创建、装配专家团队并启动 LangGraph 状态图流：</p>
+            <p style="font-size:11px;color:var(--muted);margin:2px 0 0;">顶层无项目绑定，直接说出研究构想，管家将自动完成项目创建、装配专家团队并启动科研工作流：</p>
           </div>
         </div>
         <div class="steward-hub-chips" style="margin-top:10px;">
@@ -937,7 +937,15 @@ function updateChatActivity(box, type, who, event){
   ChatPresentation.activity(box,type,who,event);
 }
 
+function normalizeChatEvent(event){
+  if(!event||typeof event!=='object'||Array.isArray(event))return {type:'unknown'};
+  const aliases={tool:'tool_call',tool_output:'tool_result',reasoning_chunk:'reasoning_delta'};
+  const type=typeof event.type==='string'&&event.type?event.type:typeof event.kind==='string'?event.kind:'';
+  return {...event,type:aliases[type]||type||'unknown'};
+}
+
 function appendOne(box,ev,who){
+  ev=normalizeChatEvent(ev);
   return ChatPresentation.append(box,ev,()=>appendChatEvent(box,ev,who));
 }
 function appendChatEvent(box,ev,who){

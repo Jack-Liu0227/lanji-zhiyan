@@ -28,7 +28,7 @@ class WorkflowContextCompactionTest(unittest.TestCase):
                   for index in range(30)]
         enabled = {item["id"] for index, item in enumerate(skills) if index % 5}
         with patch.object(capabilities, "list_skills", return_value=skills), \
-                patch.object(capabilities, "enabled", side_effect=lambda db, assistant, kind, item: item in enabled):
+                patch.object(capabilities, "enabled", side_effect=lambda db, assistant, kind, item, *, item_scope="": item in enabled):
             catalog = workflow_context.skill_catalog(None, "assistant", "project")
         payload = catalog[len(workflow_context.SKILL_CATALOG_PREFIX):]
         original, end = json.JSONDecoder().raw_decode(payload)

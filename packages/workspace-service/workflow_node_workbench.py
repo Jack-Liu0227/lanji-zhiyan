@@ -214,12 +214,16 @@ def read(db, selection, *, authority, window_id='', task=None, include_content=T
     if raw_content and kind != 'files' and (kind != 'text' or not isinstance(raw_content, str) or not run['output_snapshot'].get('files')):
         artifacts.append({'id': 'structured', 'name': node.get('label') or task['title'], 'kind': kind,
                           'editable': editable and _structured_editable(node, raw_content)})
+    root = tasks._root(db, task['project_id'])
     for index, item in enumerate(run['output_snapshot'].get('files') or []):
-        can_edit = project_task_review.can_edit_file(task, item) if hasattr(project_task_review, 'can_edit_file') else (task['metadata'].get('stage', 'task') in ('', 'task', 'outline', 'write', 'review') and Path(item['path']).suffix.lower() in TEXT)
-        artifacts.append({'id': 'file:' + str(index), 'name': item.get('name') or Path(item['path']).name,
+        item_path = Path(item['path'])
+        can_edit = project_task_review.can_edit_file(task, item) if hasattr(project_task_review, 'can_edit_file') else (task['metadata'].get('stage', 'task') in ('', 'task', 'outline', 'write', 'review') and item_path.suffix.lower() in TEXT)
+        rel = item.get('relative') or (item_path.resolve().relative_to(root).as_posix() if item_path.resolve().is_relative_to(root) else '')
+        artifacts.append({'id': 'file:' + str(index), 'name': item.get('name') or item_path.name,
                           'kind': _file_kind(item), 'content_hash': item.get('content_hash', item.get('sha256')),
+                          'path': str(item_path), 'relative': rel,
                           'editable': editable and can_edit and node.get('node_kind') != 'tool',
-                          'size': Path(item['path']).stat().st_size})
+                          'size': item_path.stat().st_size})
         if node.get('step') == 'notes' and artifacts[-1]['kind'] == 'pdf':
             artifacts[-1]['source_path'] = item.get('original_path', '')
     if node.get('step') == 'convert':
@@ -381,6 +385,7 @@ def workspace(db, selection, *, authority, window_id='', task=None):
         artifacts.append({'id': 'structured', 'kind': _kind(node, output['content']), 'name': task['title'], 'editable': False})
     for item in output['files']:
         artifacts.append({'id': 'asset:' + item['asset_id'], 'kind': _file_kind(item), 'name': item['name'],
+                          'path': item.get('path', ''), 'relative': item.get('relative', ''),
                           'content_hash': item['content_hash'], 'editable': False})
     candidate = {**run, 'output_snapshot': output}
     return {'identity': _identity(task, candidate), 'task': tasks.public_view(task),

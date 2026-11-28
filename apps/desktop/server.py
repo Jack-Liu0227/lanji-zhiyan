@@ -13,6 +13,7 @@ import tempfile
 import json
 import re
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -536,6 +537,7 @@ def _webview_window(url: str, stamp: str) -> bool:
     try:
         import webview
     except Exception:
+        (paths.CACHE / "server-error.log").write_text(traceback.format_exc(), encoding="utf-8")
         return False
     # 打包后图标在 exe 目录的 build/icon.ico（spec 把 tools/build 打进去），源码跑在 tools/build/icon.ico
     icon = ROOT / "build" / "icon.ico"
@@ -571,6 +573,41 @@ def _webview_window(url: str, stamp: str) -> bool:
         return False
 
 
+def _edge_app_executable() -> Path | None:
+    candidates = [shutil.which("msedge")]
+    for variable in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"):
+        root = os.environ.get(variable)
+        if root:
+            candidates.append(str(Path(root) / "Microsoft" / "Edge" / "Application" / "msedge.exe"))
+    return next((Path(item) for item in candidates if item and Path(item).is_file()), None)
+
+
+def _open_fallback_window(url: str) -> bool:
+    if os.name != "nt":
+        return bool(webbrowser.open(url))
+    edge = _edge_app_executable()
+    if edge:
+        try:
+            subprocess.Popen([str(edge), "--app=" + url, "--start-maximized"], close_fds=True,
+                             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) |
+                             getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+            return True
+        except OSError:
+            pass
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            "桌面窗口无法启动。请安装 Microsoft Edge WebView2 Runtime。\n\n"
+            "诊断日志：" + str(paths.CACHE / "server-error.log"),
+            APP_TITLE,
+            0x10,
+        )
+    except Exception:
+        pass
+    return bool(webbrowser.open(url))
+
+
 def _show_pinned(win: Any) -> None:
     """先把窗口钉准再露脸。以前是 show 之后每 100ms 才钉一次，肉眼能看到
     2465×1543 → 2488×1600 的一下跳；现在 hidden=True 起来，钉完再 show()。
@@ -601,6 +638,7 @@ def _set_icons(h: int) -> None:
     于是任务栏/标题栏用的是宿主进程 pythonw.exe 的图标（用户看到的就是 Python 图标）。
     打包版 exe 本身带图标，这里再设一遍也无害。句柄故意不释放：进程活多久就留多久。"""
     import ctypes
+    from ctypes import wintypes
     u = ctypes.windll.user32
     ico = ROOT / "build" / "icon.ico"
     if not ico.is_file():
@@ -608,10 +646,24 @@ def _set_icons(h: int) -> None:
     if not ico.is_file():
         return
     IMAGE_ICON, LR_LOADFROMFILE, WM_SETICON = 1, 0x10, 0x80
-    for size, kind in ((16, 0), (32, 1)):      # 0 = ICON_SMALL（标题栏），1 = ICON_BIG（任务栏/Alt-Tab）
+    GCLP_HICON, GCLP_HICONSM = -14, -34
+    u.LoadImageW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+    u.LoadImageW.restype = ctypes.c_void_p
+    u.SendMessageW.argtypes = [wintypes.HWND, ctypes.c_uint, ctypes.c_size_t, ctypes.c_ssize_t]
+    u.SendMessageW.restype = ctypes.c_ssize_t
+    if hasattr(u, "SetClassLongPtrW"):
+        u.SetClassLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        u.SetClassLongPtrW.restype = ctypes.c_ssize_t
+    for size, kind, gclp in ((16, 0, GCLP_HICONSM), (32, 1, GCLP_HICON)):      # 0 = ICON_SMALL（标题栏），1 = ICON_BIG（任务栏/Alt-Tab）
         handle = u.LoadImageW(None, str(ico), IMAGE_ICON, size, size, LR_LOADFROMFILE)
         if handle:
-            u.SendMessageW(h, WM_SETICON, kind, handle)
+            h_val = ctypes.cast(handle, ctypes.c_void_p).value or 0
+            u.SendMessageW(h, WM_SETICON, kind, h_val)
+            if hasattr(u, "SetClassLongPtrW"):
+                try:
+                    u.SetClassLongPtrW(h, gclp, h_val)
+                except Exception:
+                    pass
 
 
 def _nudge(h: int) -> None:
@@ -796,6 +848,10 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
             alt = ROOT / "tools" / "home" / "home.png"
             if alt.is_file():
                 return self._send(200, alt.read_bytes(), "image/png")
+        if (WEB.resolve() not in target.parents or not target.is_file()) and rel.strip("/") in ("favicon.ico", "build/icon.ico"):
+            alt = ROOT / "tools" / "build" / "icon.ico"
+            if alt.is_file():
+                return self._send(200, alt.read_bytes(), "image/x-icon")
         if WEB.resolve() not in target.parents or not target.is_file():
             return self._send(404, b"not found", "text/plain; charset=utf-8")
         self._send(200, target.read_bytes(), self.MIME.get(target.suffix.lower(), "application/octet-stream"))
@@ -1161,7 +1217,7 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                 return self._send(200, (WEB / "index.html").read_bytes(), "text/html; charset=utf-8")
             if path == "/kb.html":                                  # 知识星图整页（iframe 挂在「知识库」视图里）
                 return self._send(200, (WEB / "kb.html").read_bytes(), "text/html; charset=utf-8")
-            if path.startswith("/vendor/") or path.endswith((".js", ".css", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".woff2", ".woff", ".ttf")):
+            if path in ("/manifest.json",) or path.startswith("/vendor/") or path.endswith((".js", ".css", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".woff2", ".woff", ".ttf", ".json")):
                 return self._static(path)
 
             if path in ("/tools/home/home.png", "/home/home.png"):
@@ -1390,18 +1446,20 @@ class Handler(StarmapRoutes, CoreRoutes, WorkflowRoutes, MiscRoutes, UpdateRoute
                             if path == "/api/assistant/delete":
                                 db.assistant_delete(b.get("id", ""))
                                 return self._json({"ok": True})
+                            if path == "/api/assistant/restore-defaults":
+                                return self._json(db.assistant_restore_defaults(mode=str(b.get("mode") or "missing")))
                     except ValueError as exc:
                         return self._json({"error": str(exc)}, 400)
-                if path.startswith("/api/teams/"):           # 建 / 改名 / 解散 团队
+                if path.startswith("/api/teams/"):           # 建 / 改名 / 删除 团队
                     b = data or {}
                     try:
                         if path == "/api/teams/new":
-                            return self._json({"team": team.new_team(b.get("kind", "temp"), b.get("name", ""),
+                            return self._json({"team": team.new_team(b.get("kind", "team"), b.get("name", ""),
                                                                     b.get("project", ""), b.get("purpose", ""))})
                         if path == "/api/teams/rename":
                             return self._json({"team": team.rename_team(b.get("id", ""), b.get("name", ""))})
-                        if path == "/api/teams/dissolve":
-                            return self._json(team.dissolve(b.get("id", "")))
+                        if path in ("/api/teams/dissolve", "/api/teams/delete"):
+                            return self._json(team.delete_team(b.get("id", "")))
                     except ValueError as exc:
                         return self._json({"error": str(exc)}, 400)
                 if path.startswith("/api/team/chat/"):      # 团队 v2：选专家 / 移人 / 说话（接力）/ 停止
@@ -2345,7 +2403,7 @@ def main() -> int:
         if not busy and _webview_window(url, stamp):
             _stop_low_server()                    # 关窗 = 一起收掉沙箱里的服务端，不留僵尸
             return 0
-        webbrowser.open(url)
+        _open_fallback_window(url)
     if busy:
         return 0
     try:

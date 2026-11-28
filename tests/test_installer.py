@@ -23,7 +23,7 @@ class InstallerTest(unittest.TestCase):
         self.src = self.root / "payload"
         for name in (installer.APP + ".exe", "VERSION", "web/index.html", "build/icon.ico",
                      "packages/contracts/providers_catalog.json", "archive/migrations/001-046.zip",
-                     "archive/migrations/manifest.json"):
+                     "archive/migrations/manifest.json", "tools/zotero-mcp/zotero-mcp.exe"):
             path = self.src / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("new version", encoding="utf-8")
@@ -41,7 +41,7 @@ class InstallerTest(unittest.TestCase):
     def test_upgrade_removes_stale_program_files_and_preserves_data(self):
         installer.install_payload(self.src, self.app)
         self.assertFalse((self.app / "old.exe").exists())
-        self.assertEqual(installer.verify_payload(self.app), 7)
+        self.assertEqual(installer.verify_payload(self.app), 8)
         self.assertEqual(self.data.read_bytes(), b"user data")
 
     def test_corrupt_payload_leaves_current_installation_intact(self):

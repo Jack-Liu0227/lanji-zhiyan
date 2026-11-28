@@ -52,6 +52,73 @@ def _clean(text: Any) -> str:
     return " ".join(str(text or "").split())
 
 
+_FTS_DDL = {
+    "memory_fts": "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(mem_id UNINDEXED, text, tags, tokenize='trigram')",
+    "chat_fts": "CREATE VIRTUAL TABLE IF NOT EXISTS chat_fts USING fts5(chat_id UNINDEXED, task_id UNINDEXED, role UNINDEXED, content, tokenize='trigram')",
+    "asset_fts": "CREATE VIRTUAL TABLE IF NOT EXISTS asset_fts USING fts5(asset_id UNINDEXED, project_id UNINDEXED, title, body, tokenize='unicode61')",
+    "sem_fts": "CREATE VIRTUAL TABLE IF NOT EXISTS sem_fts USING fts5(text, tokenize='trigram')",
+}
+
+
+def _repopulate_fts(conn: sqlite3.Connection, name: str) -> None:
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if name == "chat_fts" and "chat" in tables:
+        conn.execute("INSERT INTO chat_fts(chat_id,task_id,role,content) SELECT id,task_id,role,content FROM chat")
+    elif name == "memory_fts" and "memory" in tables:
+        conn.execute("INSERT INTO memory_fts(mem_id,text,tags) SELECT id,text,tags FROM memory")
+    elif name == "sem_fts" and "sem_chunks" in tables:
+        conn.execute("INSERT INTO sem_fts(rowid,text) SELECT rowid,text FROM sem_chunks")
+    elif name == "asset_fts" and "assets" in tables:
+        conn.execute("INSERT INTO asset_fts(asset_id,project_id,title,body) SELECT id,project_id,title,'' FROM assets WHERE status='active'")
+
+
+def repair_fts_table(conn: sqlite3.Connection, name: str) -> bool:
+    """Rebuild or recreate a corrupted derived FTS5 table without losing base rows."""
+    if name not in _FTS_DDL:
+        return False
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
+    if not row:
+        return False
+    ddl = row[0] or _FTS_DDL[name]
+    try:
+        conn.execute(f"INSERT INTO {name}({name}) VALUES('integrity-check')")
+        return True
+    except sqlite3.DatabaseError:
+        pass
+    try:
+        conn.execute(f"INSERT INTO {name}({name}) VALUES('rebuild')")
+        conn.execute(f"INSERT INTO {name}({name}) VALUES('integrity-check')")
+        return True
+    except sqlite3.DatabaseError:
+        conn.execute(f"DROP TABLE IF EXISTS {name}")
+        conn.execute(ddl)
+        _repopulate_fts(conn, name)
+        return True
+
+
+def ensure_fts_healthy(conn: sqlite3.Connection, names: tuple[str, ...] = tuple(_FTS_DDL), *, commit: bool = True) -> None:
+    for name in names:
+        repair_fts_table(conn, name)
+    if commit and conn.in_transaction:
+        conn.commit()
+
+
+def safe_delete_fts(conn: sqlite3.Connection, table: str, where_sql: str, params: tuple | list = ()) -> None:
+    """Delete from a derived FTS5 table; if its index is corrupt, repair and retry."""
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+        return
+    sp = f"fts_del_{table}"
+    conn.execute(f"SAVEPOINT {sp}")
+    try:
+        conn.execute(f"DELETE FROM {table} WHERE {where_sql}", params)
+        conn.execute(f"RELEASE {sp}")
+    except sqlite3.DatabaseError:
+        conn.execute(f"ROLLBACK TO {sp}")
+        conn.execute(f"RELEASE {sp}")
+        repair_fts_table(conn, table)
+        conn.execute(f"DELETE FROM {table} WHERE {where_sql}", params)
+
+
 def ready(db) -> None:
     """建表 + 旧数据搬家 + 索引补齐。幂等；每个库每个进程只跑一次。
 
@@ -67,6 +134,7 @@ def ready(db) -> None:
             _READY.discard(key)
     conn = db.db
     conn.executescript(SCHEMA)
+    ensure_fts_healthy(conn, ("memory_fts", "chat_fts"))
     conn.execute("INSERT OR IGNORE INTO memory (id,scope,scope_id,kind,text,tags,source,importance,"
                  "hits,archived,superseded_by,created_at,updated_at) "
                  "SELECT id,'project',task_id,CASE WHEN kind='short' THEN 'episode' ELSE 'fact' END,"

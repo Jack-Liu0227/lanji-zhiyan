@@ -420,7 +420,12 @@ def write(db: Any, project_id: str, relative: str, content: str, *, title: str |
     if not relative:
         cid = (metadata or {}).get("category_id") or ""
         category = note_catalog.category(catalog, cid)
-        relative = (category["folder"] if category else "笔记") + "/" + uuid.uuid4().hex + ".md"
+        folder = category["folder"] if category else "笔记"
+        if (metadata or {}).get("note_type") == "prompt_template" and title and title.strip():
+            import prompt_templates
+            relative = prompt_templates.unique_path(db, project_id, folder, title.strip())
+        else:
+            relative = folder + "/" + uuid.uuid4().hex + ".md"
         create = True
     path = note_path(db, project_id, relative, create=True)
     if create and path.exists():

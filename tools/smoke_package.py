@@ -59,6 +59,7 @@ def smoke_app(directory: Path, home: Path, on_ready: Callable[[], None] | None =
         else:
             raise RuntimeError("Packaged app did not become ready")
         assert state["tasks"] and state["stages"], "Application state is incomplete"
+        mcp = smoke_zotero_mcp(directory, home, env)
         with http.open(base + "/api/providers", timeout=5) as response:
             providers = json.load(response)["providers"]
         catalog = json.loads((directory / "packages/contracts/providers_catalog.json").read_text(encoding="utf-8"))
@@ -90,7 +91,7 @@ def smoke_app(directory: Path, home: Path, on_ready: Callable[[], None] | None =
         if on_ready is not None:
             on_ready()
         return {"migrations": versions, "patches": patches, "project_id": state["tasks"][0]["id"],
-                "http": "ok", "python_on_path": False}
+                "http": "ok", "zotero_mcp": mcp, "python_on_path": False}
     except Exception as exc:
         log = home / "data/cache/server-error.log"
         detail = log.read_text(encoding="utf-8") if log.exists() else "No startup error log"
@@ -98,6 +99,30 @@ def smoke_app(directory: Path, home: Path, on_ready: Callable[[], None] | None =
     finally:
         if proc.poll() is None:
             proc.terminate()
+        proc.wait(timeout=15)
+
+
+def smoke_zotero_mcp(directory: Path, home: Path, env: dict[str, str]) -> dict:
+    command = [str(directory / "tools/zotero-mcp/zotero-mcp.exe")]
+    proc = subprocess.Popen(command, cwd=home, env=env, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            encoding="utf-8", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    try:
+        proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                     "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                                                "clientInfo": {"name": "package-smoke", "version": "1"}}}) + "\n")
+        proc.stdin.flush()
+        initialized = json.loads(proc.stdout.readline())
+        assert initialized.get("result", {}).get("serverInfo", {}).get("name") == "zotero"
+        proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) + "\n")
+        proc.stdin.flush()
+        listed = json.loads(proc.stdout.readline())
+        names = {item["name"] for item in listed.get("result", {}).get("tools", [])}
+        assert {"zotero_status", "zotero_search", "zotero_item"}.issubset(names), names
+        return {"initialize": "ok", "tools": len(names)}
+    finally:
+        if proc.stdin:
+            proc.stdin.close()
         proc.wait(timeout=15)
 
 

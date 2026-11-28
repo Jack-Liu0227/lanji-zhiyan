@@ -1217,28 +1217,17 @@ def teams(project_id: str | None = None) -> dict[str, Any]:
                 "temp": len([x for x in out if x["kind"] == "temp"])}
 
 
-def new_team(kind: str = "temp", name: str = "", project_id: str = "", purpose: str = "") -> dict[str, Any]:
-    """建团队。每个项目：常驻位 2 个（文献抽取 / 文件撰写，只改名不解散）、加急位 3 个
-    （加急位满了会先把「已收工」的自动收掉，用完即释放）。"""
+def new_team(kind: str = "team", name: str = "", project_id: str = "", purpose: str = "") -> dict[str, Any]:
+    """新建项目团队（所有团队统一级别，不设常驻/机动名额限制）。"""
     pid = (project_id or "").strip()
+    norm_kind = (kind or "team").strip() or "team"
+    if norm_kind not in ("team", "custom", "temp", "fixed"):
+        norm_kind = "team"
     with workflow.WorkflowDB(_db_path()) as db:
         ts = [x for x in db.teams() if (x.get("project_id") or "") == pid]
-        if kind == "fixed":
-            if len([x for x in ts if x["kind"] == "fixed"]) >= MAX_FIXED:
-                raise ValueError("常驻办公室只能有 %d 间" % MAX_FIXED)
-        else:
-            temps = [x for x in ts if x["kind"] == "temp"]
-            if len(temps) >= MAX_TEMP:
-                done = [x for x in temps if x["status"] == "done"]
-                if not done:
-                    raise ValueError("三个加急位都在用 —— 等它们跑完，或先散一间")
-                db.team_delete(done[0]["id"])          # 用完的加急团队自动回收，腾出名额
-                ts = [x for x in ts if x["id"] != done[0]["id"]]   # 名额按删后的算，不然下面那道兜底还会拦
-        if len(ts) >= MAX_TEAMS:                       # 兜底（正常走不到：上面两种位各卡了一道）
-            raise ValueError("最多 %d 间办公室（%d 常驻 + %d 加急）" % (MAX_TEAMS, MAX_FIXED, MAX_TEMP))
-        n = len([x for x in ts if x["kind"] == kind]) + 1
-        default = ("%s %d" % ("常驻" if kind == "fixed" else "加急", n))
-        created = db.team_add((name or "").strip() or default, kind, project_id=pid, purpose=purpose)
+        n = len(ts) + 1
+        default = f"团队 {n}"
+        created = db.team_add((name or "").strip() or default, norm_kind, project_id=pid, purpose=purpose)
         ensure_leader(created["id"], db)
         return created
 
@@ -1267,11 +1256,8 @@ def form_team(project_id: str, purpose: str, members: list[str], *, db=None, own
 
 @synchronized
 def create_temporary(db, project_id, name, purpose, assistants, *, owner_chat_id="", named_leader=True):
-    temps = [room for room in db.teams() if room["project_id"] == project_id and room["kind"] == "temp" and room["status"] != "done"]
-    if len(temps) >= MAX_TEMP:
-        raise ValueError("三个加急位都在用，请先结束其中一个临时团队")
     if not assistants or len(assistants) > 12:
-        raise ValueError("临时团队需要 1 至 12 位专业专家")
+        raise ValueError("团队需要 1 至 12 位专业专家")
     room = db.team_add(name, "temp", project_id, purpose, owner_chat_id=owner_chat_id)
     if not named_leader:
         ensure_leader(room["id"], db)
@@ -1336,16 +1322,51 @@ def rename_team(tid: str, name: str) -> dict[str, Any]:
         return db.team_update(tid, name=name)
 
 
-def dissolve(tid: str) -> dict[str, Any]:
-    """解散团队。机动的可以；固定的不行（2 个固定位是常驻的）。记录留在库里不删。"""
+def delete_team(tid: str) -> dict[str, Any]:
+    """统一删除团队：支持任意团队类型；保留历史会话与产物追溯，停止关联绑定。"""
+    tid = (tid or "").strip()
+    if not tid:
+        raise ValueError("请指定要删除的团队")
     with workflow.WorkflowDB(_db_path()) as db:
         t = db.team(tid)
-        if not t:
+        if not t or t.get("status") in ("dissolved", "archived"):
             raise ValueError("没有这个团队")
-        if t["kind"] == "fixed":
-            raise ValueError("固定团队不能解散 —— 只能改名字")
-        db.team_delete(tid)
-        return {"ok": True, "dissolved": t["name"]}
+        import team_orchestration
+        from datetime import datetime, timezone
+        instances = [r[0] for r in db.db.execute(
+            "SELECT instance_team_id FROM team_execution_instances WHERE template_team_id=?", (tid,)
+        ).fetchall()]
+        scopes = [tid, *instances]
+        slots = ",".join("?" for _ in scopes)
+        orch = team_orchestration.state(db, scopes)
+        active_team_task = db.db.execute(
+            f"SELECT 1 FROM team_tasks WHERE task_id IN ({slots}) AND status IN ('queued','running','blocked') LIMIT 1",
+            scopes,
+        ).fetchone()
+        active_project_task = db.db.execute(
+            f"""SELECT 1 FROM project_tasks t JOIN project_task_runs r ON r.id=t.latest_run_id
+                WHERE t.status IN ('queued','running','awaiting_review','blocked')
+                  AND json_extract(r.executor_snapshot,'$.team_id') IN ({slots}) LIMIT 1""",
+            scopes,
+        ).fetchone()
+        if any(s in TEAM_RUNS for s in scopes) or (orch and orch["status"] in ("queued", "running", "awaiting_review", "blocked", "interrupted")) or active_team_task or active_project_task:
+            raise ValueError("团队有正在运行或排队中的任务，请先停止后再删除")
+        stamp = datetime.now(timezone.utc).isoformat()
+        with db.db:
+            db.db.execute("DELETE FROM conversation_temporary_teams WHERE team_id=?", (tid,))
+            db.db.execute(f"UPDATE team_sessions SET active=0 WHERE team_id IN ({slots})", scopes)
+            db.db.execute(f"UPDATE team_members SET status='disabled' WHERE task_id IN ({slots})", scopes)
+            db.db.execute("UPDATE project_executor_bindings SET enabled=0, updated_at=? WHERE kind='team' AND target_id=?", (stamp, tid))
+            if instances:
+                inst_slots = ",".join("?" for _ in instances)
+                db.db.execute(f"UPDATE teams SET status='dissolved', updated_at=? WHERE id IN ({inst_slots})", (stamp, *instances))
+        db.team_update(tid, status="dissolved")
+        return {"ok": True, "deleted": t["name"], "dissolved": t["name"]}
+
+
+def dissolve(tid: str) -> dict[str, Any]:
+    """解散/删除团队（兼容旧接口）。"""
+    return delete_team(tid)
 
 
 def release(tid: str) -> None:

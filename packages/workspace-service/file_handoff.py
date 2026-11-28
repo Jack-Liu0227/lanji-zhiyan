@@ -21,13 +21,17 @@ def _json(value):
 
 def current_layout(db, project_id):
     workflow_layout._project(db, project_id)
-    if not db.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='project_workflow_layouts'").fetchone():
-        raise ValueError("项目尚未绑定工作流，请先打开科研平台并配置工作流")
+    workflow_layout.ensure_schema(db)
     row = db.db.execute("SELECT layout_id FROM project_workflow_layouts WHERE task_id=?", (project_id,)).fetchone()
     if not row or not row["layout_id"]:
-        raise ValueError("项目尚未绑定工作流，请先打开科研平台并配置工作流")
+        state = workflow_layout.state(db, project_id)
+        layout = state.get("layout")
+        if not layout:
+            raise ValueError("项目尚未绑定工作流，请先在项目工作流中配置")
+    else:
+        layout = workflow_layout._layout(db, row["layout_id"])
     import project_workflows
-    layout = project_workflows.effective(db, project_id, workflow_layout._layout(db, row["layout_id"]))
+    layout = project_workflows.effective(db, project_id, layout)
     return {**layout, **workflow_layout.validate_definition(layout)}
 
 
@@ -154,10 +158,15 @@ def _target(db, body):
 
 def _file(db, project_id, relative):
     root = project_notes.project_root(db, project_id)
-    if not relative or Path(relative).is_absolute() or PureWindowsPath(relative).drive:
+    if not relative:
         raise ValueError("请选择当前项目中的文件")
-    path = (root / relative).resolve()
-    if not path.is_relative_to(root.resolve()) or not path.is_file():
+    resolved_root = root.resolve()
+    raw = str(relative).strip()
+    if Path(raw).is_absolute() or PureWindowsPath(raw).drive:
+        path = Path(raw).resolve()
+    else:
+        path = (resolved_root / raw.lstrip('/\\')).resolve()
+    if not path.is_relative_to(resolved_root) or not path.is_file():
         raise ValueError("文件不存在或不属于当前项目")
     return path
 
@@ -178,8 +187,13 @@ def history(db, project_id, relative="", limit=50, summary=False):
     sql = "SELECT id FROM file_handoffs WHERE project_id=?"
     args = [project_id]
     if relative:
+        norm = relative.strip().replace("\\", "/")
+        try:
+            norm = _file(db, project_id, relative).relative_to(project_notes.project_root(db, project_id).resolve()).as_posix()
+        except Exception:
+            pass
         sql += " AND json_extract(payload,'$.relative')=?"
-        args.append(relative)
+        args.append(norm)
     args.append(max(1, min(int(limit), 50)))
     rows = db.db.execute(sql + " ORDER BY rowid DESC LIMIT ?", args).fetchall()
     if not summary:
@@ -283,11 +297,12 @@ def start(db, handoff_id):
             return {**record, "waiting_reason": "项目已有执行或待审查任务。材料已保存，请在现有运行结束后开始本任务。"}
         layout = current_layout(db, project_id)
         stages = [n["step"] for n in layout["nodes"]]
-        state = (workflow_state.node_states(db, project_id, layout)[node["id"]] if "task" in stages or len(stages) != len(set(stages))
-                 else workflow_state.states(db, project_id)[node["step"]])
-        if state["status"] == "running":
+        node_map = workflow_state.node_states(db, project_id, layout)
+        step_map = {} if ("task" in stages or len(stages) != len(set(stages))) else workflow_state.states(db, project_id)
+        state = step_map.get(node["step"]) or node_map.get(node["id"]) or {"status": "idle", "blocked_by": []}
+        if state.get("status") == "running":
             return {**record, "waiting_reason": "此节点已有任务正在执行，材料已保留，完成后可再次开始。"}
-        if state["blocked_by"]:
+        if state.get("blocked_by"):
             return {**record, "waiting_reason": "等待前置节点验收：" + "、".join(state["blocked_by"])}
         source = _file(db, project_id, payload["relative"])
         if asset_service.sha256_file(source) != payload["sha256"]:

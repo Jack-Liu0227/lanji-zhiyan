@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 
-from installer import APP
+from installer import APP, write_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,6 +30,9 @@ def main() -> None:
     print("Build Python: " + sys.executable, flush=True)
     run("-m", "PyInstaller", "tools/览籍智研.spec", "--noconfirm", "--clean")
     payload = ROOT / "dist" / APP
+    run("-m", "PyInstaller", "tools/zotero-mcp.spec", "--noconfirm", "--clean")
+    shutil.copytree(ROOT / "dist" / "zotero-mcp", payload / "tools" / "zotero-mcp", dirs_exist_ok=True)
+    write_manifest(payload)
     run("tools/smoke_package.py", str(payload))
     env = dict(os.environ, LANJI_PACKAGE_DIR=str(payload))
     run("-m", "PyInstaller", "tools/installer.spec", "--noconfirm", "--clean", env=env)

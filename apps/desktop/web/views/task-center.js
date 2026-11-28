@@ -77,7 +77,7 @@ const TaskCenter=(()=>{
       let board;
       if(state.boardLayout==='workflow'){
         const grouped=new Map();for(const row of rows){const key=row.workflow_run_id||row.parent_task_id||'standalone';if(!grouped.has(key))grouped.set(key,[]);grouped.get(key).push(row);}
-        board=[...grouped].map(([key,items])=>`<section class="ec-run-group"><h3>${key==='standalone'?'独立任务与对话':key.startsWith('wrun')?'LangGraph 工作流':'团队协作'}<span class="ec-count">${items.length}</span></h3><div class="ec-run-grid">${items.map(runCard).join('')}</div></section>`).join('')||'<div class="pw-empty"><h3>还没有执行记录</h3><p>从计划派发、对话执行或自动化触发后，在这里跟踪进度。</p></div>';
+        board=[...grouped].map(([key,items])=>`<section class="ec-run-group"><h3>${key==='standalone'?'独立任务与对话':key.startsWith('wrun')?'工作流运行':'团队协作'}<span class="ec-count">${items.length}</span></h3><div class="ec-run-grid">${items.map(runCard).join('')}</div></section>`).join('')||'<div class="pw-empty"><h3>还没有执行记录</h3><p>从计划派发、对话执行或自动化触发后，在这里跟踪进度。</p></div>';
       }else{
         board=`<div class="ec-lanes" data-lane-count="${shownLanes.length}">${shownLanes.map(lane=>{const tasks=rows.filter(row=>lane.statuses.includes(row.status));return `<section class="ec-status-lane" data-ec-lane="${lane.id}" data-tone="${lane.tone}"><header class="ec-lane-head"><h3><span class="ec-lane-dot" aria-hidden="true"></span>${lane.label}</h3><div class="ec-lane-actions"><span class="ec-count">${tasks.length}</span>${!state.trash?`<button type="button" class="pw-text-button" data-ec-clear="${lane.id}" aria-label="清理${h(lane.label)}本列记录" ${tasks.length?'':'disabled'}>清理本列</button>`:''}</div></header><div class="ec-lane-body">${tasks.map(runCard).join('')||'<p class="ec-lane-empty">暂无'+lane.label+'的任务</p>'}</div></section>`;}).join('')}</div>`;
       }
@@ -132,7 +132,7 @@ const TaskCenter=(()=>{
       host.querySelector('[data-ec-open-chat], [data-ec-open]')?.addEventListener('click',()=>openExecutionConversation(row));
       host.querySelector('[data-ec-open-workflow]')?.addEventListener('click',()=>AppNavigation.follow(()=>ProjectWorkspace.openWorkflowRun(row.project_id,row.workflow_run_id)));
       const nodes=artifactNodes(row);
-      host.querySelectorAll('[data-ec-open-artifact]').forEach(button=>button.onclick=()=>AppNavigation.follow(()=>ProjectWorkspace.openNodeResult(nodes[Number(button.dataset.ecOpenArtifact)],row.project_id)));
+      host.querySelectorAll('[data-ec-open-artifact]').forEach(button=>button.onclick=()=>AppNavigation.follow(()=>ProjectWorkspace.openNodeResult(nodes[Number(button.dataset.ecOpenArtifact)],row.project_id,{peek:false})));
     }
     function runCard(row){
       const kind=row.execution_kind==='workflow'?'工作流':row.workflow_node_id?'流程节点':row.channel==='toolbox'?'论文工具':row.kind==='conversation'?'对话运行':row.executor_kind==='team'?'团队协作':'专家任务';

@@ -14,7 +14,7 @@
   let viewEpoch = 0;
   let dialog = null;
   const css = document.createElement("style");
-  css.textContent = `.ag-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}.ag-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.ag-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px;margin-top:14px}.ag-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.ag-form label,.ag-stack{display:flex;flex-direction:column;gap:6px}.ag-wide{grid-column:1/-1}.ag-modal{width:min(760px,calc(100vw - 32px));max-height:88vh;overflow:auto;background:var(--surface,var(--bg));color:var(--text);border:1px solid var(--line,var(--border));border-radius:16px;padding:24px;box-shadow:0 24px 90px #0006}.ag-modal::backdrop{background:#0008;backdrop-filter:blur(3px)}.ag-list{display:flex;flex-direction:column;gap:8px;max-height:270px;overflow:auto}.ag-model{display:flex;align-items:center;gap:10px;padding:8px;border-bottom:1px solid var(--line,var(--border));overflow-wrap:anywhere}.ag-danger{padding:10px 12px;border-left:3px solid var(--err,#b54b45);background:color-mix(in srgb,var(--err,#b54b45) 9%,transparent);font-size:12px}.ag-meta{font-size:12px;color:var(--muted);overflow-wrap:anywhere}.ag-team{display:grid;grid-template-columns:var(--ag-team-nav-w,220px) minmax(0,1fr);gap:14px;position:relative}.ag-team-nav{display:flex;flex-direction:column;gap:8px}.ag-team-nav button{text-align:left}.ag-transcript{max-height:52vh;min-height:180px;overflow:auto;display:flex;flex-direction:column;gap:10px;margin:14px 0}.ag-message{padding:12px;border:1px solid var(--line,var(--border));border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere}.ag-message strong{font-size:12px;color:var(--brand)}.ag-member{cursor:pointer}.ag-status{min-height:20px;margin:10px 0}.ag-model-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:8px;max-height:320px;overflow:auto}@media(max-width:720px){.ag-form,.ag-team{grid-template-columns:1fr}.ag-team-nav{flex-direction:row;overflow:auto}.ag-team-nav button{min-width:160px}.ag-modal{padding:16px}.ag-head{align-items:flex-start}}`;
+  css.textContent = `.ag-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}.ag-head>div{min-width:0;flex:1 1 280px}.ag-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.ag-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:12px;margin-top:14px}.ag-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.ag-form label,.ag-stack{display:flex;flex-direction:column;gap:6px}.ag-wide{grid-column:1/-1}.ag-modal{width:min(760px,calc(100vw - 32px));max-height:88vh;overflow:auto;background:var(--surface,var(--bg));color:var(--text);border:1px solid var(--line,var(--border));border-radius:16px;padding:24px;box-shadow:0 24px 90px #0006}.ag-modal::backdrop{background:#0008;backdrop-filter:blur(3px)}.ag-list{display:flex;flex-direction:column;gap:8px;max-height:270px;overflow:auto}.ag-model{display:flex;align-items:center;gap:10px;padding:8px;border-bottom:1px solid var(--line,var(--border));overflow-wrap:anywhere}.ag-danger{padding:10px 12px;border-left:3px solid var(--err,#b54b45);background:color-mix(in srgb,var(--err,#b54b45) 9%,transparent);font-size:12px}.ag-meta{font-size:12px;color:var(--muted);overflow-wrap:anywhere}.ag-team{display:grid;grid-template-columns:var(--ag-team-nav-w,230px) minmax(0,1fr);gap:16px;align-items:start;position:relative}.ag-team>section{min-width:0}.ag-team-nav{display:flex;flex-direction:column;gap:6px;min-width:0}.ag-team-item{display:flex;flex-direction:column;align-items:flex-start;gap:4px;width:100%;min-width:0;padding:10px 12px;border:1px solid var(--line,var(--border));border-radius:10px;background:var(--panel);color:var(--fg);font:inherit;text-align:left;cursor:pointer;white-space:normal;word-break:break-word;overflow-wrap:anywhere;transition:border-color .15s,background .15s}.ag-team-item:hover{background:var(--panel2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line,var(--border)))}.ag-team-item.is-active{background:color-mix(in srgb,var(--accent) 16%,var(--panel));border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}.ag-team-name{font-size:13px;font-weight:600;line-height:1.45;width:100%;overflow-wrap:anywhere}.ag-team-count{font-size:11px;color:var(--muted)}.ag-member-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,240px),1fr));gap:10px;margin-top:14px}.ag-transcript{max-height:52vh;min-height:180px;overflow:auto;display:flex;flex-direction:column;gap:10px;margin:14px 0}.ag-message{padding:12px;border:1px solid var(--line,var(--border));border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere}.ag-message strong{font-size:12px;color:var(--brand)}.ag-member{margin:0;display:flex;flex-direction:column;align-items:stretch;gap:6px;padding:12px 14px;border:1px solid var(--line,var(--border));border-radius:10px;background:var(--panel2,var(--panel));color:var(--fg);font:inherit;text-align:left;cursor:pointer;min-width:0;transition:border-color .15s,background .15s,transform .15s}.ag-member:hover{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,var(--panel2,var(--panel)));transform:translateY(-1px)}.ag-member-head{display:flex;align-items:center;gap:8px;min-width:0}.ag-role-badge{flex:none;font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:999px;background:var(--panel);border:1px solid var(--line,var(--border));color:var(--muted)}.ag-role-badge.is-leader{background:color-mix(in srgb,var(--accent) 16%,transparent);border-color:color-mix(in srgb,var(--accent) 45%,transparent);color:var(--accent)}.ag-member-name{font-size:13.5px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ag-member .ag-meta{margin:0;line-height:1.45}.ag-status{min-height:20px;margin:10px 0}.ag-model-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:8px;max-height:320px;overflow:auto}@media(max-width:720px){.ag-form,.ag-team{grid-template-columns:1fr}.ag-team-nav{flex-direction:row;overflow:auto}.ag-team-item{min-width:160px;flex:0 0 auto}.ag-modal{padding:16px}.ag-head{align-items:flex-start}}`;
   document.head.append(css);
 
   async function load() {
@@ -366,9 +366,14 @@
         const actions = container.querySelector(".ag-head .ag-row");
         const duplicate = document.createElement("button"); duplicate.className = "btn"; duplicate.textContent = "复制为我的";
         duplicate.onclick = () => assistantEditor({...a,id:"",source:"user",name:a.name + "（我的）",enabled:1}); actions.append(duplicate);
-        if (a.source === "user") {
-          const remove = document.createElement("button"); remove.className = "btn ghost"; remove.textContent = "删除专家";
-          remove.onclick = async () => { if (!await uiConfirm("删除此专家？已有会话和历史消息仍保留。")) return; try { await api("/api/assistant/delete",{id:a.id}); assistantId = null; await saved(); render(); } catch(e) { uiNotify(e.message); } }; actions.append(remove);
+        if (a.id !== "builtin-steward") {
+          const remove = document.createElement("button"); remove.className = "btn ghost"; remove.style.color = "var(--err)"; remove.textContent = "删除专家";
+          remove.onclick = async () => {
+            const note = a.source === "builtin" ? "已有会话记录仍保留；之后可通过「恢复默认」找回。" : "已有会话和历史消息仍保留。";
+            if (!await uiConfirm(`删除专家「${a.name}」？${note}`)) return;
+            try { await api("/api/assistant/delete",{id:a.id}); assistantId = null; await saved(); render(); } catch(e) { uiNotify(e.message); }
+          };
+          actions.append(remove);
         }
         el("ag-a-chat").onclick = async () => { try { await useAssistant(a.id === "builtin-steward" ? "" : a.id, a.name); } catch(e) { uiNotify(e.message); } };
         if (el("ag-a-toggle")) el("ag-a-toggle").onclick = async () => { try { await request("assistant-save",{id:a.id,enabled:!a.enabled}); await saved(); render(); } catch(e) { uiNotify(e.message); } };
@@ -383,8 +388,45 @@
           if (y.id === "builtin-steward") return 1;
           return (x.sort_order ?? 0) - (y.sort_order ?? 0);
         });
-      container.innerHTML = `<div class="ag-head"><div><p class="inst-label">EXPERTS</p><h3>专家</h3><p class="hint">所有我的专家和已启用系统专家均可被选择；没有数量截断。点击卡片右上角可立即启用/停用。</p></div><div class="ag-row"><button class="btn btn-sm" id="ag-as-all-on">全部启用</button><button class="btn btn-sm ghost" id="ag-as-all-off">全部停用</button><button class="btn btn-primary" id="ag-assistant-new">＋ 新建专家</button></div></div><div class="ag-row">${[["all","全部专家"],["public","系统专家"],["user","我的专家"]].map(([id,label]) => `<button class="btn ${assistantFilter === id ? "btn-primary" : ""}" data-ag-as-filter="${id}">${label}</button>`).join("")}</div><div class="ag-grid">${list.map(a => `<article class="card"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><h4>${a.id === "builtin-steward" ? `<img src="${Q_AV}" alt="智研管家" style="width:22px;height:22px;object-fit:contain;vertical-align:-4px;margin-right:2px">` : h(a.avatar || "👨‍🔬")} ${h(a.name)}</h4><button class="as-toggle ${a.enabled !== 0 ? "on" : "off"}" data-ag-as-toggle="${h(a.id)}" title="${a.enabled !== 0 ? "已启用（点击停用）" : "未启用（点击启用）"}"><span class="as-knob"></span><span class="as-toggle-txt">${a.enabled !== 0 ? "已启用" : "未启用"}</span></button></div><p class="ag-meta">${h(a.description || "（暂无专长描述）")}</p><p class="ag-meta">${a.source === "user" ? "自建 · 始终可选" : (a.enabled ? "系统 · 已启用" : "系统 · 未启用")} · ${h(S.models.find(m => m.id === a.model_id)?.name || "自动模型")}</p><div class="ag-row" style="margin-top:8px;gap:8px"><button class="btn btn-primary as-go" data-ag-chat-as="${h(a.id)}">💬 去对话</button><button class="btn" data-ag-assistant="${h(a.id)}">查看 / 编辑</button></div></article>`).join("") || `<p class="hint">尚无专家，点击“新建专家”。</p>`}</div>`;
+      container.innerHTML = `<div class="ag-head"><div><p class="inst-label">EXPERTS</p><h3>专家</h3><p class="hint">所有自建专家和已启用系统专家均可使用；内置专家支持删除与恢复默认。</p></div><div class="ag-row"><button class="btn btn-sm" id="ag-as-all-on">全部启用</button><button class="btn btn-sm ghost" id="ag-as-all-off">全部停用</button><button class="btn btn-sm" id="ag-as-prompts">更新内置提示词</button><button class="btn btn-sm" id="ag-as-restore">恢复默认</button><button class="btn btn-primary" id="ag-assistant-new">＋ 新建专家</button></div></div><div class="ag-row">${[["all","全部专家"],["public","系统专家"],["user","我的专家"]].map(([id,label]) => `<button class="btn ${assistantFilter === id ? "btn-primary" : ""}" data-ag-as-filter="${id}">${label}</button>`).join("")}</div><div class="ag-grid">${list.map(a => `<article class="card"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><h4>${a.id === "builtin-steward" ? `<img src="${Q_AV}" alt="智研管家" style="width:22px;height:22px;object-fit:contain;vertical-align:-4px;margin-right:2px">` : h(a.avatar || "👨‍🔬")} ${h(a.name)}</h4><button class="as-toggle ${a.enabled !== 0 ? "on" : "off"}" data-ag-as-toggle="${h(a.id)}" title="${a.enabled !== 0 ? "已启用（点击停用）" : "未启用（点击启用）"}"><span class="as-knob"></span><span class="as-toggle-txt">${a.enabled !== 0 ? "已启用" : "未启用"}</span></button></div><p class="ag-meta">${h(a.description || "（暂无专长描述）")}</p><p class="ag-meta">${a.source === "user" ? "自建 · 始终可选" : (a.enabled ? "系统 · 已启用" : "系统 · 未启用")} · ${h(S.models.find(m => m.id === a.model_id)?.name || "自动模型")}</p><div class="ag-row" style="margin-top:8px;gap:8px"><button class="btn btn-primary as-go" data-ag-chat-as="${h(a.id)}">💬 去对话</button><button class="btn" data-ag-assistant="${h(a.id)}">查看 / 编辑</button>${a.id !== "builtin-steward" ? `<button class="btn ghost" data-ag-as-del="${h(a.id)}" style="color:var(--err)">删除</button>` : ""}</div></article>`).join("") || `<p class="hint">尚无专家，点击“新建专家”或“恢复默认”。</p>`}</div>`;
       el("ag-assistant-new").onclick = () => assistantEditor({id:"",name:"",rules:"",enabled:1});
+      el("ag-as-prompts").onclick = async () => {
+        try {
+          const preview = await api(endpoint + "assistant-prompt-upgrade-preview");
+          const rows = preview.assistants.filter(item => item.fields.rules.status !== "current" || item.fields.prompts.status !== "current");
+          const fieldLabel = {rules:"系统规则",prompts:"推荐问题"};
+          const fieldStatus = {update:"可安全更新",custom:"保留自定义",current:"已是最新"};
+          const d = modal("内置专家提示词更新预览", `<p class="hint">目标版本 ${h(preview.revision)}。只应用仍等于旧内置默认值的字段；用户编辑过的字段会保留。模型、备用模型、推理强度、权限、启用状态和描述不会改变。</p><div class="ag-list" style="max-height:58vh">${rows.map(item => `<label class="ag-model"><input type="checkbox" data-prompt-update="${h(item.id)}" ${Object.values(item.fields).some(field => field.status === "update") ? "checked" : "disabled"}><span><strong>${h(item.name)}</strong>${Object.entries(item.fields).map(([field,value]) => `<span class="ag-meta" style="display:block">${fieldLabel[field]}：${fieldStatus[value.status]}</span>${value.status === "update" ? `<details><summary>查看${fieldLabel[field]}差异</summary><pre>当前：\n${h(value.current)}\n\n更新后：\n${h(value.default)}</pre></details>` : ""}`).join("")}</span></label>`).join("") || `<p class="hint">没有待处理的内置提示词。</p>`}</div><button class="btn btn-primary" data-prompt-apply ${rows.some(item => Object.values(item.fields).some(field => field.status === "update")) ? "" : "disabled"}>应用选中更新</button>`);
+          const apply = d.querySelector("[data-prompt-apply]");
+          if (apply) apply.onclick = async () => {
+            const ids = [...d.querySelectorAll("[data-prompt-update]:checked")].map(input => input.dataset.promptUpdate);
+            apply.disabled = true;
+            try {
+              const result = await request("assistant-prompt-upgrade", {ids});
+              await saved(); d.close(); render();
+              uiNotify(`已更新 ${result.updated.length} 个提示词字段；自定义内容已保留。`);
+            } catch(e) { error(d.querySelector("[role=status]"),e); apply.disabled = false; }
+          };
+        } catch(e) { uiNotify(e.message); }
+      };
+      const bRestore = el("ag-as-restore");
+      if (bRestore) bRestore.onclick = () => {
+        const d = modal("恢复默认专家", `<div class="ag-stack"><p class="hint">请选择恢复方式（自建专家始终保留，不会被覆盖）：</p>
+          <button class="btn btn-primary" id="ag-as-restore-missing">仅恢复已删除的内置专家（保留现有修改）</button>
+          <button class="btn" id="ag-as-restore-reset">全部内置专家重置为默认配置</button></div>`);
+        const runRestore = async mode => {
+          try {
+            const res = await api("/api/assistant/restore-defaults", {mode});
+            await saved(); d.close(); render();
+            uiNotify(res.restored ? `已恢复 ${res.restored} 位内置专家` : "内置专家已处于最新状态");
+          } catch(err) { error(d.querySelector("[role=status]"), err); }
+        };
+        el("ag-as-restore-missing").onclick = () => runRestore("missing");
+        el("ag-as-restore-reset").onclick = async () => {
+          if (!await uiConfirm("将所有内置专家的名称、规则与提示词还原为默认设置？（自建专家保留）")) return;
+          await runRestore("reset");
+        };
+      };
       const bOn = el("ag-as-all-on"), bOff = el("ag-as-all-off");
       if (bOn) bOn.onclick = async () => {
         const ids = list.map(x => x.id);
@@ -406,6 +448,15 @@
       };
       container.querySelectorAll("[data-ag-as-filter]").forEach(b => b.onclick = () => { assistantFilter = b.dataset.agAsFilter; render(); });
       container.querySelectorAll("[data-ag-assistant]").forEach(b => b.onclick = () => { assistantId = b.dataset.agAssistant; render(); });
+      container.querySelectorAll("[data-ag-as-del]").forEach(b => b.onclick = async (e) => {
+        e.stopPropagation();
+        const aid = b.dataset.agAsDel;
+        const a = S.assistants.find(x => x.id === aid);
+        if (!a) return;
+        const note = a.source === "builtin" ? "已有会话记录仍保留；之后可通过「恢复默认」找回。" : "已有会话和历史消息仍保留。";
+        if (!await uiConfirm(`删除专家「${a.name}」？${note}`)) return;
+        try { await api("/api/assistant/delete", {id: aid}); await saved(); render(); } catch(err) { uiNotify("删除失败：" + err.message); }
+      });
       container.querySelectorAll("[data-ag-as-toggle]").forEach(b => b.onclick = async (e) => {
         e.stopPropagation();
         const aid = b.dataset.agAsToggle;
@@ -451,28 +502,34 @@
     if (el("ag-m-remove")) el("ag-m-remove").onclick = async () => { try { await api("/api/team/chat/remove",{member_id:member.id}); d.close(); render(); } catch(e) { error(d.querySelector("[role=status]"),e); } };
   }
   function teamEditor(t = {}) {
-    const d = modal(t.id ? "编辑团队" : "新建持久团队", `<div class="ag-stack"><label>团队名称<input class="control" id="ag-t-name" value="${h(t.name)}"></label><label>团队描述<textarea class="control" id="ag-t-desc" rows="4">${h(t.description)}</textarea></label><button class="btn btn-primary" id="ag-t-save">保存团队</button></div>`);
+    const d = modal(t.id ? "编辑团队" : "新建团队", `<div class="ag-stack"><label>团队名称<input class="control" id="ag-t-name" value="${h(t.name)}"></label><label>团队描述<textarea class="control" id="ag-t-desc" rows="4">${h(t.description)}</textarea></label><button class="btn btn-primary" id="ag-t-save">保存团队</button></div>`);
     el("ag-t-save").onclick = async () => { try { const r = await request("team-save",{id:t.id,name:el("ag-t-name").value,description:el("ag-t-desc").value,project:curTask||""}); teamScope = r.team.id; localStorage.setItem("rw-team-chat",teamScope); teamSession = ""; teamList = null; d.close(); render(); } catch(e) { error(d.querySelector("[role=status]"),e); } };
   }
-  const renderTeamSettings = async function(container) {
+  const renderTeamSettings = async function(container, options = {}) {
     if (!S.loaded || !container) return;
+    const inSettings = !!options.inSettings || route() === "settings";
     const expectedRoute = route(), epoch = ++viewEpoch;
     clearTimeout(teamTick);
     try {
       await load();
       const all = (await api("/api/teams?project=" + encodeURIComponent(curTask || ""))).teams || [];
       if (!all.some(t => t.id === teamScope)) teamScope = all[0]?.id || "";
-      if (!teamScope) { container.innerHTML = `<div class="card"><h3>团队配置</h3><button class="btn" id="ag-team-new">新建团队</button></div>`; el("ag-team-new").onclick = () => teamEditor(); return; }
+      if (!teamScope) {
+        container.innerHTML = `<div class="card"><div class="ag-head"><h3>团队配置</h3>${inSettings ? "" : `<button class="btn ghost" id="ag-team-back">← 返回平面</button>`}</div><p class="hint">当前项目还没有团队。</p><button class="btn btn-primary" id="ag-team-new">新建团队</button></div>`;
+        if (el("ag-team-back")) el("ag-team-back").onclick = () => { window.__teamMode = ""; render(); };
+        el("ag-team-new").onclick = () => teamEditor();
+        return;
+      }
       const data = await api(endpoint + "team-detail?id=" + encodeURIComponent(teamScope) + (teamSession ? "&session_id=" + encodeURIComponent(teamSession) : ""));
       if (!container.isConnected || route() !== expectedRoute || epoch !== viewEpoch) return;
-      const t = data.team || all.find(x => x.id === teamScope) || {}, running = data.running;
+      const t = data.team || all.find(x => x.id === teamScope) || {};
       const selected = data.session || {};
-      container.innerHTML = `<div class="ag-head"><div><p class="inst-label">TEAMS · ${all.length}</p><h3>团队管理与角色配置</h3><p class="hint">在此创建与编排团队。设置 Leader、成员角色、指定模型、推理强度及 Full Access 权限。日常团队协作对话请直接前往主界面「团队」研讨室。</p></div><div class="ag-row"><button class="btn ghost" id="ag-team-back">← 返回平面</button><button class="btn btn-primary" id="ag-team-new">新建团队</button><button class="btn" id="ag-team-go-chat">进入团队对话 💬</button></div></div><div class="ag-team"><nav class="ag-team-nav">${all.map(t => `<button class="btn ${t.id === teamScope ? "btn-primary" : ""}" data-ag-team="${h(t.id)}">${h(t.name)}<br><small>${t.kind === "custom" ? "持久团队" : t.kind === "fixed" ? "预设团队" : "机动团队"}</small></button>`).join("")}</nav><section><div class="card"><div class="ag-head"><div><h3>${h(t.name)}</h3><p class="hint">${h(t.description)}</p></div><div class="ag-row"><button class="btn" id="ag-team-edit">编辑团队</button>${t.kind === "temp" ? `<button class="btn ghost" id="ag-team-dissolve" style="color:var(--err)">解散</button>` : ""}</div></div><div class="ag-grid">${data.members.map(m => `<button class="card ag-member" data-ag-member="${h(m.id)}" style="text-align:left"><b>${m.role === "leader" ? "Leader · " : "成员 · "}${h(m.name)}</b><p class="ag-meta">${h(m.model_id ? S.models.find(x => x.id === m.model_id)?.name || "模型已移除" : "跟随专家 / 当前模型")}</p><span class="ag-meta">${h(effortLabels[m.reasoning] || "Agent 决定")} · ${h(permissionLabels[m.permission] || "Agent 决定")}</span></button>`).join("")}</div><button class="btn" id="ag-member-new" style="margin-top:12px">添加成员（全部可用专家）</button></div><div class="card" style="margin-top:12px"><div class="ag-row"><label style="flex:1">会话历史记录<select class="control" id="ag-team-session">${(data.sessions || []).map(s => `<option value="${h(s.id)}" ${s.id === selected.id ? "selected" : ""}>${h(s.title)} · ${h(fmtDate(s.updated_at))}${s.active ? " · 当前" : ""}</option>`).join("")}</select></label><button class="btn" id="ag-session-new">新建会话</button></div><p class="hint">团队对话请在主界面的「团队」研讨室进行全屏沉浸交流。</p></div></section></div>`;
-      el("ag-team-back").onclick = () => { window.__teamMode = ""; render(); };
+      container.innerHTML = `<div class="ag-head"><div><p class="inst-label">TEAMS · ${all.length}</p><h3>团队管理与角色配置</h3><p class="hint">在此创建与编排团队。所有团队平级管理，可随时调整 Leader、成员角色、模型、权限或删除团队。</p></div><div class="ag-row">${inSettings ? "" : `<button class="btn ghost" id="ag-team-back">← 返回平面</button>`}<button class="btn btn-primary" id="ag-team-new">新建团队</button><button class="btn" id="ag-team-go-chat">进入团队对话 💬</button></div></div><div class="ag-team"><nav class="ag-team-nav">${all.map(item => `<button type="button" class="ag-team-item ${item.id === teamScope ? "is-active" : ""}" data-ag-team="${h(item.id)}"><span class="ag-team-name">${h(item.name)}</span><small class="ag-team-count">${item.picks ?? 0} 位成员</small></button>`).join("")}</nav><section><div class="card"><div class="ag-head"><div><h3>${h(t.name)}</h3><p class="hint" style="margin:4px 0 0">${h(t.description || t.purpose || "")}</p></div><div class="ag-row"><button class="btn" id="ag-team-edit">编辑团队</button><button class="btn ghost" id="ag-team-delete" style="color:var(--err)">删除团队</button></div></div><div class="ag-member-grid">${data.members.map(m => `<button type="button" class="ag-member" data-ag-member="${h(m.id)}"><div class="ag-member-head"><span class="ag-role-badge ${m.role === "leader" ? "is-leader" : ""}">${m.role === "leader" ? "Leader" : "成员"}</span><span class="ag-member-name" title="${h(m.name)}">${h(m.name)}</span></div><p class="ag-meta">${h(m.model_id ? S.models.find(x => x.id === m.model_id)?.name || "模型已移除" : "跟随专家 / 当前模型")}</p><span class="ag-meta">${h(effortLabels[m.reasoning] || "Agent 决定")} · ${h(permissionLabels[m.permission] || "Agent 决定")}</span></button>`).join("")}</div><button class="btn" id="ag-member-new" style="margin-top:14px">添加成员（全部可用专家）</button></div><div class="card" style="margin-top:12px"><div class="ag-row" style="align-items:flex-end"><label class="ag-stack" style="flex:1;min-width:220px"><span class="ag-meta">会话历史记录</span><select class="control" id="ag-team-session">${(data.sessions || []).map(s => `<option value="${h(s.id)}" ${s.id === selected.id ? "selected" : ""}>${h(s.title)} · ${h(fmtDate(s.updated_at))}${s.active ? " · 当前" : ""}</option>`).join("")}</select></label><button class="btn" id="ag-session-new">新建会话</button></div><p class="hint" style="margin:8px 0 0">团队对话请在主界面的「团队」研讨室进行全屏沉浸交流。</p></div></section></div>`;
+      if (el("ag-team-back")) el("ag-team-back").onclick = () => { window.__teamMode = ""; render(); };
       el("ag-team-new").onclick = () => teamEditor();
       el("ag-team-edit").onclick = () => teamEditor(t);
-      if (el("ag-team-dissolve")) el("ag-team-dissolve").onclick = async () => { if (!await uiConfirm("解散这个机动团队？")) return; try { await api("/api/teams/dissolve",{id:teamScope}); teamScope = ""; render(); } catch(e) { uiNotify(e.message); } };
-      el("ag-team-go-chat").onclick = () => { window.__teamMode = "chat"; render(); };
+      if (el("ag-team-delete")) el("ag-team-delete").onclick = async () => { if (!await uiConfirm(`删除团队「${t.name}」？历史会话仍保留，团队将不再可用。`)) return; try { await api("/api/teams/delete",{id:teamScope}); teamScope = ""; teamList = null; render(); } catch(e) { uiNotify(e.message); } };
+      el("ag-team-go-chat").onclick = () => { window.__teamMode = "chat"; if (inSettings) openTab("team"); else render(); };
       el("ag-member-new").onclick = () => memberEditor(teamScope);
       container.querySelectorAll("[data-ag-team]").forEach(b => b.onclick = () => { teamScope = b.dataset.agTeam; teamSession = ""; localStorage.setItem("rw-team-chat",teamScope); render(); });
       container.querySelectorAll("[data-ag-member]").forEach(b => b.onclick = () => memberEditor(teamScope,data.members.find(m => m.id === b.dataset.agMember)));
@@ -488,19 +545,18 @@
     return renderTeamOffice(container);                                          // 一层平面
   };
 
+  if (typeof SET_SECS !== "undefined" && !SET_SECS.some(section => section[0] === "teams")) {
+    SET_SECS.push(["teams", "👥", "团队配置"]);
+  }
   const originalSettings = renderSettings;
   renderSettings = function(container) {
-    if (setSec === "teams") {
-      container.innerHTML = `<div class="page-head"><h3>设置 / 团队</h3><button class="btn" id="ag-settings-back">返回设置</button></div><div id="ag-settings-teams"></div>`;
-      el("ag-settings-back").onclick = () => { setSec = "theme"; render(); };
-      renderTeamSettings(el("ag-settings-teams"));
-      return;
-    }
     originalSettings(container);
-    const nav = container.querySelector(".set-nav");
-    if (nav && !nav.querySelector("[data-ag-set-team]")) {
-      const b = document.createElement("button"); b.className = "set-row"; b.dataset.agSetTeam = "1"; b.textContent = "团队配置";
-      b.onclick = () => { setSec = "teams"; render(); }; nav.append(b);
+    if (setSec === "teams") {
+      const body = container.querySelector("#set-body");
+      if (body) {
+        body.innerHTML = `<div id="ag-settings-teams"></div>`;
+        renderTeamSettings(el("ag-settings-teams"), { inSettings: true });
+      }
     }
   };
   window.renderTeamSettings = renderTeamSettings;

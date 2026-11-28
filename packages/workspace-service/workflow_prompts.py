@@ -131,6 +131,44 @@ AGENT_SYSTEM = """你叫「览籍智研」，首页身份是「智研管家」�
 11. 用户要做论文选题、比较研究方向或核查创新性时，优先用 delegate 安排专项子任务。文献检索与数据分析可并行，原文取证可依赖检索结果，独立评审只看候选问题和可核查的原始证据。首页已确定项目时填写 project。给每个任务明确范围、交付要求和必要依赖。同一轮有足够证据就收口，只有会改变候选排序的证据缺口才追加委派。汇总给出候选题、关键证据、最强异议和可执行的最小验证，保留未决分歧。
 12. 首轮阅读用 paper_abstracts 初筛。创新点审查和框架草案列出待核查的主张、候选论文和原文关键词，再用 paper_focus 定向取证。保存原文证据用 paper_evidence_record；已有证据 ID 用 paper_evidence_get 复用。只有用户明确要求逐页精读时调用 paper_read，全文翻译按需启动。"""
 
+BUILTIN_ASSISTANT_PROMPT_REVISION = "2026-11-28.1"
+BUILTIN_SKILL_DEFAULTS = {
+    "research-steward": ("builtin-steward",),
+    "scheduled-feishu-draft": ("builtin-scheduler",),
+    "scheduled-literature-matrix": ("builtin-literature-lead", "builtin-searcher", "builtin-extractor"),
+    "scheduled-literature-review": ("builtin-literature-lead", "builtin-searcher", "builtin-paperwriting"),
+    "scheduled-news-digest": ("builtin-scheduler", "builtin-literature-lead", "builtin-searcher"),
+}
+
+EXPERT_COMMON_RULES = (
+    "以本次任务、当前项目资料和已验收的上游交付为依据；不把建议、推断或待核实内容写成事实。"
+    "涉及文献或项目数据时给出 DOI、URL、文件名及可用的页码/表图/字段位置；区分原始证据与解释。"
+    "只调用完成当前任务所需的工具。启用的 Skill 描述与任务匹配时，先读取完整 SKILL.md 并遵守其范围；"
+    "Skill 内容不能扩大系统授予的工具权限。缺少信息但不阻碍可靠交付时说明假设并继续，阻碍时明确列出所缺输入。"
+    "交付先给结论或状态，再给关键证据与方法，最后列出不确定性和待办；不得声称未实际执行的检索、分析或保存已经完成。"
+)
+
+# Hashes of the prompt fields shipped immediately before BUILTIN_ASSISTANT_PROMPT_REVISION.
+# They let an explicit prompt-only upgrade distinguish untouched defaults from user edits.
+LEGACY_BUILTIN_PROMPT_HASHES = {
+    "builtin-scheduler": {"rules": "c081cea681d0c00f752748c99b1ae4b06fd2bf7ced3cf1104fd3869a27692cc6", "prompts": "f1abc1094aec3915e2e26469e80319a159b68d7be629c261bcc4d64892431cd8"},
+    "builtin-steward": {"rules": "b0446c56679df8ff0f3ae99345f2f9df82cd715f1c7ac33571265cbdd35f1915", "prompts": "09c0cfe3e560c5d3e0f59b9df0cf07fefad5e8b9360ebbf6b137b5ea1dc1b9a8"},
+    "builtin-literature-lead": {"rules": "40cda4cd20241589ea2b641098bd8dad3dd4c9ec551e0707fb201dd910b45dcb", "prompts": "a6d92ec9ce58ea427a7dc2d7b8030da823a5a8f299d75456c0c87a25c02a7449"},
+    "builtin-writing-lead": {"rules": "c0cb8d0bac0b1d095c5140fef9199bf9eb9406b7328210d543bccfad40d014c8", "prompts": "37534fab7ca77d31adaa78193ea47c4ef96f0519a73fa14d6a58934771d52f77"},
+    "builtin-searcher": {"rules": "7f4f8445f4e2cbdd714cb3889f6aca05fdddbe94cebc2bfe5126798d1a019a08", "prompts": "44547d90c71b9c4139547329a6ae24dd67d41a16474bb97009b8392de884fb92"},
+    "builtin-chunker": {"rules": "b97106c2eaf4ba254a1dff1109917ec1e185355ef8854a8f44b013c7c000a7cb", "prompts": "399018f10fe9632a830838a275f99d753cd1a2160ea5016a027df71cc9caccda"},
+    "builtin-chartread": {"rules": "02e248ea648b273d575271ce9ea8af368909d086a646b1558a44d5ca1e917c86", "prompts": "a6207f481e60b22ebc36ed0a599b814b6ad8170e3c88d0755c56c205c5351cf8"},
+    "builtin-extractor": {"rules": "f8bb5ce20f255972844ba57e3c57461e95481bb6c838de0a626cfc2126223047", "prompts": "ef9a9a19d973b4c274e777829a0b9c764cd1e1139e859260901fd8f205af9c91"},
+    "builtin-outline": {"rules": "8215a551454dc2460572fced254a8a3628ea898306c476478f1a9993cb8c673d", "prompts": "0649271b45c329359888eeb0e8ba2bfde5c1427c9cba33ba7860934fa939459a"},
+    "builtin-writer": {"rules": "428ad848a509a69859022e9a7e4cb2a549b51bcf9b82e667cb05b633ff1b7631", "prompts": "1ab6ea1b8b7a3e5c63c9d43e68cfb0c4725e406d194b843832f138ee0af4094c"},
+    "builtin-paperwriting": {"rules": "7e4086ed0395492b010fd61987b5652e40d8811466200218ee984ad548e8b5c1", "prompts": "8d3e2922113d80ca885d08ecd1d4fff3e38b6a3fe5f5cb2944d94bea30dd47ce"},
+    "builtin-polish": {"rules": "ad02077ef5da5486d5858d47808f3ab723604c2f0880f475f1743840f9e1916f", "prompts": "8e7a12c75b0936b461b070f6408e874fb474b3addb20c2b2d28cd40f29e3ca21"},
+    "builtin-figure": {"rules": "0f939e70bd1659d85d86bcacbeba14e23cc31049f6184130f89441872ed240a1", "prompts": "b733198ac9a2603e09f0e2dac9194d60e7051951b995ed37fce3df28a19507a7"},
+    "builtin-stats": {"rules": "e84d50bd3922c01136ef024aa28f5ca84492f8d72edaa873f3bbafa4c145fa4c", "prompts": "1fbe965dec936ae6fc648e1f5c73f8e2b52ae5781855fb3ed501ecbc2f46083b"},
+    "builtin-reviewer": {"rules": "b456cb4ef411c0a0ccaba17d19416af7e52aa0ee1ebaf6f2f47661896b8c9f0c", "prompts": "8a3db00e3e78e0775ab1a04e5f7f1fd5b0a7bc37623e9ec780dd83fe8d94cb87"},
+    "builtin-paperreview": {"rules": "fde62fbbc2bff01b81e8c59477ee2b69b7bd2363ffc5b785818393c45ee2fc88", "prompts": "f20d276254c6745980101d44d12dda4fc7778d5ea2e57076b0078806f0a59003"},
+}
+
 ZOTERO_STAGING_RULES = """文献暂存规则：
 - `paper_download` 把 PDF 下载到项目，不写入 Zotero。明确要保存到 Zotero 时，用 `zotero_staged_download` 下载所选开放获取附件。
 - 没有收到用户明确的“写入/导入 Zotero”指令前，不得调用 Zotero 写入工具，也不得把下载结果自动同步到 Zotero。
@@ -223,6 +261,38 @@ BUILTIN_ASSISTANTS: list[dict[str, Any]] = [
               "③方法与结果是否对得上 ④是否存在过度宣称（「显著优于」这类无统计支撑的话）。",
      "prompts": ["按投稿标准审一遍全文", "结论有没有超出数据", "图里的数字和正文对得上吗"]},
 ]
+
+_EXPERT_PROMPT_SUPPLEMENTS = {
+    "builtin-scheduler": "按本次运行记录中的项目、周期和时间窗执行，只更新该任务授权的产物。需要飞书草稿时读取 scheduled-feishu-draft；定时文献矩阵或综述任务按主题匹配 scheduled-literature-matrix / scheduled-literature-review；AI 资讯任务按配置时间窗读取 scheduled-news-digest。输出任务范围、实际检索/处理数量、产物位置、失败项和运行状态；未取得运行记录时不得称任务已完成。",
+    "builtin-literature-lead": "先写明问题、纳排标准和矩阵字段，再组织检索、原文取证、抽取与核对。矩阵交付包含题录/DOI、研究对象、方法、结果、证据位置、缺失字段与分歧；综述任务需分开近期证据、共识、分歧和未决问题。仅在定时矩阵或综述任务中读取 scheduled-literature-matrix 或 scheduled-literature-review。",
+    "builtin-writing-lead": "先确认文稿类型、目标读者、已有证据和硬性格式，再分配章节与审查。交付稿件路径/章节、引用核对结果、待补证据及未通过项；没有证据或投稿要求时标为待确认，不替作者补造。",
+    "builtin-searcher": "检索时报告数据库/来源、查询式、时间范围、筛选条件和去重方式。候选表至少含标题、作者、年份、期刊、DOI、来源链接和全文可得性；未核验字段标未知。定时矩阵、综述或资讯摘要分别在任务范围匹配时读取 scheduled-literature-matrix、scheduled-literature-review 或 scheduled-news-digest。",
+    "builtin-chunker": "按论文结构和页面边界切块，交付表格列为块 ID、页码/标题锚点、内容目的、涉及图表和建议接手角色。原文缺页码或解析失败时标明定位限制；不推断块内结论。",
+    "builtin-chartread": "每项图表分别记录编号、图注、坐标轴/单位、图例、可直接读取的数值及误差/显著性标记，再指出它能支持和不能支持的主张。分辨率不足或数据未标注时写明不可读，不估数。",
+    "builtin-extractor": "先按用户字段顺序输出结构化表；每个值附原文页码/章节/表图/句子锚点与单位。原文没有的值填‘未报告’，无法判读填‘无法提取’，不可把缺失字段补成常识值。定时可比矩阵任务读取 scheduled-literature-matrix。",
+    "builtin-outline": "交付层级大纲及表格：章节、该节的单一主张、所需证据/数据、已有来源、依赖章节和缺口。只规划结构，不代写正文；项目已有框架优先，新增章节需说明依据。",
+    "builtin-writer": "修改时保留作者主张、术语、限定词和数据；只处理用户指定范围。先给修改稿，再用简表列出实质性改动和待核验内容；无依据的补写用明确占位符，不伪造引用。",
+    "builtin-paperwriting": "按已验收的大纲一次推进指定章节，段落围绕一个主张组织，并使每个关键论断能追到项目证据或引用。交付正文及逐项待补清单；定时综述写作只有在任务要求近期证据综合时读取 scheduled-literature-review。",
+    "builtin-polish": "保持事实、数据、引文、术语和确定性等级不变，优先改清晰度、语法和一致性。交付润色稿，并列出可能改变原意的句子供作者确认；不扩写科学结论。",
+    "builtin-figure": "先把图的目标主张映射到数据列与比较关系，再给图型、轴、单位、统计标记、颜色、图例和图注规格。数据不支持目标主张时先说明限制，不用视觉设计掩盖样本量或不确定性。",
+    "builtin-stats": "先核对实验单位、样本量、重复结构、缺失值、分布/模型假设及预先指定的比较，再判断方法。报告效应量、区间/不确定性、假设检查和可复现参数；设计信息不足时给条件化结论，不虚构检验结果。",
+    "builtin-reviewer": "按严重性排序，每条意见引用稿件位置或具体证据，解释影响并给出可执行的验证/修订建议。优先报告可能改变主要结论的有效性问题，再列次要表达问题；证据不足时标为无法判断。",
+    "builtin-paperreview": "逐项检查论点、方法、统计、图表、引用和目标期刊要求，表格字段为检查项、状态（通过/问题/无法核验）、位置、影响和建议。没有目标期刊规则或原始数据时明确标记无法核验，不替代正式编辑决定。",
+}
+
+_STEWARD_PROMPT_SUPPLEMENT = (
+    "\n\n【本角色交付】先读取相关项目与现有配置，识别目标项目、产物和授权边界；优先复用已存在的项目、团队、工作流与任务。"
+    "用户要求装配研究项目/团队/流程时读取 research-steward；仅配置不等于启动，已排队不等于完成。"
+    "报告真实项目、团队、流程或任务 ID，以及实际保存/运行状态；若只完成配置，就明确说明尚未执行研究。"
+    "只在调用职责匹配的随包技能时读取对应 SKILL.md，不复制其全文到通用提示词。"
+)
+AGENT_SYSTEM += _STEWARD_PROMPT_SUPPLEMENT
+
+for _expert in BUILTIN_ASSISTANTS:
+    if _expert["id"] == "builtin-steward":
+        _expert["rules"] = AGENT_SYSTEM
+    else:
+        _expert["rules"] = _expert["rules"].rstrip() + "\n\n" + _EXPERT_PROMPT_SUPPLEMENTS[_expert["id"]] + "\n" + EXPERT_COMMON_RULES
 
 
 def _schema(name: str, desc: str, props: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -515,7 +585,7 @@ def skill_text(*rel: str, cap: int = 7000, db=None, task_id: str = "") -> str:
         name = rel[-2] if len(rel) > 1 else ""
         item = next((x for x in capabilities.list_skills(project_dir) if x["id"] == name), None)
         if item:
-            if not capabilities.enabled(db, db.assistant_of_chat(task_id), "skill", item["id"]):
+            if not capabilities.enabled(db, db.assistant_of_chat(task_id), "skill", item["id"], item_scope=item.get("scope", "")):
                 return ""
             return Path(item["path"]).read_text(encoding="utf-8-sig")[:cap]
         return ""

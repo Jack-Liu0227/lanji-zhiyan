@@ -529,11 +529,19 @@ class ResearchDB:
         self.db.commit()
         return {"run_id": run_id, "event_id": event_id, "kind": kind, "payload": payload, "created_at": t}
 
-    def get_run_events(self, run_id: str, after_id: int = 0) -> list[dict[str, Any]]:
-        rows = self.db.execute(
-            "SELECT run_id, event_id, kind, payload, created_at FROM run_events WHERE run_id=? AND event_id>? ORDER BY event_id ASC",
-            (run_id, after_id)
-        ).fetchall()
+    def get_run_events(self, run_id: str, after_id: int = 0, *, limit: int | None = None) -> list[dict[str, Any]]:
+        if limit is None:
+            rows = self.db.execute(
+                "SELECT run_id, event_id, kind, payload, created_at FROM run_events WHERE run_id=? AND event_id>? ORDER BY event_id ASC",
+                (run_id, after_id)
+            ).fetchall()
+        else:
+            limit = max(1, min(int(limit), 1000))
+            rows = self.db.execute(
+                "SELECT run_id, event_id, kind, payload, created_at FROM run_events "
+                "WHERE run_id=? AND event_id>? ORDER BY event_id DESC LIMIT ?",
+                (run_id, after_id, limit)
+            ).fetchall()[::-1]
         out = []
         for r in rows:
             pl = r["payload"]
@@ -543,6 +551,20 @@ class ResearchDB:
                 pass
             out.append({"run_id": r["run_id"], "event_id": r["event_id"], "kind": r["kind"], "payload": pl, "created_at": r["created_at"]})
         return out
+
+    def get_latest_run_event(self, run_id: str, kind: str) -> dict[str, Any] | None:
+        row = self.db.execute(
+            "SELECT run_id,event_id,kind,payload,created_at FROM run_events "
+            "WHERE run_id=? AND kind=? ORDER BY event_id DESC LIMIT 1", (run_id, kind)
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            payload = json.loads(row["payload"])
+        except (TypeError, ValueError):
+            payload = row["payload"]
+        return {"run_id": row["run_id"], "event_id": row["event_id"], "kind": row["kind"],
+                "payload": payload, "created_at": row["created_at"]}
 
     def record_audit_event(self, actor: str, assistant_id: str = "", tool: str = "", project_id: str = "",
                            input_hash: str = "", outcome: str = "ok", duration_ms: int = 0) -> dict[str, Any]:

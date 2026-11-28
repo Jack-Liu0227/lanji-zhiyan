@@ -99,15 +99,27 @@ def derived(db, month=None):
         for run in runs:
             if run["project_id"] not in projects:
                 continue
+            run_nodes = [dict(r) for r in conn.execute("SELECT * FROM workflow_nodes WHERE run_id=? ORDER BY rowid", (run["id"],))]
             if run["status"] in ("succeeded", "failed", "blocked", "interrupted", "cancelled"):
                 pending_run = run["status"] in ("failed", "blocked", "interrupted")
                 title = "工作流已完成" if run["status"] == "succeeded" else "工作流需要处理" if pending_run else "工作流已停止"
                 stamp = datetime.now().date().isoformat() if pending_run else run["ended_at"] or run["started_at"]
+                focus = (
+                    next((n for n in run_nodes if n["status"] in ("failed", "blocked", "interrupted", "awaiting_review")), None)
+                    or next((n for n in run_nodes if n["id"] == run.get("current_node")), None)
+                    or (run_nodes[-1] if run_nodes else None)
+                )
+                focus_task = ""
+                if focus:
+                    try:
+                        focus_task = str(json.loads(focus.get("checkpoint") or "{}").get("canonical_task_id") or focus.get("canonical_task_id") or "")
+                    except Exception:
+                        focus_task = str(focus.get("canonical_task_id") or "")
                 result.append(_event("workflow_run", run["id"], run["project_id"], title, stamp,
                     status=run["status"], done=run["status"] == "succeeded", pending=pending_run,
-                    target_type="workflow", created_at=run["started_at"], run_id=run["id"], note=run["error"]))
-            for record in conn.execute("SELECT * FROM workflow_nodes WHERE run_id=?", (run["id"],)):
-                node = dict(record)
+                    target_type="workflow", created_at=run["started_at"], run_id=run["id"],
+                    node_id=focus["id"] if focus else "", canonical_task_id=focus_task, note=run["error"]))
+            for node in run_nodes:
                 acceptance = json.loads(node["acceptance"] or "{}")
                 if not acceptance.get("review_required", True) or node["status"] in ("queued", "running", "failed", "interrupted"):
                     continue
@@ -119,8 +131,10 @@ def derived(db, month=None):
                 result.append(_event("workflow_review", node["id"], run["project_id"], "审查 · " + config.get("label", node["stage"]), stamp,
                     status=node["status"], done=node["status"] == "delivered", pending=pending,
                     target_type="workflow", target_id=run["id"], note=checkpoint.get("feedback") or "查看节点产物后通过或退回，日历勾选不能代替人工审查。",
-                    created_at=node["started_at"], run_id=run["id"], node_id=node["id"], stage=node["stage"],
-                    received_at=node['ended_at'] or node['started_at'], due_at=reminder.get('due_at', ''), remind_at=reminder.get('remind_at', ''),
+                    created_at=node["started_at"], run_id=run["id"], node_id=node["id"],
+                    canonical_task_id=str(checkpoint.get("canonical_task_id") or node.get("canonical_task_id") or ""),
+                    stage=node["stage"], received_at=node['ended_at'] or node['started_at'],
+                    due_at=reminder.get('due_at', ''), remind_at=reminder.get('remind_at', ''),
                     assistant_id=checkpoint.get("input", {}).get("assistant_id", "")))
     if "project_tasks" in tables:
         import review_inbox

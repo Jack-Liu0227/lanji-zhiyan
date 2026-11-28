@@ -400,17 +400,19 @@
             <span class="sc-icon">⚡</span>
             <div>
               <p class="inst-label" style="margin:0 0 2px">MCP PROTOCOL / AGENT CAPABILITY</p>
-              <h3 style="margin:0">Zotero stdio MCP 服务</h3>
-              <p class="hint" style="margin:4px 0 0">让专家检索、读取和修改本机 Zotero 文献，并挂载笔记。同步与 MCP 共用本机写入授权。</p>
+              <h3 style="margin:0">Zotero 内置 MCP 服务</h3>
+              <p class="hint" style="margin:4px 0 0">已直接内置于安装包中，无需单独下载安装；启用并打开本机 Zotero 桌面端即可让专家检索文献、读取批注、直读 PDF 与写入笔记。</p>
             </div>
           </div>
-          <span class="pill ${mcpRes.enabled ? "ok" : ""}" id="zm-pill">${mcpRes.enabled ? "MCP 已启用" : "未启用"}</span>
+          <span class="pill ${mcpRes.connected ? "ok" : ""}" id="zm-pill">${mcpRes.connected ? "MCP 已连接" : mcpRes.enabled ? "连接失败" : "未启用"}</span>
         </div>
         <div class="integration-actions" style="margin-top:12px">
           <button class="btn" id="zm-enable">${mcpRes.registered ? "重新激活 / 注册 MCP" : "一键注册并启用 Zotero MCP"}</button>
+          <button class="btn ghost" id="zm-launch" ${mcpRes.local_readable ? 'style="display:none"' : ""}>启动本机 Zotero</button>
           <button class="btn ghost" id="zm-open-mcp">去 MCP 矩阵查看权限 →</button>
         </div>
-        <div class="hint" style="margin-top:8px">包含工具：<code>zotero_status</code> · <code>zotero_search</code> · <code>zotero_item</code> · <code>zotero_pdf</code> · <code>zotero_create_item</code> · <code>zotero_update_item</code> · <code>zotero_create_note</code></div>
+        <div class="hint" style="margin-top:8px">${mcpRes.connected ? `已验证 ${mcpRes.tools_count} 个工具；${mcpRes.local_readable ? '本机 Zotero 可读取' : e(mcpRes.local_message || 'MCP 已连接，但本机 Zotero 尚不可读')}` : e(mcpRes.error || '尚未验证 MCP 连接')}</div>
+        <div class="hint">内置工具：<code>zotero_status</code> · <code>zotero_collections</code> · <code>zotero_recent</code> · <code>zotero_search</code> · <code>zotero_item</code> · <code>zotero_annotations</code> · <code>zotero_pdf</code> · <code>zotero_create_item</code> · <code>zotero_update_item</code> · <code>zotero_create_note</code></div>
       </div>
 
       <div class="card"><p class="inst-label">LIBRARY CONSISTENCY</p><h3>Zotero 连接与授权</h3><p class="hint">配置本机连接和写入权限。项目文献的来源、题录和同步在项目空间统一管理。</p>
@@ -429,12 +431,33 @@
         <details><summary>高级：预览 / 写入单个 Zotero 条目 JSON</summary><p class="hint">现有条目修改必须提供 key 和 version；字段依照 Zotero 官方条目格式。点击写入将再次确认。</p><textarea class="control integration-json" id="zs-item">${e(JSON.stringify({itemType: "journalArticle", title: "", creators: [], tags: [], collections: bound.collection ? [bound.collection] : []}, null, 2))}</textarea><div class="integration-actions"><button class="btn ghost" id="zs-item-preview">格式校验 / 预览</button><button class="btn ghost" id="zs-item-write">确认写入条目</button></div></details>
         <div id="integration-error" class="integration-error"></div><pre id="integration-result" class="integration-result"></pre></div>`;
 
+    field("zm-pill").textContent = mcpRes.connected ? "MCP 已连接" : !mcpRes.enabled ? "未启用" : mcpRes.checked ? "连接失败" : "尚未测试";
+    const mcpCard = field("zm-pill").closest(".card");
+    const mcpStatus = mcpCard.querySelector(".integration-actions + .hint");
+    if (mcpStatus) mcpStatus.textContent = mcpRes.connected
+      ? `已验证 ${mcpRes.tools_count} 个工具；${mcpRes.local_readable ? "本机 Zotero 可读取" : mcpRes.local_message || "MCP 已连接，但本机 Zotero 尚不可读"}`
+      : mcpRes.error || "尚未测试连接";
+    field("zm-enable").insertAdjacentHTML("afterend", '<button class="btn ghost" id="zm-check" ' + (mcpRes.enabled ? "" : "disabled") + '>测试连接</button>');
+
     field("zm-enable").onclick = event => action(event.target, async () => {
       const res = await api("/api/zotero/mcp/enable", {});
-      if (res.ok) {
-        field("integration-result").textContent = "Zotero MCP 服务已成功注册并启用！\nAgent 现可在对话中调用 Zotero 读写工具。";
-        await loadZotero();
-      }
+      await loadZotero();
+      field("integration-result").textContent = res.connected
+        ? `Zotero MCP 已连接并验证 ${res.tools_count} 个工具。${res.local_readable ? '本机 Zotero 可读取。' : res.local_message || '本机 Zotero 尚不可读。'}`
+        : res.error || "Zotero MCP 已注册，但连接检查未通过。";
+    });
+
+    field("zm-check").onclick = event => action(event.target, async () => {
+      const res = await api("/api/zotero/mcp/check", {});
+      await loadZotero();
+      field("integration-result").textContent = res.connected
+        ? `Zotero MCP 已连接并验证 ${res.tools_count} 个工具。${res.local_readable ? "本机 Zotero 可读取。" : res.local_message || "本机 Zotero 尚不可读。"}`
+        : res.error || "Zotero MCP 连接检查未通过。";
+    });
+    field("zm-launch").onclick = event => action(event.target, async () => {
+      const res = await api("/api/zotero/mcp/launch-zotero", {});
+      await loadZotero();
+      field("integration-result").textContent = res.message || (res.success ? "Zotero 已启动" : "未检测到本机 Zotero");
     });
 
     field("zm-open-mcp").onclick = () => { setSec = "mcp"; render(); };

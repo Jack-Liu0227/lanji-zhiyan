@@ -74,6 +74,14 @@
       const source = data.source || {};
       element('name').textContent = data.name || name;
       element('name').title = data.name || name;
+      root.setAttribute('data-wfp-meta', JSON.stringify({
+        project_id: source.project_id || projectId || '',
+        relative: source.relative || selected.relative || selected.rel || '',
+        path: source.path || selected.path || '',
+        name: data.name || name,
+        task_id: source.task_id || selected.task_id || '',
+        read_only: source.kind === 'node'
+      }));
       element('source').textContent = source.kind === 'node'
         ? `节点产物 · ${source.task_id} · 运行 ${source.task_run_id} · 修订 v${source.output_revision} · ${source.artifact_id}`
         : `项目文件 · ${source.relative || selected.relative || selected.path || ''} · 当前文件`;
@@ -89,13 +97,33 @@
         const rows = data.rows || [];
         element('body').innerHTML = `<div class="wfp-table-scroll" tabindex="0" role="region" aria-label="CSV 表格，可横向滚动">
           <table><caption class="wfp-sr-only">${escape(data.name)}，共 ${escape(data.total_rows)} 行</caption><thead><tr>${columns.map(column => `<th scope="col">${escape(column)}</th>`).join('')}</tr></thead>
-          <tbody>${rows.map(row => `<tr>${columns.map((_, index) => `<td>${escape(row[index])}</td>`).join('')}</tr>`).join('')}</tbody></table>
+          <tbody>${rows.map(row => `<tr>${columns.map((_, index) => {
+            const cellVal = escape(row[index]);
+            return `<td title="${cellVal}"><div class="wfp-cell-truncate">${cellVal}</div></td>`;
+          }).join('')}</tr>`).join('')}</tbody></table>
           ${rows.length ? '' : '<p class="wfp-empty">暂无数据行</p>'}</div>`;
         element('page').textContent = data.total_rows
           ? `${data.offset + 1}–${data.offset + rows.length} / ${data.total_rows} 行`
           : '0 / 0 行';
         element('prev').disabled = data.offset === 0;
         element('next').disabled = data.offset + rows.length >= data.total_rows;
+      } else if (data.kind === 'text') {
+        element('body').innerHTML = `<pre class="wfp-text">${escape(data.text || '')}</pre>`;
+      } else if (['pdf', 'image', 'html'].includes(data.kind) || ['pdf', 'image', 'html'].includes(data.preview?.kind)) {
+        const media = data.preview || data;
+        const kind = media.kind || data.kind;
+        const raw = media.url || media.preview_url || data.url;
+        if (raw) {
+          element('body').innerHTML = kind === 'image'
+            ? `<img class="wfp-image" src="${escape(raw)}" alt="${escape(data.name || name)}">`
+            : `<iframe class="wfp-frame" title="${escape(data.name || name)}" ${kind === 'html' ? 'sandbox="allow-same-origin"' : ''} src="${escape(raw)}"></iframe>`;
+        } else if (data.download_url) {
+          element('body').innerHTML = `<div class="wfp-empty"><a class="btn" href="${escape(data.download_url)}" download>下载 ${escape(data.name || name)}</a></div>`;
+        } else {
+          throw new Error('缺少预览地址');
+        }
+      } else if (data.download_url) {
+        element('body').innerHTML = `<div class="wfp-empty"><p>${escape(data.preview_note || '此格式暂不支持直接预览，可下载后查看。')}</p><a class="btn" href="${escape(data.download_url)}" download>下载 ${escape(data.name || name)}</a></div>`;
       } else {
         throw new Error('服务器返回了不支持的预览类型');
       }

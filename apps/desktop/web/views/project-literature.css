@@ -26,8 +26,8 @@
 .pl-row > input { margin-top: 5px; }
 .pl-row > input:disabled { visibility: hidden; }
 .pl-main { min-width: 0; overflow-wrap: anywhere; }
-.pl-main h4 { margin: 0; font-size: 14px; line-height: 1.5; }
-.pl-main p { margin: 4px 0 8px; color: var(--muted); font-size: 12px; }
+.pl-main h4 { margin: 0; font-size: 14px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; }
+.pl-main p { margin: 4px 0 8px; color: var(--muted); font-size: 12px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; }
 .pl-actions { justify-content: flex-end; max-width: 270px; }
 #plManagement {
   background: var(--panel);

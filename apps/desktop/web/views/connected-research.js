@@ -36,7 +36,7 @@
       ${run?`<div class="connected-row" style="margin-top:12px"><b>${h(run.layout.name)}</b><span class="pill">${h(statuses[run.status] || run.status)}</span>
         ${["failed","blocked","interrupted"].includes(run.status)?`${(S.models||[]).length?`<select class="control" style="width:auto" data-sequence-switch-model><option value="">保持原模型继续</option>${(S.models||[]).map(m=>`<option value="${h(m.id)}">${h(m.name||m.model)}</option>`).join("")}</select>`:""}<button class="btn" data-sequence-resume>从已保存进度继续</button><button class="btn ghost" data-sequence-restart>核对后重新执行当前节点</button>`:""}
         ${prepared?'<button class="btn btn-primary" data-sequence-start-prepared>开始已准备的工作流</button>':""}
-        <button class="btn" data-sequence-chat>打开 LangGraph</button><button class="btn ghost" data-sequence-project-tasks>查看任务状态</button>
+        <button class="btn ghost" data-sequence-project-tasks>查看任务状态</button>
         ${!["succeeded","cancelled"].includes(run.status)?'<button class="btn ghost" data-sequence-cancel>停止本次运行</button>':""}</div>
         ${active?`<div class="connected-row" style="margin-top:12px"><label class="field"><span>本次运行模式</span><select class="control" data-sequence-run-mode>${modeOptions(mode)}</select></label><button class="btn" data-sequence-mode-apply>应用运行模式</button></div><p class="hint">模式调整作用于本次运行的项目任务；项目范围与专家工具权限保持各自的授权。</p>`:""}
         ${run.error?`<p class="connected-error">${h(run.error)}</p>`:""}
@@ -79,7 +79,6 @@
     host.querySelectorAll("[data-sequence-task]").forEach(button=>button.onclick=()=>openNode(button.dataset.sequenceTask));
     host.querySelectorAll('[data-sequence-result]').forEach(button=>button.onclick=()=>{const task=nodeTasks.get(button.dataset.sequenceResult),project=currentProject;dialog.close();ProjectWorkspace.openNodeResult(WorkflowNodeWorkbench.availableSelection(task),project);});
     host.querySelector("[data-sequence-project-tasks]")?.addEventListener("click",()=>ProjectTasks.open(currentProject));
-    host.querySelector('[data-sequence-chat]')?.addEventListener('click',async()=>{const project=currentProject,id=run.id;dialog.close();await ProjectWorkspace.openWorkflowRun(project,id,run.current_node||'');});
     const bind=(selector,action,extra=()=>({}))=>host.querySelectorAll(selector).forEach(button=>button.onclick=async()=>{
       button.disabled=true;
       try {
@@ -137,28 +136,52 @@
     if(document.activeElement?.closest('.quick-add, .cal-pop')) return;
     renderCalendar(document.getElementById('main'));
   }
+  async function focusTargetCard(selector){
+    for(let i=0;i<6;i++){
+      const el=document.querySelector(selector);
+      if(el){
+        el.scrollIntoView({block:'center',behavior:'smooth'});
+        const prev=el.style.outline;
+        el.style.outline='2px solid var(--accent)';
+        setTimeout(()=>{if(el.isConnected)el.style.outline=prev;},1600);
+        return el;
+      }
+      await new Promise(r=>setTimeout(r,60));
+    }
+    return null;
+  }
   async function openNote(project,path){
     await ProjectWorkspace.openProject(project);
     if(curTask!==project) return;
-    await ProjectWorkspace.showResource('notes');
-    await Notebook.open(path);
+    if(path){
+      let full='';
+      try{const loc=await api('/api/file/location',{project_id:project,relative:path});full=loc.path||'';}catch{}
+      return ProjectWorkspace.openFile({rel:path,path:full,name:path.split('/').pop()},project,{peek:false,forceLibrary:true});
+    }
+    await ProjectWorkspace.showResource('files',undefined,{peek:false,surface:'library'});
   }
   function openCalendarSource(id,trigger){return AppNavigation.follow(()=>openCalendarTarget(id),{trigger});}
   async function openCalendarTarget(id){
     const event=S.events.find(e=>e.id===id);
     if(!event) throw new Error('关联日程已更新，请刷新后重试');
     const project=event.task_id;
-    if(event.target_type==='workflow') return openRun(project,event.run_id || event.target_id);
-    if(event.target_type==='project_task') return ProjectWorkspace.openTask(event.target_id,project);
+    if(event.target_type==='workflow'){
+      if(event.canonical_task_id) return ProjectWorkspace.openTask(event.canonical_task_id,project,{peek:false});
+      return ProjectWorkspace.openWorkflowRun(project,event.run_id || event.target_id,event.node_id || '');
+    }
+    if(event.target_type==='project_task') return ProjectWorkspace.openTask(event.target_id,project,{peek:false});
     if(event.target_type==='note') return openNote(project,event.note_path);
     curTask=project; localStorage.setItem('rw-task',project);
     if(event.target_type==='schedule'){
-      await ProjectWorkspace.openProject(project);await ProjectWorkspace.showResource('automation');
-      document.querySelector(`[data-sch-edit="${CSS.escape(event.schedule_id || event.target_id)}"]`)?.closest('.sch-card')?.scrollIntoView({block:'center'});
+      const sid=event.schedule_id || event.target_id || '';
+      await ProjectWorkspace.openProject(project);
+      await ProjectWorkspace.showResource('automation');
+      if(sid) await focusTargetCard(`[data-schedule-id="${CSS.escape(sid)}"],[data-sch-edit="${CSS.escape(sid)}"]`);
     }else if(event.target_type==='todo'){
+      const pid=event.source_id || event.target_id || '';
       await ProjectWorkspace.openProject(project);
       await ProjectWorkspace.showResource('plan');
-      await TaskCenter.openPlan(event.source_id,project);
+      if(pid) await focusTargetCard(`[data-plan-id="${CSS.escape(pid)}"]`);
     }
   }
   document.addEventListener('click',event=>{
@@ -179,7 +202,7 @@
       for(const r of data.items){
         const select=attr=>instance.querySelector(`[${attr}="${CSS.escape(r.node_id)}"]`);
         if(r.due_at){const d=new Date(r.due_at);select('data-review-due').value=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);}
-        select('data-review-open').onclick=()=>{instance.close();if(r.canonical_task_id) ProjectTasks.openTask(r.canonical_task_id,r.project_id);else openRun(r.project_id,r.run_id);};
+        select('data-review-open').onclick=()=>{instance.close();if(r.canonical_task_id) ProjectWorkspace.openTask(r.canonical_task_id,r.project_id,{peek:false});else ProjectWorkspace.openWorkflowRun(r.project_id,r.run_id,r.node_id||'');};
         const update=async body=>{try{await api('/api/workflow/reviews',{node_id:r.node_id,...body});await draw();await refreshReviews();}catch(error){instance.querySelector('[data-review-error]').textContent=error.message;}};
         select('data-review-snooze').onclick=()=>update({snooze_minutes:60});
         select('data-review-save').onclick=()=>{const value=select('data-review-due').value;update({due_at:value?new Date(value).toISOString():''});};

@@ -19,6 +19,7 @@ def delete(db, project_id: str, *, require_idle: bool) -> dict:
 
     memory_store.ready(db)  # Schema initialization may commit.
     conn = db.db
+    memory_store.ensure_fts_healthy(conn, commit=True)
     if not require_idle and conn.execute("SELECT 1 FROM research_tasks WHERE id=?", (project_id,)).fetchone():
         _cancel_legacy_runs(db, project_id)  # Schedule cancellation uses a separate connection.
     foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
@@ -29,7 +30,11 @@ def delete(db, project_id: str, *, require_idle: bool) -> dict:
             project = preview(db, project_id)
             if require_idle and project["running"]:
                 raise ValueError("请先停止项目中正在运行或排队的任务，再删除项目")
-            semantic.invalidate_project(db, project_id)
+            try:
+                semantic.invalidate_project(db, project_id)
+            except sqlite3.DatabaseError:
+                memory_store.repair_fts_table(conn, "sem_fts")
+                semantic.invalidate_project(db, project_id)
             _delete_records(conn, project_id)
             conn.execute(
                 "INSERT INTO deleted_project_locations VALUES (?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))",
@@ -75,15 +80,17 @@ def _delete_records(conn, project_id: str) -> None:
     conn.execute(f"DELETE FROM paper_evidence_recheck WHERE evidence_id IN (SELECT id FROM evidence WHERE paper_id IN ({paper_ids}))", args)
     for table in ("paper_pages", "evidence"):
         conn.execute(f"DELETE FROM {table} WHERE paper_id IN ({paper_ids})", args)
+    import memory_store
     for table in (
         "papers", "artifacts", "runs", "calendar_events", "notes", "steps", "search_cache", "chat",
         "paper_graph", "kb_graph", "project_memory", "md_notes", "dl_queue", "team_tasks", "team_events",
         "zotero_bindings", "zotero_project_sources", "zotero_project_memberships", "zotero_link_batches",
         "project_paper_links", "project_todos", "paper_zotero_refs", "zotero_save_plans",
         "zotero_pending_writes", "zotero_downloads",
-        "background_jobs", "idea_input", "tr_hl", "chat_fts", "zotero_staging",
+        "background_jobs", "idea_input", "tr_hl", "zotero_staging",
     ):
         conn.execute(f"DELETE FROM {table} WHERE task_id=?", args)
+    memory_store.safe_delete_fts(conn, "chat_fts", "task_id=?", args)
     # These legacy tables are created on demand.
     for table in ("project_workflow_layouts", "zotero_item_links"):
         if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
@@ -91,12 +98,13 @@ def _delete_records(conn, project_id: str) -> None:
     for table in ("task_links", "research_setups"):
         conn.execute(f"DELETE FROM {table} WHERE project_id=?", args)
     project_memory_ids = "SELECT id FROM memory WHERE scope='project' AND scope_id=?"
-    for table, key in (("memory_revisions", "memory_id"), ("memory_fts", "mem_id")):
-        conn.execute(f"DELETE FROM {table} WHERE {key} IN ({project_memory_ids})", args)
+    conn.execute(f"DELETE FROM memory_revisions WHERE memory_id IN ({project_memory_ids})", args)
+    memory_store.safe_delete_fts(conn, "memory_fts", f"mem_id IN ({project_memory_ids})", args)
     conn.execute("DELETE FROM memory WHERE scope='project' AND scope_id=?", args)
     _delete_execution_records(conn, project_id)
     asset_ids = "SELECT id FROM assets WHERE project_id=?"
-    for table in ("asset_fts", "asset_provenance", "asset_revisions"):
+    memory_store.safe_delete_fts(conn, "asset_fts", f"asset_id IN ({asset_ids})", args)
+    for table in ("asset_provenance", "asset_revisions"):
         conn.execute(f"DELETE FROM {table} WHERE asset_id IN ({asset_ids})", args)
     conn.execute(f"DELETE FROM asset_relations WHERE from_asset_id IN ({asset_ids}) "
                  f"OR to_asset_id IN ({asset_ids})", (project_id, project_id))
@@ -113,8 +121,9 @@ def _delete_execution_records(conn, project_id: str) -> None:
     conn.execute(f"DELETE FROM workflow_nodes WHERE run_id IN ({workflow_ids})", args)
     chat_ids = ("SELECT c.id FROM chats c JOIN execution_conversations e ON e.chat_id=c.id "
                 "WHERE e.project_id=?1 AND c.task_id IN ('',?1)")
-    for table in ("chat", "chat_fts"):
-        conn.execute(f"DELETE FROM {table} WHERE task_id IN ({chat_ids})", args)
+    import memory_store
+    conn.execute(f"DELETE FROM chat WHERE task_id IN ({chat_ids})", args)
+    memory_store.safe_delete_fts(conn, "chat_fts", f"task_id IN ({chat_ids})", args)
     conn.execute(f"DELETE FROM chats WHERE id IN ({chat_ids})", args)
     for table in EXECUTION_TABLES:
         conn.execute(f"DELETE FROM {table} WHERE project_id=?", args)

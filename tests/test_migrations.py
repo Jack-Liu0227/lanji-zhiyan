@@ -35,8 +35,8 @@ class MigrationsTest(unittest.TestCase):
         self.assertEqual(versions, expected)
         self.assertEqual(applied, [entry.version for entry in entries])
         self.assertEqual(len(versions), 46)
-        self.assertEqual(self.conn.execute("SELECT name FROM schema_patch_runs").fetchall(),
-                         [("prune_legacy_builtin_assistants",)])
+        self.assertEqual(self.conn.execute("SELECT name FROM schema_patch_runs ORDER BY name").fetchall(),
+                         [("builtin_assistant_prompt_state",), ("prune_legacy_builtin_assistants",)])
 
         tables = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
         self.assertIn("research_tasks", tables)

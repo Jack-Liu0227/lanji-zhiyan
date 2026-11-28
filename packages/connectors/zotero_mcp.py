@@ -13,6 +13,7 @@ import os
 import sqlite3
 import sys
 import traceback
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -95,6 +96,52 @@ def tool_pdf(a: dict) -> dict:
             "found": bool(path), "hint": "" if path else "这条没有 PDF 附件（或附件不在本机）"}
 
 
+def tool_collections(a: dict) -> dict:
+    limit = max(1, min(int(a.get("limit") or 100), 100))
+    return zotero.collections(limit=limit)
+
+
+def tool_recent(a: dict) -> dict:
+    limit = max(1, min(int(a.get("limit") or 20), 50))
+    page = zotero.items(collection=a.get("collection", ""), limit=limit)
+    keep = ("key", "type", "title", "creators", "year", "venue", "doi", "tags", "abstract")
+    items = [
+        {k: it[k] for k in keep}
+        for it in page["items"]
+        if it.get("type") not in ("attachment", "note", "annotation")
+    ]
+    return {"total": page["total"], "items": items}
+
+
+def tool_annotations(a: dict) -> dict:
+    key = zotero._key(str(a.get("key") or "").strip())
+    root = zotero._base()
+    _, _, body = zotero._get(zotero._api_url(root, f"/users/0/items/{urllib.parse.quote(key)}/children"))
+    rows = body if isinstance(body, list) else []
+    annotations: list[dict[str, Any]] = []
+    notes: list[dict[str, Any]] = []
+    for row in rows:
+        data = row.get("data") or {}
+        kind = data.get("itemType")
+        if kind == "annotation":
+            annotations.append({
+                "key": str(row.get("key") or data.get("key") or ""),
+                "type": str(data.get("annotationType") or ""),
+                "text": str(data.get("annotationText") or ""),
+                "comment": str(data.get("annotationComment") or ""),
+                "color": str(data.get("annotationColor") or ""),
+                "page": str(data.get("annotationPageLabel") or ""),
+                "parentAttachment": str(data.get("parentItem") or ""),
+            })
+        elif kind == "note":
+            notes.append({
+                "key": str(row.get("key") or data.get("key") or ""),
+                "text": zotero.html_to_text(data.get("note") or ""),
+                "tags": [str(t.get("tag") if isinstance(t, dict) else t) for t in (data.get("tags") or [])],
+            })
+    return {"key": key, "annotations": annotations, "notes": notes}
+
+
 def tool_create_item(a: dict) -> dict:
     item = dict(a.get("item") or {})
     if not item.get("title"):
@@ -130,6 +177,15 @@ TOOLS: list[dict[str, Any]] = [
     {"name": "zotero_status", "run": tool_status,
      "description": "Zotero 本机连接状态 + 是否能写入（不能写会说明原因）。",
      "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "zotero_collections", "run": tool_collections,
+     "description": "列出本机 Zotero 的分类（Collections）树及各分类条目数。",
+     "inputSchema": {"type": "object", "properties": {
+         "limit": {"type": "integer", "description": "1-100，默认 100"}}}},
+    {"name": "zotero_recent", "run": tool_recent,
+     "description": "按最近修改时间列出 Zotero 最新文献条目。",
+     "inputSchema": {"type": "object", "properties": {
+         "collection": {"type": "string", "description": "分类 key，空=全库"},
+         "limit": {"type": "integer", "description": "1-50，默认 20"}}}},
     {"name": "zotero_search", "run": tool_search,
      "description": "按分类/关键词检索本机 Zotero 条目，返回题录（key/标题/作者/年份/期刊/DOI/标签/摘要）。",
      "inputSchema": {"type": "object", "properties": {
@@ -142,6 +198,9 @@ TOOLS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}},
     {"name": "zotero_pdf", "run": tool_pdf,
      "description": "这条论文在本机的 PDF 绝对路径（找不到返回 found=false）。",
+     "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}},
+    {"name": "zotero_annotations", "run": tool_annotations,
+     "description": "读取指定条目下的 PDF 高亮/批注和子笔记正文。",
      "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}},
     {"name": "zotero_create_item", "run": tool_create_item,
      "description": "往 Zotero 写入一条文献（默认本机写入，自动复用本机授权）。",

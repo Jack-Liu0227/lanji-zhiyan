@@ -11,30 +11,120 @@ import note_catalog
 import project_notes
 
 TOKEN = re.compile(r"\{\{\s*([\w\u4e00-\u9fff][\w.\u4e00-\u9fff]{0,79})\s*\}\}")
+_HEX_STEM = re.compile(r"^[0-9a-f]{32}$", re.I)
 
 
-@project_notes.synchronized
-def ensure_defaults(db, project_id):
-    import service_settings
-    if getattr(db, '_seeding_prompts', False) or service_settings.read(db, 'project_prompt_defaults', project_id).get('version'):
+def safe_filename(title: str) -> str:
+    raw = re.sub(r'\.(?:md|markdown)$', '', str(title or '').strip(), flags=re.I)
+    clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', '-', raw).strip(' .')
+    clean = re.sub(r'-{2,}', '-', clean).strip('-')
+    if not clean or clean in ('.', '..'):
+        clean = '提示词模板'
+    return clean[:80].rstrip(' .') or '提示词模板'
+
+
+def unique_path(db, project_id: str, folder: str, title: str, exclude_path: str = '') -> str:
+    root = project_notes.project_root(db, project_id)
+    base_folder = str(folder or '笔记').strip('/')
+    stem = safe_filename(title)
+    candidate = f"{base_folder}/{stem}.md"
+    if candidate == exclude_path or not (root / candidate).exists():
+        return candidate
+    for idx in range(2, 1000):
+        candidate = f"{base_folder}/{stem}-{idx}.md"
+        if candidate == exclude_path or not (root / candidate).exists():
+            return candidate
+    return f"{base_folder}/{stem}-{uuid.uuid4().hex[:6]}.md"
+
+
+def _sync_template_filename(db, project_id: str, relative: str, title: str) -> str:
+    if not relative or not title:
+        return relative
+    folder = relative.rsplit('/', 1)[0] if '/' in relative else '笔记'
+    current_stem = Path(relative).stem
+    desired_stem = safe_filename(title)
+    if not desired_stem or _HEX_STEM.match(desired_stem) or current_stem == desired_stem or current_stem.startswith(desired_stem + '-'):
+        return relative
+    target_rel = unique_path(db, project_id, folder, title, exclude_path=relative)
+    if target_rel == relative:
+        return relative
+    target_name = Path(target_rel).name
+    try:
+        renamed = project_notes.rename(db, project_id, relative, target_name)
+        return renamed.get('new_path') or relative
+    except Exception:
+        return relative
+
+
+def _normalize_legacy_filenames(db, project_id: str) -> None:
+    if getattr(db, '_normalizing_templates', False):
         return
     try:
         project_notes.project_root(db, project_id, writable=True)
     except ValueError:
         return
-    defaults = [
-        ('图片图注与润色', '请分析本轮附带的科研图片，逐图生成可用于论文的 caption。说明各子图、坐标、符号、缩写和可见趋势；无法从图中确认的实验条件、样本量、统计方法等列为待补充信息，不编造结果。若提供了原图注，先核对与图片的一致性，再润色并列出实质修改。按图片顺序输出图号、英文图注、中文说明及待确认项。没有收到图片时请先提示提供图片。'),
-        ('学术文本润色', '请润色本轮提供的学术文本，保持原语言、事实、数字、公式、引用与结论强度。修正语法和术语，改善句子衔接；不得补造文献或实验结果。输出润色后的正文，以及需要作者确认的含义变化。')]
+    db._normalizing_templates = True
+    try:
+        for item in project_notes.dashboard(db, project_id).get('items', []):
+            if item.get('note_type') != 'prompt_template':
+                continue
+            rel = str(item.get('path') or '')
+            if not rel or not _HEX_STEM.match(Path(rel).stem):
+                continue
+            title = str(item.get('title') or '').strip()
+            if not title or title == item.get('name') or _HEX_STEM.match(Path(title).stem):
+                try:
+                    content = project_notes.read(db, project_id, rel).get('content', '')
+                    meta, _ = note_catalog.split(content)
+                    title = str(meta.get('title') or meta.get('name') or '').strip()
+                except Exception:
+                    title = ''
+            if title and not _HEX_STEM.match(Path(title).stem):
+                _sync_template_filename(db, project_id, rel, title)
+    except Exception:
+        pass
+    finally:
+        db._normalizing_templates = False
+
+
+_DEFAULT_VERSION = 2
+_DEFAULT_TEMPLATES = (
+    ('图片图注与润色', ['内置', '论文写作', '科研绘图'], '请分析本轮附带的科研图片，逐图生成可用于论文的 caption。说明各子图、坐标、符号、缩写和可见趋势；无法从图中确认的实验条件、样本量、统计方法等列为待补充信息，不编造结果。若提供了原图注，先核对与图片的一致性，再润色并列出实质修改。按图片顺序输出图号、英文图注、中文说明及待确认项。没有收到图片时请先提示提供图片。'),
+    ('学术文本润色', ['内置', '论文写作'], '请润色本轮提供的学术文本，保持原语言、事实、数字、公式、引用与结论强度。修正语法和术语，改善句子衔接；不得补造文献或实验结果。输出润色后的正文，以及需要作者确认的含义变化。'),
+    ('文献精读结构化笔记', ['内置', '文献精读'], '请基于本轮提供的论文全文或摘录生成结构化精读笔记：\n1. 核心研究问题与待解决痛点；\n2. 方法路线、关键模块/实验设计与核心参数；\n3. 关键定量结果与对照基线；\n4. 实验-结论证据链与适用边界（仅写原文可证内容，标注页码/图表依据）；\n5. 作者自述局限性与潜在待检验问题。'),
+    ('审稿意见逐点回复', ['内置', '返修投稿'], '请根据本轮提供的审稿人意见（Reviewer Comments）与原文/补充实验材料起草逐点回复信（Response Letter）：\n- 先逐条提炼审稿人核心关切与隐含要求；\n- 每条按「礼貌致谢与回应态度 -> 依据证据的具体回答 -> 拟修订位置与修改前后对比」组织；\n- 若需补充数据、统计检验或作者确认，明确标出 `[待补充/待确认]`，严禁编造结果。'),
+    ('中英文摘要对照与优化', ['内置', '论文写作'], '请将本轮提供的摘要优化为高水准学术表达，输出中英文对照版本：\n1. 控制篇幅并突出「背景痛点—核心方法—关键发现/定量指标—科学意义」四段式信息密度；\n2. 保持结论强度与原文一致，不过度拔高；\n3. 列出关键术语中英译名对照表与句式修改说明。'),
+    ('实验设计与统计核查', ['内置', '实验分析'], '请以方法学审稿人视角核查本轮提供的实验方案、实验记录或统计结果：\n1. 检查对照设置、随机化、盲法、重复次数与样本量合理性；\n2. 识别潜在混杂因素、批次效应、伪重复（pseudoreplication）与数据泄漏；\n3. 核对统计检验选择、假设前提及效应量/置信区间报告是否规范，并给出可执行改进清单。'),
+    ('引言逻辑与研究空白梳理', ['内置', '论文写作', '文献综述'], '请根据本轮主题与文献证据梳理论文引言（Introduction）写作框架：\n1. 领域重要性与既有主流方案脉络；\n2. 精准界定现有研究空白（Research Gap）及机理/方法层面的瓶颈（附可核验证据锚点，避免机械罗列人名）；\n3. 引出本文目标、核心思路与具体贡献列表（2–4 条）。'),
+    ('论文结论与局限性凝练', ['内置', '论文写作'], '请基于本文已获证据起草 Conclusion 与 Limitations 段落：\n1. 凝练可由本文数据直接支撑的核心发现与机制/工程价值；\n2. 明确结论成立边界、实验条件限制与外推风险；\n3. 提出 2–3 个具体且可验证的后续研究方向。'),
+)
+
+
+@project_notes.synchronized
+def ensure_defaults(db, project_id):
+    import service_settings
+    if getattr(db, '_seeding_prompts', False):
+        return
+    _normalize_legacy_filenames(db, project_id)
+    try:
+        root = project_notes.project_root(db, project_id, writable=True)
+    except ValueError:
+        return
+    tpl_dir = root / '笔记' / '提示词模板'
+    has_files = tpl_dir.is_dir() and any(tpl_dir.glob('*.md'))
+    saved_ver = int(service_settings.read(db, 'project_prompt_defaults', project_id).get('version') or 0)
+    if saved_ver >= _DEFAULT_VERSION and has_files:
+        return
     db._seeding_prompts = True
     context = getattr(db, 'asset_run', None)
     db.asset_run = None
     try:
         existing = {item['title'] for item in search(db, project_id, include_disabled=True)['templates']}
-        for title, content in defaults:
+        for title, tags, content in _DEFAULT_TEMPLATES:
             if title not in existing:
                 save_template(db, project_id, {'title': title, 'content': content,
-                    'metadata': {'tags': ['内置', '论文写作'], 'template_status': 'active'}})
-        service_settings.write(db, 'project_prompt_defaults', {'version': 1}, project_id)
+                    'metadata': {'tags': tags, 'template_status': 'active'}})
+        service_settings.write(db, 'project_prompt_defaults', {'version': _DEFAULT_VERSION}, project_id)
     finally:
         db.asset_run = context
         db._seeding_prompts = False
@@ -348,6 +438,8 @@ def save_template(db,project_id,body):
         metadata['variables']={name:variables.get(name,{'type':'text','required':True}) for name in dict.fromkeys(TOKEN.findall(content))}
     saved=project_notes.write(db,project_id,note['path'] if note else '',content,title=title,create=not note,
                               expected_hash=note['content_hash'] if note else None,metadata=metadata)
+    if note:
+        _sync_template_filename(db, project_id, saved['path'], title)
     return inspect_template(db,project_id,saved['template_id'])
 
 

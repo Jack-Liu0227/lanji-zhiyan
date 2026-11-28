@@ -37,6 +37,18 @@ function renderMarkdown(value){
         anchor.target='_blank';anchor.relList.add('noopener','noreferrer');
       }
     });
+    root.querySelectorAll('table td, table th').forEach(cell=>{
+      const fullText = cell.textContent.trim();
+      if(fullText && !cell.getAttribute('title')){
+        cell.setAttribute('title', fullText);
+      }
+      if(cell.tagName === 'TD' && !cell.querySelector('.md-table-cell')){
+        const wrap = document.createElement('div');
+        wrap.className = 'md-table-cell';
+        wrap.append(...cell.childNodes);
+        cell.append(wrap);
+      }
+    });
     root.querySelectorAll("[data-rw-math]").forEach(node=>{
       const math=markdownMathSlots[Number(node.dataset.rwMath)];
       node.removeAttribute("data-rw-math");
@@ -515,7 +527,7 @@ function schEditorHTML(){
       <label><span>Cron（分 时 日 月 周）</span><input id="schCron" value="${esc(e.cron)}" style="font-family:ui-monospace,Consolas,monospace"></label>
       <label><span>项目</span><select id="schProj">${projOpts}</select></label>
        <label><span>执行专家</span><select id="schAssistant">${assistantOpts}</select></label>
-       <label><span>LangGraph 流程（可选）</span><select id="schWorkflow"><option value="">只运行所选专家</option></select></label>
+       <label><span>工作流模板（可选）</span><select id="schWorkflow"><option value="">只运行所选专家</option></select></label>
        <label><span>关联项目待办（可选）</span><select id="schTodo"><option value="">正在读取…</option></select></label>
       <label><span>输出目录（项目目录内的相对路径）</span><input id="schOut" value="${esc(e.output_dir)}"></label>
       <label><span>启用</span><select id="schOn"><option value="1" ${e.enabled?"selected":""}>已启用</option><option value="0" ${e.enabled?"":"selected"}>已暂停</option></select></label>
@@ -531,7 +543,7 @@ function schCardHTML(r){
     <div class="main"><div class="nmrow"><span class="nm">${esc(r.name)}</span>
       <span class="pill ${r.enabled?"ok":"warn"}">${r.enabled?"已启用":"已暂停"}</span>
       <span class="pill">${esc(schFreqLabel(r.frequency))} · ${esc(r.cron)}</span></div>
-       <div class="ln">${r.project_id?esc(schTaskName(r.project_id)||"已绑定项目"):"未绑定项目"} · ${r.workflow_id?'LangGraph 流程':esc((S.assistants||[]).find(a=>a.id===r.assistant_id)?.name||"未绑定专家")} · 输出 ${esc(r.output_dir)}</div>
+       <div class="ln">${r.project_id?esc(schTaskName(r.project_id)||"已绑定项目"):"未绑定项目"} · ${r.workflow_id?'工作流':esc((S.assistants||[]).find(a=>a.id===r.assistant_id)?.name||"未绑定专家")} · 输出 ${esc(r.output_dir)}</div>
       <div class="ln">${esc((r.prompt||"").replace(/\s+/g," ").slice(0,110))}</div>
       <div class="ln">下次 ${esc(next)} · 最近 ${esc(r.last_run_at?fmtDate(r.last_run_at):"尚未运行")}</div></div>
     <div class="acts">
@@ -658,7 +670,7 @@ async function renderSchedules(m, options={}){
   m.querySelectorAll("[data-run-note]").forEach(b=>b.onclick=async()=>{
     await ConnectedResearch.openNote(b.dataset.noteProject,b.dataset.notePath);
   });
-  m.querySelectorAll('[data-run-workflow]').forEach(b=>b.onclick=()=>AppNavigation.follow(()=>ConnectedResearch.openRun(b.dataset.runProject,b.dataset.runWorkflow)));
+  m.querySelectorAll('[data-run-workflow]').forEach(b=>b.onclick=()=>AppNavigation.follow(()=>ProjectWorkspace.openWorkflowRun(b.dataset.runProject,b.dataset.runWorkflow)));
   m.querySelectorAll('[data-run-task]').forEach(b=>b.onclick=()=>AppNavigation.follow(()=>ProjectWorkspace.openTask(b.dataset.runTask,b.dataset.runProject,{peek:false})));
   $("schRunsClear") && ($("schRunsClear").onclick = async ()=>{
     if(!await uiConfirm(`删除全部 ${visibleRuns.length} 条运行记录？定时规则与产物文件都不会被改动。`)) return;
@@ -1965,28 +1977,12 @@ function setPanel(){
     <div style="display:flex;gap:6px;margin-top:4px">${[["compact","紧凑"],["comfortable","标准"],["large","大"]].map(([k,l])=>`<button class="btn ghost" data-f="${k}">${l}</button>`).join("")}</div></div>`;
   if(setSec === "perm") {
     const mode = (S.sec||{}).permission_mode || "";
-    const reviewMode = ((S.sec||{}).workflow_review_mode === "auto") ? "auto" : "human_review";
     const opt = (k, t, d) => `<label class="perm-opt ${mode===k?"on":""}"><input type="radio" name="permmode" value="${k}" ${mode===k?"checked":""}><div><b>${t}</b><p>${d}</p></div></label>`;
-    const revOpt = (k, t, d) => `<label class="perm-opt ${reviewMode===k?"on":""}"><input type="radio" name="wfreviewmode" value="${k}" ${reviewMode===k?"checked":""}><div><b>${t}</b><p>${d}</p></div></label>`;
     return `<div class="card"><h3>权限模式</h3>
       <div class="hint">我只能在程序自己的数据目录和你亲手选过的项目文件夹里读写；越界会直接拒绝并记一条审计。</div>
       <div class="perm-opts">
         ${opt("all", "允许所有", "在允许的目录里直接读写、编译、导出，不再逐次询问。")}
         ${opt("ask", "每次都要问", "编译、写文件、导出前先问你一句「允许这一次吗」。")}
-      </div></div>
-    <div class="card" style="margin-top:12px"><h3>自编排工作流审查</h3>
-      <div class="hint">控制自编排与多阶段工作流节点完成后的验收方式。即使选择无需人工审查，产物仍须通过格式、版本与必备文件检查。</div>
-      <div class="perm-opts">
-        ${revOpt("human_review", "需要人工干预审查（默认）", "节点完成后在待核查状态暂停，等你审阅产物、修订并点击通过后才推进下游。")}
-        ${revOpt("auto", "无需人工干预审查", "节点产物校验通过后自动验收并推进后续节点，不再逐节点暂停（明确指定需人工上传的节点除外）。")}
-      </div></div>
-    <div class="card" style="margin-top:12px"><h3>上下文预算</h3>
-      <div class="hint">默认按当前模型的 Token 预算管理历史。可填写正整数设置个人偏好，0 表示自动；完整历史仍然保存。</div>
-      <div class="ag-row" style="margin-top:8px">
-        <input class="control" id="ctxchars" type="number" min="0" step="1000"
-               value="${Number((S.sec||{}).history_chars) || 0}" style="max-width:160px">
-        <span class="hint">字，0 为自动</span>
-        <button class="btn btn-primary" id="ctxsave">保存</button>
       </div></div>`;
   }
   if(setSec === "models") return `<div class="card"><h3>模型列表</h3>
@@ -2021,6 +2017,7 @@ function setPanel(){
       <table><tr><th>服务器</th><th>启动</th></tr>${(setMeta.mcp||[]).map(x=>`<tr><td><code>${esc(x.name)}</code></td><td class="muted">${esc(x.cmd)}</td></tr>`).join("")}</table></div>`;
 }
 function renderSettings(m){
+  if(!SET_SECS.some(([k])=>k===setSec)) setSec = "theme";
   m.innerHTML = `<div class="page-head"><div><p class="inst-label">SETTINGS</p><h3>设置</h3></div>
       <div class="ph-acts"><button class="btn ghost" id="to-assist">管理专家 →</button></div></div>
     <div class="set-wrap" style="margin-top:12px">
@@ -2047,20 +2044,6 @@ function renderSettings(m){
     m.querySelectorAll('input[name="permmode"]').forEach(r => r.onchange = async () => {
       await setPermissionMode(r.value); render();
     });
-    m.querySelectorAll('input[name="wfreviewmode"]').forEach(r => r.onchange = async () => {
-      await setWorkflowReviewMode(r.value);
-      uiNotify("工作流审查模式已保存：" + (r.value === "auto" ? "无需人工干预审查" : "需要人工干预审查"));
-      render();
-    });
-    const cs = $("ctxsave");
-    if(cs) cs.onclick = async () => {
-      const n = Number($("ctxchars").value);
-      if(!Number.isSafeInteger(n) || n < 0) return uiNotify("请输入非负整数，0 表示自动");
-      try {
-        S.sec = await api("/api/security", { history_chars: n });
-        uiNotify("上下文预算已保存：" + n + " 字");
-      } catch(e) { uiNotify("保存失败：" + e.message); }
-    };
   }
   if(setSec === "theme"){
     $("th").onclick = ()=>setTheme(document.documentElement.dataset.theme==="dark"?"light":"dark");

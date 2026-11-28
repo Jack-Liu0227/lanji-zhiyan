@@ -42,13 +42,12 @@ const FileHandoff = (() => {
   }
   async function open(ref, preferred=""){
     if(!ref?.project_id || !ref.relative){ uiNotify("请先选择项目中的文件"); return; }
-    if(uiRouteIs("workflow") && ref.project_id!==curTask){uiNotify("项目已切换，请重新选择文件。");return;}
     ref={project_id:ref.project_id,relative:ref.relative};
     const workspace=document.querySelector('.project-workspace');
     if(preferred==='project' && workspace && workspace.dataset.surface!=='flow' && window.ProjectTasks){
       try{
         await saveInput(ref);
-        return ProjectTasks.compose(ref.project_id,{title:ref.relative.split(/[\\/]/).at(-1),goal:'',inputs:[{relative:ref.relative}],metadata:{source:'file_handoff'},quick:true});
+        return ProjectTasks.compose(ref.project_id,{title:ref.relative.split(/[\\/]/).at(-1),goal:'',inputs:[{relative:ref.relative,allow_draft:true}],metadata:{source:'file_handoff'},quick:true});
       }catch(error){uiNotify(error.message);return;}
     }
     const activeProject=curTask;
@@ -74,7 +73,7 @@ const FileHandoff = (() => {
       remember();
       const goal=instruction.value;
       el.close();
-      await ProjectTasks.compose(ref.project_id,{title:ref.relative.split(/[\\/]/).at(-1),goal,inputs:[{relative:ref.relative}],metadata:{source:"file_handoff"},beforeSubmit:async()=>{
+      await ProjectTasks.compose(ref.project_id,{title:ref.relative.split(/[\\/]/).at(-1),goal,inputs:[{relative:ref.relative,allow_draft:true}],metadata:{source:"file_handoff"},beforeSubmit:async()=>{
         if(curTask!==activeProject) throw new Error("项目已切换，已保留任务说明。请从当前项目重新打开文件任务。");
         await saveInput(ref);
       }});
@@ -176,9 +175,12 @@ const FileHandoff = (() => {
     async function refresh(){
       error.textContent=""; selection=null;group=[]; drawSelection();
       try{
-        const [next,history]=await Promise.all([api("/api/handoff/targets?project_id="+encodeURIComponent(ref.project_id)),api("/api/handoff/history?project_id="+encodeURIComponent(ref.project_id)+"&summary=1")]);
+        const [targetsRes,historyRes]=await Promise.allSettled([api("/api/handoff/targets?project_id="+encodeURIComponent(ref.project_id)),api("/api/handoff/history?project_id="+encodeURIComponent(ref.project_id)+"&summary=1")]);
         if(!el.open) return;
-        const first=!data;data=next;related=history.items;invalidate();
+        related=historyRes.status==="fulfilled"?(historyRes.value.items||[]):[];
+        if(targetsRes.status!=="fulfilled") throw targetsRes.reason;
+        const next=targetsRes.value;
+        const first=!data;data=next;invalidate();
         body.querySelector("[data-workflow]").textContent="工作流："+data.layout_name+" · 仅显示此工作流内的目标";
         const notice=body.querySelector("[data-configuration]"), config=data.configuration || {};
         notice.hidden=true;notice.innerHTML="";
@@ -202,16 +204,16 @@ const FileHandoff = (() => {
           for(const node of data.nodes) for(const actor of node.actors) if(keyOf(node,actor)===(preferred || saved.selection)) selection={node,actor};
         }
         drawTargets();drawSelection();
-      }catch(e){error.textContent=e.message;body.querySelector("[data-targets]").textContent="目标暂不可用。任务说明已保留。";}
+      }catch(e){error.textContent=e.message+"（可点击上方「项目任务 · 无需工作流」直接交给专家或团队）";body.querySelector("[data-targets]").textContent="目标暂不可用。任务说明已保留。";}
     }
     body.querySelectorAll("[data-view]").forEach(button=>button.onclick=()=>{view=button.dataset.view;group=[];body.querySelectorAll("[data-view]").forEach(b=>b.setAttribute("aria-pressed",String(b===button)));drawTargets();drawSelection();});
     body.querySelector("[data-refresh]").onclick=refresh;
     async function navigateConfiguration(tab){
       if(curTask!==activeProject){error.textContent="项目已切换，请从当前项目重新打开交接面板。";return;}
       if(flCurrentFile && flCurrentFile.text!==flCurrentFile.originalText && !await flSaveCurrent()){error.textContent="文件保存失败，已保留当前编辑。";return;}
-      uiNavigate(()=>{el.close();if(tab==="settings") setSec="workflows";openTab(tab);});
+      uiNavigate(()=>{el.close();openTab(tab==="team"?"team":"workflow-studio");});
     }
-    body.querySelector("[data-configure]").onclick=()=>navigateConfiguration("settings");
+    body.querySelector("[data-configure]").onclick=()=>navigateConfiguration("workflow-studio");
     search.oninput=drawTargets;instruction.oninput=invalidate;
     body.querySelector("[data-parent]").onchange=invalidate;
     el.addEventListener("close",()=>{remember();preview(ref);},{once:true});

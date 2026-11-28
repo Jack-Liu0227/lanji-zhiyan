@@ -452,7 +452,7 @@ const WorkflowNodeWorkbench=(()=>{
       state.history=entries;
       el('version').innerHTML=entries.map((item,index)=>`<option value="${index}" ${sameVersion(item,identity)?'selected':''}>${h(item.label||'运行 '+(item.attempt||'')+' · 修订 v'+item.output_revision)}</option>`).join('');
       el('version').onchange=()=>{const selected=entries[Number(el('version').value)];options.select({...state.selection,task_run_id:selected.task_run_id||selected.identity?.task_run_id,output_revision:selected.output_revision??selected.identity?.output_revision});};
-      el('files').innerHTML=(result.artifacts||[]).map((artifact,index)=>`<button type="button" class="wnw-file" data-wnw-file="${index}"><span>${h(artifact.name||artifact.id)}</span><small>${h(artifact.kind||'文件')}</small></button>`).join('');
+      el('files').innerHTML=(result.artifacts||[]).map((artifact,index)=>`<button type="button" class="wnw-file" data-wnw-file="${index}" data-project-id="${h(result.identity.project_id)}" data-rel="${h(artifact.relative||artifact.source_path||'')}" data-path="${h(artifact.path||artifact.source_path||'')}" data-wnw-art-id="${h(artifact.id)}" data-wnw-art-name="${h(artifact.name||artifact.id)}"><span>${h(artifact.name||artifact.id)}</span><small>${h(artifact.kind||'文件')}</small></button>`).join('');
       el('files').querySelectorAll('[data-wnw-file]').forEach(button=>button.onclick=()=>openArtifact(result.artifacts[Number(button.dataset.wnwFile)]));
       let checks=Array.isArray(result.checks)?result.checks:Object.entries(result.checks||{}).map(([name,value])=>({label:(({format:'输出格式',min_chars:'最少字数',sections:'必要章节',required_files:'必要文件'})[name]||name)+' '+textOf(value)}));
       checks=[...(result.guide?.checks||[]),...checks];
@@ -489,6 +489,14 @@ const WorkflowNodeWorkbench=(()=>{
       if(saved&&(state.result.editable||state.result.can_rework)){state.value=saved.text??state.value;state.reason=saved.reason||'';state.feedback=saved.feedback||state.feedback;state.draftVersion=saved.version??saved.draft_version??0;if(saved.instruction)el('instruction').value=saved.instruction;message('已恢复此窗口在当前版本上的编辑草稿。');}
       el('reason').value=state.reason;el('feedback').value=state.feedback;
       el('file-title').textContent=artifact.name||artifact.id;
+      const docEl=host.querySelector('.wnw-document');
+      if(docEl){
+        docEl.dataset.projectId=state.result.identity.project_id||'';
+        docEl.dataset.rel=artifact.relative||artifact.source_path||'';
+        docEl.dataset.path=artifact.path||artifact.source_path||'';
+        docEl.dataset.wnwArtId=artifact.id||'';
+        docEl.dataset.wnwArtName=artifact.name||artifact.id||'';
+      }
       el('export-edit').hidden=artifact.id==='export-source'||!state.result.artifacts.some(item=>item.id==='export-source'&&item.editable);
       const legacyEdit=el('file-edit');
       if(legacyEdit){legacyEdit.hidden=!String(artifact.id||'').startsWith('file:');legacyEdit.disabled=!editable();}
@@ -598,7 +606,9 @@ const WorkflowNodeWorkbench=(()=>{
       function cellMarkup(row,index,field){
         const value=typeof row==='object'&&row?row[field]:row;
         const boolean=typeof value==='boolean'||!csvFile&&['included','resolved'].includes(field),canEdit=edit&&!['id','source','created_at','task_id','sha256','files','source_path'].includes(field);
-        if(!canEdit)return `<td>${h(boolean?(value===false?'否':'是'):typeof value==='object'?textOf(value):value??'')}</td>`;
+        const raw=typeof value==='object'?textOf(value):value??'';
+        const displayVal=boolean?(value===false?'否':'是'):raw;
+        if(!canEdit)return `<td title="${h(displayVal)}"><div class="wnw-cell-truncate">${h(displayVal)}</div></td>`;
         return `<td>${boolean?`<input type="checkbox" data-wnw-cell="${index}" data-field="${h(field)}" aria-label="第 ${index+1} 行 ${h(labels[field]||field)}" ${value!==false&&field==='included'||value===true?'checked':''}>`:`<textarea class="control" rows="${type==='bilingual'?5:2}" data-wnw-cell="${index}" data-field="${h(field)}" aria-label="第 ${index+1} 行 ${h(labels[field]||field)}">${h(typeof value==='object'?textOf(value):value??'')}</textarea>`}</td>`;
       }
       function orderMarkup(index){return `<td class="wnw-order"><span>${index+1}</span>${edit?`<button type="button" class="pw-text-button" data-wnw-row-move="${index}:-1" aria-label="第 ${index+1} 行上移" ${index===0?'disabled':''}>上移</button><button type="button" class="pw-text-button" data-wnw-row-move="${index}:1" aria-label="第 ${index+1} 行下移" ${index===rows.length-1?'disabled':''}>下移</button>`:''}</td>`;}

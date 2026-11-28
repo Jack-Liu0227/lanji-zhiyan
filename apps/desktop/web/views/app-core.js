@@ -581,11 +581,6 @@ async function setPermissionMode(mode) {
   try { S.sec = await api("/api/security", { permission_mode: mode }); } catch (e) { uiNotify("保存失败：" + e.message); }
   return S.sec;
 }
-async function setWorkflowReviewMode(mode) {
-  try { S.sec = await api("/api/security", { workflow_review_mode: mode }); } catch (e) { uiNotify("保存失败：" + e.message); }
-  return S.sec;
-}
-
 /* ---------------- 模型 Key 守卫 ----------------
    新装用户没配 Key 时，发消息/翻译/出计划一律先拦下来，别让一轮请求打到后端再回一句报错。
    「编译 .tex」不走这里：那是本地 xelatex，不需要任何 Key。 */

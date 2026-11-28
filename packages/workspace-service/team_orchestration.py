@@ -121,7 +121,7 @@ def prepare_office_members(db, task, executor):
         return False
     roster = [member for member in policy['members'] if member['id'] in policy['worker_ids']]
     if not roster:
-        raise ValueError('常驻团队没有可用成员，请在团队配置中启用至少一位专业成员')
+        raise ValueError('团队没有可用成员，请在团队配置中启用至少一位专业成员')
     prefix = f"office:{task['id']}:"
     children = task['children']
     if not children or any(child['request_key'].startswith(prefix) for child in children):

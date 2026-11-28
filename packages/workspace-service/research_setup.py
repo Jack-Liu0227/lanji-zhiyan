@@ -150,8 +150,8 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
         if args.get('auto_start_graph', True): _permit(db, actor_id, 'workflow_start')
         installed = {item['id']: item for item in capabilities.list_skills(str(db.base_dir(project_id) or '') if project_id else '')}
         requested = args.get('skills')
-        selected = requested if requested is not None else [name for name in DEFAULT_SKILLS[graph_type] if name in installed and capabilities.enabled(db, actor_id, 'skill', name)]
-        if not isinstance(selected, list) or any(not isinstance(name, str) or name not in installed or not capabilities.enabled(db, actor_id, 'skill', name) for name in selected):
+        selected = requested if requested is not None else [name for name in DEFAULT_SKILLS[graph_type] if name in installed and capabilities.enabled(db, actor_id, 'skill', name, item_scope=installed[name].get('scope', ''))]
+        if not isinstance(selected, list) or any(not isinstance(name, str) or name not in installed or not capabilities.enabled(db, actor_id, 'skill', name, item_scope=installed[name].get('scope', '')) for name in selected):
             raise ValueError('请选择实际已安装且已启用的 Skill ID')
         for expert in experts:
             if expert.get('assistant_id'):
@@ -201,7 +201,7 @@ def configure(db, args, *, project_id='', actor_id='builtin-steward', default_mo
                         rules=str(expert.get('rules') or '完成分配的科研工作，先读取相关 Skill 和项目资料，使用工具保存产物，引用可验证证据。区分研究建议、实际数据和未验证假设，不编造文献或实验结果。'),
                         model_id=str(expert.get('model_id') or ''))
                 for skill in selected:
-                    if not capabilities.enabled(db, assistant['id'], 'skill', skill): raise PermissionError('执行专家已停用 Skill：' + skill)
+                    if not capabilities.enabled(db, assistant['id'], 'skill', skill, item_scope=installed[skill].get('scope', '')): raise PermissionError('执行专家已停用 Skill：' + skill)
                 grant = _grant(db, pid, 'assistant', assistant['id'])
                 result['experts'].append({'role_id': role, 'assistant_id': assistant['id'], 'name': assistant['name'], 'binding_id': grant['id']})
                 save()
